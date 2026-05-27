@@ -167,7 +167,7 @@ FROTHY_DEPS = \
 	$(BUILD_DEPS)
 
 TEST_BINARY ?= test/test
-UNITY_TEST_BINARY ?= test/test-unity
+UNITY_TEST_BINARY ?= $(BUILD_DIR)/test-unity
 FROTHY_BINARY ?= frothy
 # Helper basename must match compilerProgramName in cmd/frothy-session.
 OVERLAY_COMPILER ?= $(BUILD_DIR)/frothy-compile-overlay
@@ -485,7 +485,7 @@ $(TEST_BINARY): $(TEST_DEPS)
 	$(FR_CC) $(FR_CFLAGS) $(TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
 $(UNITY_TEST_BINARY): $(UNITY_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) \
-		test/unity/unity.h test/unity/unity_internals.h
+		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) $(UNITY_TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
 $(OVERLAY_COMPILER): tools/frothy-compile-overlay.c $(FROTHY_DEPS) | $(BUILD_DIR)
@@ -513,6 +513,6 @@ print-config:
 	@printf 'ARTIFACT_SIZE=%s\n' "$(ARTIFACT_SIZE)"
 
 clean:
-	rm -rf build frothy test/test test/test-tiny-328 test/test-tiny-328-volatile test/test-tiny-328-tethered test/test-tiny-328-tethered-host-names test/test-tiny-328-tethered-host-names-persist test/test-host-normal test/test-unity
+	rm -rf build frothy test/test test/test-tiny-328 test/test-tiny-328-volatile test/test-tiny-328-tethered test/test-tiny-328-tethered-host-names test/test-tiny-328-tethered-host-names-persist test/test-host-normal
 
 .PHONY: test test-unity artifacts flash test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal test-host-normal-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session install-host test-install-host test-helper-targets print-config clean
