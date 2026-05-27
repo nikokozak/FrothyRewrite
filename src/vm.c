@@ -334,6 +334,18 @@ static fr_err_t fr_vm_call_native_slot(fr_runtime_t *runtime,
   return fr_vm_push(state, result);
 }
 
+/* ADR 0041 acceptance #1: fr_vm_add_int's sum temp must be wider than
+ * fr_int_t so lhs + rhs cannot wrap before the range check sees it. The
+ * partition is small relative to fr_int_t's native bounds, so a VM-level
+ * boundary test cannot distinguish the wide temp from the older fr_int_t
+ * precheck — both error correctly. The invariants live here instead.
+ * Negative-array-size trick keeps us C99-clean under -Werror -pedantic. */
+typedef char fr_vm_add_int_sum_must_be_wider_than_fr_int[
+    (sizeof(int64_t) > sizeof(fr_int_t)) ? 1 : -1];
+typedef char fr_vm_add_int_partition_must_fit_int64_sum[
+    ((int64_t)FR_TAGGED_INT_MAX + (int64_t)FR_TAGGED_INT_MAX <= INT64_MAX)
+        ? 1 : -1];
+
 static fr_err_t fr_vm_add_int(fr_vm_state_t *state) {
   fr_tagged_t rhs_tagged = 0;
   fr_tagged_t lhs_tagged = 0;

@@ -4921,8 +4921,9 @@ static void test_vm(void) {
                              FR_OP_RETURN};
   uint8_t add_overflow[] = {0x00, 0x00, FR_TEST_PUSH_INT(FR_TAGGED_INT_MAX),
                             FR_TEST_PUSH_INT(1), FR_OP_ADD_INT, FR_OP_RETURN};
-  /* Both operands near the partition boundary; their sum overflows it. The
-   * range check must fire from a wide temp, not from fr_int_t wraparound. */
+  /* Partition-boundary range check: the sum sits outside the tagged band, so
+   * FR_ERR_RANGE is expected. The wide-temp width invariant is proven
+   * separately by the typedef asserts next to fr_vm_add_int in src/vm.c. */
   uint8_t add_partition[] = {0x00, 0x00, FR_TEST_PUSH_INT(FR_TAGGED_INT_MAX),
                              FR_TEST_PUSH_INT(FR_TAGGED_INT_MAX),
                              FR_OP_ADD_INT, FR_OP_RETURN};
