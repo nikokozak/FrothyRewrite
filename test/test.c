@@ -4921,9 +4921,17 @@ static void test_vm(void) {
                              FR_OP_RETURN};
   uint8_t add_overflow[] = {0x00, 0x00, FR_TEST_PUSH_INT(FR_TAGGED_INT_MAX),
                             FR_TEST_PUSH_INT(1), FR_OP_ADD_INT, FR_OP_RETURN};
+  /* Both operands near the partition boundary; their sum overflows it. The
+   * range check must fire from a wide temp, not from fr_int_t wraparound. */
+  uint8_t add_partition[] = {0x00, 0x00, FR_TEST_PUSH_INT(FR_TAGGED_INT_MAX),
+                             FR_TEST_PUSH_INT(FR_TAGGED_INT_MAX),
+                             FR_OP_ADD_INT, FR_OP_RETURN};
   uint8_t add_underflow[] = {0x00, 0x00, FR_TEST_PUSH_INT(FR_TAGGED_INT_MIN),
                              FR_TEST_PUSH_INT(-1), FR_OP_ADD_INT,
                              FR_OP_RETURN};
+  uint8_t add_partition_low[] = {0x00, 0x00, FR_TEST_PUSH_INT(FR_TAGGED_INT_MIN),
+                                 FR_TEST_PUSH_INT(FR_TAGGED_INT_MIN),
+                                 FR_OP_ADD_INT, FR_OP_RETURN};
   uint8_t add_type_error[] = {
       0x00, 0x00, FR_OP_LOAD_SLOT, 0x00, 0x00, FR_TEST_PUSH_INT(1),
       FR_OP_ADD_INT, FR_OP_RETURN};
@@ -5029,7 +5037,9 @@ static void test_vm(void) {
   write_instruction_header(push_nil, FR_INSTRUCTION_MIN_HEADER_SIZE);
   write_instruction_header(add_two_three, FR_INSTRUCTION_MIN_HEADER_SIZE);
   write_instruction_header(add_overflow, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(add_partition, FR_INSTRUCTION_MIN_HEADER_SIZE);
   write_instruction_header(add_underflow, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(add_partition_low, FR_INSTRUCTION_MIN_HEADER_SIZE);
   write_instruction_header(add_type_error, FR_INSTRUCTION_MIN_HEADER_SIZE);
   write_instruction_header(store_slot_zero, FR_INSTRUCTION_MIN_HEADER_SIZE);
   write_instruction_header(load_slot_zero, FR_INSTRUCTION_MIN_HEADER_SIZE);
@@ -5115,9 +5125,19 @@ static void test_vm(void) {
                 FR_OK &&
             fr_vm_run_instruction_stream(&runtime, &view, &result) ==
                 FR_ERR_RANGE);
+  CHECK("vm add rejects partition-boundary overflow",
+        fr_instruction_stream_init(&view, add_partition,
+                                   sizeof(add_partition)) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &view, &result) ==
+                FR_ERR_RANGE);
   CHECK("vm add rejects underflow",
         fr_instruction_stream_init(&view, add_underflow,
                                    sizeof(add_underflow)) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &view, &result) ==
+                FR_ERR_RANGE);
+  CHECK("vm add rejects partition-boundary underflow",
+        fr_instruction_stream_init(&view, add_partition_low,
+                                   sizeof(add_partition_low)) == FR_OK &&
             fr_vm_run_instruction_stream(&runtime, &view, &result) ==
                 FR_ERR_RANGE);
   CHECK("vm add rejects non-int",

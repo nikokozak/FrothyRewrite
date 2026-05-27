@@ -339,20 +339,18 @@ static fr_err_t fr_vm_add_int(fr_vm_state_t *state) {
   fr_tagged_t lhs_tagged = 0;
   fr_int_t rhs = 0;
   fr_int_t lhs = 0;
-  fr_int_t sum = 0;
+  int64_t sum = 0;
 
   FR_TRY(fr_vm_pop(state, &rhs_tagged));
   FR_TRY(fr_vm_pop(state, &lhs_tagged));
   FR_TRY(fr_tagged_decode_int(rhs_tagged, &rhs));
   FR_TRY(fr_tagged_decode_int(lhs_tagged, &lhs));
-  if (rhs > 0 && lhs > (fr_int_t)(FR_TAGGED_INT_MAX - rhs)) {
+  /* Wide temp: range check is independent of fr_int_t's native bounds. */
+  sum = (int64_t)lhs + (int64_t)rhs;
+  if (sum > (int64_t)FR_TAGGED_INT_MAX || sum < (int64_t)FR_TAGGED_INT_MIN) {
     return FR_ERR_RANGE;
   }
-  if (rhs < 0 && lhs < (fr_int_t)(FR_TAGGED_INT_MIN - rhs)) {
-    return FR_ERR_RANGE;
-  }
-  sum = (fr_int_t)(lhs + rhs);
-  FR_TRY(fr_tagged_encode_int(sum, &lhs_tagged));
+  FR_TRY(fr_tagged_encode_int((fr_int_t)sum, &lhs_tagged));
 
   state->ip += 1;
   return fr_vm_push(state, lhs_tagged);
