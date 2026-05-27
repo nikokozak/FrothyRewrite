@@ -803,6 +803,30 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
     return fr_parse_finish_line(&parser);
 #endif
   }
+  if (parser.token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser.token.span, "to")) {
+    fr_parse_expr_id_t body = 0;
+    uint8_t param_start = parser.out->param_count;
+
+    FR_TRY(fr_parse_advance(&parser));
+    if (parser.token.kind != FR_TOKEN_NAME ||
+        fr_parse_span_equals(parser.token.span, "is") ||
+        fr_parse_span_equals(parser.token.span, "to")) {
+      return FR_ERR_INVALID;
+    }
+    out->definition.name = parser.token.span;
+    FR_TRY(fr_parse_advance(&parser));
+    FR_TRY(fr_parse_bracket_block(&parser, &body));
+    FR_TRY(fr_parse_add_expr(
+        &parser,
+        (fr_parse_expr_t){.kind = FR_PARSE_EXPR_FUNCTION,
+                          .child = body,
+                          .param_start = param_start,
+                          .param_count = 0,
+                          .child_count = 1},
+        &out->definition.value));
+    return fr_parse_finish_line(&parser);
+  }
   if (parser.token.kind != FR_TOKEN_NAME ||
       fr_parse_span_equals(parser.token.span, "is")) {
     return FR_ERR_INVALID;

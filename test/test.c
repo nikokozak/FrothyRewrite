@@ -2855,6 +2855,23 @@ static void test_parse(void) {
             parsed.exprs[body->children[0]].kind ==
                 FR_PARSE_EXPR_INT &&
             parsed.exprs[body->children[0]].int_value == 1);
+  CHECK("parse to definition desugars to fn",
+        fr_parse_line("to boot [ 1 ]", &parsed) == FR_OK &&
+            parsed.expr_count == 3 &&
+            fr_parse_span_equals(parsed.definition.name, "boot") &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            value->param_count == 0 &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[body->children[0]].int_value == 1);
+  CHECK("parse to rejects missing name",
+        fr_parse_line("to [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse to rejects is as name",
+        fr_parse_line("to is [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse to rejects missing body",
+        fr_parse_line("to boot", &parsed) == FR_ERR_INVALID);
 #if FR_TAGGED_INT_MAX >= 115200
   CHECK("parse roomier int body",
         fr_parse_line("boot is fn [ 115200 ]", &parsed) == FR_OK &&
@@ -3801,6 +3818,12 @@ static void test_compile(void) {
   CHECK("compiled function applies and runs",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ 1 ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
+  CHECK("compiled to definition runs like is fn",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("to boot [ 1 ]", &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
