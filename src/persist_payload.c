@@ -53,6 +53,10 @@ typedef enum fr_persist_object_record_kind_t {
 
 static const uint8_t fr_persist_payload_magic[4] = {'F', 'R', 'P', 'O'};
 
+/* Writer/reader cursors stay uint16_t; this asserts the payload buffer fits. */
+typedef char fr_persist_payload_bytes_must_fit_uint16[
+    (FR_PROFILE_PERSISTENCE_BYTES <= UINT16_MAX) ? 1 : -1];
+
 typedef struct fr_persist_writer_t {
   uint8_t *bytes;
   uint16_t used;

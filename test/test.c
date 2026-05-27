@@ -4506,6 +4506,32 @@ static void test_persist(void) {
             fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
             decoded == 100000);
+  {
+    /* Drive payload well past the 16-bit profile 512-byte ceiling so the
+       uint16_t writer/reader cursors are exercised at 32-bit-profile scale. */
+    char line[40];
+    uint16_t saturated_bytes = 0;
+    fr_base_image_install(&runtime);
+    for (uint16_t i = 0; i < FR_PROFILE_MAX_OVERLAY_NAMES; i++) {
+      (void)snprintf(line, sizeof(line), "saturated_overlay_%02u is %u",
+                     (unsigned)i, 100000u + i);
+      if (fr_compile_overlay_update_for_runtime(&runtime, line, &update) !=
+          FR_OK) {
+        break;
+      }
+      if (fr_overlay_apply(&runtime, &update.overlay_update) != FR_OK) {
+        break;
+      }
+    }
+    CHECK("persist 32-bit saturated payload cursor stays bounded",
+          fr_persist_save(&runtime) == FR_OK &&
+              (saturated_bytes = fr_persist_debug_last_payload_bytes()) >
+                  1024 &&
+              saturated_bytes < FR_PROFILE_PERSISTENCE_BYTES);
+    CHECK("persist 32-bit saturated payload round-trips",
+          fr_base_image_install(&runtime) == FR_OK &&
+              fr_persist_restore(&runtime) == FR_OK);
+  }
 #endif
   CHECK("persist restores dynamic slot ids",
         fr_base_image_install(&runtime) == FR_OK &&
