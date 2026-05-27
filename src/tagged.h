@@ -142,3 +142,8 @@ fr_err_t fr_tagged_encode_handle_ref(fr_handle_ref_t ref,
                                      fr_tagged_t *out_tagged);
 fr_err_t fr_tagged_decode_handle_ref(fr_tagged_t tagged,
                                      fr_handle_ref_t *out_ref);
+
+/* Canonical little-endian u32 byte pair. Lives here because tagged.h owns the
+ * runtime word byte layout; persist, profile, and instruction call through. */
+uint32_t fr_read_u32_le(const uint8_t *bytes);
+void fr_write_u32_le(uint8_t *bytes, uint32_t value);

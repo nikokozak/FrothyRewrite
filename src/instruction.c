@@ -21,18 +21,11 @@ static fr_int_t fr_read_i16_little_endian(const uint8_t *bytes) {
 }
 #endif
 
-#if FR_WORD_SIZE == 32
-static uint32_t fr_read_u32_little_endian(const uint8_t *bytes) {
-  return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
-         ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
-}
-#endif
-
 static fr_int_t fr_read_int_operand_little_endian(const uint8_t *bytes) {
 #if FR_WORD_SIZE == 16
   return fr_read_i16_little_endian(bytes);
 #else
-  return (fr_int_t)(int32_t)fr_read_u32_little_endian(bytes);
+  return (fr_int_t)(int32_t)fr_read_u32_le(bytes);
 #endif
 }
 

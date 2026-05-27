@@ -173,20 +173,6 @@ static void fr_persist_payload_write_u16(uint8_t *bytes, uint16_t value) {
   bytes[1] = (uint8_t)(value >> 8);
 }
 
-#if FR_WORD_SIZE == 32
-static uint32_t fr_persist_payload_read_u32(const uint8_t *bytes) {
-  return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
-         ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
-}
-
-static void fr_persist_payload_write_u32(uint8_t *bytes, uint32_t value) {
-  bytes[0] = (uint8_t)(value & 0xffu);
-  bytes[1] = (uint8_t)((value >> 8) & 0xffu);
-  bytes[2] = (uint8_t)((value >> 16) & 0xffu);
-  bytes[3] = (uint8_t)((value >> 24) & 0xffu);
-}
-#endif
-
 static fr_err_t fr_persist_writer_u8(fr_persist_writer_t *writer,
                                      uint8_t value) {
   if (writer->used + 1 > writer->cap) {
@@ -215,7 +201,7 @@ static fr_err_t fr_persist_writer_u32(fr_persist_writer_t *writer,
     return FR_ERR_CAPACITY;
   }
 
-  fr_persist_payload_write_u32(&writer->bytes[writer->used], value);
+  fr_write_u32_le(&writer->bytes[writer->used], value);
   writer->used = (uint16_t)(writer->used + 4);
   return FR_OK;
 }
@@ -304,7 +290,7 @@ static fr_err_t fr_persist_reader_u32(fr_persist_reader_t *reader,
     return FR_ERR_CORRUPT;
   }
 
-  *out = fr_persist_payload_read_u32(&reader->bytes[reader->offset]);
+  *out = fr_read_u32_le(&reader->bytes[reader->offset]);
   reader->offset = (uint16_t)(reader->offset + 4);
   return FR_OK;
 }

@@ -180,17 +180,10 @@ static void fr_profile_hash_u16(uint32_t *crc, uint16_t value) {
 }
 
 #if FR_WORD_SIZE == 32
-static void fr_profile_write_u32(uint8_t *bytes, uint32_t value) {
-  bytes[0] = (uint8_t)(value & 0xffu);
-  bytes[1] = (uint8_t)((value >> 8) & 0xffu);
-  bytes[2] = (uint8_t)((value >> 16) & 0xffu);
-  bytes[3] = (uint8_t)((value >> 24) & 0xffu);
-}
-
 static void fr_profile_hash_u32(uint32_t *crc, uint32_t value) {
   uint8_t bytes[4];
 
-  fr_profile_write_u32(bytes, value);
+  fr_write_u32_le(bytes, value);
   *crc = fr_crc32_update(*crc, bytes, (uint16_t)sizeof(bytes));
 }
 #endif

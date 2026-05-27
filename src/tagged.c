@@ -245,6 +245,18 @@ fr_err_t fr_tagged_encode_handle_ref(fr_handle_ref_t ref,
 #endif
 }
 
+uint32_t fr_read_u32_le(const uint8_t *bytes) {
+  return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
+         ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+}
+
+void fr_write_u32_le(uint8_t *bytes, uint32_t value) {
+  bytes[0] = (uint8_t)(value & 0xffu);
+  bytes[1] = (uint8_t)((value >> 8) & 0xffu);
+  bytes[2] = (uint8_t)((value >> 16) & 0xffu);
+  bytes[3] = (uint8_t)((value >> 24) & 0xffu);
+}
+
 fr_err_t fr_tagged_decode_handle_ref(fr_tagged_t tagged,
                                      fr_handle_ref_t *out_ref) {
   if (out_ref == NULL) {
