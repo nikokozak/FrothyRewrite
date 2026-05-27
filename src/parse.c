@@ -18,6 +18,12 @@ typedef enum fr_token_kind_t {
   FR_TOKEN_SEMICOLON,
   FR_TOKEN_COMMA,
   FR_TOKEN_ARROW,
+  FR_TOKEN_LT,
+  FR_TOKEN_GT,
+  FR_TOKEN_LE,
+  FR_TOKEN_GE,
+  FR_TOKEN_EQ,
+  FR_TOKEN_NE,
 } fr_token_kind_t;
 
 typedef struct fr_token_t {
@@ -64,6 +70,10 @@ static bool fr_parse_is_punctuation(char c) {
 
 static bool fr_parse_is_arrow_start(const char *text) {
   return text != NULL && text[0] == '-' && text[1] == '>';
+}
+
+static bool fr_parse_is_compare_op_char(char c) {
+  return c == '<' || c == '>' || c == '=';
 }
 
 bool fr_parse_span_equals(fr_parse_span_t span, const char *text) {
@@ -201,6 +211,34 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
 #endif
   }
 
+  if (fr_parse_is_compare_op_char(c)) {
+    parser->cursor += 1;
+    span.length = 1;
+    parser->token.span = span;
+    parser->token.int_value = 0;
+    parser->token.leading_space = leading_space;
+    if (c == '<' && *parser->cursor == '=') {
+      parser->cursor += 1;
+      parser->token.span.length = 2;
+      parser->token.kind = FR_TOKEN_LE;
+    } else if (c == '<' && *parser->cursor == '>') {
+      parser->cursor += 1;
+      parser->token.span.length = 2;
+      parser->token.kind = FR_TOKEN_NE;
+    } else if (c == '>' && *parser->cursor == '=') {
+      parser->cursor += 1;
+      parser->token.span.length = 2;
+      parser->token.kind = FR_TOKEN_GE;
+    } else if (c == '<') {
+      parser->token.kind = FR_TOKEN_LT;
+    } else if (c == '>') {
+      parser->token.kind = FR_TOKEN_GT;
+    } else {
+      parser->token.kind = FR_TOKEN_EQ;
+    }
+    return FR_OK;
+  }
+
   if (fr_parse_is_punctuation(c)) {
     parser->cursor += 1;
     span.length = 1;
@@ -227,6 +265,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
 
   while (*parser->cursor != '\0' && !fr_parse_is_space(*parser->cursor) &&
          !fr_parse_is_punctuation(*parser->cursor) &&
+         !fr_parse_is_compare_op_char(*parser->cursor) &&
          !fr_parse_is_arrow_start(parser->cursor)) {
     if (span.length >= FR_PARSE_MAX_TOKEN_BYTES) {
       return FR_ERR_RANGE;
@@ -619,6 +658,40 @@ static fr_err_t fr_parse_forever(fr_parser_t *parser,
   return fr_parse_add_expr(parser, forever, out_id);
 }
 
+static bool fr_parse_compare_token_kind(fr_token_kind_t kind,
+                                        fr_parse_expr_kind_t *out_expr_kind) {
+  switch (kind) {
+  case FR_TOKEN_LT: *out_expr_kind = FR_PARSE_EXPR_LT; return true;
+  case FR_TOKEN_GT: *out_expr_kind = FR_PARSE_EXPR_GT; return true;
+  case FR_TOKEN_LE: *out_expr_kind = FR_PARSE_EXPR_LE; return true;
+  case FR_TOKEN_GE: *out_expr_kind = FR_PARSE_EXPR_GE; return true;
+  case FR_TOKEN_EQ: *out_expr_kind = FR_PARSE_EXPR_EQ; return true;
+  case FR_TOKEN_NE: *out_expr_kind = FR_PARSE_EXPR_NE; return true;
+  default: return false;
+  }
+}
+
+static fr_err_t fr_parse_comparison(fr_parser_t *parser,
+                                    fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_id_t lhs = 0;
+  fr_parse_expr_kind_t op_kind = FR_PARSE_EXPR_LT;
+
+  FR_TRY(fr_parse_expression_inner(parser, &lhs));
+  while (fr_parse_compare_token_kind(parser->token.kind, &op_kind)) {
+    fr_parse_expr_id_t rhs = 0;
+    fr_parse_expr_t binop = {.kind = op_kind, .child_count = 2};
+
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_expression_inner(parser, &rhs));
+    binop.children[0] = lhs;
+    binop.children[1] = rhs;
+    binop.child = lhs;
+    FR_TRY(fr_parse_add_expr(parser, binop, &lhs));
+  }
+  *out_id = lhs;
+  return FR_OK;
+}
+
 static fr_err_t fr_parse_expression(fr_parser_t *parser,
                                     fr_parse_expr_id_t *out_id) {
   fr_err_t err = FR_OK;
@@ -631,7 +704,7 @@ static fr_err_t fr_parse_expression(fr_parser_t *parser,
   }
 
   parser->expr_depth += 1;
-  err = fr_parse_expression_inner(parser, out_id);
+  err = fr_parse_comparison(parser, out_id);
   parser->expr_depth -= 1;
   return err;
 }

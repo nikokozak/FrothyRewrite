@@ -338,6 +338,21 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
                                      uint8_t instruction_bytes[],
                                      uint16_t *offset);
 
+static fr_err_t fr_compile_emit_binop(const fr_compile_context_t *ctx,
+                                      const fr_parse_line_t *parsed,
+                                      const fr_parse_expr_t *expr,
+                                      uint8_t instruction_bytes[],
+                                      uint16_t *offset, fr_opcode_t op) {
+  if (expr->child_count != 2) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0], instruction_bytes,
+                              offset));
+  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[1], instruction_bytes,
+                              offset));
+  return fr_compile_write_byte(instruction_bytes, offset, (uint8_t)op);
+}
+
 static fr_err_t fr_compile_emit_drop(uint8_t instruction_bytes[],
                                      uint16_t *offset) {
   return fr_compile_write_byte(instruction_bytes, offset, FR_OP_DROP);
@@ -627,6 +642,24 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_FIELD_WRITE:
     return FR_ERR_UNSUPPORTED;
 #endif
+  case FR_PARSE_EXPR_LT:
+    return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
+                                 FR_OP_LT_INT);
+  case FR_PARSE_EXPR_GT:
+    return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
+                                 FR_OP_GT_INT);
+  case FR_PARSE_EXPR_LE:
+    return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
+                                 FR_OP_LE_INT);
+  case FR_PARSE_EXPR_GE:
+    return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
+                                 FR_OP_GE_INT);
+  case FR_PARSE_EXPR_EQ:
+    return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
+                                 FR_OP_EQ_INT);
+  case FR_PARSE_EXPR_NE:
+    return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
+                                 FR_OP_NE_INT);
   case FR_PARSE_EXPR_CALL:
     return fr_compile_emit_call(ctx, parsed, expr, instruction_bytes, offset);
   case FR_PARSE_EXPR_LIST:

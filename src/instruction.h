@@ -44,6 +44,12 @@ typedef enum fr_opcode_t {
   FR_OP_STORE_FIELD = 0x12,
   FR_OP_PUSH_FALSE = 0x13,
   FR_OP_PUSH_TRUE = 0x14,
+  FR_OP_LT_INT = 0x15,
+  FR_OP_GT_INT = 0x16,
+  FR_OP_LE_INT = 0x17,
+  FR_OP_GE_INT = 0x18,
+  FR_OP_EQ_INT = 0x19,
+  FR_OP_NE_INT = 0x1A,
 } fr_opcode_t;
 
 fr_err_t fr_instruction_stream_init(fr_instruction_stream_t *view,

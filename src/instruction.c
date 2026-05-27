@@ -335,6 +335,30 @@ fr_err_t fr_instruction_disassemble_at(const fr_instruction_stream_t *view,
     FR_TRY(fr_append_text(out, out_cap, &used, "ADD_INT"));
     return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
                                       next_ip);
+  case FR_OP_LT_INT:
+    FR_TRY(fr_append_text(out, out_cap, &used, "LT_INT"));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
+                                      next_ip);
+  case FR_OP_GT_INT:
+    FR_TRY(fr_append_text(out, out_cap, &used, "GT_INT"));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
+                                      next_ip);
+  case FR_OP_LE_INT:
+    FR_TRY(fr_append_text(out, out_cap, &used, "LE_INT"));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
+                                      next_ip);
+  case FR_OP_GE_INT:
+    FR_TRY(fr_append_text(out, out_cap, &used, "GE_INT"));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
+                                      next_ip);
+  case FR_OP_EQ_INT:
+    FR_TRY(fr_append_text(out, out_cap, &used, "EQ_INT"));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
+                                      next_ip);
+  case FR_OP_NE_INT:
+    FR_TRY(fr_append_text(out, out_cap, &used, "NE_INT"));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
+                                      next_ip);
   case FR_OP_DROP:
     FR_TRY(fr_append_text(out, out_cap, &used, "DROP"));
     return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),

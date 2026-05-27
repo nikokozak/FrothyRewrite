@@ -42,6 +42,12 @@ typedef enum fr_parse_expr_kind_t {
   FR_PARSE_EXPR_CELL_WRITE,
   FR_PARSE_EXPR_FIELD_READ,
   FR_PARSE_EXPR_FIELD_WRITE,
+  FR_PARSE_EXPR_LT,
+  FR_PARSE_EXPR_GT,
+  FR_PARSE_EXPR_LE,
+  FR_PARSE_EXPR_GE,
+  FR_PARSE_EXPR_EQ,
+  FR_PARSE_EXPR_NE,
 } fr_parse_expr_kind_t;
 
 typedef struct fr_parse_expr_t {

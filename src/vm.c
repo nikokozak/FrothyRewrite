@@ -376,6 +376,34 @@ static fr_err_t fr_vm_add_int(fr_vm_state_t *state) {
   return fr_vm_push(state, lhs_tagged);
 }
 
+static fr_err_t fr_vm_compare_int(fr_vm_state_t *state, fr_opcode_t op) {
+  fr_tagged_t rhs_tagged = 0;
+  fr_tagged_t lhs_tagged = 0;
+  fr_int_t rhs = 0;
+  fr_int_t lhs = 0;
+  bool result = false;
+
+  FR_TRY(fr_vm_pop(state, &rhs_tagged));
+  FR_TRY(fr_vm_pop(state, &lhs_tagged));
+  FR_TRY(fr_tagged_decode_int(rhs_tagged, &rhs));
+  FR_TRY(fr_tagged_decode_int(lhs_tagged, &lhs));
+
+  switch (op) {
+  case FR_OP_LT_INT: result = lhs < rhs; break;
+  case FR_OP_GT_INT: result = lhs > rhs; break;
+  case FR_OP_LE_INT: result = lhs <= rhs; break;
+  case FR_OP_GE_INT: result = lhs >= rhs; break;
+  case FR_OP_EQ_INT: result = lhs == rhs; break;
+  case FR_OP_NE_INT: result = lhs != rhs; break;
+  default:
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_encode_bool(result, &lhs_tagged));
+  state->ip += 1;
+  return fr_vm_push(state, lhs_tagged);
+}
+
 static fr_err_t fr_vm_jump(const fr_instruction_stream_t *view,
                            fr_vm_state_t *state) {
   fr_code_offset_t target = 0;
@@ -495,6 +523,13 @@ static fr_err_t fr_vm_step(fr_runtime_t *runtime,
     return fr_vm_call_native_slot(runtime, view, state);
   case FR_OP_ADD_INT:
     return fr_vm_add_int(state);
+  case FR_OP_LT_INT:
+  case FR_OP_GT_INT:
+  case FR_OP_LE_INT:
+  case FR_OP_GE_INT:
+  case FR_OP_EQ_INT:
+  case FR_OP_NE_INT:
+    return fr_vm_compare_int(state, (fr_opcode_t)view->bytes[state->ip]);
   case FR_OP_JUMP:
     return fr_vm_jump(view, state);
   case FR_OP_JUMP_IF_FALSY:
