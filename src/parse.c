@@ -79,6 +79,11 @@ static bool fr_parse_is_compare_op_char(char c) {
   return c == '<' || c == '>' || c == '=';
 }
 
+static bool fr_parse_minus_infix_after(fr_token_kind_t kind) {
+  return kind == FR_TOKEN_INT || kind == FR_TOKEN_RBRACKET ||
+         kind == FR_TOKEN_RPAREN || kind == FR_TOKEN_TEXT;
+}
+
 bool fr_parse_span_equals(fr_parse_span_t span, const char *text) {
   uint16_t i = 0;
 
@@ -168,6 +173,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
   fr_parse_span_t span = {0};
   char c = '\0';
   bool leading_space = false;
+  fr_token_kind_t prev_kind = parser->token.kind;
 
   leading_space = fr_parse_skip_space(parser);
   c = *parser->cursor;
@@ -243,7 +249,9 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
   }
 
   if (c == '*' || c == '/' ||
-      (c == '-' && !fr_parse_is_digit(parser->cursor[1]))) {
+      (c == '-' &&
+       (!fr_parse_is_digit(parser->cursor[1]) ||
+        (!leading_space && fr_parse_minus_infix_after(prev_kind))))) {
     parser->cursor += 1;
     span.length = 1;
     parser->token.span = span;
@@ -283,7 +291,8 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
          !fr_parse_is_punctuation(*parser->cursor) &&
          !fr_parse_is_compare_op_char(*parser->cursor) &&
          *parser->cursor != '*' && *parser->cursor != '/' &&
-         !fr_parse_is_arrow_start(parser->cursor)) {
+         !fr_parse_is_arrow_start(parser->cursor) &&
+         !(*parser->cursor == '-' && fr_parse_is_digit(span.start[0]))) {
     if (span.length >= FR_PARSE_MAX_TOKEN_BYTES) {
       return FR_ERR_RANGE;
     }
