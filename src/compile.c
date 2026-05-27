@@ -538,6 +538,33 @@ static fr_err_t fr_compile_emit_repeat(const fr_compile_context_t *ctx,
   return fr_compile_emit_push_nil(instruction_bytes, offset);
 }
 
+static fr_err_t fr_compile_emit_while(const fr_compile_context_t *ctx,
+                                      const fr_parse_line_t *parsed,
+                                      const fr_parse_expr_t *expr,
+                                      uint8_t instruction_bytes[],
+                                      uint16_t *offset) {
+  uint16_t cond_offset = 0;
+  uint16_t done_target_operand = 0;
+
+  if (expr == NULL || expr->child_count != 2) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
+
+  cond_offset = *offset;
+  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
+                              instruction_bytes, offset));
+  FR_TRY(fr_compile_emit_jump_placeholder(
+      instruction_bytes, offset, FR_OP_JUMP_IF_FALSY, &done_target_operand));
+  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[1],
+                              instruction_bytes, offset));
+  FR_TRY(fr_compile_emit_drop(instruction_bytes, offset));
+  FR_TRY(fr_compile_emit_jump_target(instruction_bytes, offset, FR_OP_JUMP,
+                                     cond_offset));
+  FR_TRY(fr_compile_patch_u16(instruction_bytes, done_target_operand, *offset));
+  return fr_compile_emit_push_nil(instruction_bytes, offset);
+}
+
 static fr_err_t fr_compile_emit_forever(const fr_compile_context_t *ctx,
                                         const fr_parse_line_t *parsed,
                                         const fr_parse_expr_t *expr,
@@ -693,6 +720,8 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     return fr_compile_emit_if(ctx, parsed, expr, instruction_bytes, offset);
   case FR_PARSE_EXPR_REPEAT:
     return fr_compile_emit_repeat(ctx, parsed, expr, instruction_bytes, offset);
+  case FR_PARSE_EXPR_WHILE:
+    return fr_compile_emit_while(ctx, parsed, expr, instruction_bytes, offset);
   case FR_PARSE_EXPR_FOREVER:
     return fr_compile_emit_forever(ctx, parsed, expr, instruction_bytes,
                                    offset);

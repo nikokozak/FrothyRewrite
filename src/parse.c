@@ -384,6 +384,7 @@ static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
          fr_parse_span_equals(name, "when") ||
          fr_parse_span_equals(name, "unless") ||
          fr_parse_span_equals(name, "repeat") ||
+         fr_parse_span_equals(name, "while") ||
          fr_parse_span_equals(name, "forever") ||
          fr_parse_span_equals(name, "cells") ||
          fr_parse_span_equals(name, "record") ||
@@ -719,6 +720,18 @@ static fr_err_t fr_parse_repeat(fr_parser_t *parser,
   return fr_parse_add_expr(parser, repeat, out_id);
 }
 
+static fr_err_t fr_parse_while(fr_parser_t *parser,
+                               fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_t while_expr = {.kind = FR_PARSE_EXPR_WHILE};
+
+  FR_TRY(fr_parse_advance(parser));
+  FR_TRY(fr_parse_expression(parser, &while_expr.children[0]));
+  FR_TRY(fr_parse_bracket_block(parser, &while_expr.children[1]));
+  while_expr.child = while_expr.children[0];
+  while_expr.child_count = 2;
+  return fr_parse_add_expr(parser, while_expr, out_id);
+}
+
 static fr_err_t fr_parse_forever(fr_parser_t *parser,
                                  fr_parse_expr_id_t *out_id) {
   fr_parse_expr_t forever = {.kind = FR_PARSE_EXPR_FOREVER};
@@ -880,6 +893,9 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     }
     if (fr_parse_span_equals(parser->token.span, "repeat")) {
       return fr_parse_repeat(parser, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "while")) {
+      return fr_parse_while(parser, out_id);
     }
     if (fr_parse_span_equals(parser->token.span, "forever")) {
       return fr_parse_forever(parser, out_id);

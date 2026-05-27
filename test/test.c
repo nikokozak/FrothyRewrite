@@ -3140,6 +3140,23 @@ static void test_parse(void) {
             body->child_count == 1 &&
             parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_CALL &&
             fr_parse_span_equals(parsed.exprs[body->children[0]].name, "ms"));
+  CHECK("parse while expression",
+        fr_parse_line("boot is fn [ while 1 [ one ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_WHILE &&
+            value->child_count == 2 &&
+            (condition = &parsed.exprs[value->children[0]])->kind ==
+                FR_PARSE_EXPR_INT &&
+            condition->int_value == 1 &&
+            (body = &parsed.exprs[value->children[1]])->kind ==
+                FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_NAME &&
+            fr_parse_span_equals(parsed.exprs[body->children[0]].name, "one"));
   CHECK("parse forever expression",
         fr_parse_line("boot is fn [ forever [ ms: 10 ] ]", &parsed) ==
                 FR_OK &&
@@ -4488,6 +4505,71 @@ static void test_compile(void) {
   CHECK("compile rejects negative repeat count",
         fr_compile_overlay_update("boot is fn [ repeat -1 [ one ] ]",
                                   &update) == FR_ERR_RANGE);
+  CHECK("compiled while uses jump loop",
+        fr_compile_overlay_update("boot is fn [ while 0 [ 1 ] ]",
+                                  &update) == FR_OK &&
+            update.code_object.instructions.length ==
+                11u + (push_size * 2u) &&
+            update.instruction_bytes[2] == FR_OP_PUSH_INT &&
+            update.instruction_bytes[3] == 0 &&
+            update.instruction_bytes[2u + push_size] ==
+                FR_OP_JUMP_IF_FALSY &&
+            update.instruction_bytes[3u + push_size] ==
+                9u + (push_size * 2u) &&
+            update.instruction_bytes[5u + push_size] == FR_OP_PUSH_INT &&
+            update.instruction_bytes[6u + push_size] == 1 &&
+            update.instruction_bytes[5u + (push_size * 2u)] == FR_OP_DROP &&
+            update.instruction_bytes[6u + (push_size * 2u)] == FR_OP_JUMP &&
+            update.instruction_bytes[7u + (push_size * 2u)] == 2 &&
+            update.instruction_bytes[9u + (push_size * 2u)] ==
+                FR_OP_PUSH_NIL &&
+            update.instruction_bytes[10u + (push_size * 2u)] ==
+                FR_OP_RETURN);
+  CHECK("compiled while false skips body and yields nil",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ while false [ 1 ] ]",
+                                      &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged));
+#if FR_FEATURE_CELLS
+  CHECK("compiled while decrements cell to zero and exits",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "counter is cells(1)", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime,
+                "boot is fn [ set counter[0] to 3; "
+                "while counter[0] [ set counter[0] to counter[0] - 1 ] ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged) &&
+            fr_compile_expression_for_runtime(&runtime, "counter[0]",
+                                              &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 0);
+  CHECK("compiled while exits when comparison on slot flips",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "counter is cells(1)", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime,
+                "boot is fn [ set counter[0] to 1; "
+                "while counter[0] > 0 [ set counter[0] to 0 ] ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged) &&
+            fr_compile_expression_for_runtime(&runtime, "counter[0]",
+                                              &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 0);
+#endif
   CHECK("compiled forever uses jump loop",
         fr_compile_overlay_update("boot is fn [ forever [ ms: 1 ] ]",
                                   &update) == FR_OK &&
