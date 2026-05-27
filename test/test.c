@@ -324,6 +324,39 @@ static void test_profile_hash_word_size(void) {
         fr_profile_hash() != fr_profile_debug_hash_for_word_size(other));
 }
 
+#if FR_FEATURE_PERSISTENCE
+/* A saved persist header carrying the opposite word size's profile hash
+ * must be rejected outright, not silently restored. The gate is the hash
+ * compare in fr_persist_header_parse. */
+static void test_persist_cross_width_header_rejection(void) {
+  fr_runtime_t runtime;
+  uint8_t header[FR_PERSIST_HEADER_BYTES];
+  const uint16_t other = (FR_WORD_SIZE == 16) ? 32u : 16u;
+
+  CHECK("save populates storage for cross-width test",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_save(&runtime) == FR_OK);
+  CHECK("read saved header for tampering",
+        fr_platform_storage_read(0, 0, header,
+                                 (uint16_t)sizeof(header)) == FR_OK);
+
+  fr_write_u32_le(&header[FR_PERSIST_PROFILE_HASH_OFFSET],
+                  fr_profile_debug_hash_for_word_size(other));
+  memset(&header[24], 0, 4);
+  fr_write_u32_le(&header[24],
+                  fr_crc32(header, FR_PERSIST_HEADER_BYTES));
+
+  CHECK("write tampered headers back to both storage slots",
+        fr_platform_storage_write(0, 0, header,
+                                  (uint16_t)sizeof(header)) == FR_OK &&
+            fr_platform_storage_write(1, 0, header,
+                                      (uint16_t)sizeof(header)) == FR_OK);
+  CHECK("restore rejects header with opposite-width profile hash",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_ERR_CORRUPT);
+}
+#endif
+
 #if FR_FEATURE_OVERLAY_APPLY_COMMAND
 static char hex_digit(uint8_t value) {
   return value < 10 ? (char)('0' + value) : (char)('a' + value - 10);
@@ -6382,6 +6415,7 @@ int main(void) {
 #endif
 #if FR_FEATURE_PERSISTENCE
   test_persist();
+  test_persist_cross_width_header_rejection();
 #endif
   test_vm();
   test_repl();
