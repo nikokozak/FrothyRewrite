@@ -3172,6 +3172,14 @@ static void test_parse(void) {
             body->child_count == 1 &&
             parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_CALL &&
             fr_parse_span_equals(parsed.exprs[body->children[0]].name, "ms"));
+  CHECK("parse set name to expr is slot write",
+        fr_parse_expression_line("set count to 7", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_SLOT_WRITE &&
+            fr_parse_span_equals(parsed.exprs[expr_id].name, "count") &&
+            parsed.exprs[parsed.exprs[expr_id].child].kind ==
+                FR_PARSE_EXPR_INT &&
+            parsed.exprs[parsed.exprs[expr_id].child].int_value == 7);
 #if FR_FEATURE_CELLS
   CHECK("parse cells definition",
         fr_parse_line("counter is cells(2)", &parsed) == FR_OK &&
@@ -4656,6 +4664,33 @@ static void test_compile(void) {
                 FR_SLOT_GPIO_WRITE);
   CHECK("compiled expression rejects definition",
         fr_compile_expression("boot is 1", &expression) == FR_ERR_INVALID);
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  CHECK("compile set name to expr stores into existing slot",
+        fr_base_image_install(&binding_runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(&binding_runtime,
+                                                  "count is 1", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&binding_runtime, &update.overlay_update) ==
+                FR_OK &&
+            fr_compile_expression_for_runtime(&binding_runtime,
+                                              "set count to 42",
+                                              &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(&binding_runtime,
+                                         &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged) &&
+            fr_slot_id_for_name(&binding_runtime, "count", &slot_id) ==
+                FR_OK &&
+            fr_slot_read(&binding_runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 42);
+  CHECK("compile rejects set on undeclared slot",
+        fr_compile_expression_for_runtime(&binding_runtime,
+                                          "set never_declared to 1",
+                                          &expression) == FR_ERR_NOT_FOUND);
+#endif
+  CHECK("compile rejects set on function parameter",
+        fr_compile_overlay_update("boot is fn with x [ set x to 1 ]",
+                                  &update) == FR_ERR_INVALID);
 }
 
 /*

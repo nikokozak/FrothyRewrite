@@ -669,6 +669,21 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_FIELD_WRITE:
     return FR_ERR_UNSUPPORTED;
 #endif
+  case FR_PARSE_EXPR_SLOT_WRITE:
+    if (expr->child_count != 1) {
+      return FR_ERR_INVALID;
+    }
+    /* Parameters are immutable; trying to `set arg to ...` is a source bug. */
+    if (fr_compile_param_for_name(ctx, expr->name, &arg_index)) {
+      return FR_ERR_INVALID;
+    }
+    /* fr_compile_slot_for_name errors if the name has never been declared,
+     * which is exactly the "set on undeclared slot" rejection we want. */
+    FR_TRY(fr_compile_slot_for_name(ctx, expr->name, &slot_id));
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->child, instruction_bytes,
+                                offset));
+    return fr_compile_emit_slot_op(instruction_bytes, offset, FR_OP_STORE_SLOT,
+                                   slot_id);
   case FR_PARSE_EXPR_LT:
     return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
                                  FR_OP_LT_INT);

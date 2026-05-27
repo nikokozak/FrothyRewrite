@@ -608,7 +608,6 @@ static fr_err_t fr_parse_cells(fr_parser_t *parser,
 }
 #endif
 
-#if FR_FEATURE_CELLS || FR_FEATURE_RECORDS
 static fr_err_t fr_parse_set(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   const fr_parse_expr_t *target = NULL;
   fr_parse_expr_id_t target_id = 0;
@@ -648,9 +647,20 @@ static fr_err_t fr_parse_set(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
         out_id);
 #endif
   }
+  /* `set name to expr` mutates an existing top-level slot. `is` still
+   * declares-and-rebinds for live-coding ergonomics; `set` is the
+   * documented mutation form and errors at compile time if the slot has
+   * not been declared. */
+  if (target->kind == FR_PARSE_EXPR_NAME) {
+    return fr_parse_add_expr(
+        parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_SLOT_WRITE,
+                                  .name = target->name,
+                                  .child = value,
+                                  .child_count = 1},
+        out_id);
+  }
   return FR_ERR_INVALID;
 }
-#endif
 
 static fr_err_t fr_parse_if(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   fr_parse_expr_t if_expr = {.kind = FR_PARSE_EXPR_IF};
@@ -908,11 +918,7 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
 #endif
     }
     if (fr_parse_span_equals(parser->token.span, "set")) {
-#if !FR_FEATURE_CELLS && !FR_FEATURE_RECORDS
-      return FR_ERR_UNSUPPORTED;
-#else
       return fr_parse_set(parser, out_id);
-#endif
     }
     if (fr_parse_span_equals(parser->token.span, "is")) {
       return FR_ERR_INVALID;
