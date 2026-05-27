@@ -194,14 +194,12 @@ static fr_err_t fr_compile_write_i16(uint8_t instruction_bytes[],
 #if FR_WORD_SIZE == 32
 static fr_err_t fr_compile_write_u32(uint8_t instruction_bytes[],
                                      uint16_t *offset, uint32_t word) {
-  FR_TRY(fr_compile_write_byte(instruction_bytes, offset,
-                               (uint8_t)(word & 0xFFu)));
-  FR_TRY(fr_compile_write_byte(instruction_bytes, offset,
-                               (uint8_t)((word >> 8) & 0xFFu)));
-  FR_TRY(fr_compile_write_byte(instruction_bytes, offset,
-                               (uint8_t)((word >> 16) & 0xFFu)));
-  return fr_compile_write_byte(instruction_bytes, offset,
-                               (uint8_t)((word >> 24) & 0xFFu));
+  if (*offset + 4u > FR_COMPILE_MAX_INSTRUCTION_BYTES) {
+    return FR_ERR_CAPACITY;
+  }
+  fr_write_u32_le(&instruction_bytes[*offset], word);
+  *offset = (uint16_t)(*offset + 4u);
+  return FR_OK;
 }
 #endif
 

@@ -33,21 +33,9 @@ static uint16_t fr_persist_read_u16(const uint8_t *bytes) {
   return (uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8);
 }
 
-static uint32_t fr_persist_read_u32(const uint8_t *bytes) {
-  return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
-         ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
-}
-
 static void fr_persist_write_u16_raw(uint8_t *bytes, uint16_t value) {
   bytes[0] = (uint8_t)(value & 0xffu);
   bytes[1] = (uint8_t)(value >> 8);
-}
-
-static void fr_persist_write_u32_raw(uint8_t *bytes, uint32_t value) {
-  bytes[0] = (uint8_t)(value & 0xffu);
-  bytes[1] = (uint8_t)((value >> 8) & 0xffu);
-  bytes[2] = (uint8_t)((value >> 16) & 0xffu);
-  bytes[3] = (uint8_t)((value >> 24) & 0xffu);
 }
 
 static fr_err_t fr_persist_header_build(uint8_t *bytes,
@@ -60,13 +48,11 @@ static fr_err_t fr_persist_header_build(uint8_t *bytes,
   memcpy(bytes, fr_persist_header_magic, sizeof(fr_persist_header_magic));
   bytes[4] = FR_PERSIST_FORMAT_VERSION;
   bytes[5] = FR_PERSIST_HEADER_BYTES;
-  fr_persist_write_u32_raw(&bytes[FR_PERSIST_PROFILE_HASH_OFFSET],
-                           fr_profile_hash());
-  fr_persist_write_u32_raw(&bytes[12], header->generation);
+  fr_write_u32_le(&bytes[FR_PERSIST_PROFILE_HASH_OFFSET], fr_profile_hash());
+  fr_write_u32_le(&bytes[12], header->generation);
   fr_persist_write_u16_raw(&bytes[16], header->payload_length);
-  fr_persist_write_u32_raw(&bytes[20], header->payload_crc);
-  fr_persist_write_u32_raw(&bytes[24],
-                           fr_crc32(bytes, FR_PERSIST_HEADER_BYTES));
+  fr_write_u32_le(&bytes[20], header->payload_crc);
+  fr_write_u32_le(&bytes[24], fr_crc32(bytes, FR_PERSIST_HEADER_BYTES));
   return FR_OK;
 }
 
@@ -86,21 +72,21 @@ static fr_err_t fr_persist_header_parse(const uint8_t *bytes,
       bytes[5] != FR_PERSIST_HEADER_BYTES) {
     return FR_ERR_CORRUPT;
   }
-  if (fr_persist_read_u32(&bytes[FR_PERSIST_PROFILE_HASH_OFFSET]) !=
+  if (fr_read_u32_le(&bytes[FR_PERSIST_PROFILE_HASH_OFFSET]) !=
       fr_profile_hash()) {
     return FR_ERR_CORRUPT;
   }
 
   memcpy(scratch, bytes, sizeof(scratch));
-  stored_crc = fr_persist_read_u32(&scratch[24]);
+  stored_crc = fr_read_u32_le(&scratch[24]);
   memset(&scratch[24], 0, 4);
   if (fr_crc32(scratch, FR_PERSIST_HEADER_BYTES) != stored_crc) {
     return FR_ERR_CORRUPT;
   }
 
-  out->generation = fr_persist_read_u32(&bytes[12]);
+  out->generation = fr_read_u32_le(&bytes[12]);
   out->payload_length = fr_persist_read_u16(&bytes[16]);
-  out->payload_crc = fr_persist_read_u32(&bytes[20]);
+  out->payload_crc = fr_read_u32_le(&bytes[20]);
   if (out->payload_length > sizeof(fr_persist_payload)) {
     return FR_ERR_CORRUPT;
   }
