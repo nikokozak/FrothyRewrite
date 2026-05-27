@@ -382,6 +382,7 @@ static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
          fr_parse_span_equals(name, "if") ||
          fr_parse_span_equals(name, "else") ||
          fr_parse_span_equals(name, "when") ||
+         fr_parse_span_equals(name, "unless") ||
          fr_parse_span_equals(name, "repeat") ||
          fr_parse_span_equals(name, "forever") ||
          fr_parse_span_equals(name, "cells") ||
@@ -684,6 +685,28 @@ static fr_err_t fr_parse_when(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   return fr_parse_add_expr(parser, when_expr, out_id);
 }
 
+/* `unless X [body]` rides the if emitter by parking the body in the else slot
+ * and synthesizing a nil for the (unused) then arm. */
+static fr_err_t fr_parse_unless(fr_parser_t *parser,
+                                fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_t unless_expr = {.kind = FR_PARSE_EXPR_IF};
+  fr_parse_expr_id_t nil_id = 0;
+
+  FR_TRY(fr_parse_advance(parser));
+  FR_TRY(fr_parse_expression(parser, &unless_expr.children[0]));
+  FR_TRY(fr_parse_add_expr(
+      parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_NIL}, &nil_id));
+  FR_TRY(fr_parse_bracket_block(parser, &unless_expr.children[2]));
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "else")) {
+    return FR_ERR_INVALID;
+  }
+  unless_expr.children[1] = nil_id;
+  unless_expr.child = unless_expr.children[0];
+  unless_expr.child_count = 3;
+  return fr_parse_add_expr(parser, unless_expr, out_id);
+}
+
 static fr_err_t fr_parse_repeat(fr_parser_t *parser,
                                 fr_parse_expr_id_t *out_id) {
   fr_parse_expr_t repeat = {.kind = FR_PARSE_EXPR_REPEAT};
@@ -851,6 +874,9 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     }
     if (fr_parse_span_equals(parser->token.span, "when")) {
       return fr_parse_when(parser, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "unless")) {
+      return fr_parse_unless(parser, out_id);
     }
     if (fr_parse_span_equals(parser->token.span, "repeat")) {
       return fr_parse_repeat(parser, out_id);
