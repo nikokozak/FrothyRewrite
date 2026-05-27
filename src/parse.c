@@ -24,6 +24,7 @@ typedef enum fr_token_kind_t {
   FR_TOKEN_GE,
   FR_TOKEN_EQ,
   FR_TOKEN_NE,
+  FR_TOKEN_PLUS,
   FR_TOKEN_MINUS,
   FR_TOKEN_STAR,
   FR_TOKEN_SLASH,
@@ -249,6 +250,18 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     return FR_OK;
   }
 
+  /* `+` is always infix — Frothy has no `+5` positive-literal form, so the
+   * `-` special-case logic doesn't apply here. */
+  if (c == '+') {
+    parser->cursor += 1;
+    span.length = 1;
+    parser->token.span = span;
+    parser->token.int_value = 0;
+    parser->token.leading_space = leading_space;
+    parser->token.kind = FR_TOKEN_PLUS;
+    return FR_OK;
+  }
+
   if (c == '*' || c == '/' ||
       (c == '-' &&
        (!fr_parse_is_digit(parser->cursor[1]) ||
@@ -291,11 +304,13 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
   /* Stop at `-` only when one side is a digit, so `5-2` and `x-1` read as
    * infix subtraction while `emit-byte` and `uart.write-byte` stay one
    * name. `x-y` is a name; for subtraction between two names, write
-   * `x - y` with spaces. */
+   * `x - y` with spaces. `+` always stops the name — no identifier uses
+   * it, and Frothy has no positive-literal form to confuse it with. */
   while (*parser->cursor != '\0' && !fr_parse_is_space(*parser->cursor) &&
          !fr_parse_is_punctuation(*parser->cursor) &&
          !fr_parse_is_compare_op_char(*parser->cursor) &&
          *parser->cursor != '*' && *parser->cursor != '/' &&
+         *parser->cursor != '+' &&
          !fr_parse_is_arrow_start(parser->cursor) &&
          !(*parser->cursor == '-' && span.length > 0 &&
            (fr_parse_is_digit(span.start[0]) ||
@@ -795,9 +810,13 @@ static fr_err_t fr_parse_additive(fr_parser_t *parser,
   fr_parse_expr_id_t lhs = 0;
 
   FR_TRY(fr_parse_multiplicative(parser, &lhs));
-  while (parser->token.kind == FR_TOKEN_MINUS) {
+  while (parser->token.kind == FR_TOKEN_PLUS ||
+         parser->token.kind == FR_TOKEN_MINUS) {
     fr_parse_expr_id_t rhs = 0;
-    fr_parse_expr_t binop = {.kind = FR_PARSE_EXPR_SUB, .child_count = 2};
+    fr_parse_expr_t binop = {
+        .kind = parser->token.kind == FR_TOKEN_PLUS ? FR_PARSE_EXPR_ADD
+                                                    : FR_PARSE_EXPR_SUB,
+        .child_count = 2};
 
     FR_TRY(fr_parse_advance(parser));
     FR_TRY(fr_parse_multiplicative(parser, &rhs));

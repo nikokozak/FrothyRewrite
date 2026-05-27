@@ -1,24 +1,26 @@
 status
+counter is 0
+bump is fn [ set counter to counter + 1 ]
+bump:
+bump:
+bump:
+counter
 greeting is "frothy beta lives"
-greeting
-counter is cells(1)
-set counter[0] to 0
-mark is fn [ set counter[0] to 42 ]
-mark:
-counter[0]
 pad.reset
 fill is fn [ repeat 3 [ pad.emit-byte: 65 ]; pad.len: ]
 fill:
 pad.len:
-see fill
+see bump
 save
 clear
-counter[0]
+counter
 greeting
-fill:
+bump:
 restore
-counter[0]
+counter
 greeting
+bump:
+counter
 pad.reset
 fill:
 pad.len:

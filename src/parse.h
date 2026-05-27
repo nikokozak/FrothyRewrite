@@ -50,6 +50,7 @@ typedef enum fr_parse_expr_kind_t {
   FR_PARSE_EXPR_GE,
   FR_PARSE_EXPR_EQ,
   FR_PARSE_EXPR_NE,
+  FR_PARSE_EXPR_ADD,
   FR_PARSE_EXPR_SUB,
   FR_PARSE_EXPR_MUL,
   FR_PARSE_EXPR_DIV,
