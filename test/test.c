@@ -318,6 +318,12 @@ static void test_base_def_contract(void) {
 #endif
 }
 
+static void test_profile_hash_word_size(void) {
+  uint16_t other = (FR_WORD_SIZE == 16) ? 32u : 16u;
+  CHECK("profile hash differs when word size differs",
+        fr_profile_hash() != fr_profile_debug_hash_for_word_size(other));
+}
+
 #if FR_FEATURE_OVERLAY_APPLY_COMMAND
 static char hex_digit(uint8_t value) {
   return value < 10 ? (char)('0' + value) : (char)('a' + value - 10);
@@ -6320,6 +6326,7 @@ int main(void) {
   test_refs();
   test_addr();
   test_base_def_contract();
+  test_profile_hash_word_size();
   test_instruction_stream();
   test_slots();
 #if FR_FEATURE_HANDLES

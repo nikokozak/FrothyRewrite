@@ -224,11 +224,11 @@ const char *fr_profile_name(void) { return FR_PROFILE_NAME; }
 
 const char *fr_profile_contract_name(void) { return FR_PROFILE_CONTRACT_NAME; }
 
-uint32_t fr_profile_hash(void) {
+uint32_t fr_profile_debug_hash_for_word_size(uint16_t word_size) {
   uint32_t crc = 0xffffffffu;
 
   /* Compact drift fingerprint, not a cryptographic identity. */
-  fr_profile_hash_u16(&crc, FR_PROFILE_HASH_WORD_SIZE);
+  fr_profile_hash_u16(&crc, word_size);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_MAX_SLOTS);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_MAX_INSTRUCTION_BYTES);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_MAX_STACK_DEPTH);
@@ -287,6 +287,10 @@ uint32_t fr_profile_hash(void) {
   }
 
   return ~crc;
+}
+
+uint32_t fr_profile_hash(void) {
+  return fr_profile_debug_hash_for_word_size(FR_PROFILE_HASH_WORD_SIZE);
 }
 
 const char *fr_profile_compiler_mode(void) {
