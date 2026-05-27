@@ -288,6 +288,10 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     return FR_OK;
   }
 
+  /* Stop at `-` only when one side is a digit, so `5-2` and `x-1` read as
+   * infix subtraction while `emit-byte` and `uart.write-byte` stay one
+   * name. `x-y` is a name; for subtraction between two names, write
+   * `x - y` with spaces. */
   while (*parser->cursor != '\0' && !fr_parse_is_space(*parser->cursor) &&
          !fr_parse_is_punctuation(*parser->cursor) &&
          !fr_parse_is_compare_op_char(*parser->cursor) &&
