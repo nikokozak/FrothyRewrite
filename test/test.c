@@ -3184,6 +3184,15 @@ static void test_compile(void) {
             fr_tagged_decode_int(update.slot_inits[0].ref.literal_tagged,
                                  &decoded) == FR_OK &&
             decoded == -1);
+  CHECK("compile min int literal round-trips",
+        ((void)snprintf(line, sizeof(line), "boot is fn [ %" PRId32 " ]",
+                        (int32_t)FR_TAGGED_INT_MIN),
+         fr_base_image_install(&runtime) == FR_OK &&
+             fr_compile_overlay_update(line, &update) == FR_OK &&
+             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+             fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
+             decoded == FR_TAGGED_INT_MIN));
 #if FR_TAGGED_INT_MAX >= 115200
   CHECK("compile roomier int",
         fr_compile_overlay_update("boot is 115200", &update) == FR_OK &&
@@ -5507,6 +5516,18 @@ static void test_repl(void) {
         fr_repl_eval_line(&runtime, " \tstatus \t", out, sizeof(out)) ==
                 FR_OK &&
             strncmp(out, status_prefix, strlen(status_prefix)) == 0);
+  {
+    char expected_int_min[32];
+    char expected_int_max[32];
+    (void)snprintf(expected_int_min, sizeof(expected_int_min),
+                   " int_min=%" PRId32 " ", (int32_t)FR_TAGGED_INT_MIN);
+    (void)snprintf(expected_int_max, sizeof(expected_int_max),
+                   " int_max=%" PRId32 " ", (int32_t)FR_TAGGED_INT_MAX);
+    CHECK("repl status formats int_min and int_max for active width",
+          fr_repl_eval_line(&runtime, "status", out, sizeof(out)) == FR_OK &&
+              strstr(out, expected_int_min) != NULL &&
+              strstr(out, expected_int_max) != NULL);
+  }
 #if FR_FEATURE_COMPILER
   CHECK("repl command matching is case-sensitive",
         fr_repl_eval_line(&runtime, "STATUS", out, sizeof(out)) ==
