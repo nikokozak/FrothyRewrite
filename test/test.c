@@ -4036,6 +4036,70 @@ static void test_compile(void) {
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
+  CHECK("compiled subtraction",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ 5 - 2 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 3);
+  CHECK("compiled multiplication",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ 3 * 4 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 12);
+  CHECK("compiled division truncates",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ 7 / 2 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 3);
+  CHECK("compiled multiplication binds tighter than subtraction",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ 4 - 2 * 3 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == -2);
+  CHECK("compiled subtraction rejects boolean operand",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ true - 1 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_ERR_TYPE);
+  CHECK("compiled division by zero rejects",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ 1 / 0 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_ERR_RANGE);
+  CHECK("compiled subtraction below min rejects",
+        ((void)snprintf(line, sizeof(line),
+                        "boot is fn [ %" PRId32 " - 1 ]",
+                        (int32_t)FR_TAGGED_INT_MIN),
+         fr_runtime_init(&runtime) == FR_OK &&
+             fr_compile_overlay_update(line, &update) == FR_OK &&
+             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+             fr_vm_run_boot(&runtime, &tagged) == FR_ERR_RANGE));
+  CHECK("compiled multiplication above max rejects",
+        ((void)snprintf(line, sizeof(line),
+                        "boot is fn [ %" PRId32 " * 2 ]",
+                        (int32_t)FR_TAGGED_INT_MAX),
+         fr_runtime_init(&runtime) == FR_OK &&
+             fr_compile_overlay_update(line, &update) == FR_OK &&
+             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+             fr_vm_run_boot(&runtime, &tagged) == FR_ERR_RANGE));
+  CHECK("compiled division negates min above max",
+        ((void)snprintf(line, sizeof(line),
+                        "boot is fn [ %" PRId32 " / -1 ]",
+                        (int32_t)FR_TAGGED_INT_MIN),
+         fr_runtime_init(&runtime) == FR_OK &&
+             fr_compile_overlay_update(line, &update) == FR_OK &&
+             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+             fr_vm_run_boot(&runtime, &tagged) == FR_ERR_RANGE));
   CHECK("compiled native call owns instruction bytes",
         fr_compile_overlay_update("boot is fn [ ms: 100 ]", &update) == FR_OK &&
             update.slot_inits[0].slot_id == FR_SLOT_BOOT &&

@@ -50,6 +50,9 @@ typedef enum fr_opcode_t {
   FR_OP_GE_INT = 0x18,
   FR_OP_EQ_INT = 0x19,
   FR_OP_NE_INT = 0x1A,
+  FR_OP_SUB_INT = 0x1B,
+  FR_OP_MUL_INT = 0x1C,
+  FR_OP_DIV_INT = 0x1D,
 } fr_opcode_t;
 
 fr_err_t fr_instruction_stream_init(fr_instruction_stream_t *view,

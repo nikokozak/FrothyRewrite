@@ -354,6 +354,14 @@ typedef char fr_vm_add_int_partition_must_fit_int64_sum[
     ((int64_t)FR_TAGGED_INT_MAX + (int64_t)FR_TAGGED_INT_MAX <= INT64_MAX)
         ? 1 : -1];
 
+/* Same wide-temp discipline as fr_vm_add_int for sub/mul/div. The mul case
+ * has the tightest constraint: the product of the partition extremes must
+ * fit int64_t before the range check decides. */
+typedef char fr_vm_arith_int_partition_product_must_fit_int64[
+    ((int64_t)FR_TAGGED_INT_MAX * (int64_t)FR_TAGGED_INT_MAX <= INT64_MAX &&
+     -(int64_t)FR_TAGGED_INT_MIN * -(int64_t)FR_TAGGED_INT_MIN <= INT64_MAX)
+        ? 1 : -1];
+
 static fr_err_t fr_vm_add_int(fr_vm_state_t *state) {
   fr_tagged_t rhs_tagged = 0;
   fr_tagged_t lhs_tagged = 0;
@@ -371,6 +379,44 @@ static fr_err_t fr_vm_add_int(fr_vm_state_t *state) {
     return FR_ERR_RANGE;
   }
   FR_TRY(fr_tagged_encode_int((fr_int_t)sum, &lhs_tagged));
+
+  state->ip += 1;
+  return fr_vm_push(state, lhs_tagged);
+}
+
+static fr_err_t fr_vm_arith_int(fr_vm_state_t *state, fr_opcode_t op) {
+  fr_tagged_t rhs_tagged = 0;
+  fr_tagged_t lhs_tagged = 0;
+  fr_int_t rhs = 0;
+  fr_int_t lhs = 0;
+  int64_t result = 0;
+
+  FR_TRY(fr_vm_pop(state, &rhs_tagged));
+  FR_TRY(fr_vm_pop(state, &lhs_tagged));
+  FR_TRY(fr_tagged_decode_int(rhs_tagged, &rhs));
+  FR_TRY(fr_tagged_decode_int(lhs_tagged, &lhs));
+
+  switch (op) {
+  case FR_OP_SUB_INT:
+    result = (int64_t)lhs - (int64_t)rhs;
+    break;
+  case FR_OP_MUL_INT:
+    result = (int64_t)lhs * (int64_t)rhs;
+    break;
+  case FR_OP_DIV_INT:
+    if (rhs == 0) {
+      return FR_ERR_RANGE;
+    }
+    result = (int64_t)lhs / (int64_t)rhs;
+    break;
+  default:
+    return FR_ERR_INVALID;
+  }
+  if (result > (int64_t)FR_TAGGED_INT_MAX ||
+      result < (int64_t)FR_TAGGED_INT_MIN) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_tagged_encode_int((fr_int_t)result, &lhs_tagged));
 
   state->ip += 1;
   return fr_vm_push(state, lhs_tagged);
@@ -523,6 +569,10 @@ static fr_err_t fr_vm_step(fr_runtime_t *runtime,
     return fr_vm_call_native_slot(runtime, view, state);
   case FR_OP_ADD_INT:
     return fr_vm_add_int(state);
+  case FR_OP_SUB_INT:
+  case FR_OP_MUL_INT:
+  case FR_OP_DIV_INT:
+    return fr_vm_arith_int(state, (fr_opcode_t)view->bytes[state->ip]);
   case FR_OP_LT_INT:
   case FR_OP_GT_INT:
   case FR_OP_LE_INT:

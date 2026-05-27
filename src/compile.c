@@ -660,6 +660,15 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_NE:
     return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
                                  FR_OP_NE_INT);
+  case FR_PARSE_EXPR_SUB:
+    return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
+                                 FR_OP_SUB_INT);
+  case FR_PARSE_EXPR_MUL:
+    return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
+                                 FR_OP_MUL_INT);
+  case FR_PARSE_EXPR_DIV:
+    return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
+                                 FR_OP_DIV_INT);
   case FR_PARSE_EXPR_CALL:
     return fr_compile_emit_call(ctx, parsed, expr, instruction_bytes, offset);
   case FR_PARSE_EXPR_LIST:

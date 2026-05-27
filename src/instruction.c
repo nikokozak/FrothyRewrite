@@ -335,6 +335,18 @@ fr_err_t fr_instruction_disassemble_at(const fr_instruction_stream_t *view,
     FR_TRY(fr_append_text(out, out_cap, &used, "ADD_INT"));
     return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
                                       next_ip);
+  case FR_OP_SUB_INT:
+    FR_TRY(fr_append_text(out, out_cap, &used, "SUB_INT"));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
+                                      next_ip);
+  case FR_OP_MUL_INT:
+    FR_TRY(fr_append_text(out, out_cap, &used, "MUL_INT"));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
+                                      next_ip);
+  case FR_OP_DIV_INT:
+    FR_TRY(fr_append_text(out, out_cap, &used, "DIV_INT"));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
+                                      next_ip);
   case FR_OP_LT_INT:
     FR_TRY(fr_append_text(out, out_cap, &used, "LT_INT"));
     return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),

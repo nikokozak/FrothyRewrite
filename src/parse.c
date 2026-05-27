@@ -24,6 +24,9 @@ typedef enum fr_token_kind_t {
   FR_TOKEN_GE,
   FR_TOKEN_EQ,
   FR_TOKEN_NE,
+  FR_TOKEN_MINUS,
+  FR_TOKEN_STAR,
+  FR_TOKEN_SLASH,
 } fr_token_kind_t;
 
 typedef struct fr_token_t {
@@ -239,6 +242,19 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     return FR_OK;
   }
 
+  if (c == '*' || c == '/' ||
+      (c == '-' && !fr_parse_is_digit(parser->cursor[1]))) {
+    parser->cursor += 1;
+    span.length = 1;
+    parser->token.span = span;
+    parser->token.int_value = 0;
+    parser->token.leading_space = leading_space;
+    parser->token.kind = (c == '*')   ? FR_TOKEN_STAR
+                         : (c == '/') ? FR_TOKEN_SLASH
+                                      : FR_TOKEN_MINUS;
+    return FR_OK;
+  }
+
   if (fr_parse_is_punctuation(c)) {
     parser->cursor += 1;
     span.length = 1;
@@ -266,6 +282,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
   while (*parser->cursor != '\0' && !fr_parse_is_space(*parser->cursor) &&
          !fr_parse_is_punctuation(*parser->cursor) &&
          !fr_parse_is_compare_op_char(*parser->cursor) &&
+         *parser->cursor != '*' && *parser->cursor != '/' &&
          !fr_parse_is_arrow_start(parser->cursor)) {
     if (span.length >= FR_PARSE_MAX_TOKEN_BYTES) {
       return FR_ERR_RANGE;
@@ -671,18 +688,62 @@ static bool fr_parse_compare_token_kind(fr_token_kind_t kind,
   }
 }
 
-static fr_err_t fr_parse_comparison(fr_parser_t *parser,
-                                    fr_parse_expr_id_t *out_id) {
+static fr_err_t fr_parse_multiplicative(fr_parser_t *parser,
+                                        fr_parse_expr_id_t *out_id) {
   fr_parse_expr_id_t lhs = 0;
-  fr_parse_expr_kind_t op_kind = FR_PARSE_EXPR_LT;
 
   FR_TRY(fr_parse_expression_inner(parser, &lhs));
-  while (fr_parse_compare_token_kind(parser->token.kind, &op_kind)) {
+  while (parser->token.kind == FR_TOKEN_STAR ||
+         parser->token.kind == FR_TOKEN_SLASH) {
+    fr_parse_expr_kind_t op_kind = parser->token.kind == FR_TOKEN_STAR
+                                       ? FR_PARSE_EXPR_MUL
+                                       : FR_PARSE_EXPR_DIV;
     fr_parse_expr_id_t rhs = 0;
     fr_parse_expr_t binop = {.kind = op_kind, .child_count = 2};
 
     FR_TRY(fr_parse_advance(parser));
     FR_TRY(fr_parse_expression_inner(parser, &rhs));
+    binop.children[0] = lhs;
+    binop.children[1] = rhs;
+    binop.child = lhs;
+    FR_TRY(fr_parse_add_expr(parser, binop, &lhs));
+  }
+  *out_id = lhs;
+  return FR_OK;
+}
+
+static fr_err_t fr_parse_additive(fr_parser_t *parser,
+                                  fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_id_t lhs = 0;
+
+  FR_TRY(fr_parse_multiplicative(parser, &lhs));
+  while (parser->token.kind == FR_TOKEN_MINUS) {
+    fr_parse_expr_id_t rhs = 0;
+    fr_parse_expr_t binop = {.kind = FR_PARSE_EXPR_SUB, .child_count = 2};
+
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_multiplicative(parser, &rhs));
+    binop.children[0] = lhs;
+    binop.children[1] = rhs;
+    binop.child = lhs;
+    FR_TRY(fr_parse_add_expr(parser, binop, &lhs));
+  }
+  *out_id = lhs;
+  return FR_OK;
+}
+
+static fr_err_t fr_parse_comparison(fr_parser_t *parser,
+                                    fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_id_t lhs = 0;
+  fr_parse_expr_kind_t op_kind = FR_PARSE_EXPR_LT;
+
+  FR_TRY(fr_parse_additive(parser, &lhs));
+  while (fr_parse_compare_token_kind(parser->token.kind, &op_kind)) {
+    fr_parse_expr_id_t rhs = 0;
+    fr_parse_expr_t binop = {.kind = op_kind, .child_count = 2};
+
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_additive(parser, &rhs));
     binop.children[0] = lhs;
     binop.children[1] = rhs;
     binop.child = lhs;
