@@ -826,7 +826,9 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
     if (parser.token.kind != FR_TOKEN_NAME ||
         fr_parse_span_equals(parser.token.span, "is") ||
         fr_parse_span_equals(parser.token.span, "to") ||
-        fr_parse_span_equals(parser.token.span, "with")) {
+        fr_parse_span_equals(parser.token.span, "with") ||
+        fr_parse_span_equals(parser.token.span, "true") ||
+        fr_parse_span_equals(parser.token.span, "false")) {
       return FR_ERR_INVALID;
     }
     out->definition.name = parser.token.span;
@@ -835,7 +837,9 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
     return fr_parse_finish_line(&parser);
   }
   if (parser.token.kind != FR_TOKEN_NAME ||
-      fr_parse_span_equals(parser.token.span, "is")) {
+      fr_parse_span_equals(parser.token.span, "is") ||
+      fr_parse_span_equals(parser.token.span, "true") ||
+      fr_parse_span_equals(parser.token.span, "false")) {
     return FR_ERR_INVALID;
   }
   out->definition.name = parser.token.span;

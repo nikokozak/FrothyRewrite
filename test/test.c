@@ -2915,6 +2915,14 @@ static void test_parse(void) {
         fr_parse_line("to f with true [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse false rejects as parameter",
         fr_parse_line("to f with false [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse true rejects as is-definition name",
+        fr_parse_line("true is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse false rejects as is-definition name",
+        fr_parse_line("false is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse true rejects as to-definition name",
+        fr_parse_line("to true [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse false rejects as to-definition name",
+        fr_parse_line("to false [ 1 ]", &parsed) == FR_ERR_INVALID);
 #if FR_TAGGED_INT_MAX >= 115200
   CHECK("parse roomier int body",
         fr_parse_line("boot is fn [ 115200 ]", &parsed) == FR_OK &&
