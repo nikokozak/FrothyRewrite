@@ -155,15 +155,14 @@
 
 #ifndef FR_PROFILE_OVERLAY_UPDATE_VERSION
 /*
- * Overlay update version tracks the serial apply/run payload format. It is
- * separate from the persistence payload version in persist_payload.c; bump each
- * only when its own wire format changes.
+ * Overlay update version tracks the serial apply/run payload format and is
+ * reserved for format evolution. Width identity lives in the profile hash
+ * (see FR_PROFILE_HASH_WORD_SIZE in profile.c), so this counter must not be
+ * derived from FR_WORD_SIZE -- cross-width rejection is the hash's job.
+ * Separate from the persistence payload version in persist_payload.c; bump
+ * each only when its own wire format changes.
  */
-#if FR_WORD_SIZE == 16
 #define FR_PROFILE_OVERLAY_UPDATE_VERSION 1
-#else
-#define FR_PROFILE_OVERLAY_UPDATE_VERSION 2
-#endif
 #endif
 
 #ifndef FR_PROFILE_REPL_LINE_BYTES
