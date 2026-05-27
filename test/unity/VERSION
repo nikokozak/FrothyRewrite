@@ -1,0 +1,5 @@
+Unity 2.6.1
+Upstream: https://github.com/ThrowTheSwitch/Unity
+Tag: v2.6.1
+Commit: cbcd08fa7de711053a3deec6339ee89cad5d2697
+Files vendored: src/unity.c, src/unity.h, src/unity_internals.h, LICENSE.txt
