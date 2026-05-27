@@ -2872,6 +2872,22 @@ static void test_parse(void) {
         fr_parse_line("to is [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse to rejects missing body",
         fr_parse_line("to boot", &parsed) == FR_ERR_INVALID);
+  CHECK("parse to with parameters",
+        fr_parse_line("to add with a, b [ a ]", &parsed) == FR_OK &&
+            fr_parse_span_equals(parsed.definition.name, "add") &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            value->param_count == 2 &&
+            fr_parse_span_equals(parsed.params[value->param_start], "a") &&
+            fr_parse_span_equals(parsed.params[value->param_start + 1], "b") &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_NAME &&
+            fr_parse_span_equals(parsed.exprs[body->children[0]].name, "a"));
+  CHECK("parse to rejects with as name",
+        fr_parse_line("to with [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse to rejects empty with list",
+        fr_parse_line("to add with [ 1 ]", &parsed) == FR_ERR_INVALID);
 #if FR_TAGGED_INT_MAX >= 115200
   CHECK("parse roomier int body",
         fr_parse_line("boot is fn [ 115200 ]", &parsed) == FR_OK &&
@@ -3827,6 +3843,26 @@ static void test_compile(void) {
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
+  CHECK("compiled to with parameters runs",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "to first with a, b [ a ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "boot is fn [ first: 7, 9 ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 7);
+  CHECK("compiled to with rejects wrong arity",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "to first with a, b [ a ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "boot is fn [ first: 7 ]", &update) ==
+                FR_ERR_INVALID);
   CHECK("compiled native call owns instruction bytes",
         fr_compile_overlay_update("boot is fn [ ms: 100 ]", &update) == FR_OK &&
             update.slot_inits[0].slot_id == FR_SLOT_BOOT &&
