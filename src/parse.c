@@ -81,7 +81,8 @@ static bool fr_parse_is_compare_op_char(char c) {
 
 static bool fr_parse_minus_infix_after(fr_token_kind_t kind) {
   return kind == FR_TOKEN_INT || kind == FR_TOKEN_RBRACKET ||
-         kind == FR_TOKEN_RPAREN || kind == FR_TOKEN_TEXT;
+         kind == FR_TOKEN_RPAREN || kind == FR_TOKEN_TEXT ||
+         kind == FR_TOKEN_NAME;
 }
 
 bool fr_parse_span_equals(fr_parse_span_t span, const char *text) {
@@ -292,7 +293,9 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
          !fr_parse_is_compare_op_char(*parser->cursor) &&
          *parser->cursor != '*' && *parser->cursor != '/' &&
          !fr_parse_is_arrow_start(parser->cursor) &&
-         !(*parser->cursor == '-' && fr_parse_is_digit(span.start[0]))) {
+         !(*parser->cursor == '-' && span.length > 0 &&
+           (fr_parse_is_digit(span.start[0]) ||
+            fr_parse_is_digit(parser->cursor[1])))) {
     if (span.length >= FR_PARSE_MAX_TOKEN_BYTES) {
       return FR_ERR_RANGE;
     }

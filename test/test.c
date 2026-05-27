@@ -4050,6 +4050,17 @@ static void test_compile(void) {
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 3);
+  CHECK("compiled subtraction after parameter without spaces",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "to dec with x [ x-1 ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "boot is fn [ dec: 1 ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 0);
   CHECK("compiled multiplication",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ 3 * 4 ]", &update) ==
