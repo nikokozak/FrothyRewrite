@@ -6,8 +6,13 @@
 
 #include FR_PROFILE_HEADER
 
+/*
+ * Every profile header must declare FR_WORD_SIZE (16 or 32). A silent default
+ * would let a new profile pick up the wrong tagged-word contract without the
+ * author noticing.
+ */
 #ifndef FR_WORD_SIZE
-#define FR_WORD_SIZE 16
+#error "profile header must define FR_WORD_SIZE (16 or 32)"
 #endif
 
 #if FR_WORD_SIZE != 16 && FR_WORD_SIZE != 32
