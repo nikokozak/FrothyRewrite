@@ -3081,6 +3081,26 @@ static void test_parse(void) {
                 FR_PARSE_EXPR_CALL &&
             condition->child_count == 0 &&
             fr_parse_span_equals(condition->name, "boot"));
+  CHECK("parse when expression",
+        fr_parse_line("boot is fn [ when 1 [ one ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_IF &&
+            value->child_count == 2 &&
+            (condition = &parsed.exprs[value->children[0]])->kind ==
+                FR_PARSE_EXPR_INT &&
+            condition->int_value == 1 &&
+            (body = &parsed.exprs[value->children[1]])->kind ==
+                FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_NAME &&
+            fr_parse_span_equals(parsed.exprs[body->children[0]].name, "one"));
+  CHECK("parse when rejects else clause",
+        fr_parse_line("boot is fn [ when 1 [ one ] else [ nil ] ]", &parsed) ==
+            FR_ERR_INVALID);
   CHECK("parse repeat expression",
         fr_parse_line("boot is fn [ repeat 2 [ ms: 10 ] ]", &parsed) ==
                 FR_OK &&
@@ -4315,6 +4335,34 @@ static void test_compile(void) {
                                       &update) == FR_OK &&
             update.code_object.instructions.length == 13u + push_size &&
             update.instruction_bytes[11u + push_size] == FR_OP_PUSH_NIL &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged));
+  CHECK("compiled when true runs body",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ when true [ 1 ] ]",
+                                      &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
+  CHECK("compiled when non-zero int runs body",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ when 5 [ 1 ] ]",
+                                      &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
+  CHECK("compiled when false skips body and yields nil",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ when false [ 1 ] ]",
+                                      &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged));
+  CHECK("compiled when nil skips body and yields nil",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ when nil [ 1 ] ]",
+                                      &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));

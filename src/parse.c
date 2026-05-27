@@ -381,6 +381,7 @@ static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
          fr_parse_span_equals(name, "is") ||
          fr_parse_span_equals(name, "if") ||
          fr_parse_span_equals(name, "else") ||
+         fr_parse_span_equals(name, "when") ||
          fr_parse_span_equals(name, "repeat") ||
          fr_parse_span_equals(name, "forever") ||
          fr_parse_span_equals(name, "cells") ||
@@ -668,6 +669,21 @@ static fr_err_t fr_parse_if(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   return fr_parse_add_expr(parser, if_expr, out_id);
 }
 
+static fr_err_t fr_parse_when(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_t when_expr = {.kind = FR_PARSE_EXPR_IF};
+
+  FR_TRY(fr_parse_advance(parser));
+  FR_TRY(fr_parse_expression(parser, &when_expr.children[0]));
+  FR_TRY(fr_parse_bracket_block(parser, &when_expr.children[1]));
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "else")) {
+    return FR_ERR_INVALID;
+  }
+  when_expr.child = when_expr.children[0];
+  when_expr.child_count = 2;
+  return fr_parse_add_expr(parser, when_expr, out_id);
+}
+
 static fr_err_t fr_parse_repeat(fr_parser_t *parser,
                                 fr_parse_expr_id_t *out_id) {
   fr_parse_expr_t repeat = {.kind = FR_PARSE_EXPR_REPEAT};
@@ -832,6 +848,9 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     }
     if (fr_parse_span_equals(parser->token.span, "if")) {
       return fr_parse_if(parser, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "when")) {
+      return fr_parse_when(parser, out_id);
     }
     if (fr_parse_span_equals(parser->token.span, "repeat")) {
       return fr_parse_repeat(parser, out_id);
