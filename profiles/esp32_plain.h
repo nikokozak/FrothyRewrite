@@ -1,0 +1,43 @@
+/*
+ * Plain ESP32 DevKit V1 profile.
+ *
+ * This is the first roomier device proof profile after host_normal. It uses
+ * the normal 32-bit tagged word contract and gives on-device source, names,
+ * cells, and NVS persistence enough room to be useful over ordinary UART0
+ * serial before workshop distribution grows its own shape.
+ */
+
+#pragma once
+
+#define FR_WORD_SIZE 32
+
+#define FR_PROFILE_TARGET_FLASH_BYTES 4194304u
+#define FR_PROFILE_TARGET_SRAM_BYTES 327680u
+#define FR_PROFILE_MIN_STACK_RESERVE_BYTES 24576u
+
+#define FR_PROFILE_MAX_SLOTS 160
+#define FR_PROFILE_MAX_INSTRUCTION_BYTES 1024
+#define FR_PROFILE_MAX_STACK_DEPTH 48
+#define FR_PROFILE_CODE_OBJECT_TABLE_SIZE 96
+#define FR_PROFILE_NATIVE_TABLE_SIZE 64
+#define FR_PROFILE_MAX_HANDLES 16
+#define FR_PROFILE_OBJECT_TABLE_SIZE 32
+#define FR_PROFILE_MAX_CELL_WORDS 128
+#define FR_PROFILE_MAX_CELL_LENGTH 32
+#define FR_PROFILE_MAX_TEXT_BYTES 512
+#define FR_PROFILE_MAX_TEXT_LENGTH 64
+#define FR_PROFILE_MAX_CALL_DEPTH 24
+#define FR_PROFILE_PERSISTENCE_BYTES 4096
+#define FR_PROFILE_MAX_NAME_BYTES 48
+#define FR_PROFILE_MAX_OVERLAY_NAMES 96
+#define FR_PROFILE_REPL_LINE_BYTES 512
+#define FR_BASE_IMAGE_INCLUDE_SYMBOLS 1
+
+#define FR_FEATURE_REPL 1
+#define FR_FEATURE_COMPILER 1
+#define FR_FEATURE_PERSISTENCE 1
+#define FR_FEATURE_INTROSPECTION 1
+#define FR_FEATURE_CELLS 1
+#define FR_FEATURE_TEXT 1
+#define FR_FEATURE_HANDLES 1
+#define FR_FEATURE_UART 1

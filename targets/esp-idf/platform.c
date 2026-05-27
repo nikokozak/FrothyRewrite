@@ -1,0 +1,758 @@
+#include "platform.h"
+
+#include "board.h"
+#include "handle.h"
+#include "runtime.h"
+
+#include "driver/gpio.h"
+#include "driver/uart.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_err.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "soc/soc_caps.h"
+
+#include <stddef.h>
+#include <string.h>
+
+enum {
+  FR_ESP_UART_RX_BYTES = 256,
+  FR_ESP_UART_TX_BYTES = 256,
+#if FR_FEATURE_UART
+  FR_ESP_APP_UART_RX_BYTES = 256,
+  FR_ESP_APP_UART_TX_BYTES = 256,
+#endif
+  FR_ESP_CTRL_C = 3,
+  FR_ESP_BACKSPACE = 8,
+  FR_ESP_DELETE = 127,
+  FR_ESP_MILLIS_WRAP = 16384,
+  FR_ESP_STORAGE_SLOT_COUNT = 2,
+};
+
+#if FR_FEATURE_UART
+typedef struct fr_esp_app_uart_t {
+  bool in_use;
+  uint16_t tx;
+  uint16_t rx;
+  uint16_t rate_code;
+} fr_esp_app_uart_t;
+
+#if SOC_UART_NUM <= 1
+#error "FR_FEATURE_UART requires an ESP target with an application UART"
+#endif
+
+static const uart_port_t fr_esp_app_uart_ports[] = {
+#if SOC_UART_NUM > 1
+    UART_NUM_1,
+#endif
+#if SOC_UART_NUM > 2
+    UART_NUM_2,
+#endif
+};
+
+static fr_esp_app_uart_t
+    fr_esp_app_uarts[sizeof(fr_esp_app_uart_ports) /
+                     sizeof(fr_esp_app_uart_ports[0])];
+#endif
+
+static bool fr_esp_initialized;
+static bool fr_esp_pending_byte_valid;
+static uint8_t fr_esp_pending_byte;
+static adc_oneshot_unit_handle_t fr_esp_adc1;
+static bool fr_esp_adc1_initialized;
+
+static fr_err_t fr_esp_err(esp_err_t err) {
+  switch (err) {
+  case ESP_OK:
+    return FR_OK;
+  case ESP_ERR_NO_MEM:
+    return FR_ERR_CAPACITY;
+  case ESP_ERR_NOT_FOUND:
+  case ESP_ERR_NVS_NOT_FOUND:
+    return FR_ERR_NOT_FOUND;
+  case ESP_ERR_INVALID_ARG:
+  case ESP_ERR_INVALID_STATE:
+    return FR_ERR_INVALID;
+  default:
+    return FR_ERR_IO;
+  }
+}
+
+static fr_err_t fr_esp_uart_init(void) {
+  const uart_config_t config = {
+      .baud_rate = FR_BOARD_UART_BAUD,
+      .data_bits = UART_DATA_8_BITS,
+      .parity = UART_PARITY_DISABLE,
+      .stop_bits = UART_STOP_BITS_1,
+      .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+      .source_clk = UART_SCLK_DEFAULT,
+  };
+  esp_err_t err = uart_driver_install(FR_BOARD_UART_PORT, FR_ESP_UART_RX_BYTES,
+                                      FR_ESP_UART_TX_BYTES, 0, NULL, 0);
+
+  if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+    return fr_esp_err(err);
+  }
+  FR_TRY(fr_esp_err(uart_param_config(FR_BOARD_UART_PORT, &config)));
+  FR_TRY(fr_esp_err(uart_set_pin(FR_BOARD_UART_PORT, FR_BOARD_UART_TX,
+                                 FR_BOARD_UART_RX, UART_PIN_NO_CHANGE,
+                                 UART_PIN_NO_CHANGE)));
+  FR_TRY(fr_esp_err(uart_set_mode(FR_BOARD_UART_PORT, UART_MODE_UART)));
+  FR_TRY(fr_esp_err(uart_flush_input(FR_BOARD_UART_PORT)));
+  return FR_OK;
+}
+
+static fr_err_t fr_esp_nvs_init(void) {
+  esp_err_t err = nvs_flash_init();
+
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES ||
+      err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    FR_TRY(fr_esp_err(nvs_flash_erase()));
+    err = nvs_flash_init();
+  }
+  return fr_esp_err(err);
+}
+
+fr_err_t fr_esp_platform_init(void) {
+  if (fr_esp_initialized) {
+    return FR_OK;
+  }
+
+  FR_TRY(fr_esp_uart_init());
+#if FR_FEATURE_PERSISTENCE
+  FR_TRY(fr_esp_nvs_init());
+#endif
+  fr_esp_initialized = true;
+  return FR_OK;
+}
+
+static fr_err_t fr_esp_read_byte(uint8_t *out_byte, TickType_t timeout) {
+  int read = 0;
+
+  if (out_byte == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_esp_pending_byte_valid) {
+    *out_byte = fr_esp_pending_byte;
+    fr_esp_pending_byte_valid = false;
+    return FR_OK;
+  }
+
+  read = uart_read_bytes(FR_BOARD_UART_PORT, out_byte, 1, timeout);
+  if (read < 0) {
+    return FR_ERR_IO;
+  }
+  return read == 1 ? FR_OK : FR_ERR_NOT_FOUND;
+}
+
+static void fr_esp_save_pending_byte(uint8_t byte) {
+  fr_esp_pending_byte = byte;
+  fr_esp_pending_byte_valid = true;
+}
+
+fr_err_t fr_platform_delay_ms(uint16_t ms) {
+  if (ms == 0) {
+    return FR_OK;
+  }
+
+  vTaskDelay(pdMS_TO_TICKS(ms));
+  return FR_OK;
+}
+
+fr_err_t fr_platform_millis(uint16_t *out_ms) {
+  int64_t ms = 0;
+
+  if (out_ms == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  ms = esp_timer_get_time() / 1000;
+  *out_ms = (uint16_t)(ms % FR_ESP_MILLIS_WRAP);
+  return FR_OK;
+}
+
+static bool fr_esp_gpio_pin_valid(uint16_t pin) {
+  return pin < GPIO_NUM_MAX && ((1ULL << pin) & SOC_GPIO_VALID_GPIO_MASK) != 0;
+}
+
+static bool fr_esp_gpio_output_valid(uint16_t pin) {
+  return pin < GPIO_NUM_MAX &&
+         ((1ULL << pin) & SOC_GPIO_VALID_OUTPUT_GPIO_MASK) != 0;
+}
+
+#if FR_FEATURE_UART
+static fr_err_t fr_esp_uart_baud(uint16_t rate_code, int *out_baud) {
+  if (out_baud == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  switch (rate_code) {
+  case FR_UART_RATE_9600:
+    *out_baud = 9600;
+    return FR_OK;
+  case FR_UART_RATE_19200:
+    *out_baud = 19200;
+    return FR_OK;
+  case FR_UART_RATE_38400:
+    *out_baud = 38400;
+    return FR_OK;
+  case FR_UART_RATE_57600:
+    *out_baud = 57600;
+    return FR_OK;
+  case FR_UART_RATE_115200:
+    *out_baud = 115200;
+    return FR_OK;
+  default:
+    return FR_ERR_DOMAIN;
+  }
+}
+
+static bool fr_esp_app_uart_console_conflict(uint16_t tx, uint16_t rx) {
+  return tx == FR_BOARD_UART_TX || tx == FR_BOARD_UART_RX ||
+         rx == FR_BOARD_UART_TX || rx == FR_BOARD_UART_RX;
+}
+
+static bool fr_esp_app_uart_pin_conflict(uint16_t tx, uint16_t rx) {
+  for (uint16_t i = 0;
+       i < sizeof(fr_esp_app_uarts) / sizeof(fr_esp_app_uarts[0]); i++) {
+    const fr_esp_app_uart_t *uart = &fr_esp_app_uarts[i];
+
+    if (!uart->in_use) {
+      continue;
+    }
+    if (uart->tx == tx || uart->tx == rx || uart->rx == tx ||
+        uart->rx == rx) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static fr_err_t fr_esp_app_uart_entry(uint16_t platform_index,
+                                      fr_esp_app_uart_t **out_uart,
+                                      uart_port_t *out_port) {
+  if (out_uart == NULL || out_port == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (platform_index >=
+          sizeof(fr_esp_app_uarts) / sizeof(fr_esp_app_uarts[0]) ||
+      !fr_esp_app_uarts[platform_index].in_use) {
+    return FR_ERR_HANDLE;
+  }
+
+  *out_uart = &fr_esp_app_uarts[platform_index];
+  *out_port = fr_esp_app_uart_ports[platform_index];
+  return FR_OK;
+}
+#endif
+
+fr_err_t fr_platform_gpio_mode(uint16_t pin, uint16_t mode) {
+  gpio_config_t config = {0};
+
+  if (!fr_esp_gpio_pin_valid(pin)) {
+    return FR_ERR_DOMAIN;
+  }
+
+  switch (mode) {
+  case 0:
+    config.mode = GPIO_MODE_INPUT;
+    config.pull_up_en = GPIO_PULLUP_DISABLE;
+    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    break;
+  case 1:
+    if (!fr_esp_gpio_output_valid(pin)) {
+      return FR_ERR_DOMAIN;
+    }
+    config.mode = GPIO_MODE_INPUT_OUTPUT;
+    config.pull_up_en = GPIO_PULLUP_DISABLE;
+    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    break;
+  case 2:
+    config.mode = GPIO_MODE_INPUT;
+    config.pull_up_en = GPIO_PULLUP_ENABLE;
+    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    break;
+  default:
+    return FR_ERR_DOMAIN;
+  }
+
+  config.intr_type = GPIO_INTR_DISABLE;
+  config.pin_bit_mask = 1ULL << pin;
+  return fr_esp_err(gpio_config(&config));
+}
+
+fr_err_t fr_platform_gpio_write(uint16_t pin, uint16_t value) {
+  if (!fr_esp_gpio_output_valid(pin)) {
+    return FR_ERR_DOMAIN;
+  }
+
+  FR_TRY(fr_esp_err(gpio_set_direction((gpio_num_t)pin, GPIO_MODE_INPUT_OUTPUT)));
+  return fr_esp_err(gpio_set_level((gpio_num_t)pin, value == 0 ? 0 : 1));
+}
+
+fr_err_t fr_platform_gpio_read(uint16_t pin, uint16_t *out_value) {
+  if (out_value == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_esp_gpio_pin_valid(pin)) {
+    return FR_ERR_DOMAIN;
+  }
+
+  *out_value = gpio_get_level((gpio_num_t)pin) == 0 ? 0 : 1;
+  return FR_OK;
+}
+
+static bool fr_esp_adc1_channel_for_pin(uint16_t pin,
+                                        adc_channel_t *out_channel) {
+  if (out_channel == NULL) {
+    return false;
+  }
+
+  switch (pin) {
+  case 36:
+    *out_channel = ADC_CHANNEL_0;
+    return true;
+  case 37:
+    *out_channel = ADC_CHANNEL_1;
+    return true;
+  case 38:
+    *out_channel = ADC_CHANNEL_2;
+    return true;
+  case 39:
+    *out_channel = ADC_CHANNEL_3;
+    return true;
+  case 32:
+    *out_channel = ADC_CHANNEL_4;
+    return true;
+  case 33:
+    *out_channel = ADC_CHANNEL_5;
+    return true;
+  case 34:
+    *out_channel = ADC_CHANNEL_6;
+    return true;
+  case 35:
+    *out_channel = ADC_CHANNEL_7;
+    return true;
+  default:
+    return false;
+  }
+}
+
+static fr_err_t fr_esp_adc1_init(void) {
+  const adc_oneshot_unit_init_cfg_t init_config = {
+      .unit_id = ADC_UNIT_1,
+      .ulp_mode = ADC_ULP_MODE_DISABLE,
+  };
+
+  if (fr_esp_adc1_initialized) {
+    return FR_OK;
+  }
+
+  FR_TRY(fr_esp_err(adc_oneshot_new_unit(&init_config, &fr_esp_adc1)));
+  fr_esp_adc1_initialized = true;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_adc_read(uint16_t pin, uint16_t *out_value) {
+  adc_channel_t channel = ADC_CHANNEL_0;
+  const adc_oneshot_chan_cfg_t config = {
+      .atten = ADC_ATTEN_DB_12,
+      .bitwidth = ADC_BITWIDTH_DEFAULT,
+  };
+  int raw = 0;
+
+  if (out_value == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_esp_adc1_channel_for_pin(pin, &channel)) {
+    return FR_ERR_DOMAIN;
+  }
+
+  FR_TRY(fr_esp_adc1_init());
+  FR_TRY(fr_esp_err(adc_oneshot_config_channel(fr_esp_adc1, channel,
+                                               &config)));
+  FR_TRY(fr_esp_err(adc_oneshot_read(fr_esp_adc1, channel, &raw)));
+  if (raw < 0 || raw > 16383) {
+    return FR_ERR_RANGE;
+  }
+
+  *out_value = (uint16_t)raw;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_poll_interrupt(fr_runtime_t *runtime) {
+  uint8_t byte = 0;
+  fr_err_t err = fr_esp_read_byte(&byte, 0);
+
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (err == FR_ERR_NOT_FOUND) {
+    return FR_OK;
+  }
+  FR_TRY(err);
+  if (byte == FR_ESP_CTRL_C) {
+    fr_runtime_interrupt(runtime);
+  } else {
+    fr_esp_save_pending_byte(byte);
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
+                                  uint16_t platform_index) {
+#if FR_FEATURE_UART
+  if (kind == FR_HANDLE_KIND_UART) {
+    fr_esp_app_uart_t *uart = NULL;
+    uart_port_t port = UART_NUM_0;
+    esp_err_t err = ESP_OK;
+
+    FR_TRY(fr_esp_app_uart_entry(platform_index, &uart, &port));
+    err = uart_driver_delete(port);
+    if (err != ESP_OK) {
+      return fr_esp_err(err);
+    }
+    memset(uart, 0, sizeof(*uart));
+    return FR_OK;
+  }
+#endif
+  (void)kind;
+  (void)platform_index;
+  return FR_OK;
+}
+
+#if FR_FEATURE_UART
+fr_err_t fr_platform_uart_open(uint16_t tx, uint16_t rx, uint16_t rate_code,
+                               uint16_t *out_platform_index) {
+  int baud = 0;
+
+  if (out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_esp_gpio_output_valid(tx) || !fr_esp_gpio_pin_valid(rx) || tx == rx ||
+      fr_esp_app_uart_console_conflict(tx, rx) ||
+      fr_esp_app_uart_pin_conflict(tx, rx)) {
+    return FR_ERR_DOMAIN;
+  }
+  FR_TRY(fr_esp_uart_baud(rate_code, &baud));
+
+  for (uint16_t i = 0;
+       i < sizeof(fr_esp_app_uarts) / sizeof(fr_esp_app_uarts[0]); i++) {
+    fr_esp_app_uart_t *uart = &fr_esp_app_uarts[i];
+    uart_port_t port = fr_esp_app_uart_ports[i];
+    const uart_config_t config = {
+        .baud_rate = baud,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    esp_err_t err = ESP_OK;
+
+    if (port == FR_BOARD_UART_PORT) {
+      continue;
+    }
+    if (uart->in_use) {
+      continue;
+    }
+
+    err = uart_driver_install(port, FR_ESP_APP_UART_RX_BYTES,
+                              FR_ESP_APP_UART_TX_BYTES, 0, NULL, 0);
+    if (err != ESP_OK) {
+      return fr_esp_err(err);
+    }
+    err = uart_param_config(port, &config);
+    if (err == ESP_OK) {
+      err = uart_set_pin(port, tx, rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    }
+    if (err == ESP_OK) {
+      err = uart_set_mode(port, UART_MODE_UART);
+    }
+    if (err == ESP_OK) {
+      err = uart_flush_input(port);
+    }
+    if (err != ESP_OK) {
+      (void)uart_driver_delete(port);
+      return fr_esp_err(err);
+    }
+
+    *uart = (fr_esp_app_uart_t){
+        .in_use = true,
+        .tx = tx,
+        .rx = rx,
+        .rate_code = rate_code,
+    };
+    *out_platform_index = i;
+    return FR_OK;
+  }
+
+  return FR_ERR_CAPACITY;
+}
+
+fr_err_t fr_platform_uart_write_byte(uint16_t platform_index, uint8_t byte) {
+  fr_esp_app_uart_t *uart = NULL;
+  uart_port_t port = UART_NUM_0;
+
+  FR_TRY(fr_esp_app_uart_entry(platform_index, &uart, &port));
+  (void)uart;
+  return uart_write_bytes(port, &byte, 1) == 1 ? FR_OK : FR_ERR_IO;
+}
+
+fr_err_t fr_platform_uart_read_byte(uint16_t platform_index, uint8_t *out_byte,
+                                    bool *out_has_byte) {
+  fr_esp_app_uart_t *uart = NULL;
+  uart_port_t port = UART_NUM_0;
+  int read = 0;
+
+  if (out_byte == NULL || out_has_byte == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_esp_app_uart_entry(platform_index, &uart, &port));
+  (void)uart;
+  read = uart_read_bytes(port, out_byte, 1, 0);
+  if (read < 0) {
+    return FR_ERR_IO;
+  }
+  *out_has_byte = read == 1;
+  if (!*out_has_byte) {
+    *out_byte = 0;
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_uart_available(uint16_t platform_index,
+                                    uint16_t *out_count) {
+  fr_esp_app_uart_t *uart = NULL;
+  uart_port_t port = UART_NUM_0;
+  size_t length = 0;
+
+  if (out_count == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_esp_app_uart_entry(platform_index, &uart, &port));
+  (void)uart;
+  FR_TRY(fr_esp_err(uart_get_buffered_data_len(port, &length)));
+  if (length > 16383u) {
+    return FR_ERR_RANGE;
+  }
+  *out_count = (uint16_t)length;
+  return FR_OK;
+}
+#endif
+
+#if FR_FEATURE_REPL
+fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
+  uint16_t used = 0;
+
+  if (line == NULL || cap == 0 || out_eof == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  *out_eof = false;
+  line[0] = '\0';
+  for (;;) {
+    uint8_t byte = 0;
+    fr_err_t err = fr_esp_read_byte(&byte, pdMS_TO_TICKS(20));
+
+    if (err == FR_ERR_NOT_FOUND) {
+      continue;
+    }
+    FR_TRY(err);
+
+    if (byte == '\r' || byte == '\n') {
+      line[used] = '\0';
+      fr_platform_write_text("\n");
+      return FR_OK;
+    }
+    if (byte == FR_ESP_CTRL_C) {
+      line[0] = '\0';
+      fr_platform_write_text("^C\n");
+      return FR_OK;
+    }
+    if (byte == FR_ESP_BACKSPACE || byte == FR_ESP_DELETE) {
+      if (used > 0) {
+        used -= 1;
+        line[used] = '\0';
+        fr_platform_write_text("\b \b");
+      }
+      continue;
+    }
+    if (byte < 32 || byte > 126) {
+      continue;
+    }
+    if ((uint16_t)(used + 1) >= cap) {
+      return FR_ERR_RANGE;
+    }
+
+    line[used] = (char)byte;
+    used += 1;
+    line[used] = '\0';
+    (void)uart_write_bytes(FR_BOARD_UART_PORT, &byte, 1);
+  }
+}
+
+fr_err_t fr_platform_write_text(const char *text) {
+  if (text == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  while (*text != '\0') {
+    if (*text == '\n') {
+      const char cr = '\r';
+      if (uart_write_bytes(FR_BOARD_UART_PORT, &cr, 1) < 0) {
+        return FR_ERR_IO;
+      }
+    }
+    if (uart_write_bytes(FR_BOARD_UART_PORT, text, 1) < 0) {
+      return FR_ERR_IO;
+    }
+    text += 1;
+  }
+  return FR_OK;
+}
+#endif
+
+#if FR_FEATURE_PERSISTENCE
+static uint8_t fr_esp_storage_image[FR_PROFILE_PERSISTENCE_BYTES];
+
+static bool fr_esp_storage_bounds(uint8_t slot, uint16_t offset,
+                                  uint16_t length) {
+  return slot < FR_ESP_STORAGE_SLOT_COUNT &&
+         (uint32_t)offset + length <= FR_PROFILE_PERSISTENCE_BYTES;
+}
+
+static const char *fr_esp_storage_key(uint8_t slot) {
+  switch (slot) {
+  case 0:
+    return "slot0";
+  case 1:
+    return "slot1";
+  default:
+    return NULL;
+  }
+}
+
+static fr_err_t fr_esp_storage_open(nvs_open_mode_t mode,
+                                    nvs_handle_t *out_handle) {
+  if (out_handle == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_platform_init());
+  return fr_esp_err(nvs_open("frothy", mode, out_handle));
+}
+
+static fr_err_t fr_esp_storage_load(nvs_handle_t handle, const char *key,
+                                    uint8_t *image) {
+  size_t length = FR_PROFILE_PERSISTENCE_BYTES;
+  esp_err_t err = ESP_OK;
+
+  if (key == NULL || image == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  memset(image, 0xff, FR_PROFILE_PERSISTENCE_BYTES);
+  err = nvs_get_blob(handle, key, image, &length);
+  if (err == ESP_ERR_NVS_NOT_FOUND) {
+    return FR_OK;
+  }
+  FR_TRY(fr_esp_err(err));
+  if (length != FR_PROFILE_PERSISTENCE_BYTES) {
+    return FR_ERR_CORRUPT;
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_storage_read(uint8_t slot, uint16_t offset, uint8_t *bytes,
+                                  uint16_t length) {
+  nvs_handle_t handle = 0;
+  const char *key = fr_esp_storage_key(slot);
+  fr_err_t err = FR_OK;
+
+  if ((bytes == NULL && length > 0) ||
+      !fr_esp_storage_bounds(slot, offset, length) || key == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  err = fr_esp_storage_open(NVS_READONLY, &handle);
+  if (err == FR_ERR_NOT_FOUND) {
+    memset(fr_esp_storage_image, 0xff, FR_PROFILE_PERSISTENCE_BYTES);
+    err = FR_OK;
+  }
+  if (err == FR_OK && handle != 0) {
+    err = fr_esp_storage_load(handle, key, fr_esp_storage_image);
+  }
+  if (err == FR_OK && length > 0) {
+    memcpy(bytes, &fr_esp_storage_image[offset], length);
+  }
+  if (handle != 0) {
+    nvs_close(handle);
+  }
+  return err;
+}
+
+fr_err_t fr_platform_storage_write(uint8_t slot, uint16_t offset,
+                                   const uint8_t *bytes, uint16_t length) {
+  nvs_handle_t handle = 0;
+  const char *key = fr_esp_storage_key(slot);
+  fr_err_t err = FR_OK;
+
+  if ((bytes == NULL && length > 0) ||
+      !fr_esp_storage_bounds(slot, offset, length) || key == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  err = fr_esp_storage_open(NVS_READWRITE, &handle);
+  if (err == FR_OK) {
+    err = fr_esp_storage_load(handle, key, fr_esp_storage_image);
+  }
+  if (err == FR_OK && length > 0) {
+    memcpy(&fr_esp_storage_image[offset], bytes, length);
+    err = fr_esp_err(nvs_set_blob(handle, key, fr_esp_storage_image,
+                                  FR_PROFILE_PERSISTENCE_BYTES));
+  }
+  if (err == FR_OK) {
+    err = fr_esp_err(nvs_commit(handle));
+  }
+  if (handle != 0) {
+    nvs_close(handle);
+  }
+  return err;
+}
+
+fr_err_t fr_platform_storage_erase(uint8_t slot) {
+  nvs_handle_t handle = 0;
+  const char *key = fr_esp_storage_key(slot);
+  fr_err_t err = FR_OK;
+  esp_err_t erase_err = ESP_OK;
+
+  if (slot >= FR_ESP_STORAGE_SLOT_COUNT || key == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  err = fr_esp_storage_open(NVS_READWRITE, &handle);
+  if (err != FR_OK) {
+    return err;
+  }
+  erase_err = nvs_erase_key(handle, key);
+  if (erase_err != ESP_OK && erase_err != ESP_ERR_NVS_NOT_FOUND) {
+    err = fr_esp_err(erase_err);
+  }
+  if (err == FR_OK) {
+    err = fr_esp_err(nvs_commit(handle));
+  }
+  nvs_close(handle);
+  return err;
+}
+
+void fr_platform_storage_debug_reset(void) {
+  for (uint8_t slot = 0; slot < FR_ESP_STORAGE_SLOT_COUNT; slot++) {
+    (void)fr_platform_storage_erase(slot);
+  }
+}
+#endif

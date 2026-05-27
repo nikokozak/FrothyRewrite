@@ -1,0 +1,45 @@
+/*
+ * Roomier host proof profile for normal Frothy.
+ *
+ * This profile keeps the same device-owned compiler/runtime path as the small
+ * host pressure profile, but gives the normal language enough room to prove
+ * names, code, persistence, boot, inspection, and interrupt without Uno limits.
+ */
+
+#pragma once
+
+#define FR_WORD_SIZE 32
+
+#define FR_PROFILE_MAX_SLOTS 128
+#define FR_PROFILE_MAX_INSTRUCTION_BYTES 512
+#define FR_PROFILE_MAX_STACK_DEPTH 32
+#define FR_PROFILE_CODE_OBJECT_TABLE_SIZE 64
+#define FR_PROFILE_NATIVE_TABLE_SIZE 64
+#define FR_PROFILE_MAX_HANDLES 16
+#define FR_PROFILE_OBJECT_TABLE_SIZE 32
+#define FR_PROFILE_MAX_CELL_WORDS 64
+#define FR_PROFILE_MAX_CELL_LENGTH 16
+#define FR_PROFILE_MAX_TEXT_BYTES 512
+#define FR_PROFILE_MAX_TEXT_LENGTH 64
+#define FR_PROFILE_MAX_RECORD_NAME_BYTES 256
+#define FR_PROFILE_MAX_RECORD_FIELDS_PER_SHAPE 4
+#define FR_PROFILE_MAX_RECORD_SHAPE_FIELDS 32
+#define FR_PROFILE_MAX_RECORD_VALUE_FIELDS 64
+#define FR_PROFILE_PAD_BYTES 64
+#define FR_PROFILE_MAX_CALL_DEPTH 16
+#define FR_PROFILE_PERSISTENCE_BYTES 4096
+#define FR_PROFILE_MAX_NAME_BYTES 48
+#define FR_PROFILE_MAX_OVERLAY_NAMES 64
+#define FR_PROFILE_REPL_LINE_BYTES 512
+#define FR_BASE_IMAGE_INCLUDE_SYMBOLS 1
+
+#define FR_FEATURE_REPL 1
+#define FR_FEATURE_COMPILER 1
+#define FR_FEATURE_PERSISTENCE 1
+#define FR_FEATURE_INTROSPECTION 1
+#define FR_FEATURE_CELLS 1
+#define FR_FEATURE_TEXT 1
+#define FR_FEATURE_RECORDS 1
+#define FR_FEATURE_HANDLES 1
+#define FR_FEATURE_UART 1
+#define FR_FEATURE_PAD 1

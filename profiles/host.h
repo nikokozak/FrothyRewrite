@@ -1,0 +1,26 @@
+/*
+ * Host proof profile. It intentionally starts with tiny limits so host tests do
+ * not hide target pressure.
+ */
+
+#pragma once
+
+#define FR_WORD_SIZE 16
+
+#define FR_PROFILE_MAX_SLOTS 32
+#define FR_PROFILE_MAX_INSTRUCTION_BYTES 128
+#define FR_PROFILE_MAX_STACK_DEPTH 16
+#define FR_PROFILE_CODE_OBJECT_TABLE_SIZE 16
+#define FR_PROFILE_NATIVE_TABLE_SIZE 16
+#define FR_PROFILE_MAX_HANDLES 4
+#define FR_PROFILE_MAX_CALL_DEPTH 8
+#define FR_PROFILE_PERSISTENCE_BYTES 1024
+#define FR_PROFILE_MAX_NAME_BYTES 32
+#define FR_PROFILE_MAX_OVERLAY_NAMES 8
+#define FR_BASE_IMAGE_INCLUDE_SYMBOLS 1
+
+#define FR_FEATURE_REPL 1
+#define FR_FEATURE_COMPILER 1
+#define FR_FEATURE_PERSISTENCE 1
+#define FR_FEATURE_INTROSPECTION 1
+#define FR_FEATURE_HANDLES 1

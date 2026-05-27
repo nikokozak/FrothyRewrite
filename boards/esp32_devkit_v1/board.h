@@ -1,0 +1,10 @@
+#pragma once
+
+#define FR_BOARD_UART_PORT 0
+#define FR_BOARD_UART_BAUD 115200
+#define FR_BOARD_UART_TX 1
+#define FR_BOARD_UART_RX 3
+
+#define FR_BOARD_LED_BUILTIN 2u
+#define FR_BOARD_A0 34u
+#define FR_BOARD_BOOT_BUTTON 0u

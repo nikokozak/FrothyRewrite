@@ -1,0 +1,10 @@
+-std=c99
+-Wall
+-Wextra
+-Werror
+-pedantic
+-Isrc
+-Iprofiles
+-Itargets/host
+-Iboards/host
+-DFR_PROFILE_HEADER="host.h"
