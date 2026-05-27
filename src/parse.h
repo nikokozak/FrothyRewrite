@@ -26,6 +26,8 @@ typedef uint8_t fr_parse_expr_id_t;
 
 typedef enum fr_parse_expr_kind_t {
   FR_PARSE_EXPR_NIL,
+  FR_PARSE_EXPR_FALSE,
+  FR_PARSE_EXPR_TRUE,
   FR_PARSE_EXPR_INT,
   FR_PARSE_EXPR_TEXT,
   FR_PARSE_EXPR_NAME,

@@ -117,6 +117,9 @@ bool fr_tagged_can_encode_int(int32_t raw_int);
 fr_err_t fr_tagged_encode_int(int32_t raw_int, fr_tagged_t *out_tagged);
 fr_err_t fr_tagged_decode_int(fr_tagged_t tagged, fr_int_t *out_int);
 
+fr_err_t fr_tagged_encode_bool(bool value, fr_tagged_t *out_tagged);
+fr_err_t fr_tagged_decode_bool(fr_tagged_t tagged, bool *out_value);
+
 fr_err_t fr_tagged_encode_slot_id(fr_slot_id_t slot_id,
                                   fr_tagged_t *out_tagged);
 fr_err_t fr_tagged_decode_slot_id(fr_tagged_t tagged,

@@ -120,6 +120,14 @@ static fr_err_t fr_vm_push_nil(fr_vm_state_t *state) {
   return fr_vm_push(state, fr_tagged_nil());
 }
 
+static fr_err_t fr_vm_push_bool(fr_vm_state_t *state, bool value) {
+  fr_tagged_t tagged = 0;
+
+  FR_TRY(fr_tagged_encode_bool(value, &tagged));
+  state->ip += 1;
+  return fr_vm_push(state, tagged);
+}
+
 static fr_err_t fr_vm_load_arg(const fr_instruction_stream_t *view,
                                fr_vm_state_t *state) {
   uint8_t arg_index = 0;
@@ -495,6 +503,10 @@ static fr_err_t fr_vm_step(fr_runtime_t *runtime,
     return fr_vm_drop(state);
   case FR_OP_PUSH_NIL:
     return fr_vm_push_nil(state);
+  case FR_OP_PUSH_FALSE:
+    return fr_vm_push_bool(state, false);
+  case FR_OP_PUSH_TRUE:
+    return fr_vm_push_bool(state, true);
   case FR_OP_REPEAT_BEGIN:
     return fr_vm_repeat_begin(view, state);
   case FR_OP_REPEAT_NEXT:

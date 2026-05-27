@@ -302,6 +302,8 @@ static bool fr_parse_span_same(fr_parse_span_t lhs, fr_parse_span_t rhs) {
 
 static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
   return fr_parse_span_equals(name, "nil") ||
+         fr_parse_span_equals(name, "true") ||
+         fr_parse_span_equals(name, "false") ||
          fr_parse_span_equals(name, "fn") ||
          fr_parse_span_equals(name, "with") ||
          fr_parse_span_equals(name, "is") ||
@@ -664,6 +666,16 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
       FR_TRY(fr_parse_advance(parser));
       return fr_parse_add_expr(
           parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_NIL}, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "false")) {
+      FR_TRY(fr_parse_advance(parser));
+      return fr_parse_add_expr(
+          parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_FALSE}, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "true")) {
+      FR_TRY(fr_parse_advance(parser));
+      return fr_parse_add_expr(
+          parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_TRUE}, out_id);
     }
     if (fr_parse_span_equals(parser->token.span, "fn")) {
       return fr_parse_function(parser, out_id);

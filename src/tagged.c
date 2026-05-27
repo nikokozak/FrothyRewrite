@@ -98,6 +98,29 @@ fr_err_t fr_tagged_decode_int(fr_tagged_t tagged, fr_int_t *out_int) {
   return FR_ERR_TYPE;
 }
 
+fr_err_t fr_tagged_encode_bool(bool value, fr_tagged_t *out_tagged) {
+  if (out_tagged == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_tagged = value ? FR_TAGGED_TRUE : FR_TAGGED_FALSE;
+  return FR_OK;
+}
+
+fr_err_t fr_tagged_decode_bool(fr_tagged_t tagged, bool *out_value) {
+  if (out_value == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (tagged == FR_TAGGED_TRUE) {
+    *out_value = true;
+    return FR_OK;
+  }
+  if (tagged == FR_TAGGED_FALSE) {
+    *out_value = false;
+    return FR_OK;
+  }
+  return FR_ERR_TYPE;
+}
+
 /* The encode-side range check for compact IDs is #if FR_WORD_SIZE == 16 only;
  * the 32-bit branch trusts the typedef to fit the 32-bit band (UINT16_MAX).
  * Lock that here so widening fr_slot_id_t et al. past 16 bits without also

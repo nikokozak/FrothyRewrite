@@ -449,6 +449,7 @@ static void test_tagged_bands(void) {
 
 static void test_specials(void) {
   fr_tagged_t tagged = 0;
+  bool decoded_bool = false;
 
   CHECK("nil", fr_tagged_is_nil(fr_tagged_nil()));
   CHECK("false", fr_tagged_is_false(fr_tagged_false()));
@@ -456,6 +457,22 @@ static void test_specials(void) {
   CHECK("false is bool", fr_tagged_is_bool(fr_tagged_false()));
   CHECK("true is bool", fr_tagged_is_bool(fr_tagged_true()));
   CHECK("nil is not bool", !fr_tagged_is_bool(fr_tagged_nil()));
+
+  CHECK("encode false", fr_tagged_encode_bool(false, &tagged) == FR_OK &&
+                            tagged == fr_tagged_false());
+  CHECK("encode true", fr_tagged_encode_bool(true, &tagged) == FR_OK &&
+                           tagged == fr_tagged_true());
+  CHECK("decode false", fr_tagged_decode_bool(fr_tagged_false(),
+                                              &decoded_bool) == FR_OK &&
+                            decoded_bool == false);
+  CHECK("decode true", fr_tagged_decode_bool(fr_tagged_true(),
+                                             &decoded_bool) == FR_OK &&
+                           decoded_bool == true);
+  CHECK("decode nil rejects",
+        fr_tagged_decode_bool(fr_tagged_nil(), &decoded_bool) == FR_ERR_TYPE);
+  CHECK("decode int rejects",
+        fr_tagged_encode_int(1, &tagged) == FR_OK &&
+            fr_tagged_decode_bool(tagged, &decoded_bool) == FR_ERR_TYPE);
 
   CHECK("nil is falsy", fr_tagged_is_falsy(fr_tagged_nil()));
   CHECK("false is falsy", fr_tagged_is_falsy(fr_tagged_false()));
@@ -2888,6 +2905,16 @@ static void test_parse(void) {
         fr_parse_line("to with [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse to rejects empty with list",
         fr_parse_line("to add with [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse true literal",
+        fr_parse_line("boot is true", &parsed) == FR_OK &&
+            parsed.exprs[parsed.definition.value].kind == FR_PARSE_EXPR_TRUE);
+  CHECK("parse false literal",
+        fr_parse_line("boot is false", &parsed) == FR_OK &&
+            parsed.exprs[parsed.definition.value].kind == FR_PARSE_EXPR_FALSE);
+  CHECK("parse true rejects as parameter",
+        fr_parse_line("to f with true [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse false rejects as parameter",
+        fr_parse_line("to f with false [ 1 ]", &parsed) == FR_ERR_INVALID);
 #if FR_TAGGED_INT_MAX >= 115200
   CHECK("parse roomier int body",
         fr_parse_line("boot is fn [ 115200 ]", &parsed) == FR_OK &&
@@ -3277,8 +3304,6 @@ static void test_compile(void) {
         fr_compile_overlay_update("boot is 12x", &update) == FR_ERR_UNSUPPORTED);
   CHECK("compile rejects unknown slot",
         fr_compile_overlay_update("missing is nil", &update) == FR_ERR_NOT_FOUND);
-  CHECK("compile rejects unsupported literal",
-        fr_compile_overlay_update("boot is true", &update) == FR_ERR_UNSUPPORTED);
   CHECK("compile rejects extra token",
         fr_compile_overlay_update("boot is nil now", &update) == FR_ERR_INVALID);
   CHECK("compile rejects missing token",
@@ -3863,6 +3888,48 @@ static void test_compile(void) {
             fr_compile_overlay_update_for_runtime(
                 &runtime, "boot is fn [ first: 7 ]", &update) ==
                 FR_ERR_INVALID);
+  CHECK("compiled true literal round-trips through slot",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is true", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
+            fr_tagged_is_true(tagged));
+  CHECK("compiled false literal round-trips through slot",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is false", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
+            fr_tagged_is_false(tagged));
+  CHECK("compiled if true takes then branch",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ if true [ 1 ] else [ 2 ] ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
+  CHECK("compiled if false takes else branch",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ if false [ 1 ] else [ 2 ] ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 2);
+  CHECK("compiled fn returning true",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ true ]", &update) ==
+                FR_OK &&
+            update.instruction_bytes[2] == FR_OP_PUSH_TRUE &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_true(tagged));
+  CHECK("compiled fn returning false",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ false ]", &update) ==
+                FR_OK &&
+            update.instruction_bytes[2] == FR_OP_PUSH_FALSE &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_false(tagged));
   CHECK("compiled native call owns instruction bytes",
         fr_compile_overlay_update("boot is fn [ ms: 100 ]", &update) == FR_OK &&
             update.slot_inits[0].slot_id == FR_SLOT_BOOT &&

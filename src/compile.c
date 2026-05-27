@@ -294,6 +294,12 @@ static fr_err_t fr_compile_emit_push_nil(uint8_t instruction_bytes[],
   return fr_compile_write_byte(instruction_bytes, offset, FR_OP_PUSH_NIL);
 }
 
+static fr_err_t fr_compile_emit_push_bool(uint8_t instruction_bytes[],
+                                          uint16_t *offset, bool value) {
+  return fr_compile_write_byte(instruction_bytes, offset,
+                               value ? FR_OP_PUSH_TRUE : FR_OP_PUSH_FALSE);
+}
+
 static fr_err_t fr_compile_emit_jump_placeholder(uint8_t instruction_bytes[],
                                                  uint16_t *offset,
                                                  fr_opcode_t op,
@@ -557,6 +563,10 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   switch (expr->kind) {
   case FR_PARSE_EXPR_NIL:
     return fr_compile_emit_push_nil(instruction_bytes, offset);
+  case FR_PARSE_EXPR_FALSE:
+    return fr_compile_emit_push_bool(instruction_bytes, offset, false);
+  case FR_PARSE_EXPR_TRUE:
+    return fr_compile_emit_push_bool(instruction_bytes, offset, true);
   case FR_PARSE_EXPR_INT:
     return fr_compile_emit_push_int(instruction_bytes, offset, expr->int_value);
   case FR_PARSE_EXPR_TEXT:
@@ -661,6 +671,11 @@ static fr_err_t fr_compile_literal_ref(const fr_compile_context_t *ctx,
 
   if (expr->kind == FR_PARSE_EXPR_NIL) {
     *out_ref = (fr_image_ref_t){FR_IMAGE_REF_LITERAL_TAGGED, FR_TAGGED_NIL, 0};
+    return FR_OK;
+  }
+  if (expr->kind == FR_PARSE_EXPR_FALSE || expr->kind == FR_PARSE_EXPR_TRUE) {
+    FR_TRY(fr_tagged_encode_bool(expr->kind == FR_PARSE_EXPR_TRUE, &tagged));
+    *out_ref = (fr_image_ref_t){FR_IMAGE_REF_LITERAL_TAGGED, tagged, 0};
     return FR_OK;
   }
   if (expr->kind == FR_PARSE_EXPR_INT) {
