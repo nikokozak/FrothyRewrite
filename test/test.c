@@ -4921,9 +4921,9 @@ static void test_vm(void) {
                              FR_OP_RETURN};
   uint8_t add_overflow[] = {0x00, 0x00, FR_TEST_PUSH_INT(FR_TAGGED_INT_MAX),
                             FR_TEST_PUSH_INT(1), FR_OP_ADD_INT, FR_OP_RETURN};
-  /* Partition-boundary range check: the sum sits outside the tagged band, so
-   * FR_ERR_RANGE is expected. The wide-temp width invariant is proven
-   * separately by the typedef asserts next to fr_vm_add_int in src/vm.c. */
+  /* Sum sits outside the tagged band, so FR_ERR_RANGE is expected. The
+   * wide-temp width rule is enforced by the typedef checks next to
+   * fr_vm_add_int in src/vm.c, not by this case. */
   uint8_t add_partition[] = {0x00, 0x00, FR_TEST_PUSH_INT(FR_TAGGED_INT_MAX),
                              FR_TEST_PUSH_INT(FR_TAGGED_INT_MAX),
                              FR_OP_ADD_INT, FR_OP_RETURN};
@@ -5126,7 +5126,7 @@ static void test_vm(void) {
                 FR_OK &&
             fr_vm_run_instruction_stream(&runtime, &view, &result) ==
                 FR_ERR_RANGE);
-  CHECK("vm add rejects partition-boundary overflow",
+  CHECK("vm add rejects max+max overflow",
         fr_instruction_stream_init(&view, add_partition,
                                    sizeof(add_partition)) == FR_OK &&
             fr_vm_run_instruction_stream(&runtime, &view, &result) ==
@@ -5136,7 +5136,7 @@ static void test_vm(void) {
                                    sizeof(add_underflow)) == FR_OK &&
             fr_vm_run_instruction_stream(&runtime, &view, &result) ==
                 FR_ERR_RANGE);
-  CHECK("vm add rejects partition-boundary underflow",
+  CHECK("vm add rejects min+min underflow",
         fr_instruction_stream_init(&view, add_partition_low,
                                    sizeof(add_partition_low)) == FR_OK &&
             fr_vm_run_instruction_stream(&runtime, &view, &result) ==
