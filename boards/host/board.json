@@ -1,0 +1,10 @@
+{
+  "name": "Host",
+  "chip": "host",
+  "target": "host",
+  "profile": "host",
+  "peripherals": [],
+  "pins": {
+    "$led_builtin": 13
+  }
+}
