@@ -5,6 +5,9 @@
 #include "runtime.h"
 
 #include "driver/gpio.h"
+#if FR_FEATURE_PWM
+#include "driver/ledc.h"
+#endif
 #include "driver/uart.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_err.h"
@@ -57,6 +60,47 @@ static const uart_port_t fr_esp_app_uart_ports[] = {
 static fr_esp_app_uart_t
     fr_esp_app_uarts[sizeof(fr_esp_app_uart_ports) /
                      sizeof(fr_esp_app_uart_ports[0])];
+#endif
+
+#if FR_FEATURE_PWM
+/* One LEDC timer per channel: timer sharing across channels is a deferred
+ * optimization (see ADR). Capacity is the timer count, not the channel count. */
+enum {
+  FR_ESP_PWM_MAX = SOC_LEDC_TIMER_NUM,
+  FR_ESP_PWM_DUTY_RESOLUTION_BITS = 10,
+};
+
+typedef struct fr_esp_pwm_t {
+  bool in_use;
+  ledc_channel_t channel;
+  ledc_timer_t timer;
+  uint16_t pin;
+  uint16_t freq;
+} fr_esp_pwm_t;
+
+static fr_esp_pwm_t fr_esp_pwms[FR_ESP_PWM_MAX];
+
+static bool fr_esp_pwm_pin_in_use(uint16_t pin) {
+  for (uint16_t i = 0; i < FR_ESP_PWM_MAX; i++) {
+    if (fr_esp_pwms[i].in_use && fr_esp_pwms[i].pin == pin) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static fr_err_t fr_esp_pwm_entry(uint16_t platform_index,
+                                 fr_esp_pwm_t **out_pwm) {
+  if (out_pwm == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (platform_index >= FR_ESP_PWM_MAX || !fr_esp_pwms[platform_index].in_use) {
+    return FR_ERR_HANDLE;
+  }
+
+  *out_pwm = &fr_esp_pwms[platform_index];
+  return FR_OK;
+}
 #endif
 
 static bool fr_esp_initialized;
@@ -423,6 +467,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
     return FR_OK;
   }
 #endif
+#if FR_FEATURE_PWM
+  if (kind == FR_HANDLE_KIND_PWM) {
+    return fr_platform_pwm_close(platform_index);
+  }
+#endif
   (void)kind;
   (void)platform_index;
   return FR_OK;
@@ -697,6 +746,77 @@ uint32_t fr_platform_random_next(void) {
 
 void fr_platform_random_seed(uint32_t seed) {
   fr_esp_random_state = seed == 0u ? 1u : seed;
+}
+#endif
+
+#if FR_FEATURE_PWM
+fr_err_t fr_platform_pwm_open(uint16_t pin, uint16_t freq,
+                              uint16_t *out_platform_index) {
+  if (out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_esp_gpio_output_valid(pin) || freq == 0) {
+    return FR_ERR_DOMAIN;
+  }
+  if (fr_esp_pwm_pin_in_use(pin)) {
+    return FR_ERR_DOMAIN;
+  }
+
+  for (uint16_t i = 0; i < FR_ESP_PWM_MAX; i++) {
+    fr_esp_pwm_t *pwm = &fr_esp_pwms[i];
+    ledc_timer_config_t timer_conf = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .timer_num = (ledc_timer_t)i,
+        .freq_hz = freq,
+        .duty_resolution = (ledc_timer_bit_t)FR_ESP_PWM_DUTY_RESOLUTION_BITS,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ledc_channel_config_t channel_conf = {
+        .gpio_num = pin,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = (ledc_channel_t)i,
+        .timer_sel = (ledc_timer_t)i,
+        .duty = 0,
+        .hpoint = 0,
+        .intr_type = LEDC_INTR_DISABLE,
+    };
+
+    if (pwm->in_use) {
+      continue;
+    }
+
+    FR_TRY(fr_esp_err(ledc_timer_config(&timer_conf)));
+    FR_TRY(fr_esp_err(ledc_channel_config(&channel_conf)));
+    *pwm = (fr_esp_pwm_t){
+        .in_use = true,
+        .channel = (ledc_channel_t)i,
+        .timer = (ledc_timer_t)i,
+        .pin = pin,
+        .freq = freq,
+    };
+    *out_platform_index = i;
+    return FR_OK;
+  }
+
+  return FR_ERR_CAPACITY;
+}
+
+fr_err_t fr_platform_pwm_write(uint16_t platform_index, uint16_t duty) {
+  fr_esp_pwm_t *pwm = NULL;
+
+  FR_TRY(fr_esp_pwm_entry(platform_index, &pwm));
+  FR_TRY(fr_esp_err(
+      ledc_set_duty(LEDC_LOW_SPEED_MODE, pwm->channel, (uint32_t)duty)));
+  return fr_esp_err(ledc_update_duty(LEDC_LOW_SPEED_MODE, pwm->channel));
+}
+
+fr_err_t fr_platform_pwm_close(uint16_t platform_index) {
+  fr_esp_pwm_t *pwm = NULL;
+
+  FR_TRY(fr_esp_pwm_entry(platform_index, &pwm));
+  FR_TRY(fr_esp_err(ledc_stop(LEDC_LOW_SPEED_MODE, pwm->channel, 0)));
+  memset(pwm, 0, sizeof(*pwm));
+  return FR_OK;
 }
 #endif
 

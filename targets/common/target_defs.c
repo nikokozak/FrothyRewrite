@@ -325,6 +325,100 @@ static fr_err_t fr_native_uart_close(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_PWM
+enum {
+  FR_NATIVE_PWM_DUTY_MAX = 1023,
+};
+
+static fr_err_t fr_native_decode_pwm_handle(fr_runtime_t *runtime,
+                                            const fr_tagged_t *args,
+                                            uint8_t arg_count, uint8_t index,
+                                            uint16_t *out_platform_index) {
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || args == NULL || index >= arg_count ||
+      out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_handle_ref(args[index], &ref));
+  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_PWM, NULL,
+                          out_platform_index);
+}
+
+static fr_err_t fr_native_pwm_open(fr_runtime_t *runtime,
+                                   const fr_tagged_t *args, uint8_t arg_count,
+                                   fr_tagged_t *out) {
+  uint16_t pin = 0;
+  uint16_t freq = 0;
+  fr_handle_ref_t ref = {0};
+  fr_tagged_t handle = 0;
+  uint16_t platform_index = 0;
+  fr_err_t err = FR_OK;
+
+  if (runtime == NULL || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &pin));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &freq));
+
+  FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_PWM, &ref, &handle));
+  err = fr_platform_pwm_open(pin, freq, &platform_index);
+  if (err != FR_OK) {
+    (void)fr_handle_release_reserved(runtime, ref);
+    return err;
+  }
+
+  err = fr_handle_activate(runtime, ref, platform_index);
+  if (err != FR_OK) {
+    (void)fr_platform_handle_close(FR_HANDLE_KIND_PWM, platform_index);
+    (void)fr_handle_release_reserved(runtime, ref);
+    return err;
+  }
+
+  *out = handle;
+  return FR_OK;
+}
+
+static fr_err_t fr_native_pwm_write(fr_runtime_t *runtime,
+                                    const fr_tagged_t *args, uint8_t arg_count,
+                                    fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  fr_int_t duty = 0;
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_decode_pwm_handle(runtime, args, arg_count, 0,
+                                     &platform_index));
+  FR_TRY(fr_tagged_decode_int(args[1], &duty));
+  if (duty < 0 || duty > FR_NATIVE_PWM_DUTY_MAX) {
+    return FR_ERR_DOMAIN;
+  }
+  FR_TRY(fr_platform_pwm_write(platform_index, (uint16_t)duty));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_pwm_close(fr_runtime_t *runtime,
+                                    const fr_tagged_t *args, uint8_t arg_count,
+                                    fr_tagged_t *out) {
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || args == NULL || arg_count == 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_handle_ref(args[0], &ref));
+  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_PWM, NULL, NULL));
+  FR_TRY(fr_handle_close(runtime, ref));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+#endif
+
 #if FR_FEATURE_RANDOM
 static fr_err_t fr_native_random_next(fr_runtime_t *runtime,
                                       const fr_tagged_t *args,
@@ -645,6 +739,40 @@ static const fr_native_signature_t fr_native_handle_to_nil_signature = {
 };
 #endif
 
+#if FR_FEATURE_PWM
+static const fr_native_param_t fr_native_pwm_open_params[] = {
+    {"pin", FR_NATIVE_VALUE_INT},
+    {"freq", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_pwm_open_signature = {
+    .params = fr_native_pwm_open_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_HANDLE,
+    .help = "open a PWM channel on a pin at a frequency in Hz",
+};
+
+static const fr_native_param_t fr_native_pwm_write_params[] = {
+    {"handle", FR_NATIVE_VALUE_HANDLE},
+    {"duty", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_pwm_write_signature = {
+    .params = fr_native_pwm_write_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "set a PWM duty cycle in [0, 1023]",
+};
+
+static const fr_native_param_t fr_native_pwm_close_params[] = {
+    {"handle", FR_NATIVE_VALUE_HANDLE},
+};
+static const fr_native_signature_t fr_native_pwm_close_signature = {
+    .params = fr_native_pwm_close_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "release a PWM channel",
+};
+#endif
+
 #if FR_FEATURE_RANDOM
 static const fr_native_signature_t fr_native_random_next_signature = {
     .params = NULL,
@@ -920,6 +1048,44 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_random_seed_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_PWM
+    {
+        .slot_id = FR_SLOT_PWM_OPEN,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pwm.open",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pwm_open,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pwm_open_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_PWM_WRITE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pwm.write",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pwm_write,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pwm_write_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_PWM_CLOSE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pwm.close",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pwm_close,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pwm_close_signature,
 #endif
     },
 #endif

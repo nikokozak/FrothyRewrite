@@ -24,3 +24,8 @@
 #define FR_FEATURE_PERSISTENCE 1
 #define FR_FEATURE_INTROSPECTION 1
 #define FR_FEATURE_HANDLES 1
+
+/* Native table caps at 16; with persistence and random the pressure profile is
+ * already at 13. PWM's three rows would leave no room for runtime installs. */
+#undef FR_FEATURE_PWM
+#define FR_FEATURE_PWM 0

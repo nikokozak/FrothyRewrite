@@ -18,6 +18,40 @@ enum {
 static uint8_t fr_host_gpio_values[FR_HOST_MAX_PIN + 1];
 static uint16_t fr_host_millis;
 
+#if FR_FEATURE_PWM
+typedef struct fr_host_pwm_t {
+  bool in_use;
+  uint16_t pin;
+  uint16_t freq;
+  uint16_t duty;
+} fr_host_pwm_t;
+
+static fr_host_pwm_t fr_host_pwms[FR_PROFILE_MAX_HANDLES];
+
+static bool fr_host_pwm_pin_in_use(uint16_t pin) {
+  for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
+    if (fr_host_pwms[i].in_use && fr_host_pwms[i].pin == pin) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static fr_err_t fr_host_pwm_entry(uint16_t platform_index,
+                                  fr_host_pwm_t **out_pwm) {
+  if (out_pwm == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (platform_index >= FR_PROFILE_MAX_HANDLES ||
+      !fr_host_pwms[platform_index].in_use) {
+    return FR_ERR_HANDLE;
+  }
+
+  *out_pwm = &fr_host_pwms[platform_index];
+  return FR_OK;
+}
+#endif
+
 #if FR_FEATURE_UART
 enum {
   FR_HOST_UART_MAX_PORT = 7,
@@ -151,6 +185,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
              sizeof(fr_host_uarts[platform_index]));
     }
     return FR_OK;
+  }
+#endif
+#if FR_FEATURE_PWM
+  if (kind == FR_HANDLE_KIND_PWM) {
+    return fr_platform_pwm_close(platform_index);
   }
 #endif
   (void)kind;
@@ -346,6 +385,52 @@ uint32_t fr_platform_random_next(void) {
 
 void fr_platform_random_seed(uint32_t seed) {
   fr_host_random_state = seed == 0u ? 1u : seed;
+}
+#endif
+
+#if FR_FEATURE_PWM
+fr_err_t fr_platform_pwm_open(uint16_t pin, uint16_t freq,
+                              uint16_t *out_platform_index) {
+  if (out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (pin > FR_HOST_MAX_PIN || freq == 0 || fr_host_pwm_pin_in_use(pin)) {
+    return FR_ERR_DOMAIN;
+  }
+
+  for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
+    fr_host_pwm_t *pwm = &fr_host_pwms[i];
+
+    if (pwm->in_use) {
+      continue;
+    }
+
+    *pwm = (fr_host_pwm_t){
+        .in_use = true,
+        .pin = pin,
+        .freq = freq,
+    };
+    *out_platform_index = i;
+    return FR_OK;
+  }
+
+  return FR_ERR_CAPACITY;
+}
+
+fr_err_t fr_platform_pwm_write(uint16_t platform_index, uint16_t duty) {
+  fr_host_pwm_t *pwm = NULL;
+
+  FR_TRY(fr_host_pwm_entry(platform_index, &pwm));
+  pwm->duty = duty;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pwm_close(uint16_t platform_index) {
+  if (platform_index >= FR_PROFILE_MAX_HANDLES) {
+    return FR_OK;
+  }
+  memset(&fr_host_pwms[platform_index], 0, sizeof(fr_host_pwms[platform_index]));
+  return FR_OK;
 }
 #endif
 

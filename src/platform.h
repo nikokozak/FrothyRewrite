@@ -48,6 +48,13 @@ uint32_t fr_platform_random_next(void);
 void fr_platform_random_seed(uint32_t seed);
 #endif
 
+#if FR_FEATURE_PWM
+fr_err_t fr_platform_pwm_open(uint16_t pin, uint16_t freq,
+                              uint16_t *out_platform_index);
+fr_err_t fr_platform_pwm_write(uint16_t platform_index, uint16_t duty);
+fr_err_t fr_platform_pwm_close(uint16_t platform_index);
+#endif
+
 #if FR_FEATURE_PERSISTENCE
 fr_err_t fr_platform_storage_read(uint8_t slot, uint16_t offset, uint8_t *bytes,
                                   uint16_t length);
