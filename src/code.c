@@ -76,9 +76,12 @@ fr_err_t fr_code_install(fr_runtime_t *runtime,
       FR_PROFILE_MAX_INSTRUCTION_BYTES) {
     return FR_ERR_CAPACITY;
   }
+  /* Names are introspection metadata, not semantics. If the shared pool is
+   * full, drop them and let the renderer fall back rather than fail a compile
+   * the instructions accept. */
   if ((uint32_t)runtime->code.used_param_name_bytes + param_names_length >
       sizeof(runtime->code.param_name_bytes)) {
-    return FR_ERR_CAPACITY;
+    param_names_length = 0;
   }
 
   entry = &runtime->code.entries[runtime->code.count];

@@ -185,8 +185,10 @@
 #define FR_PROFILE_REPL_LINE_BYTES 128
 #endif
 
-/* Shared pool for code-object param names, NUL-separated. Sized off the code
- * table because most words have zero or one param; the renderer reads it. */
+/* Shared cache for code-object param names, NUL-separated. Sized off the code
+ * table because most words have zero or one param; the renderer reads it. When
+ * the cache fills, install drops names for the overflowing object (the renderer
+ * falls back), so this is a budget, not a hard limit on legal source. */
 #ifndef FR_PROFILE_MAX_PARAM_NAME_BYTES
 #define FR_PROFILE_MAX_PARAM_NAME_BYTES (FR_PROFILE_CODE_OBJECT_TABLE_SIZE * 8)
 #endif

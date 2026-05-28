@@ -7,6 +7,11 @@
 
 enum {
   FR_COMPILE_MAX_INSTRUCTION_BYTES = FR_PROFILE_MAX_INSTRUCTION_BYTES,
+  /* One function's packed param names: every arg at max token length plus its
+   * NUL. The runtime pool is a shared cache, but this scratch holds one
+   * signature, so it must fit the largest legal one or compile would reject it. */
+  FR_COMPILE_MAX_PARAM_NAME_BYTES =
+      FR_PARSE_MAX_PARAMS * (FR_PARSE_MAX_TOKEN_BYTES + 1),
 };
 
 typedef struct fr_compile_overlay_update_t {
@@ -21,9 +26,7 @@ typedef struct fr_compile_overlay_update_t {
   fr_record_name_t record_fields[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
   fr_image_ref_t record_field_refs[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
   uint8_t instruction_bytes[FR_COMPILE_MAX_INSTRUCTION_BYTES];
-  char param_name_text[FR_PROFILE_MAX_PARAM_NAME_BYTES > 0
-                           ? FR_PROFILE_MAX_PARAM_NAME_BYTES
-                           : 1];
+  char param_name_text[FR_COMPILE_MAX_PARAM_NAME_BYTES];
   uint8_t text_bytes[FR_PROFILE_MAX_TEXT_LENGTH > 0
                          ? FR_PROFILE_MAX_TEXT_LENGTH
                          : 1];
