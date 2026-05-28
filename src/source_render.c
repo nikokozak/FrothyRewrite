@@ -272,6 +272,21 @@ static fr_err_t fr_source_reduce_repeat(fr_source_render_t *r,
   return fr_source_seal(r, start, false);
 }
 
+/* A multi-statement body leaves one fragment per `;`-separated statement on
+ * the stack; splice them back into `a ; b ; c` source form. */
+static fr_err_t fr_source_join_statements(fr_source_render_t *r, uint8_t base) {
+  uint16_t start = r->used;
+
+  for (uint8_t i = base; i < r->depth; i++) {
+    if (i > base) {
+      FR_TRY(fr_source_puts(r, " ; "));
+    }
+    FR_TRY(fr_source_puts(r, &fr_source_render_arena[r->stack[i].start]));
+  }
+  r->depth = base;
+  return fr_source_seal(r, start, false);
+}
+
 /* if/else leaves one value; assemble it from the already-rendered fragments.
  * The condition prints raw — a comparison reads fine without parens here. */
 static fr_err_t fr_source_reduce_if(fr_source_render_t *r,
@@ -439,8 +454,16 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
                                       const fr_instruction_stream_t *view,
                                       const char *names, uint16_t names_len,
                                       fr_code_offset_t ip, fr_code_offset_t end) {
+  uint8_t base = r->depth;
+
   while (ip < end) {
     switch ((fr_opcode_t)view->bytes[ip]) {
+    case FR_OP_DROP:
+      /* Statement separator: the finished statement stays on the stack for
+       * the join below. Control-flow constructs eat their own internal DROPs,
+       * so any DROP reaching here sits between two body statements. */
+      ip = (fr_code_offset_t)(ip + 1u);
+      break;
     case FR_OP_PUSH_NIL:
       FR_TRY(fr_source_push_text(r, "nil"));
       ip = (fr_code_offset_t)(ip + 1u);
@@ -572,6 +595,9 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
     default:
       return FR_ERR_UNSUPPORTED;
     }
+  }
+  if (r->depth > (uint8_t)(base + 1u)) {
+    FR_TRY(fr_source_join_statements(r, base));
   }
   return FR_OK;
 }

@@ -7511,6 +7511,22 @@ static void test_repl_see_source_form(void) {
                         "to poll with p [ while gpio.read: p [ if p > 0 "
                         "[ ms: 1 ] else [ ms: 2 ] ] ]\n"
                         "ok\n") == 0);
+  /* Multi-statement body: two `;`-separated statements over the param. Each
+   * leaves a value the compiler drops between statements. Fresh install for
+   * the overlay-name budget. */
+  CHECK("see source multi-statement",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "flash is fn with p [ gpio.write: p, 1 ; gpio.write: p, 0 ]",
+                out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see flash", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to flash with p [ gpio.write: p, 1 ; "
+                        "gpio.write: p, 0 ]\n"
+                        "ok\n") == 0);
 }
 #endif
 
@@ -7557,10 +7573,9 @@ static void test_repl_pump(void) {
 #if FR_FEATURE_COMPILER
   CHECK("repl pump transcript output",
         strcmp(out, "> " FR_TEST_WORDS "> ok\n> overlay code\n"
-                    ";; source reconstruction unavailable\nLOAD_SLOT 4\n"
-                    "PUSH_INT 1\nCALL_NATIVE_SLOT 3\nDROP\nLOAD_SLOT 4\n"
-                    "PUSH_INT 0\nCALL_NATIVE_SLOT 3\nDROP\nLOAD_SLOT 2\n"
-                    "RETURN\nok\n> ok\n> err 7\n> ") == 0);
+                    "to boot [ gpio.write: $led_builtin, 1 ; "
+                    "gpio.write: $led_builtin, 0 ; one ]\n"
+                    "ok\n> ok\n> err 7\n> ") == 0);
 #elif FR_FEATURE_INTROSPECTION
   CHECK("repl pump transcript output without compiler",
         strcmp(out,
