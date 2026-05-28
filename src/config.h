@@ -193,6 +193,13 @@
 #define FR_PROFILE_MAX_PARAM_NAME_BYTES (FR_PROFILE_CODE_OBJECT_TABLE_SIZE * 8)
 #endif
 
+/* Scratch the source renderer assembles a body into before writing it. Each
+ * reduction copies its child fragments forward, so size off the byte budget;
+ * on overflow the renderer falls back to the bytecode listing. */
+#ifndef FR_PROFILE_SOURCE_RENDER_BYTES
+#define FR_PROFILE_SOURCE_RENDER_BYTES (FR_PROFILE_MAX_INSTRUCTION_BYTES * 4u)
+#endif
+
 #if FR_PROFILE_MAX_NAME_BYTES == 0
 #error "FR_PROFILE_MAX_NAME_BYTES must be greater than zero"
 #endif

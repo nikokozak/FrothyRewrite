@@ -19,6 +19,7 @@
 #include "platform.h"
 #include "profile.h"
 #include "slot.h"
+#include "source_render.h"
 #include "tagged.h"
 #include "vm.h"
 
@@ -894,12 +895,24 @@ static fr_err_t fr_repl_see_command_slot(fr_runtime_t *runtime,
 
 static fr_err_t fr_repl_write_code_listing(fr_runtime_t *runtime,
                                            fr_code_object_id_t code_object_id,
+                                           const char *word_name,
                                            const fr_repl_writer_t *writer) {
   fr_instruction_stream_t view;
   fr_instruction_header_t header;
   fr_code_offset_t ip = 0;
   char line[FR_PROFILE_MAX_NAME_BYTES + 32];
+  fr_err_t render_err =
+      fr_source_render_code(runtime, code_object_id, word_name, writer->write,
+                            writer->ctx);
 
+  if (render_err != FR_ERR_UNSUPPORTED) {
+    return render_err;
+  }
+
+  /* The renderer couldn't rebuild this body. Show the bytecode so see still
+   * answers, marked so the reader knows it's the fallback form. */
+  FR_TRY(fr_repl_writer_write(writer,
+                              ";; source reconstruction unavailable\n"));
   FR_TRY(fr_code_get_instructions(runtime, code_object_id, &view));
   FR_TRY(fr_instruction_read_header(&view, &header));
   if (view.length == header.header_size) {
@@ -932,6 +945,7 @@ static fr_err_t fr_repl_eval_see_arg(fr_runtime_t *runtime, const char *arg,
   const char *base_name = NULL;
   const char *layer_name = NULL;
   const char *slot_name = NULL;
+  const char *word_name = NULL;
   char response[FR_REPL_OUTPUT_BYTES];
   uint16_t used = 0;
 
@@ -966,6 +980,7 @@ static fr_err_t fr_repl_eval_see_arg(fr_runtime_t *runtime, const char *arg,
     /* A project name is overlay state even when the stored value is nil. */
     FR_TRY(fr_repl_append(response, (uint16_t)sizeof(response), &used,
                           "overlay "));
+    word_name = slot_name != NULL ? slot_name : base_name;
   } else if (fr_base_slot_layer(slot_id, &layer) == FR_OK) {
     layer_name = fr_repl_base_layer_name(layer);
     if (layer_name == NULL) {
@@ -976,6 +991,7 @@ static fr_err_t fr_repl_eval_see_arg(fr_runtime_t *runtime, const char *arg,
     FR_TRY(fr_repl_append(response, (uint16_t)sizeof(response), &used,
                           layer_name));
     FR_TRY(fr_repl_append(response, (uint16_t)sizeof(response), &used, " "));
+    word_name = base_name != NULL ? base_name : slot_name;
   } else {
     return FR_ERR_NOT_FOUND;
   }
@@ -986,7 +1002,8 @@ static fr_err_t fr_repl_eval_see_arg(fr_runtime_t *runtime, const char *arg,
   FR_TRY(fr_repl_writer_write(writer, response));
 
   if (fr_tagged_decode_code_object_id(tagged, &code_object_id) == FR_OK) {
-    FR_TRY(fr_repl_write_code_listing(runtime, code_object_id, writer));
+    FR_TRY(fr_repl_write_code_listing(runtime, code_object_id, word_name,
+                                      writer));
   }
 
   return fr_repl_writer_write(writer, "ok\n");

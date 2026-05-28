@@ -6699,7 +6699,6 @@ static void test_repl(void) {
   fr_tagged_t result = 0;
   fr_int_t decoded = 0;
   fr_slot_id_t slot_id = 0;
-  char expected[128];
 #endif
 #if FR_FEATURE_OVERLAY_APPLY_COMMAND
   uint8_t apply_code_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(1),
@@ -7075,10 +7074,10 @@ static void test_repl(void) {
             strcmp(out, "code 0\nok\n") == 0);
   CHECK("repl see overlay code",
         fr_repl_eval_line(&runtime, "see boot", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "overlay code\nPUSH_INT 1\nRETURN\nok\n") == 0);
+            strcmp(out, "overlay code\nto boot [ 1 ]\nok\n") == 0);
   CHECK("repl see numeric overlay code",
         fr_repl_eval_line(&runtime, "see 0", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "overlay code\nPUSH_INT 1\nRETURN\nok\n") == 0);
+            strcmp(out, "overlay code\nto boot [ 1 ]\nok\n") == 0);
   CHECK("repl compiles dynamic function",
         fr_repl_eval_line(&runtime, "blink is fn [ pin: led, 1 ]", out,
                           sizeof(out)) == FR_OK &&
@@ -7086,13 +7085,10 @@ static void test_repl(void) {
   CHECK("repl runs dynamic function",
         fr_repl_eval_line(&runtime, "blink:", out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
-  snprintf(expected, sizeof(expected),
-           "overlay code\nLOAD_SLOT %u\nPUSH_INT 1\nCALL_NATIVE_SLOT 3\n"
-           "RETURN\nok\n",
-           (unsigned)FR_TEST_PROJECT_SLOT_BASE);
   CHECK("repl see dynamic function",
         fr_repl_eval_line(&runtime, "see blink", out, sizeof(out)) == FR_OK &&
-            strcmp(out, expected) == 0);
+            strcmp(out, "overlay code\nto blink [ gpio.write: led, 1 ]\nok\n") ==
+                0);
   CHECK("repl words includes dynamic function",
         fr_repl_eval_line(&runtime, "words", out, sizeof(out)) == FR_OK &&
             strcmp(out, FR_TEST_WORDS_WITH_LED_AND_BLINK) == 0);
@@ -7113,7 +7109,8 @@ static void test_repl(void) {
 #if FR_FEATURE_INTROSPECTION
   CHECK("repl see parameter function",
         fr_repl_eval_line(&runtime, "see blink", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "overlay code\nLOAD_ARG 0\nRETURN\nok\n") == 0);
+            strcmp(out, "overlay code\nto blink with value [ value ]\nok\n") ==
+                0);
 #endif
   CHECK("repl compiles boot with parameter call",
         fr_repl_eval_line(&runtime, "boot is fn [ blink: 7 ]", out,
@@ -7440,6 +7437,28 @@ static fr_err_t test_repl_write_text(const char *text) {
   return FR_OK;
 }
 
+#if FR_FEATURE_COMPILER && FR_FEATURE_INTROSPECTION &&                         \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+/* A parameter + binop one-liner is the smallest body that exercises the source
+ * renderer's arg-name lookup and infix reduction; pin its exact form. */
+static void test_repl_see_source_form(void) {
+  fr_runtime_t runtime;
+  char out[128];
+
+#if FR_FEATURE_PERSISTENCE
+  fr_platform_storage_debug_reset();
+#endif
+  CHECK("see source one-liner",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "twice is fn with n [ n * 2 ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see twice", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\nto twice with n [ n * 2 ]\nok\n") == 0);
+}
+#endif
+
 static void test_repl_pump(void) {
   fr_runtime_t runtime;
   char out[1024] = {0};
@@ -7482,7 +7501,8 @@ static void test_repl_pump(void) {
             fr_repl_run(&runtime, &io) == FR_OK);
 #if FR_FEATURE_COMPILER
   CHECK("repl pump transcript output",
-        strcmp(out, "> " FR_TEST_WORDS "> ok\n> overlay code\nLOAD_SLOT 4\n"
+        strcmp(out, "> " FR_TEST_WORDS "> ok\n> overlay code\n"
+                    ";; source reconstruction unavailable\nLOAD_SLOT 4\n"
                     "PUSH_INT 1\nCALL_NATIVE_SLOT 3\nDROP\nLOAD_SLOT 4\n"
                     "PUSH_INT 0\nCALL_NATIVE_SLOT 3\nDROP\nLOAD_SLOT 2\n"
                     "RETURN\nok\n> ok\n> err 7\n> ") == 0);
@@ -7711,6 +7731,10 @@ int main(void) {
 #endif
   test_vm();
   test_repl();
+#if FR_FEATURE_COMPILER && FR_FEATURE_INTROSPECTION &&                         \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  test_repl_see_source_form();
+#endif
   test_repl_pump();
   test_repl_transcript();
 #if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS

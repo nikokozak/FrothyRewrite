@@ -64,7 +64,8 @@ COMPILER_SOURCES ?= \
 	src/compile.c
 
 REPL_SOURCES ?= \
-	src/repl.c
+	src/repl.c \
+	src/source_render.c
 
 KERNEL_SOURCES = \
 	src/tagged.c \
@@ -142,6 +143,7 @@ KERNEL_DEPS = \
 	src/parse.h src/parse.c \
 	src/compile.h src/compile.c \
 	src/repl.h src/repl.c \
+	src/source_render.h src/source_render.c \
 	$(PROFILE_HEADERS) \
 	$(PROFILE_MKS)
 
@@ -313,9 +315,9 @@ test-host-normal-transcript: host-normal
 		'> A' \
 		'2' \
 		'overlay code' \
-		'CALL_SLOT_ARG 48 1' \
+		'to boot [ blink_times: 3 ]' \
 		'time blink blink_times'; do \
-		if ! printf '%s\n' "$$out" | grep -q "$$expected"; then \
+		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
 			printf '%s\nmissing expected text: %s\n' "$$out" "$$expected"; \
 			exit 1; \
 		fi; \
@@ -384,8 +386,8 @@ test-esp32-plain-host-transcript: esp32-plain-host
 		'"ready"' \
 		'overlay text 5' \
 		'overlay cells 1' \
-		'CALL_NATIVE_SLOT 3'; do \
-		if ! printf '%s\n' "$$out" | grep -q "$$expected"; then \
+		'to boot [ gpio.write: $$led_builtin, 1 ]'; do \
+		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
 			printf '%s\nmissing expected text: %s\n' "$$out" "$$expected"; \
 			exit 1; \
 		fi; \
