@@ -52,3 +52,7 @@
 /* Math adds six rows; tiny is already at 10 with persistence and caps at 12. */
 #undef FR_FEATURE_MATH
 #define FR_FEATURE_MATH 0
+
+/* Source-base words compile at boot; tiny stays on C natives. */
+#undef FR_FEATURE_SOURCE_BASE
+#define FR_FEATURE_SOURCE_BASE 0
