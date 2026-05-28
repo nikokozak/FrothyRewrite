@@ -942,6 +942,22 @@ fr_err_t fr_overlay_apply(fr_runtime_t *runtime,
   return fr_image_apply_to_runtime(runtime, &records, FR_IMAGE_APPLY_OVERLAY);
 }
 
+fr_err_t fr_overlay_apply_base(fr_runtime_t *runtime,
+                               const fr_overlay_update_t *update) {
+  fr_image_records_t records;
+
+  if (runtime == NULL || update == NULL) {
+    return FR_ERR_INVALID;
+  }
+  records = fr_image_records_from_overlay(update);
+  records.slot_names = NULL;
+  records.slot_name_count = 0;
+  FR_TRY(fr_image_check_tables(&records));
+  FR_TRY(fr_image_check_apply(runtime, &records, FR_IMAGE_APPLY_BASE));
+
+  return fr_image_apply_to_runtime(runtime, &records, FR_IMAGE_APPLY_BASE);
+}
+
 static fr_err_t fr_overlay_update_encode_ref(
     fr_overlay_update_writer_t *writer, fr_image_ref_t ref) {
   fr_int_t raw_int = 0;

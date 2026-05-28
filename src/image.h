@@ -128,6 +128,12 @@ fr_err_t fr_image_install(fr_runtime_t *runtime, const fr_image_t *image);
 fr_err_t fr_overlay_apply(fr_runtime_t *runtime,
                           const fr_overlay_update_t *update);
 
+/* Apply an overlay update as base slots. Boot-time source compile uses this so
+   base/core.frothy words land in the base layer, not the project overlay. Slot
+   names are dropped; source word names ride the base source record instead. */
+fr_err_t fr_overlay_apply_base(fr_runtime_t *runtime,
+                               const fr_overlay_update_t *update);
+
 fr_err_t fr_overlay_update_encode(const fr_overlay_update_t *update,
                                   uint8_t *bytes, uint16_t cap,
                                   uint16_t *out_length);

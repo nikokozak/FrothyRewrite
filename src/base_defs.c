@@ -339,7 +339,11 @@ fr_err_t fr_base_slot_id_for_name(const char *name, fr_slot_id_t *out_slot_id) {
       return FR_OK;
     }
   }
+#if FR_FEATURE_SOURCE_BASE
+  return fr_base_source_slot_id_for_name(name, out_slot_id);
+#else
   return FR_ERR_NOT_FOUND;
+#endif
 #else
   return FR_ERR_UNSUPPORTED;
 #endif

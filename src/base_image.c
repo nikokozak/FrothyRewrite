@@ -6,6 +6,10 @@
 #include "tagged.h"
 
 #if FR_FEATURE_SOURCE_BASE
+#include "compile.h"
+#include "fr_source_base.h"
+#include "image.h"
+
 #include <string.h>
 
 enum { FR_SOURCE_BASE_RECORD_MAX = 8 };
@@ -56,6 +60,64 @@ const char *fr_base_source_slot_name(fr_slot_id_t slot_id) {
     }
   }
   return NULL;
+}
+
+fr_err_t fr_base_source_slot_id_for_name(const char *name,
+                                         fr_slot_id_t *out_slot_id) {
+  if (name == NULL || out_slot_id == NULL) {
+    return FR_ERR_INVALID;
+  }
+  for (uint16_t i = 0; i < fr_source_base_slot_count; i++) {
+    if (strcmp(fr_source_base_records[i].name, name) == 0) {
+      *out_slot_id = fr_source_base_records[i].slot_id;
+      return FR_OK;
+    }
+  }
+  return FR_ERR_NOT_FOUND;
+}
+
+static fr_err_t fr_base_compile_source_line(fr_runtime_t *runtime,
+                                            const char *line) {
+  fr_compile_overlay_update_t compiled = {0};
+
+  FR_TRY(fr_compile_overlay_update_for_runtime(runtime, line, &compiled));
+  if (compiled.overlay_update.slot_init_count != 1 ||
+      compiled.overlay_update.slot_name_count != 1) {
+    return FR_ERR_INVALID;
+  }
+  fr_slot_id_t slot_id = compiled.overlay_update.slot_inits[0].slot_id;
+  FR_TRY(fr_overlay_apply_base(runtime, &compiled.overlay_update));
+  return fr_base_source_record_add(slot_id, compiled.slot_name.name);
+}
+
+/* Compile base/core.frothy one definition per line into base bindings. */
+static fr_err_t fr_base_compile_source(fr_runtime_t *runtime, const char *bytes,
+                                       uint16_t length) {
+  char line[FR_PROFILE_REPL_LINE_BYTES];
+  uint16_t i = 0;
+
+  while (i < length) {
+    uint16_t n = 0;
+    bool blank = true;
+
+    while (i < length && bytes[i] != '\n') {
+      if (n + 1 >= sizeof(line)) {
+        return FR_ERR_CAPACITY;
+      }
+      if (bytes[i] != ' ' && bytes[i] != '\t' && bytes[i] != '\r') {
+        blank = false;
+      }
+      line[n++] = bytes[i++];
+    }
+    if (i < length) {
+      i++;
+    }
+    line[n] = '\0';
+    if (!blank) {
+      FR_TRY(fr_base_compile_source_line(runtime, line));
+    }
+  }
+  return FR_OK;
 }
 #endif
 
@@ -112,6 +174,11 @@ fr_err_t fr_base_image_install(fr_runtime_t *runtime) {
       FR_TRY(fr_base_install_def(&next, &def_layer.defs[i]));
     }
   }
+
+#if FR_FEATURE_SOURCE_BASE
+  FR_TRY(fr_base_compile_source(&next, fr_source_base_bytes,
+                                fr_source_base_bytes_len));
+#endif
 
   fr_code_mark_base(&next);
   fr_native_mark_base(&next);

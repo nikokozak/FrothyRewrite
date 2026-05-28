@@ -157,4 +157,6 @@ void fr_base_source_record_reset(void);
 fr_err_t fr_base_source_record_add(fr_slot_id_t slot_id, const char *name);
 bool fr_base_is_source_slot(fr_slot_id_t slot_id);
 const char *fr_base_source_slot_name(fr_slot_id_t slot_id);
+fr_err_t fr_base_source_slot_id_for_name(const char *name,
+                                         fr_slot_id_t *out_slot_id);
 #endif

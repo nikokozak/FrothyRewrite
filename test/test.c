@@ -134,6 +134,15 @@ enum {
 #endif
 
 #define FR_TEST_PROJECT_SLOT_BASE FR_SLOT_BOARD_LOCAL_BASE
+/* Boot compile binds base/core.frothy words at the first board-local slots, so
+   user words in a fully installed base image start above them. */
+#if FR_FEATURE_SOURCE_BASE
+#define FR_TEST_SOURCE_BASE_WORD_COUNT 1
+#else
+#define FR_TEST_SOURCE_BASE_WORD_COUNT 0
+#endif
+#define FR_TEST_FIRST_USER_SLOT                                               \
+  ((fr_slot_id_t)(FR_SLOT_BOARD_LOCAL_BASE + FR_TEST_SOURCE_BASE_WORD_COUNT))
 #define FR_TEST_SYNTHETIC_HANDLE_KIND FR_HANDLE_KIND_PWM
 #define FR_TEST_SYNTHETIC_HANDLE_NAME "pwm"
 
@@ -3299,8 +3308,14 @@ static void test_image(void) {
             strcmp(fr_base_slot_name(FR_SLOT_ADC_ABOVE), "adc.above") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_MILLIS), "millis") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_LED_BUILTIN), "$led_builtin") ==
-                0 &&
-            fr_base_slot_name(FR_SLOT_BOARD_LOCAL_BASE) == NULL);
+                0);
+#if FR_FEATURE_SOURCE_BASE
+  CHECK("base image names source word at board-local base",
+        strcmp(fr_base_slot_name(FR_SLOT_BOARD_LOCAL_BASE), "gpio.high") == 0);
+#else
+  CHECK("base image leaves board-local base unnamed",
+        fr_base_slot_name(FR_SLOT_BOARD_LOCAL_BASE) == NULL);
+#endif
 #if FR_FEATURE_UART
   CHECK("base image exposes uart slot names",
         strcmp(fr_base_slot_name_at(13), "uart.open") == 0 &&
@@ -4097,18 +4112,18 @@ static void test_compile(void) {
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime, "led is $led_builtin", &update) == FR_OK &&
-            update.slot_inits[0].slot_id == FR_TEST_PROJECT_SLOT_BASE &&
+            update.slot_inits[0].slot_id == FR_TEST_FIRST_USER_SLOT &&
             update.slot_inits[0].ref.kind == FR_IMAGE_REF_LITERAL_TAGGED &&
             fr_tagged_decode_int(update.slot_inits[0].ref.literal_tagged,
                                  &decoded) == FR_OK &&
             decoded == 13 && update.overlay_update.slot_names == &update.slot_name &&
             update.overlay_update.slot_name_count == 1 &&
-            update.slot_name.slot_id == FR_TEST_PROJECT_SLOT_BASE &&
+            update.slot_name.slot_id == FR_TEST_FIRST_USER_SLOT &&
             strcmp(update.slot_name.name, "led") == 0);
   CHECK("compiled runtime overlay name applies",
         fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_slot_id_for_name(&runtime, "led", &slot_id) == FR_OK &&
-            slot_id == FR_TEST_PROJECT_SLOT_BASE &&
+            slot_id == FR_TEST_FIRST_USER_SLOT &&
             strcmp(fr_slot_name(&runtime, slot_id), "led") == 0);
 #if FR_FEATURE_TEXT
   CHECK("compile runtime text definition",
@@ -4116,14 +4131,14 @@ static void test_compile(void) {
             fr_compile_overlay_update_for_runtime(&text_runtime,
                                                   "message is \"ready\"",
                                                   &update) == FR_OK &&
-            update.slot_inits[0].slot_id == FR_TEST_PROJECT_SLOT_BASE &&
+            update.slot_inits[0].slot_id == FR_TEST_FIRST_USER_SLOT &&
             update.slot_inits[0].ref.kind == FR_IMAGE_REF_TEXT_OBJECT &&
             update.text_object.length == 5 &&
             memcmp(update.text_object.bytes, "ready", 5) == 0 &&
             update.overlay_update.text_objects == &update.text_object &&
             update.overlay_update.text_object_count == 1 &&
             fr_overlay_apply(&text_runtime, &update.overlay_update) == FR_OK &&
-            fr_slot_read(&text_runtime, FR_TEST_PROJECT_SLOT_BASE, &tagged) ==
+            fr_slot_read(&text_runtime, FR_TEST_FIRST_USER_SLOT, &tagged) ==
                 FR_OK &&
             fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
             fr_text_view(&text_runtime, object_id, &text_bytes, &text_length) ==
@@ -4143,7 +4158,7 @@ static void test_compile(void) {
             fr_compile_overlay_update_for_runtime(&cell_runtime,
                                                   "counter is cells(2)",
                                                   &update) == FR_OK &&
-            update.slot_inits[0].slot_id == FR_TEST_PROJECT_SLOT_BASE &&
+            update.slot_inits[0].slot_id == FR_TEST_FIRST_USER_SLOT &&
             update.slot_inits[0].ref.kind == FR_IMAGE_REF_CELL_OBJECT &&
             update.cell_object.length == 2 &&
             update.overlay_update.cell_objects == &update.cell_object &&
@@ -4405,7 +4420,7 @@ static void test_compile(void) {
   CHECK("compile runtime existing overlay name",
         fr_compile_overlay_update_for_runtime(&runtime, "led is 12", &update) ==
                 FR_OK &&
-            update.slot_inits[0].slot_id == FR_TEST_PROJECT_SLOT_BASE &&
+            update.slot_inits[0].slot_id == FR_TEST_FIRST_USER_SLOT &&
             update.overlay_update.slot_name_count == 0);
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   CHECK("compile unknown name does not allocate project slot",
@@ -4422,12 +4437,12 @@ static void test_compile(void) {
   CHECK("compile project definition allocates first project slot",
         fr_compile_overlay_update_for_runtime(&project_runtime, "foo is 1",
                                               &update) == FR_OK &&
-            update.slot_inits[0].slot_id == fr_slot_first_project_id() &&
+            update.slot_inits[0].slot_id == FR_TEST_FIRST_USER_SLOT &&
             update.overlay_update.slot_name_count == 1 &&
             fr_overlay_apply(&project_runtime, &update.overlay_update) ==
                 FR_OK &&
             fr_slot_id_for_name(&project_runtime, "foo", &foo_slot) == FR_OK &&
-            foo_slot == fr_slot_first_project_id());
+            foo_slot == FR_TEST_FIRST_USER_SLOT);
   CHECK("compile project redefinition reuses slot",
         (before_slot_count = fr_slot_count(&project_runtime), true) &&
             (before_name_count =
@@ -4448,13 +4463,13 @@ static void test_compile(void) {
         fr_compile_overlay_update_for_runtime(&project_runtime, "bar is foo",
                                               &update) == FR_OK &&
             update.slot_inits[0].slot_id ==
-                (fr_slot_id_t)(fr_slot_first_project_id() + 1) &&
+                (fr_slot_id_t)(FR_TEST_FIRST_USER_SLOT + 1) &&
             fr_overlay_apply(&project_runtime, &update.overlay_update) ==
                 FR_OK &&
             fr_slot_id_for_name(&project_runtime, "foo", &foo_slot) == FR_OK &&
             fr_slot_id_for_name(&project_runtime, "bar", &bar_slot) == FR_OK &&
-            foo_slot == fr_slot_first_project_id() &&
-            bar_slot == (fr_slot_id_t)(fr_slot_first_project_id() + 1));
+            foo_slot == FR_TEST_FIRST_USER_SLOT &&
+            bar_slot == (fr_slot_id_t)(FR_TEST_FIRST_USER_SLOT + 1));
   for (uint16_t i = fr_slot_project_name_count(&project_runtime);
        i < FR_PROFILE_MAX_OVERLAY_NAMES; i++) {
     (void)snprintf(line, sizeof(line), "p%u is 1", (unsigned)i);
@@ -4470,7 +4485,7 @@ static void test_compile(void) {
   CHECK("runtime clear project drops project names",
         fr_runtime_clear_project(&project_runtime) == FR_OK &&
             fr_slot_project_name_count(&project_runtime) == 0 &&
-            fr_slot_count(&project_runtime) == fr_slot_first_project_id() &&
+            fr_slot_count(&project_runtime) == FR_TEST_FIRST_USER_SLOT &&
             fr_slot_id_for_name(&project_runtime, "foo", &foo_slot) ==
                 FR_ERR_NOT_FOUND &&
             fr_slot_id_for_name(&project_runtime, "boot", &slot_id) == FR_OK &&
@@ -4479,11 +4494,11 @@ static void test_compile(void) {
   CHECK("compile runtime dynamic function",
         fr_compile_overlay_update_for_runtime(
             &runtime, "blink is fn [ pin: led, 1 ]", &update) == FR_OK &&
-            update.slot_inits[0].slot_id == FR_TEST_PROJECT_SLOT_BASE + 1 &&
+            update.slot_inits[0].slot_id == FR_TEST_FIRST_USER_SLOT + 1 &&
             update.overlay_update.slot_name_count == 1 &&
             strcmp(update.slot_name.name, "blink") == 0 &&
             update.instruction_bytes[2] == FR_OP_LOAD_SLOT &&
-            update.instruction_bytes[3] == FR_TEST_PROJECT_SLOT_BASE &&
+            update.instruction_bytes[3] == FR_TEST_FIRST_USER_SLOT &&
             update.instruction_bytes[5] == FR_OP_PUSH_INT &&
             update.instruction_bytes[5u + push_size] ==
                 FR_OP_CALL_NATIVE_SLOT &&
@@ -4491,14 +4506,14 @@ static void test_compile(void) {
   CHECK("compiled runtime dynamic function applies and runs",
         fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_slot_id_for_name(&runtime, "blink", &slot_id) == FR_OK &&
-            slot_id == FR_TEST_PROJECT_SLOT_BASE + 1 &&
+            slot_id == FR_TEST_FIRST_USER_SLOT + 1 &&
             fr_vm_run_slot(&runtime, slot_id, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
   CHECK("compile runtime expression uses overlay name",
         fr_compile_expression_for_runtime(&runtime, "pin: led, 1",
                                           &expression) == FR_OK &&
             expression.instruction_bytes[2] == FR_OP_LOAD_SLOT &&
-            expression.instruction_bytes[3] == FR_TEST_PROJECT_SLOT_BASE &&
+            expression.instruction_bytes[3] == FR_TEST_FIRST_USER_SLOT &&
             expression.instruction_bytes[5u + push_size] ==
                 FR_OP_CALL_NATIVE_SLOT &&
             expression.instruction_bytes[6u + push_size] ==
@@ -4511,7 +4526,7 @@ static void test_compile(void) {
   CHECK("compile runtime call binding owns store instruction",
         fr_compile_value_binding_for_runtime(
             &binding_runtime, "reading is adc.read: 14", &binding) == FR_OK &&
-            binding.slot_id == FR_TEST_PROJECT_SLOT_BASE &&
+            binding.slot_id == FR_TEST_FIRST_USER_SLOT &&
             binding.has_slot_name &&
             strcmp(binding.slot_name.name, "reading") == 0 &&
             binding.instructions.length == 9u + push_size &&
@@ -4521,7 +4536,7 @@ static void test_compile(void) {
             binding.instruction_bytes[3u + push_size] == FR_SLOT_ADC_READ &&
             binding.instruction_bytes[5u + push_size] == FR_OP_STORE_SLOT &&
             binding.instruction_bytes[6u + push_size] ==
-                FR_TEST_PROJECT_SLOT_BASE &&
+                FR_TEST_FIRST_USER_SLOT &&
             binding.instruction_bytes[8u + push_size] == FR_OP_RETURN &&
             fr_vm_run_instruction_stream(&binding_runtime,
                                          &binding.instructions, &tagged) ==
@@ -5843,13 +5858,13 @@ static void test_persist(void) {
             fr_tagged_is_nil(tagged) &&
             fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
             fr_tagged_decode_code_object_id(tagged, &code_id) == FR_OK &&
-            fr_slot_read(&runtime, FR_TEST_PROJECT_SLOT_BASE, &tagged) ==
+            fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &tagged) ==
                 FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 13);
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   CHECK("persist restores dynamic slot names",
         fr_slot_id_for_name(&runtime, "led", &slot_id) == FR_OK &&
-            slot_id == FR_TEST_PROJECT_SLOT_BASE);
+            slot_id == FR_TEST_FIRST_USER_SLOT);
 #else
   CHECK("persist omits dynamic slot names without overlay names",
             fr_slot_id_for_name(&runtime, "led", &slot_id) ==
@@ -5874,13 +5889,13 @@ static void test_persist(void) {
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 13 &&
             fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
             fr_tagged_decode_code_object_id(tagged, &code_id) == FR_OK &&
-            fr_slot_read(&runtime, FR_TEST_PROJECT_SLOT_BASE, &tagged) ==
+            fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &tagged) ==
                 FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 13);
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   CHECK("persist restore after clear restores project name",
         fr_slot_id_for_name(&runtime, "led", &slot_id) == FR_OK &&
-            slot_id == FR_TEST_PROJECT_SLOT_BASE);
+            slot_id == FR_TEST_FIRST_USER_SLOT);
 #endif
   CHECK("persist restores duplicate dynamic code bytes",
         fr_base_image_install(&runtime) == FR_OK &&
@@ -5898,7 +5913,7 @@ static void test_persist(void) {
             fr_persist_restore(&runtime) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged) &&
-            fr_vm_run_slot(&runtime, FR_TEST_PROJECT_SLOT_BASE + 1, &tagged) ==
+            fr_vm_run_slot(&runtime, FR_TEST_FIRST_USER_SLOT + 1, &tagged) ==
                 FR_OK &&
             fr_tagged_is_nil(tagged));
   CHECK("persist prepares control flow code",
@@ -5932,7 +5947,7 @@ static void test_persist(void) {
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   CHECK("persist restores parameter code name",
         fr_slot_id_for_name(&runtime, "echo", &slot_id) == FR_OK &&
-            slot_id == FR_TEST_PROJECT_SLOT_BASE);
+            slot_id == FR_TEST_FIRST_USER_SLOT);
 #else
   CHECK("persist omits parameter code name without overlay names",
         fr_slot_id_for_name(&runtime, "echo", &slot_id) == FR_ERR_NOT_FOUND);
@@ -6087,7 +6102,7 @@ static void test_persist(void) {
   CHECK("persist wipe frees session overlay names",
         fr_compile_overlay_update_for_runtime(
             &runtime, "led is $led_builtin", &update) == FR_OK &&
-            update.slot_inits[0].slot_id == FR_TEST_PROJECT_SLOT_BASE);
+            update.slot_inits[0].slot_id == FR_TEST_FIRST_USER_SLOT);
 }
 #elif FR_FEATURE_PERSISTENCE
 static void test_persist(void) {
@@ -7093,9 +7108,16 @@ static void test_repl(void) {
   CHECK("repl runs boot colon",
         fr_repl_eval_line(&runtime, "boot:", out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
+#if FR_FEATURE_SOURCE_BASE
+  /* gpio.high's code object takes id 0 at boot compile, so boot's is 1. */
+  CHECK("repl displays bare compiled boot",
+        fr_repl_eval_line(&runtime, "boot", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "code 1\nok\n") == 0);
+#else
   CHECK("repl displays bare compiled boot",
         fr_repl_eval_line(&runtime, "boot", out, sizeof(out)) == FR_OK &&
             strcmp(out, "code 0\nok\n") == 0);
+#endif
   CHECK("repl see overlay code",
         fr_repl_eval_line(&runtime, "see boot", out, sizeof(out)) == FR_OK &&
             strcmp(out, "overlay code\nto boot [ 1 ]\nok\n") == 0);
