@@ -8,3 +8,5 @@
 #define FR_BOARD_LED_BUILTIN 2u
 #define FR_BOARD_A0 34u
 #define FR_BOARD_BOOT_BUTTON 0u
+#define FR_BOARD_I2C_SDA 21u
+#define FR_BOARD_I2C_SCL 22u
