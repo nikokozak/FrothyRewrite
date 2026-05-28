@@ -7494,6 +7494,23 @@ static void test_repl_see_source_form(void) {
             strcmp(out, "overlay code\n"
                         "to blink with p [ repeat 3 [ gpio.write: p, 1 ] ]\n"
                         "ok\n") == 0);
+  /* Nested form: an if/else inside a while. The while body must reduce to one
+   * fragment, and the if/else does, so the span walk renders both. Fresh
+   * install for the overlay-name budget. */
+  CHECK("see source nested while/if",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "poll is fn with p [ while gpio.read: p [ if p > 0 [ ms: 1 ] "
+                "else [ ms: 2 ] ] ]",
+                out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see poll", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to poll with p [ while gpio.read: p [ if p > 0 "
+                        "[ ms: 1 ] else [ ms: 2 ] ] ]\n"
+                        "ok\n") == 0);
 }
 #endif
 
