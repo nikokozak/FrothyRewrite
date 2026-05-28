@@ -188,8 +188,7 @@ static fr_err_t fr_native_decode_uart_handle(fr_runtime_t *runtime,
 static fr_err_t fr_native_uart_open(fr_runtime_t *runtime,
                                     const fr_tagged_t *args,
                                     uint8_t arg_count, fr_tagged_t *out) {
-  uint16_t tx = 0;
-  uint16_t rx = 0;
+  uint16_t port = 0;
   uint16_t rate_code = 0;
   fr_handle_ref_t ref = {0};
   fr_tagged_t handle = 0;
@@ -200,12 +199,11 @@ static fr_err_t fr_native_uart_open(fr_runtime_t *runtime,
     return FR_ERR_INVALID;
   }
 
-  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &tx));
-  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &rx));
-  FR_TRY(fr_native_decode_u16(args, arg_count, 2, &rate_code));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &port));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &rate_code));
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_UART, &ref, &handle));
-  err = fr_platform_uart_open(tx, rx, rate_code, &platform_index);
+  err = fr_platform_uart_open(port, rate_code, &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
     return err;
@@ -503,15 +501,14 @@ static const fr_native_signature_t fr_native_adc_above_signature = {
 
 #if FR_FEATURE_UART
 static const fr_native_param_t fr_native_uart_open_params[] = {
-    {"tx", FR_NATIVE_VALUE_INT},
-    {"rx", FR_NATIVE_VALUE_INT},
+    {"port", FR_NATIVE_VALUE_INT},
     {"baud", FR_NATIVE_VALUE_INT},
 };
 static const fr_native_signature_t fr_native_uart_open_signature = {
     .params = fr_native_uart_open_params,
-    .arg_count = 3,
+    .arg_count = 2,
     .result = FR_NATIVE_VALUE_HANDLE,
-    .help = "open a uart port (tx, rx, baud)",
+    .help = "open a uart port at a baud rate",
 };
 
 static const fr_native_signature_t fr_native_uart_write_byte_signature = {
@@ -641,7 +638,7 @@ const fr_base_def_t fr_target_base_defs[] = {
 #endif
         .kind = FR_BASE_DEF_NATIVE,
         .native_fn = fr_native_uart_open,
-        .native_arity = 3,
+        .native_arity = 2,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_uart_open_signature,
 #endif

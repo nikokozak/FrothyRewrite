@@ -1382,19 +1382,17 @@ static fr_err_t test_uart_entry(fr_runtime_t *runtime, fr_slot_id_t slot_id,
 
 static fr_err_t test_uart_open_call(fr_runtime_t *runtime,
                                     const fr_native_entry_t *open_entry,
-                                    uint16_t tx, uint16_t rx,
-                                    uint16_t rate_code,
+                                    uint16_t port, uint16_t rate_code,
                                     fr_tagged_t *out_handle) {
-  fr_tagged_t args[3] = {0};
+  fr_tagged_t args[2] = {0};
 
   if (out_handle == NULL) {
     return FR_ERR_INVALID;
   }
 
-  FR_TRY(fr_tagged_encode_int((int32_t)tx, &args[0]));
-  FR_TRY(fr_tagged_encode_int((int32_t)rx, &args[1]));
-  FR_TRY(fr_tagged_encode_int((int32_t)rate_code, &args[2]));
-  return fr_native_call(runtime, open_entry, args, 3, out_handle);
+  FR_TRY(fr_tagged_encode_int((int32_t)port, &args[0]));
+  FR_TRY(fr_tagged_encode_int((int32_t)rate_code, &args[1]));
+  return fr_native_call(runtime, open_entry, args, 2, out_handle);
 }
 
 static fr_err_t test_uart_one_handle_call(fr_runtime_t *runtime,
@@ -1419,7 +1417,7 @@ static void test_uart(void) {
   fr_tagged_t result = 0;
   fr_tagged_t write_args[2] = {0};
 #if FR_TAGGED_INT_MAX > 65535
-  fr_tagged_t wide_open_args[3] = {0};
+  fr_tagged_t wide_open_args[2] = {0};
 #endif
   fr_tagged_t wrong_handle = 0;
   fr_handle_ref_t handle_ref = {0};
@@ -1445,8 +1443,8 @@ static void test_uart(void) {
         fr_repl_eval_line(&runtime, "see uart.open", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out,
-                   "uart.open(tx: int, rx: int, baud: int) -> handle\n"
-                   "open a uart port (tx, rx, baud)\n"
+                   "uart.open(port: int, baud: int) -> handle\n"
+                   "open a uart port at a baud rate\n"
                    "ok\n") == 0);
   CHECK("uart see baud literal",
         fr_repl_eval_line(&runtime, "see $baud_115200", out, sizeof(out)) ==
@@ -1461,7 +1459,7 @@ static void test_uart(void) {
               FR_OK);
   }
   CHECK("uart open fails before platform when handles are full",
-        test_uart_open_call(&capacity_runtime, open_entry, 17, 16,
+        test_uart_open_call(&capacity_runtime, open_entry, 0,
                             FR_UART_RATE_9600, &handle) == FR_ERR_CAPACITY);
   for (fr_handle_id_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
     CHECK("uart releases capacity test handles",
@@ -1470,7 +1468,7 @@ static void test_uart(void) {
   }
   CHECK("uart repl binds open handle",
         fr_repl_eval_line(&runtime,
-                          "appuart is uart.open: 17, 16, $baud_9600", out,
+                          "appuart is uart.open: 0, $baud_9600", out,
                           sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "appuart", out, sizeof(out)) ==
@@ -1504,48 +1502,47 @@ static void test_uart(void) {
             strcmp(out, "overlay nil\nok\n") == 0);
 
   CHECK("uart rejects invalid rate",
-        test_uart_open_call(&runtime, open_entry, 17, 16, 99, &handle) ==
+        test_uart_open_call(&runtime, open_entry, 0, 99, &handle) ==
             FR_ERR_DOMAIN);
 #if FR_TAGGED_INT_MAX > 65535
   CHECK("uart rejects oversized platform argument before cast",
         fr_tagged_encode_int(65549, &wide_open_args[0]) == FR_OK &&
-            fr_tagged_encode_int(16, &wide_open_args[1]) == FR_OK &&
-            fr_tagged_encode_int(FR_UART_RATE_9600, &wide_open_args[2]) ==
+            fr_tagged_encode_int(FR_UART_RATE_9600, &wide_open_args[1]) ==
                 FR_OK &&
-            fr_native_call(&runtime, open_entry, wide_open_args, 3, &handle) ==
+            fr_native_call(&runtime, open_entry, wide_open_args, 2, &handle) ==
                 FR_ERR_DOMAIN);
 #endif
   CHECK("uart opens with each rate",
-        test_uart_open_call(&runtime, open_entry, 17, 16, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
                             &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 17, 16, FR_UART_RATE_19200,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_19200,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 17, 16, FR_UART_RATE_38400,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_38400,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 17, 16, FR_UART_RATE_57600,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_57600,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 17, 16,
+            test_uart_open_call(&runtime, open_entry, 0,
                                 FR_UART_RATE_115200, &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK);
 
   CHECK("uart opens handle",
-        test_uart_open_call(&runtime, open_entry, 17, 16, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
                             &handle) == FR_OK &&
             fr_tagged_decode_handle_ref(handle, &handle_ref) == FR_OK &&
             fr_handle_lookup(&runtime, handle_ref, FR_HANDLE_KIND_UART, &kind,
                              &platform_index) == FR_OK &&
             kind == FR_HANDLE_KIND_UART);
-  CHECK("uart rejects double open on same pins",
-        test_uart_open_call(&runtime, open_entry, 17, 16, FR_UART_RATE_9600,
+  CHECK("uart rejects double open on same port",
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
                             &second_handle) == FR_ERR_DOMAIN);
   CHECK("uart available starts with host script",
         test_uart_one_handle_call(&runtime, available_entry, handle, &result) ==
@@ -1582,7 +1579,7 @@ static void test_uart(void) {
   CHECK("uart close discards host script",
         test_uart_one_handle_call(&runtime, close_entry, handle, &result) ==
                 FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 17, 16, FR_UART_RATE_9600,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, available_entry, handle,
                                       &result) == FR_OK &&
@@ -1610,7 +1607,7 @@ static void test_uart(void) {
 
 #if FR_FEATURE_PERSISTENCE
   CHECK("uart save rejects live handle",
-        test_uart_open_call(&runtime, open_entry, 17, 16, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
                             &handle) == FR_OK &&
             fr_slot_write(&runtime, FR_SLOT_BOOT, handle) == FR_OK &&
             fr_persist_save(&runtime) == FR_ERR_VOLATILE &&
@@ -1621,13 +1618,13 @@ static void test_uart(void) {
 #endif
 
   CHECK("uart reset closes platform resource",
-        test_uart_open_call(&runtime, open_entry, 17, 16, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
                             &handle) == FR_OK &&
             fr_tagged_decode_handle_ref(handle, &handle_ref) == FR_OK &&
             fr_runtime_clear_project(&runtime) == FR_OK &&
             fr_handle_lookup(&runtime, handle_ref, FR_HANDLE_KIND_NONE, &kind,
                              &platform_index) == FR_ERR_HANDLE &&
-            test_uart_open_call(&runtime, open_entry, 17, 16, FR_UART_RATE_9600,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK);
@@ -2598,7 +2595,7 @@ static void test_image(void) {
         fr_slot_read(&runtime, FR_SLOT_UART_OPEN, &tagged) == FR_OK &&
             fr_tagged_decode_native_id(tagged, &native_id) == FR_OK &&
             fr_native_get(&runtime, native_id, &entry) == FR_OK &&
-            entry->arity == 3);
+            entry->arity == 2);
   CHECK("base image installs uart.write-byte native",
         fr_slot_read(&runtime, FR_SLOT_UART_WRITE_BYTE, &tagged) == FR_OK &&
             fr_tagged_decode_native_id(tagged, &native_id) == FR_OK &&

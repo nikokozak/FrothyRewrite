@@ -22,7 +22,7 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
                                   uint16_t platform_index);
 
 #if FR_FEATURE_UART
-fr_err_t fr_platform_uart_open(uint16_t tx, uint16_t rx, uint16_t rate_code,
+fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
                                uint16_t *out_platform_index);
 fr_err_t fr_platform_uart_write_byte(uint16_t platform_index, uint8_t byte);
 fr_err_t fr_platform_uart_read_byte(uint16_t platform_index, uint8_t *out_byte,

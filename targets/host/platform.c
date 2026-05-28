@@ -19,10 +19,13 @@ static uint8_t fr_host_gpio_values[FR_HOST_MAX_PIN + 1];
 static uint16_t fr_host_millis;
 
 #if FR_FEATURE_UART
+enum {
+  FR_HOST_UART_MAX_PORT = 7,
+};
+
 typedef struct fr_host_uart_t {
   bool in_use;
-  uint16_t tx;
-  uint16_t rx;
+  uint16_t port;
   uint16_t rate_code;
   uint8_t read_index;
   uint8_t last_written;
@@ -47,14 +50,11 @@ static bool fr_host_uart_rate_valid(uint16_t rate_code) {
   }
 }
 
-static bool fr_host_uart_pin_conflict(uint16_t tx, uint16_t rx) {
+static bool fr_host_uart_port_in_use(uint16_t port) {
   for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
     const fr_host_uart_t *uart = &fr_host_uarts[i];
 
-    if (!uart->in_use) {
-      continue;
-    }
-    if (uart->tx == tx || uart->tx == rx || uart->rx == tx || uart->rx == rx) {
+    if (uart->in_use && uart->port == port) {
       return true;
     }
   }
@@ -156,14 +156,13 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
 }
 
 #if FR_FEATURE_UART
-fr_err_t fr_platform_uart_open(uint16_t tx, uint16_t rx, uint16_t rate_code,
+fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
                                uint16_t *out_platform_index) {
   if (out_platform_index == NULL) {
     return FR_ERR_INVALID;
   }
-  if (tx > FR_HOST_MAX_PIN || rx > FR_HOST_MAX_PIN || tx == rx ||
-      !fr_host_uart_rate_valid(rate_code) ||
-      fr_host_uart_pin_conflict(tx, rx)) {
+  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_rate_valid(rate_code) ||
+      fr_host_uart_port_in_use(port)) {
     return FR_ERR_DOMAIN;
   }
 
@@ -176,8 +175,7 @@ fr_err_t fr_platform_uart_open(uint16_t tx, uint16_t rx, uint16_t rate_code,
 
     *uart = (fr_host_uart_t){
         .in_use = true,
-        .tx = tx,
-        .rx = rx,
+        .port = port,
         .rate_code = rate_code,
     };
     *out_platform_index = i;
