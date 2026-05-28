@@ -400,6 +400,8 @@ static fr_err_t fr_source_render_repeat(fr_source_render_t *r,
   fr_code_offset_t done_target = 0;
   fr_code_offset_t drop_ip = 0;
   fr_code_offset_t next_ip = 0;
+  fr_code_offset_t next_target = 0;
+  fr_code_offset_t body_ip = (fr_code_offset_t)(ip + 3u);
   fr_source_frag_t count;
   uint16_t body_start = 0;
 
@@ -417,11 +419,16 @@ static fr_err_t fr_source_render_repeat(fr_source_render_t *r,
       (fr_opcode_t)view->bytes[done_target] != FR_OP_PUSH_NIL) {
     return FR_ERR_UNSUPPORTED;
   }
+  /* REPEAT_NEXT must loop back to the body start, else this is some other
+   * shape that happens to share the tail opcodes. */
+  FR_TRY(fr_instruction_read_jump_operand(view, next_ip, &next_target));
+  if (next_target != body_ip) {
+    return FR_ERR_UNSUPPORTED;
+  }
   count = r->stack[r->depth - 1];
   r->depth = (uint8_t)(r->depth - 1u);
 
-  FR_TRY(fr_source_render_branch(r, view, names, names_len,
-                                 (fr_code_offset_t)(ip + 3u), drop_ip,
+  FR_TRY(fr_source_render_branch(r, view, names, names_len, body_ip, drop_ip,
                                  &body_start));
   FR_TRY(fr_source_reduce_repeat(r, count, body_start));
   *out_ip = (fr_code_offset_t)(done_target + 1u);
