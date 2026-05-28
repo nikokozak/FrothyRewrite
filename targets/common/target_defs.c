@@ -639,9 +639,8 @@ static fr_err_t fr_native_clamp(fr_runtime_t *runtime,
   return fr_tagged_encode_int(x < lo ? lo : (x > hi ? hi : x), out);
 }
 
-/* Wide temp matches T1's fr_vm_add_int discipline: the (x-in_lo) *
- * (out_hi-out_lo) product can blow past the tagged band before the
- * division pulls it back. */
+/* Wide temp because (x - in_lo) * (out_hi - out_lo) can blow past the
+ * tagged band before the division pulls it back. */
 static fr_err_t fr_native_map(fr_runtime_t *runtime, const fr_tagged_t *args,
                               uint8_t arg_count, fr_tagged_t *out) {
   fr_int_t x = 0;

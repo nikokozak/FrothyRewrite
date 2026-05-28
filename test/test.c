@@ -2132,6 +2132,151 @@ static void test_random(void) {
 }
 #endif
 
+#if FR_FEATURE_MATH
+static fr_err_t test_math_map_call(fr_runtime_t *runtime,
+                                   const fr_native_entry_t *map_entry,
+                                   fr_int_t x, fr_int_t in_lo, fr_int_t in_hi,
+                                   fr_int_t out_lo, fr_int_t out_hi,
+                                   fr_tagged_t *out) {
+  fr_tagged_t args[5] = {0};
+
+  FR_TRY(fr_tagged_encode_int((int32_t)x, &args[0]));
+  FR_TRY(fr_tagged_encode_int((int32_t)in_lo, &args[1]));
+  FR_TRY(fr_tagged_encode_int((int32_t)in_hi, &args[2]));
+  FR_TRY(fr_tagged_encode_int((int32_t)out_lo, &args[3]));
+  FR_TRY(fr_tagged_encode_int((int32_t)out_hi, &args[4]));
+  return fr_native_call(runtime, map_entry, args, 5, out);
+}
+
+static void test_math(void) {
+  fr_runtime_t runtime;
+  fr_tagged_t map_tagged = 0;
+  fr_native_id_t map_native_id = 0;
+  const fr_native_entry_t *map_entry = NULL;
+  fr_tagged_t map_result = 0;
+  fr_int_t map_decoded = 0;
+  char out[128];
+
+  CHECK("math installs base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("math finds map entry",
+        fr_slot_read(&runtime, FR_SLOT_MAP, &map_tagged) == FR_OK &&
+            fr_tagged_decode_native_id(map_tagged, &map_native_id) == FR_OK &&
+            fr_native_get(&runtime, map_native_id, &map_entry) == FR_OK);
+
+  CHECK("abs renders signature",
+        fr_repl_eval_line(&runtime, "see abs", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "abs(x: int) -> int\n"
+                   "return the absolute value of an int\n"
+                   "ok\n") == 0);
+  CHECK("min renders signature",
+        fr_repl_eval_line(&runtime, "see min", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "min(a: int, b: int) -> int\n"
+                   "return the smaller of two ints\n"
+                   "ok\n") == 0);
+  CHECK("max renders signature",
+        fr_repl_eval_line(&runtime, "see max", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "max(a: int, b: int) -> int\n"
+                   "return the larger of two ints\n"
+                   "ok\n") == 0);
+  CHECK("clamp renders signature",
+        fr_repl_eval_line(&runtime, "see clamp", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "clamp(x: int, lo: int, hi: int) -> int\n"
+                   "clamp x to the inclusive range [lo, hi]\n"
+                   "ok\n") == 0);
+  CHECK("map renders signature",
+        fr_repl_eval_line(&runtime, "see map", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "map(x: int, in_lo: int, in_hi: int, out_lo: int, "
+                   "out_hi: int) -> int\n"
+                   "linearly remap x from one range to another\n"
+                   "ok\n") == 0);
+  CHECK("mod renders signature",
+        fr_repl_eval_line(&runtime, "see mod", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "mod(a: int, b: int) -> int\n"
+                   "return a modulo b (C truncating semantics)\n"
+                   "ok\n") == 0);
+
+  CHECK("abs of negative flips sign",
+        fr_repl_eval_line(&runtime, "abs: -5", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "5\nok\n") == 0);
+  CHECK("abs of zero is zero",
+        fr_repl_eval_line(&runtime, "abs: 0", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "0\nok\n") == 0);
+  CHECK("abs of positive is identity",
+        fr_repl_eval_line(&runtime, "abs: 5", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "5\nok\n") == 0);
+  /* FR_TAGGED_INT_MIN on the 32-bit profile; magnitude exceeds MAX. */
+  CHECK("abs of tagged-int-min rejects",
+        fr_repl_eval_line(&runtime, "abs: -1073741824", out, sizeof(out)) ==
+            FR_ERR_RANGE);
+
+  CHECK("min picks the smaller",
+        fr_repl_eval_line(&runtime, "min: 3, 7", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "3\nok\n") == 0);
+  CHECK("max picks the larger",
+        fr_repl_eval_line(&runtime, "max: 3, 7", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "7\nok\n") == 0);
+
+  CHECK("clamp inside passes through",
+        fr_repl_eval_line(&runtime, "clamp: 5, 0, 10", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "5\nok\n") == 0);
+  CHECK("clamp below pins to lo",
+        fr_repl_eval_line(&runtime, "clamp: -3, 0, 10", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "0\nok\n") == 0);
+  CHECK("clamp above pins to hi",
+        fr_repl_eval_line(&runtime, "clamp: 15, 0, 10", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "10\nok\n") == 0);
+  CHECK("clamp with lo > hi rejects",
+        fr_repl_eval_line(&runtime, "clamp: 5, 10, 0", out, sizeof(out)) ==
+            FR_ERR_DOMAIN);
+
+  /* map's five args exceed the REPL parser's per-call child cap, so its
+   * behavior cases run as direct native calls. (50-0)*(1023-0)/(100-0) =
+   * 51150/100 = 511 after truncation. */
+  CHECK("map remaps linearly",
+        test_math_map_call(&runtime, map_entry, 50, 0, 100, 0, 1023,
+                           &map_result) == FR_OK &&
+            fr_tagged_decode_int(map_result, &map_decoded) == FR_OK &&
+            map_decoded == 511);
+  CHECK("map with zero input span rejects",
+        test_math_map_call(&runtime, map_entry, 0, 0, 0, 0, 100,
+                           &map_result) == FR_ERR_DOMAIN);
+  /* 1_000_000 * 3000 = 3e9 overflows int32_t; the int64_t temp catches it
+   * and the division returns 3000 cleanly. */
+  CHECK("map wide product fits after division",
+        test_math_map_call(&runtime, map_entry, 1000000, 0, 1000000, 0, 3000,
+                           &map_result) == FR_OK &&
+            fr_tagged_decode_int(map_result, &map_decoded) == FR_OK &&
+            map_decoded == 3000);
+  /* 1073741823 * 2 = 2147483646, past FR_TAGGED_INT_MAX. */
+  CHECK("map result above tagged max rejects",
+        test_math_map_call(&runtime, map_entry, 1073741823, 0, 1, 0, 2,
+                           &map_result) == FR_ERR_RANGE);
+
+  CHECK("mod positive remainder",
+        fr_repl_eval_line(&runtime, "mod: 7, 3", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+  CHECK("mod negative dividend keeps its sign",
+        fr_repl_eval_line(&runtime, "mod: -7, 3", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "-1\nok\n") == 0);
+  CHECK("mod negative divisor takes sign of dividend",
+        fr_repl_eval_line(&runtime, "mod: 7, -3", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+  CHECK("mod by zero rejects",
+        fr_repl_eval_line(&runtime, "mod: 5, 0", out, sizeof(out)) ==
+            FR_ERR_DOMAIN);
+}
+#endif
+
 #if FR_FEATURE_CELLS
 static void test_cells(void) {
   fr_runtime_t runtime;
@@ -7514,6 +7659,9 @@ int main(void) {
 #endif
 #if FR_FEATURE_RANDOM
   test_random();
+#endif
+#if FR_FEATURE_MATH
+  test_math();
 #endif
 #if FR_FEATURE_PAD
   test_pad();
