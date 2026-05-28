@@ -79,6 +79,10 @@
 #define FR_FEATURE_RANDOM 1
 #endif
 
+#ifndef FR_FEATURE_PWM
+#define FR_FEATURE_PWM 1
+#endif
+
 #ifndef FR_FEATURE_PAD
 #define FR_FEATURE_PAD 0
 #endif

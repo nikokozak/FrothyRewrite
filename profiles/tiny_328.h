@@ -40,3 +40,7 @@
  * to 13, so tiny stays without random. */
 #undef FR_FEATURE_RANDOM
 #define FR_FEATURE_RANDOM 0
+
+/* PWM adds three more native rows; tiny's table is already full. */
+#undef FR_FEATURE_PWM
+#define FR_FEATURE_PWM 0
