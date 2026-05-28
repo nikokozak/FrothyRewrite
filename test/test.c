@@ -1829,6 +1829,214 @@ static void test_pwm(void) {
 }
 #endif
 
+#if FR_FEATURE_I2C
+static fr_err_t test_i2c_entry(fr_runtime_t *runtime, fr_slot_id_t slot_id,
+                               const fr_native_entry_t **out_entry) {
+  fr_tagged_t tagged = 0;
+  fr_native_id_t native_id = 0;
+
+  if (runtime == NULL || out_entry == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
+  FR_TRY(fr_tagged_decode_native_id(tagged, &native_id));
+  return fr_native_get(runtime, native_id, out_entry);
+}
+
+static fr_err_t test_i2c_open_call(fr_runtime_t *runtime,
+                                   const fr_native_entry_t *open_entry,
+                                   uint16_t port, uint16_t sda, uint16_t scl,
+                                   fr_int_t freq, fr_tagged_t *out_handle) {
+  fr_tagged_t args[4] = {0};
+
+  if (out_handle == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_encode_int((int32_t)port, &args[0]));
+  FR_TRY(fr_tagged_encode_int((int32_t)sda, &args[1]));
+  FR_TRY(fr_tagged_encode_int((int32_t)scl, &args[2]));
+  FR_TRY(fr_tagged_encode_int((int32_t)freq, &args[3]));
+  return fr_native_call(runtime, open_entry, args, 4, out_handle);
+}
+
+static fr_err_t test_i2c_write_call(fr_runtime_t *runtime,
+                                    const fr_native_entry_t *write_entry,
+                                    fr_tagged_t handle, fr_int_t addr,
+                                    fr_object_id_t text_id,
+                                    fr_tagged_t *out) {
+  fr_tagged_t args[3] = {0};
+
+  args[0] = handle;
+  FR_TRY(fr_tagged_encode_int((int32_t)addr, &args[1]));
+  FR_TRY(fr_tagged_encode_object_id(text_id, &args[2]));
+  return fr_native_call(runtime, write_entry, args, 3, out);
+}
+
+static fr_err_t test_i2c_read_call(fr_runtime_t *runtime,
+                                   const fr_native_entry_t *read_entry,
+                                   fr_tagged_t handle, fr_int_t addr,
+                                   fr_int_t count, fr_tagged_t *out) {
+  fr_tagged_t args[3] = {0};
+
+  args[0] = handle;
+  FR_TRY(fr_tagged_encode_int((int32_t)addr, &args[1]));
+  FR_TRY(fr_tagged_encode_int((int32_t)count, &args[2]));
+  return fr_native_call(runtime, read_entry, args, 3, out);
+}
+
+static fr_err_t test_i2c_close_call(fr_runtime_t *runtime,
+                                    const fr_native_entry_t *close_entry,
+                                    fr_tagged_t handle, fr_tagged_t *out) {
+  return fr_native_call(runtime, close_entry, &handle, 1, out);
+}
+
+static void test_i2c(void) {
+  fr_runtime_t runtime;
+  const fr_native_entry_t *open_entry = NULL;
+  const fr_native_entry_t *write_entry = NULL;
+  const fr_native_entry_t *read_entry = NULL;
+  const fr_native_entry_t *close_entry = NULL;
+  const uint8_t payload[] = {0xDE, 0xAD, 0xBE};
+  fr_object_id_t payload_id = 0;
+  fr_object_id_t empty_id = 0;
+  fr_object_id_t read_id = 0;
+  fr_tagged_t handle = 0;
+  fr_tagged_t second_handle = 0;
+  fr_tagged_t result = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+  char out[128];
+
+  CHECK("i2c installs base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("i2c finds native entries",
+        test_i2c_entry(&runtime, FR_SLOT_I2C_OPEN, &open_entry) == FR_OK &&
+            test_i2c_entry(&runtime, FR_SLOT_I2C_WRITE, &write_entry) ==
+                FR_OK &&
+            test_i2c_entry(&runtime, FR_SLOT_I2C_READ, &read_entry) == FR_OK &&
+            test_i2c_entry(&runtime, FR_SLOT_I2C_CLOSE, &close_entry) ==
+                FR_OK);
+
+  CHECK(
+      "i2c see open renders signature",
+      fr_repl_eval_line(&runtime, "see i2c.open", out, sizeof(out)) == FR_OK &&
+          strcmp(out,
+                 "i2c.open(port: int, sda: int, scl: int, freq: int) -> "
+                 "handle\n"
+                 "open an i2c bus on a port at sda/scl pins and frequency\n"
+                 "ok\n") == 0);
+  CHECK("i2c see write renders signature",
+        fr_repl_eval_line(&runtime, "see i2c.write", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "i2c.write(bus: handle, addr: int, bytes: text) -> nil\n"
+                   "write bytes to a 7-bit i2c address\n"
+                   "ok\n") == 0);
+  CHECK("i2c see read renders signature",
+        fr_repl_eval_line(&runtime, "see i2c.read", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "i2c.read(bus: handle, addr: int, count: int) -> text\n"
+                   "read count bytes from a 7-bit i2c address\n"
+                   "ok\n") == 0);
+  CHECK("i2c see close renders signature",
+        fr_repl_eval_line(&runtime, "see i2c.close", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "i2c.close(bus: handle) -> nil\n"
+                   "release an i2c bus\n"
+                   "ok\n") == 0);
+
+  CHECK("i2c full lifecycle reads host-stub pattern",
+        fr_text_install(&runtime, payload, (uint16_t)sizeof(payload),
+                        &payload_id) == FR_OK &&
+            test_i2c_open_call(&runtime, open_entry, 0, 21, 22, 100000,
+                               &handle) == FR_OK &&
+            test_i2c_write_call(&runtime, write_entry, handle, 0x42,
+                                payload_id, &result) == FR_OK &&
+            fr_tagged_is_nil(result) &&
+            test_i2c_read_call(&runtime, read_entry, handle, 0x42, 3,
+                               &result) == FR_OK &&
+            fr_tagged_decode_object_id(result, &read_id) == FR_OK &&
+            fr_text_view(&runtime, read_id, &bytes, &length) == FR_OK &&
+            length == 3 && bytes[0] == 0x42 && bytes[1] == 0x43 &&
+            bytes[2] == 0x44 &&
+            test_i2c_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK &&
+            fr_tagged_is_nil(result));
+
+  CHECK("i2c open rejects duplicate live port",
+        test_i2c_open_call(&runtime, open_entry, 0, 21, 22, 100000,
+                           &handle) == FR_OK &&
+            test_i2c_open_call(&runtime, open_entry, 0, 30, 31, 100000,
+                               &second_handle) == FR_ERR_DOMAIN &&
+            test_i2c_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK);
+  CHECK("i2c open rejects overlapping sda or scl",
+        test_i2c_open_call(&runtime, open_entry, 0, 21, 22, 100000,
+                           &handle) == FR_OK &&
+            test_i2c_open_call(&runtime, open_entry, 1, 21, 23, 100000,
+                               &second_handle) == FR_ERR_DOMAIN &&
+            test_i2c_open_call(&runtime, open_entry, 1, 24, 22, 100000,
+                               &second_handle) == FR_ERR_DOMAIN &&
+            test_i2c_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK);
+  CHECK("i2c open rejects zero frequency",
+        test_i2c_open_call(&runtime, open_entry, 0, 21, 22, 0, &handle) ==
+            FR_ERR_DOMAIN);
+
+  CHECK("i2c address range bites write and read",
+        test_i2c_open_call(&runtime, open_entry, 0, 21, 22, 100000,
+                           &handle) == FR_OK &&
+            fr_text_install(&runtime, payload, (uint16_t)sizeof(payload),
+                            &payload_id) == FR_OK &&
+            test_i2c_write_call(&runtime, write_entry, handle, 0x80,
+                                payload_id, &result) == FR_ERR_DOMAIN &&
+            test_i2c_write_call(&runtime, write_entry, handle, -1, payload_id,
+                                &result) == FR_ERR_DOMAIN &&
+            test_i2c_read_call(&runtime, read_entry, handle, 0x80, 3,
+                               &result) == FR_ERR_DOMAIN &&
+            test_i2c_read_call(&runtime, read_entry, handle, -1, 3, &result) ==
+                FR_ERR_DOMAIN);
+  CHECK("i2c read with count above max rejects with range",
+        test_i2c_read_call(&runtime, read_entry, handle, 0x42,
+                           FR_PROFILE_MAX_TEXT_LENGTH + 1,
+                           &result) == FR_ERR_RANGE);
+  CHECK("i2c read with count zero returns empty text",
+        test_i2c_read_call(&runtime, read_entry, handle, 0x42, 0, &result) ==
+                FR_OK &&
+            fr_tagged_decode_object_id(result, &read_id) == FR_OK &&
+            fr_text_view(&runtime, read_id, &bytes, &length) == FR_OK &&
+            length == 0);
+  /* Host platform write returns OK for zero-length, so DOMAIN here proves
+   * the wrapper rejected before the platform call. */
+  CHECK("i2c empty write rejects without reaching platform",
+        fr_text_install(&runtime, NULL, 0, &empty_id) == FR_OK &&
+            test_i2c_write_call(&runtime, write_entry, handle, 0x42, empty_id,
+                                &result) == FR_ERR_DOMAIN);
+
+  CHECK("i2c rejects write and read after close",
+        test_i2c_close_call(&runtime, close_entry, handle, &result) == FR_OK &&
+            test_i2c_write_call(&runtime, write_entry, handle, 0x42,
+                                payload_id, &result) == FR_ERR_HANDLE &&
+            test_i2c_read_call(&runtime, read_entry, handle, 0x42, 3,
+                               &result) == FR_ERR_HANDLE);
+
+#if FR_FEATURE_PERSISTENCE
+  CHECK("i2c save rejects live handle",
+        test_i2c_open_call(&runtime, open_entry, 0, 21, 22, 100000,
+                           &handle) == FR_OK &&
+            fr_slot_write(&runtime, FR_SLOT_BOOT, handle) == FR_OK &&
+            fr_persist_save(&runtime) == FR_ERR_VOLATILE &&
+            test_i2c_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK &&
+            fr_slot_write(&runtime, FR_SLOT_BOOT, fr_tagged_nil()) == FR_OK &&
+            fr_persist_save(&runtime) == FR_OK);
+#endif
+}
+#endif
+
 #if FR_FEATURE_RANDOM
 static void test_random(void) {
   fr_runtime_t runtime;
@@ -7289,6 +7497,9 @@ int main(void) {
 #endif
 #if FR_FEATURE_PWM
   test_pwm();
+#endif
+#if FR_FEATURE_I2C
+  test_i2c();
 #endif
 #if FR_FEATURE_RANDOM
   test_random();
