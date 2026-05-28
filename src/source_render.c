@@ -1,10 +1,8 @@
 /*
- * Reconstructs Frothy source from a code object's bytecode by simulating the
- * VM's operand stack with rendered text fragments. It recognizes our compiler's
- * emission, not a stored AST: leaves push text, binops and calls pop their
- * operands and push the combined form. Anything it doesn't recognize (control
- * flow, multi-statement bodies, mutation) returns FR_ERR_UNSUPPORTED so see
- * falls back to the bytecode listing instead of erroring.
+ * Rebuilds Frothy source by simulating the operand stack with text fragments:
+ * leaves push text, binops/calls/if pop operands and push the combined form.
+ * It reads our compiler's emission, not a stored AST. Shapes it can't place
+ * return FR_ERR_UNSUPPORTED so see falls back to the bytecode listing.
  */
 
 #include "source_render.h"
@@ -77,8 +75,7 @@ static fr_err_t fr_source_put_int(fr_source_render_t *r, fr_int_t value) {
   return FR_OK;
 }
 
-/* Step past the trailing NUL so it separates this fragment from the next, then
- * record the just-written string on the stack. */
+/* Step past the trailing NUL, then record the fragment on the stack. */
 static fr_err_t fr_source_seal(fr_source_render_t *r, uint16_t start,
                                bool parenthesize) {
   if (r->depth >= (uint8_t)(sizeof(r->stack) / sizeof(r->stack[0]))) {
@@ -223,31 +220,105 @@ static fr_err_t fr_source_param_name_at(const char *names, uint16_t names_len,
   return FR_OK;
 }
 
-static fr_err_t fr_source_build(fr_source_render_t *r,
-                                fr_code_object_id_t code_object_id,
-                                fr_instruction_header_t *out_header,
-                                const char **out_names,
-                                uint16_t *out_names_len) {
-  fr_instruction_stream_t view;
-  fr_code_offset_t ip = 0;
-  bool returned = false;
+static fr_err_t fr_source_render_span(fr_source_render_t *r,
+                                      const fr_instruction_stream_t *view,
+                                      const char *names, uint16_t names_len,
+                                      fr_code_offset_t ip, fr_code_offset_t end);
 
-  FR_TRY(fr_code_get_instructions(r->runtime, code_object_id, &view));
-  FR_TRY(fr_instruction_read_header(&view, out_header));
-  FR_TRY(fr_code_get_param_names(r->runtime, code_object_id, out_names,
-                                 out_names_len));
-  if (out_header->arity > 0 &&
-      fr_source_param_count(*out_names, *out_names_len) != out_header->arity) {
+/* if/else leaves one value; assemble it from the already-rendered fragments.
+ * The condition prints raw — a comparison reads fine without parens here. */
+static fr_err_t fr_source_reduce_if(fr_source_render_t *r,
+                                    fr_source_frag_t cond, uint16_t then_start,
+                                    uint16_t else_start, bool has_else) {
+  uint16_t start = r->used;
+
+  FR_TRY(fr_source_puts(r, "if "));
+  FR_TRY(fr_source_puts(r, &fr_source_render_arena[cond.start]));
+  FR_TRY(fr_source_puts(r, " [ "));
+  FR_TRY(fr_source_puts(r, &fr_source_render_arena[then_start]));
+  FR_TRY(fr_source_puts(r, " ]"));
+  if (has_else) {
+    FR_TRY(fr_source_puts(r, " else [ "));
+    FR_TRY(fr_source_puts(r, &fr_source_render_arena[else_start]));
+    FR_TRY(fr_source_puts(r, " ]"));
+  }
+  return fr_source_seal(r, start, false);
+}
+
+/* A branch body must reduce to exactly one fragment; hand back its arena
+ * offset and pop it so the caller can splice it into the if form. */
+static fr_err_t fr_source_render_branch(fr_source_render_t *r,
+                                        const fr_instruction_stream_t *view,
+                                        const char *names, uint16_t names_len,
+                                        fr_code_offset_t ip,
+                                        fr_code_offset_t end,
+                                        uint16_t *out_start) {
+  uint8_t base = r->depth;
+
+  FR_TRY(fr_source_render_span(r, view, names, names_len, ip, end));
+  if (r->depth != (uint8_t)(base + 1u)) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  *out_start = r->stack[base].start;
+  r->depth = base;
+  return FR_OK;
+}
+
+static fr_err_t fr_source_render_if(fr_source_render_t *r,
+                                    const fr_instruction_stream_t *view,
+                                    const char *names, uint16_t names_len,
+                                    fr_code_offset_t ip,
+                                    fr_code_offset_t *out_ip) {
+  fr_code_offset_t false_target = 0;
+  fr_code_offset_t end_target = 0;
+  fr_code_offset_t jump_ip = 0;
+  fr_source_frag_t cond;
+  uint16_t then_start = 0;
+  uint16_t else_start = 0;
+  bool has_else = true;
+
+  /* cond JUMP_IF_FALSY(F) <then> JUMP(E) F:<else> E:  — the JUMP sits at F-3. */
+  if (r->depth < 1) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  FR_TRY(fr_instruction_read_jump_operand(view, ip, &false_target));
+  if (false_target < (fr_code_offset_t)(ip + 6u)) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  jump_ip = (fr_code_offset_t)(false_target - 3u);
+  if ((fr_opcode_t)view->bytes[jump_ip] != FR_OP_JUMP) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  FR_TRY(fr_instruction_read_jump_operand(view, jump_ip, &end_target));
+  if (end_target < false_target) {
     return FR_ERR_UNSUPPORTED;
   }
 
-  ip = out_header->header_size;
-  while (ip < view.length) {
-    switch ((fr_opcode_t)view.bytes[ip]) {
-    case FR_OP_RETURN:
-      returned = true;
-      ip = (fr_code_offset_t)(ip + 1u);
-      break;
+  cond = r->stack[r->depth - 1];
+  r->depth = (uint8_t)(r->depth - 1u);
+
+  FR_TRY(fr_source_render_branch(r, view, names, names_len,
+                                 (fr_code_offset_t)(ip + 3u), jump_ip,
+                                 &then_start));
+  /* A missing else compiles to a lone PUSH_NIL; drop the clause to match. */
+  if (end_target == (fr_code_offset_t)(false_target + 1u) &&
+      (fr_opcode_t)view->bytes[false_target] == FR_OP_PUSH_NIL) {
+    has_else = false;
+  } else {
+    FR_TRY(fr_source_render_branch(r, view, names, names_len, false_target,
+                                   end_target, &else_start));
+  }
+  FR_TRY(fr_source_reduce_if(r, cond, then_start, else_start, has_else));
+  *out_ip = end_target;
+  return FR_OK;
+}
+
+static fr_err_t fr_source_render_span(fr_source_render_t *r,
+                                      const fr_instruction_stream_t *view,
+                                      const char *names, uint16_t names_len,
+                                      fr_code_offset_t ip, fr_code_offset_t end) {
+  while (ip < end) {
+    switch ((fr_opcode_t)view->bytes[ip]) {
     case FR_OP_PUSH_NIL:
       FR_TRY(fr_source_push_text(r, "nil"));
       ip = (fr_code_offset_t)(ip + 1u);
@@ -263,7 +334,7 @@ static fr_err_t fr_source_build(fr_source_render_t *r,
     case FR_OP_PUSH_INT: {
       fr_int_t value = 0;
 
-      FR_TRY(fr_instruction_read_int_operand(&view, ip, &value));
+      FR_TRY(fr_instruction_read_int_operand(view, ip, &value));
       FR_TRY(fr_source_push_int(r, value));
       ip = (fr_code_offset_t)(ip + FR_INSTRUCTION_PUSH_INT_SIZE);
       break;
@@ -272,9 +343,8 @@ static fr_err_t fr_source_build(fr_source_render_t *r,
       uint8_t arg_index = 0;
       const char *name = NULL;
 
-      FR_TRY(fr_instruction_read_arg_operand(&view, ip, &arg_index));
-      FR_TRY(fr_source_param_name_at(*out_names, *out_names_len, arg_index,
-                                     &name));
+      FR_TRY(fr_instruction_read_arg_operand(view, ip, &arg_index));
+      FR_TRY(fr_source_param_name_at(names, names_len, arg_index, &name));
       FR_TRY(fr_source_push_text(r, name));
       ip = (fr_code_offset_t)(ip + 2u);
       break;
@@ -283,7 +353,7 @@ static fr_err_t fr_source_build(fr_source_render_t *r,
       fr_slot_id_t slot_id = 0;
       const char *name = NULL;
 
-      FR_TRY(fr_instruction_read_slot_operand(&view, ip, &slot_id));
+      FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
       name = fr_source_slot_name(r, slot_id);
       if (name == NULL) {
         return FR_ERR_UNSUPPORTED;
@@ -337,7 +407,7 @@ static fr_err_t fr_source_build(fr_source_render_t *r,
       uint8_t arity = 0;
       const char *name = NULL;
 
-      FR_TRY(fr_instruction_read_slot_operand(&view, ip, &slot_id));
+      FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
       name = fr_source_slot_name(r, slot_id);
       if (name == NULL) {
         return FR_ERR_UNSUPPORTED;
@@ -352,7 +422,7 @@ static fr_err_t fr_source_build(fr_source_render_t *r,
       uint8_t arg_count = 0;
       const char *name = NULL;
 
-      FR_TRY(fr_instruction_read_call_slot_arg_operands(&view, ip, &slot_id,
+      FR_TRY(fr_instruction_read_call_slot_arg_operands(view, ip, &slot_id,
                                                         &arg_count));
       name = fr_source_slot_name(r, slot_id);
       if (name == NULL) {
@@ -362,15 +432,41 @@ static fr_err_t fr_source_build(fr_source_render_t *r,
       ip = (fr_code_offset_t)(ip + 4u);
       break;
     }
+    case FR_OP_JUMP_IF_FALSY:
+      FR_TRY(fr_source_render_if(r, view, names, names_len, ip, &ip));
+      break;
     default:
       return FR_ERR_UNSUPPORTED;
     }
-    if (returned) {
-      break;
-    }
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_source_build(fr_source_render_t *r,
+                                fr_code_object_id_t code_object_id,
+                                fr_instruction_header_t *out_header,
+                                const char **out_names,
+                                uint16_t *out_names_len) {
+  fr_instruction_stream_t view;
+
+  FR_TRY(fr_code_get_instructions(r->runtime, code_object_id, &view));
+  FR_TRY(fr_instruction_read_header(&view, out_header));
+  FR_TRY(fr_code_get_param_names(r->runtime, code_object_id, out_names,
+                                 out_names_len));
+  if (out_header->arity > 0 &&
+      fr_source_param_count(*out_names, *out_names_len) != out_header->arity) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  /* The body is one expression followed by a trailing RETURN. */
+  if (view.length <= out_header->header_size ||
+      (fr_opcode_t)view.bytes[view.length - 1u] != FR_OP_RETURN) {
+    return FR_ERR_UNSUPPORTED;
   }
 
-  if (!returned || ip != view.length || r->depth != 1) {
+  FR_TRY(fr_source_render_span(r, &view, *out_names, *out_names_len,
+                               out_header->header_size,
+                               (fr_code_offset_t)(view.length - 1u)));
+  if (r->depth != 1) {
     return FR_ERR_UNSUPPORTED;
   }
   return FR_OK;

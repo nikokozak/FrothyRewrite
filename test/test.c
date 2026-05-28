@@ -7456,6 +7456,16 @@ static void test_repl_see_source_form(void) {
             fr_repl_eval_line(&runtime, "see twice", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "overlay code\nto twice with n [ n * 2 ]\nok\n") == 0);
+  CHECK("see source if/else",
+        fr_repl_eval_line(&runtime,
+                          "abs1 is fn with n [ if n < 0 [ -1 * n ] else [ n ] ]",
+                          out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see abs1", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to abs1 with n [ if n < 0 [ -1 * n ] else [ n ] ]\n"
+                        "ok\n") == 0);
 }
 #endif
 
