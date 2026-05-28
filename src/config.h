@@ -87,6 +87,10 @@
 #define FR_FEATURE_I2C 1
 #endif
 
+#ifndef FR_FEATURE_MATH
+#define FR_FEATURE_MATH 1
+#endif
+
 #ifndef FR_FEATURE_PAD
 #define FR_FEATURE_PAD 0
 #endif

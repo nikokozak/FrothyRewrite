@@ -34,3 +34,7 @@
  * It also needs text, which the pressure profile does not carry. */
 #undef FR_FEATURE_I2C
 #define FR_FEATURE_I2C 0
+
+/* Math adds six rows on top of the same 13, overshooting the 16 cap. */
+#undef FR_FEATURE_MATH
+#define FR_FEATURE_MATH 0

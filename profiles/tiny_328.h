@@ -48,3 +48,7 @@
 /* I2C needs handles and text, which tiny does not carry. */
 #undef FR_FEATURE_I2C
 #define FR_FEATURE_I2C 0
+
+/* Math adds six rows; tiny is already at 10 with persistence and caps at 12. */
+#undef FR_FEATURE_MATH
+#define FR_FEATURE_MATH 0
