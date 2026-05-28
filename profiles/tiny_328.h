@@ -31,3 +31,7 @@
 #define FR_FEATURE_COMPILER 1
 #define FR_FEATURE_PERSISTENCE 1
 #define FR_FEATURE_INTROSPECTION 1
+
+/* Tiny pays nothing for signatures: no help text, no per-row data in the hash. */
+#undef FR_FEATURE_NATIVE_SIGNATURES
+#define FR_FEATURE_NATIVE_SIGNATURES 0
