@@ -35,3 +35,8 @@
 /* Tiny pays nothing for signatures: no help text, no per-row data in the hash. */
 #undef FR_FEATURE_NATIVE_SIGNATURES
 #define FR_FEATURE_NATIVE_SIGNATURES 0
+
+/* Native table caps at 12; three random rows would push the persistent build
+ * to 13, so tiny stays without random. */
+#undef FR_FEATURE_RANDOM
+#define FR_FEATURE_RANDOM 0

@@ -75,6 +75,10 @@
 #define FR_FEATURE_UART 0
 #endif
 
+#ifndef FR_FEATURE_RANDOM
+#define FR_FEATURE_RANDOM 1
+#endif
+
 #ifndef FR_FEATURE_PAD
 #define FR_FEATURE_PAD 0
 #endif
