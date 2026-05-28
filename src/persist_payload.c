@@ -1997,7 +1997,7 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
 
     FR_TRY(fr_instruction_stream_init(&instructions, code_records[i].bytes,
                                       code_records[i].length));
-    FR_TRY(fr_code_install(runtime, &instructions, &code_map[i]));
+    FR_TRY(fr_code_install(runtime, &instructions, NULL, 0, &code_map[i]));
   }
   for (uint16_t i = 0; i < text_count; i++) {
     FR_TRY(fr_text_install_since(runtime, text_records[i].bytes,

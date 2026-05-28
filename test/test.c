@@ -1205,7 +1205,8 @@ static void test_handles(void) {
             fr_instruction_stream_init(&instructions, load_handle_bytes,
                                        (uint16_t)sizeof(load_handle_bytes)) ==
                 FR_OK &&
-            fr_code_install(&runtime, &instructions, &code_id) == FR_OK &&
+            fr_code_install(&runtime, &instructions, NULL, 0, &code_id) ==
+                FR_OK &&
             fr_tagged_encode_code_object_id(code_id, &code_tagged) == FR_OK &&
             fr_slot_write(&runtime, 1, code_tagged) == FR_OK &&
             fr_vm_run_slot(&runtime, 1, &result) == FR_OK &&
@@ -2821,12 +2822,12 @@ static void test_code(void) {
 
   CHECK("code runtime init", fr_runtime_init(&runtime) == FR_OK);
   CHECK("code rejects empty instruction stream",
-        fr_code_install(&runtime, &empty_view, &code_object_id) ==
+        fr_code_install(&runtime, &empty_view, NULL, 0, &code_object_id) ==
             FR_ERR_INVALID);
   CHECK("view init push one",
         fr_instruction_stream_init(&view, push_one, sizeof(push_one)) == FR_OK);
   CHECK("code install push one",
-        fr_code_install(&runtime, &view, &code_object_id) == FR_OK &&
+        fr_code_install(&runtime, &view, NULL, 0, &code_object_id) == FR_OK &&
             code_object_id == 0);
   push_one[3] = 0x02;
   push_one[4] = 0x00;
@@ -2839,14 +2840,14 @@ static void test_code(void) {
   CHECK("second code install",
         fr_instruction_stream_init(&view, push_two, sizeof(push_two)) ==
                 FR_OK &&
-            fr_code_install(&runtime, &view, &code_object_id) == FR_OK &&
+            fr_code_install(&runtime, &view, NULL, 0, &code_object_id) == FR_OK &&
             code_object_id == 1);
   fr_code_mark_base(&runtime);
   CHECK("code restore keeps base",
         (fr_code_restore_base(&runtime), true) &&
             fr_code_get_instructions(&runtime, 1, &owned_view) == FR_OK);
   CHECK("overlay code install",
-        fr_code_install(&runtime, &view, &code_object_id) == FR_OK &&
+        fr_code_install(&runtime, &view, NULL, 0, &code_object_id) == FR_OK &&
             code_object_id == 2);
   CHECK("code restore drops overlay",
         (fr_code_restore_base(&runtime), true) &&
@@ -2900,8 +2901,8 @@ static void test_image(void) {
       {3, {FR_IMAGE_REF_NATIVE, 0, 1}},
   };
   const fr_image_code_object_t image_a_code[] = {
-      {{push_one, sizeof(push_one)}},
-      {{push_two, sizeof(push_two)}},
+      {{push_one, sizeof(push_one)}, NULL, 0},
+      {{push_two, sizeof(push_two)}, NULL, 0},
   };
   const fr_image_native_t image_a_natives[] = {
       {.fn = test_native_one, .arity = 0},
@@ -2922,7 +2923,7 @@ static void test_image(void) {
       {3, {FR_IMAGE_REF_NATIVE, 0, 0}},
   };
   const fr_image_code_object_t image_b_code[] = {
-      {{push_three, sizeof(push_three)}},
+      {{push_three, sizeof(push_three)}, NULL, 0},
   };
   const fr_image_native_t image_b_natives[] = {
       {.fn = test_native_error, .arity = 0},
@@ -2953,7 +2954,7 @@ static void test_image(void) {
       {4, {FR_IMAGE_REF_CODE_OBJECT, 0, 0}},
   };
   const fr_image_code_object_t update_code[] = {
-      {{push_three, sizeof(push_three)}},
+      {{push_three, sizeof(push_three)}, NULL, 0},
   };
   const fr_overlay_update_t overlay_update = {
       .slot_inits = update_slots,
@@ -3015,7 +3016,7 @@ static void test_image(void) {
       {FR_TEST_PROJECT_SLOT_BASE, {FR_IMAGE_REF_CODE_OBJECT, 0, 0}},
   };
   const fr_image_code_object_t invalid_code_update_code[] = {
-      {{invalid_opcode, sizeof(invalid_opcode)}},
+      {{invalid_opcode, sizeof(invalid_opcode)}, NULL, 0},
   };
   const fr_overlay_update_t invalid_code_update = {
       .slot_inits = invalid_code_slots,
@@ -3979,6 +3980,9 @@ static void test_compile(void) {
   fr_slot_id_t bar_slot = 0;
   fr_slot_id_t before_slot_count = 0;
   uint16_t before_name_count = 0;
+  fr_code_object_id_t param_code_id = 0;
+  const char *param_names = NULL;
+  uint16_t param_names_len = 0;
 #if FR_FEATURE_TEXT
   const uint8_t *text_bytes = NULL;
   uint16_t text_length = 0;
@@ -4612,6 +4616,18 @@ static void test_compile(void) {
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 7);
+  CHECK("compiled to records param names on its code object",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "to pair with a, b [ a ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_slot_id_for_name(&runtime, "pair", &slot_id) == FR_OK &&
+            fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_code_object_id(tagged, &param_code_id) == FR_OK &&
+            fr_code_get_param_names(&runtime, param_code_id, &param_names,
+                                    &param_names_len) == FR_OK &&
+            param_names_len == 4 && memcmp(param_names, "a\0b\0", 4) == 0);
   CHECK("compiled to with rejects wrong arity",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_base_image_install(&runtime) == FR_OK &&
@@ -6507,7 +6523,7 @@ static void test_vm(void) {
   CHECK("code install for vm",
         fr_instruction_stream_init(&view, push_one, sizeof(push_one)) ==
                 FR_OK &&
-            fr_code_install(&runtime, &view, &code_object_id) == FR_OK &&
+            fr_code_install(&runtime, &view, NULL, 0, &code_object_id) == FR_OK &&
             code_object_id == 0);
   CHECK("code-tagged stores in slot",
         fr_tagged_encode_code_object_id(code_object_id, &tagged) == FR_OK &&
@@ -6563,7 +6579,8 @@ static void test_vm(void) {
             fr_vm_run_instruction_stream(&runtime, &view, &result) ==
                 FR_ERR_NOT_FOUND);
   CHECK("vm recursive call overflows",
-        fr_code_install(&runtime, &view, &recursive_code_object_id) == FR_OK &&
+        fr_code_install(&runtime, &view, NULL, 0, &recursive_code_object_id) ==
+            FR_OK &&
             fr_tagged_encode_code_object_id(recursive_code_object_id,
                                             &tagged) == FR_OK &&
             fr_slot_write(&runtime, 1, tagged) == FR_OK &&
@@ -6571,7 +6588,8 @@ static void test_vm(void) {
   CHECK("code install parameter function for vm",
         fr_instruction_stream_init(&view, arg_identity,
                                    sizeof(arg_identity)) == FR_OK &&
-            fr_code_install(&runtime, &view, &arg_code_object_id) == FR_OK);
+            fr_code_install(&runtime, &view, NULL, 0, &arg_code_object_id) ==
+                FR_OK);
   CHECK("vm code object rejects missing argument",
         fr_vm_run_code_object(&runtime, arg_code_object_id, &result) ==
             FR_ERR_INVALID);

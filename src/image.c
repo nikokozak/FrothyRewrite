@@ -820,6 +820,8 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
 
   for (uint16_t i = 0; i < records->code_object_count; i++) {
     FR_TRY(fr_code_install(runtime, &records->code_objects[i].instructions,
+                           records->code_objects[i].param_names,
+                           records->code_objects[i].param_names_length,
                            &code_ids[i]));
   }
 #if FR_FEATURE_TEXT
@@ -1172,6 +1174,9 @@ static fr_err_t fr_overlay_update_decode_code(
                                     &out->instruction_bytes
                                          [*instruction_bytes_used],
                                 .length = length};
+  /* Persisted code carries no param names yet; the renderer falls back. */
+  code->param_names = NULL;
+  code->param_names_length = 0;
   *instruction_bytes_used = (uint16_t)(*instruction_bytes_used + length);
   out->update.code_object_count =
       (uint16_t)(out->update.code_object_count + 1);

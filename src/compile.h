@@ -21,6 +21,9 @@ typedef struct fr_compile_overlay_update_t {
   fr_record_name_t record_fields[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
   fr_image_ref_t record_field_refs[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
   uint8_t instruction_bytes[FR_COMPILE_MAX_INSTRUCTION_BYTES];
+  char param_name_text[FR_PROFILE_MAX_PARAM_NAME_BYTES > 0
+                           ? FR_PROFILE_MAX_PARAM_NAME_BYTES
+                           : 1];
   uint8_t text_bytes[FR_PROFILE_MAX_TEXT_LENGTH > 0
                          ? FR_PROFILE_MAX_TEXT_LENGTH
                          : 1];

@@ -52,6 +52,28 @@ static fr_err_t fr_compile_copy_name(fr_parse_span_t span, char *out,
   return FR_OK;
 }
 
+/* Pack the param spans NUL-separated, one name per arg, for the code object. */
+static fr_err_t fr_compile_param_names(const fr_parse_span_t *params,
+                                       uint8_t count, char *out,
+                                       uint16_t out_cap, uint16_t *out_len) {
+  uint16_t used = 0;
+
+  for (uint8_t i = 0; i < count; i++) {
+    if (params[i].start == NULL) {
+      return FR_ERR_INVALID;
+    }
+    if ((uint32_t)used + params[i].length + 1 > out_cap) {
+      return FR_ERR_RANGE;
+    }
+    memcpy(&out[used], params[i].start, params[i].length);
+    used = (uint16_t)(used + params[i].length);
+    out[used] = '\0';
+    used += 1;
+  }
+  *out_len = used;
+  return FR_OK;
+}
+
 static fr_err_t fr_compile_slot_for_name(const fr_compile_context_t *ctx,
                                          fr_parse_span_t name,
                                          fr_slot_id_t *out_slot_id) {
@@ -1013,6 +1035,14 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
       .instructions = (fr_instruction_stream_t){.bytes = out->instruction_bytes,
                                                 .length = offset},
   };
+  if (arity > 0) {
+    uint16_t names_len = 0;
+    FR_TRY(fr_compile_param_names(body_ctx.params, arity, out->param_name_text,
+                                  (uint16_t)sizeof(out->param_name_text),
+                                  &names_len));
+    out->code_object.param_names = out->param_name_text;
+    out->code_object.param_names_length = names_len;
+  }
 
   out->slot_inits[0] = (fr_image_slot_init_t){0,
                                               {FR_IMAGE_REF_CODE_OBJECT, 0, 0}};

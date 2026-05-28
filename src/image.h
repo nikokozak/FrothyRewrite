@@ -30,6 +30,8 @@ typedef struct fr_image_slot_init_t {
 
 typedef struct fr_image_code_object_t {
   fr_instruction_stream_t instructions;
+  const char *param_names;
+  uint16_t param_names_length;
 } fr_image_code_object_t;
 
 typedef struct fr_image_cell_object_t {

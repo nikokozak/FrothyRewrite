@@ -185,6 +185,12 @@
 #define FR_PROFILE_REPL_LINE_BYTES 128
 #endif
 
+/* Shared pool for code-object param names, NUL-separated. Sized off the code
+ * table because most words have zero or one param; the renderer reads it. */
+#ifndef FR_PROFILE_MAX_PARAM_NAME_BYTES
+#define FR_PROFILE_MAX_PARAM_NAME_BYTES (FR_PROFILE_CODE_OBJECT_TABLE_SIZE * 8)
+#endif
+
 #if FR_PROFILE_MAX_NAME_BYTES == 0
 #error "FR_PROFILE_MAX_NAME_BYTES must be greater than zero"
 #endif
