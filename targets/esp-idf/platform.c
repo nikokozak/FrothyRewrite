@@ -887,7 +887,7 @@ fr_err_t fr_platform_pwm_close(uint16_t platform_index) {
 #if FR_FEATURE_I2C
 /* Per-write/read transactions construct a transient device on the bus using
  * the stored frequency as scl_speed_hz. Caching the device handle is a
- * deferred optimization (see ADR). */
+ * deferred optimization (see ADR 0047). */
 static fr_err_t fr_esp_i2c_dev(fr_esp_i2c_t *i2c, uint8_t addr,
                                i2c_master_dev_handle_t *out_dev) {
   const i2c_device_config_t dev_cfg = {
