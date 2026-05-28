@@ -386,101 +386,112 @@ static fr_err_t fr_native_pad_pack(fr_runtime_t *runtime,
 #endif
 
 #if FR_FEATURE_NATIVE_SIGNATURES
-static const fr_native_value_kind_t fr_native_int_args[] = {
-    FR_NATIVE_VALUE_INT,
+static const fr_native_param_t fr_native_int_params[] = {
+    {NULL, FR_NATIVE_VALUE_INT},
 };
 
-static const fr_native_value_kind_t fr_native_two_int_args[] = {
-    FR_NATIVE_VALUE_INT,
-    FR_NATIVE_VALUE_INT,
+static const fr_native_param_t fr_native_two_int_params[] = {
+    {NULL, FR_NATIVE_VALUE_INT},
+    {NULL, FR_NATIVE_VALUE_INT},
 };
 
 #if FR_FEATURE_UART
-static const fr_native_value_kind_t fr_native_three_int_args[] = {
-    FR_NATIVE_VALUE_INT,
-    FR_NATIVE_VALUE_INT,
-    FR_NATIVE_VALUE_INT,
+static const fr_native_param_t fr_native_three_int_params[] = {
+    {NULL, FR_NATIVE_VALUE_INT},
+    {NULL, FR_NATIVE_VALUE_INT},
+    {NULL, FR_NATIVE_VALUE_INT},
 };
 
-static const fr_native_value_kind_t fr_native_handle_args[] = {
-    FR_NATIVE_VALUE_HANDLE,
+static const fr_native_param_t fr_native_handle_params[] = {
+    {NULL, FR_NATIVE_VALUE_HANDLE},
 };
 
-static const fr_native_value_kind_t fr_native_handle_int_args[] = {
-    FR_NATIVE_VALUE_HANDLE,
-    FR_NATIVE_VALUE_INT,
+static const fr_native_param_t fr_native_handle_int_params[] = {
+    {NULL, FR_NATIVE_VALUE_HANDLE},
+    {NULL, FR_NATIVE_VALUE_INT},
 };
 #endif
 
 static const fr_native_signature_t fr_native_nil_to_int_signature = {
-    .args = NULL,
+    .params = NULL,
     .arg_count = 0,
     .result = FR_NATIVE_VALUE_INT,
+    .help = NULL,
 };
 
 #if FR_FEATURE_PAD
 static const fr_native_signature_t fr_native_nil_to_nil_signature = {
-    .args = NULL,
+    .params = NULL,
     .arg_count = 0,
     .result = FR_NATIVE_VALUE_NIL,
+    .help = NULL,
 };
 
 #if FR_FEATURE_TEXT
 static const fr_native_signature_t fr_native_nil_to_text_signature = {
-    .args = NULL,
+    .params = NULL,
     .arg_count = 0,
     .result = FR_NATIVE_VALUE_TEXT,
+    .help = NULL,
 };
 #endif
 #endif
 
 static const fr_native_signature_t fr_native_int_to_nil_signature = {
-    .args = fr_native_int_args,
+    .params = fr_native_int_params,
     .arg_count = 1,
     .result = FR_NATIVE_VALUE_NIL,
+    .help = NULL,
 };
 
 static const fr_native_signature_t fr_native_int_to_int_signature = {
-    .args = fr_native_int_args,
+    .params = fr_native_int_params,
     .arg_count = 1,
     .result = FR_NATIVE_VALUE_INT,
+    .help = NULL,
 };
 
 static const fr_native_signature_t fr_native_gpio_write_to_nil_signature = {
-    .args = fr_native_two_int_args,
+    .params = fr_native_two_int_params,
     .arg_count = 2,
     .result = FR_NATIVE_VALUE_NIL,
+    .help = NULL,
 };
 
 static const fr_native_signature_t fr_native_int_int_to_any_signature = {
-    .args = fr_native_two_int_args,
+    .params = fr_native_two_int_params,
     .arg_count = 2,
     .result = FR_NATIVE_VALUE_ANY,
+    .help = NULL,
 };
 
 #if FR_FEATURE_UART
 static const fr_native_signature_t fr_native_uart_open_signature = {
-    .args = fr_native_three_int_args,
+    .params = fr_native_three_int_params,
     .arg_count = 3,
     .result = FR_NATIVE_VALUE_HANDLE,
+    .help = NULL,
 };
 
 static const fr_native_signature_t fr_native_uart_write_byte_signature = {
-    .args = fr_native_handle_int_args,
+    .params = fr_native_handle_int_params,
     .arg_count = 2,
     .result = FR_NATIVE_VALUE_NIL,
+    .help = NULL,
 };
 
 static const fr_native_signature_t fr_native_handle_to_int_signature = {
-    .args = fr_native_handle_args,
+    .params = fr_native_handle_params,
     .arg_count = 1,
     .result = FR_NATIVE_VALUE_INT,
+    .help = NULL,
 };
 
 static const fr_native_signature_t fr_native_handle_to_nil_signature = {
-    .args = fr_native_handle_args,
+    .params = fr_native_handle_params,
     .arg_count = 1,
     .result = FR_NATIVE_VALUE_NIL,
+    .help = NULL,
 };
 #endif
 #endif

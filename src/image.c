@@ -368,7 +368,7 @@ fr_image_check_native(const fr_image_native_t *native) {
   if (signature->arg_count != native->arity) {
     return FR_ERR_INVALID;
   }
-  if (signature->arg_count > 0 && signature->args == NULL) {
+  if (signature->arg_count > 0 && signature->params == NULL) {
     return FR_ERR_INVALID;
   }
 #endif

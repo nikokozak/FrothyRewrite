@@ -285,9 +285,9 @@ static void test_base_def_contract(void) {
         if (def->native_signature != NULL) {
           CHECK("base native signature arity matches",
                 def->native_signature->arg_count == def->native_arity);
-          CHECK("base native signature args present",
+          CHECK("base native signature params present",
                 def->native_signature->arg_count == 0 ||
-                    def->native_signature->args != NULL);
+                    def->native_signature->params != NULL);
         }
 #endif
       } else {
@@ -2088,14 +2088,15 @@ static void test_natives(void) {
   fr_runtime_t runtime;
   const fr_native_entry_t *entry = NULL;
 #if FR_FEATURE_NATIVE_SIGNATURES
-  const fr_native_value_kind_t add_arg_kinds[] = {
-      FR_NATIVE_VALUE_INT,
-      FR_NATIVE_VALUE_INT,
+  const fr_native_param_t add_params[] = {
+      {NULL, FR_NATIVE_VALUE_INT},
+      {NULL, FR_NATIVE_VALUE_INT},
   };
   const fr_native_signature_t add_signature = {
-      .args = add_arg_kinds,
+      .params = add_params,
       .arg_count = 2,
       .result = FR_NATIVE_VALUE_INT,
+      .help = NULL,
   };
   const fr_native_signature_t *add_signature_ptr = &add_signature;
 #else

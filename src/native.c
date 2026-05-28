@@ -84,7 +84,7 @@ fr_native_signature_check(const fr_native_signature_t *signature,
   if (signature->arg_count != arity) {
     return FR_ERR_INVALID;
   }
-  if (signature->arg_count > 0 && signature->args == NULL) {
+  if (signature->arg_count > 0 && signature->params == NULL) {
     return FR_ERR_INVALID;
   }
   return FR_OK;
@@ -152,7 +152,7 @@ fr_err_t fr_native_call(fr_runtime_t *runtime, const fr_native_entry_t *entry,
   if (entry->signature != NULL) {
     FR_TRY(fr_native_signature_check(entry->signature, entry->arity));
     for (uint8_t i = 0; i < arg_count; i++) {
-      if (!fr_native_value_matches(runtime, entry->signature->args[i],
+      if (!fr_native_value_matches(runtime, entry->signature->params[i].type,
                                    args[i])) {
         return FR_ERR_TYPE;
       }

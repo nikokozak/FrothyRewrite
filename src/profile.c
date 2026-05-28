@@ -200,6 +200,8 @@ static void fr_profile_hash_tagged(uint32_t *crc, fr_tagged_t tagged) {
 #if !FR_FEATURE_NATIVE_SIGNATURES
 #error "profile hash cannot include native signatures when the profile omits them"
 #endif
+/* Display-only fields (.params[i].name, .help) must not enter this hash.
+ * If they did, every help-text edit would invalidate every saved image. */
 static void
 fr_profile_hash_signature(uint32_t *crc,
                           const fr_native_signature_t *signature) {
@@ -209,12 +211,12 @@ fr_profile_hash_signature(uint32_t *crc,
   }
 
   fr_profile_hash_u16(crc, (uint16_t)(signature->arg_count + 1));
-  if (signature->arg_count > 0 && signature->args == NULL) {
+  if (signature->arg_count > 0 && signature->params == NULL) {
     fr_profile_hash_u16(crc, 0xffffu);
     return;
   }
   for (uint8_t i = 0; i < signature->arg_count; i++) {
-    fr_profile_hash_u16(crc, signature->args[i]);
+    fr_profile_hash_u16(crc, signature->params[i].type);
   }
   fr_profile_hash_u16(crc, signature->result);
 }

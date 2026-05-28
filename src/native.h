@@ -15,10 +15,16 @@ typedef enum fr_native_value_kind_t {
   FR_NATIVE_VALUE_TEXT,
 } fr_native_value_kind_t;
 
+typedef struct fr_native_param_t {
+  const char *name; /* display-only; may be NULL */
+  fr_native_value_kind_t type;
+} fr_native_param_t;
+
 typedef struct fr_native_signature_t {
-  const fr_native_value_kind_t *args;
+  const fr_native_param_t *params; /* one row per arg */
   uint8_t arg_count;
   fr_native_value_kind_t result;
+  const char *help; /* display-only; may be NULL */
 } fr_native_signature_t;
 
 typedef struct fr_native_entry_t {

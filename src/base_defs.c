@@ -78,9 +78,10 @@ static const fr_base_def_t fr_core_base_defs[] = {
 
 #if FR_FEATURE_PERSISTENCE && FR_FEATURE_NATIVE_SIGNATURES
 static const fr_native_signature_t fr_native_nil_to_nil_signature = {
-    .args = NULL,
+    .params = NULL,
     .arg_count = 0,
     .result = FR_NATIVE_VALUE_NIL,
+    .help = NULL,
 };
 #endif
 
