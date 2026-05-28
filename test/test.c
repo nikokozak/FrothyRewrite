@@ -6709,7 +6709,7 @@ static void test_repl(void) {
   uint8_t run_value_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(7),
                                FR_OP_RETURN};
   const fr_image_code_object_t apply_code[] = {
-      {{apply_code_bytes, sizeof(apply_code_bytes)}},
+      {{apply_code_bytes, sizeof(apply_code_bytes)}, NULL, 0},
   };
   const fr_image_slot_init_t apply_slots[] = {
       {FR_SLOT_BOOT, {FR_IMAGE_REF_CODE_OBJECT, 0, 0}},
@@ -7324,7 +7324,7 @@ static void test_repl(void) {
 #if FR_FEATURE_INTROSPECTION
   CHECK("repl apply exposes installed code",
         fr_repl_eval_line(&runtime, "see boot", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "overlay code\nPUSH_INT 1\nRETURN\nok\n") == 0);
+            strcmp(out, "overlay code\nto boot [ 1 ]\nok\n") == 0);
 #endif
   CHECK("repl apply rejects odd hex",
         fr_repl_eval_line(&runtime, "apply 0", out, sizeof(out)) ==
