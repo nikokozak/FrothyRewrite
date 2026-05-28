@@ -239,22 +239,22 @@ static void test_base_def_contract(void) {
                              &(fr_base_def_layer_t){0}) == FR_ERR_NOT_FOUND);
 #if FR_FEATURE_UART
 #if FR_FEATURE_PAD
-  CHECK("pad slot ids follow i2c block",
-        FR_SLOT_PAD_RESET == FR_SLOT_AFTER_I2C);
+  CHECK("pad slot ids follow math block",
+        FR_SLOT_PAD_RESET == FR_SLOT_AFTER_MATH);
   CHECK("board local slot ids follow pad ids",
         FR_SLOT_BOARD_LOCAL_BASE == FR_TEST_PAD_LAST_SLOT + 1);
 #else
-  CHECK("board local slot ids follow i2c block",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_AFTER_I2C);
+  CHECK("board local slot ids follow math block",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_AFTER_MATH);
 #endif
 #elif FR_FEATURE_PAD
-  CHECK("pad slot ids follow i2c block",
-        FR_SLOT_PAD_RESET == FR_SLOT_AFTER_I2C);
+  CHECK("pad slot ids follow math block",
+        FR_SLOT_PAD_RESET == FR_SLOT_AFTER_MATH);
   CHECK("board local slot ids follow pad ids",
         FR_SLOT_BOARD_LOCAL_BASE == FR_TEST_PAD_LAST_SLOT + 1);
 #else
-  CHECK("board local slot ids follow i2c block",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_AFTER_I2C);
+  CHECK("board local slot ids follow math block",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_AFTER_MATH);
 #endif
 
   for (uint16_t layer_index = 0; layer_index < fr_base_def_layer_count();
