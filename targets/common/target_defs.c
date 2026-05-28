@@ -640,7 +640,15 @@ static fr_err_t fr_native_clamp(fr_runtime_t *runtime,
 }
 
 /* Wide temp because (x - in_lo) * (out_hi - out_lo) can blow past the
- * tagged band before the division pulls it back. */
+ * tagged band before the division pulls it back. The negative-array
+ * trick catches a future tranche that widens the tagged band past
+ * what int64_t can hold for that product. */
+typedef char fr_native_map_diff_product_must_fit_int64[
+    (((int64_t)FR_TAGGED_INT_MAX - (int64_t)FR_TAGGED_INT_MIN) *
+         ((int64_t)FR_TAGGED_INT_MAX - (int64_t)FR_TAGGED_INT_MIN) <=
+     INT64_MAX)
+        ? 1 : -1];
+
 static fr_err_t fr_native_map(fr_runtime_t *runtime, const fr_tagged_t *args,
                               uint8_t arg_count, fr_tagged_t *out) {
   fr_int_t x = 0;
