@@ -101,15 +101,18 @@ enum {
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
   "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
-      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS "\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
+          FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
   "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
-      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS " led\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
+          FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_BLINK                                      \
   "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
   "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
-      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS " led blink\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
+          FR_TEST_SOURCE_WORDS " led blink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (13 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
@@ -118,15 +121,18 @@ enum {
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
-      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS "\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
+          FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
-      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS " led\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
+          FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_BLINK                                      \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
-      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS " led blink\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
+          FR_TEST_SOURCE_WORDS " led blink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (10 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
@@ -134,11 +140,14 @@ enum {
 #endif
 
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
-   user words in a fully installed base image start above them. */
+   user words in a fully installed base image start above them, and `words`
+   lists them between the base and overlay names. */
 #if FR_FEATURE_SOURCE_BASE
 #define FR_TEST_SOURCE_BASE_WORD_COUNT 1
+#define FR_TEST_SOURCE_WORDS " gpio.high"
 #else
 #define FR_TEST_SOURCE_BASE_WORD_COUNT 0
+#define FR_TEST_SOURCE_WORDS ""
 #endif
 #define FR_TEST_FIRST_USER_SLOT                                               \
   ((fr_slot_id_t)(FR_SLOT_BOARD_LOCAL_BASE + FR_TEST_SOURCE_BASE_WORD_COUNT))
@@ -429,6 +438,45 @@ static void test_persist_cross_width_header_rejection(void) {
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_ERR_CORRUPT);
 }
+
+#if FR_FEATURE_SOURCE_BASE
+/* Same restore gate, but the saved hash reflects a one-byte-different
+ * base/core.frothy. A rebuild with edited source rejects the old overlay. */
+static void test_persist_source_change_header_rejection(void) {
+  fr_runtime_t runtime;
+  uint8_t header[FR_PERSIST_HEADER_BYTES];
+  char perturbed[FR_PROFILE_REPL_LINE_BYTES];
+  uint16_t length = fr_source_base_bytes_len;
+
+  if (length > sizeof(perturbed)) {
+    length = (uint16_t)sizeof(perturbed);
+  }
+  memcpy(perturbed, fr_source_base_bytes, length);
+  perturbed[0] = (char)(perturbed[0] ^ 0x01);
+
+  CHECK("save populates storage for source-change test",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_save(&runtime) == FR_OK);
+  CHECK("read saved header for source-change tampering",
+        fr_platform_storage_read(0, 0, header,
+                                 (uint16_t)sizeof(header)) == FR_OK);
+
+  fr_write_u32_le(&header[FR_PERSIST_PROFILE_HASH_OFFSET],
+                  fr_profile_debug_hash_for_source(FR_WORD_SIZE, perturbed,
+                                                   length));
+  memset(&header[24], 0, 4);
+  fr_write_u32_le(&header[24], fr_crc32(header, FR_PERSIST_HEADER_BYTES));
+
+  CHECK("write source-changed headers back to both storage slots",
+        fr_platform_storage_write(0, 0, header,
+                                  (uint16_t)sizeof(header)) == FR_OK &&
+            fr_platform_storage_write(1, 0, header,
+                                      (uint16_t)sizeof(header)) == FR_OK);
+  CHECK("restore rejects overlay saved under different source bytes",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_ERR_CORRUPT);
+}
+#endif
 #endif
 
 #if FR_FEATURE_OVERLAY_APPLY_COMMAND
@@ -7874,6 +7922,9 @@ int main(void) {
 #if FR_FEATURE_PERSISTENCE
   test_persist();
   test_persist_cross_width_header_rejection();
+#if FR_FEATURE_SOURCE_BASE
+  test_persist_source_change_header_rejection();
+#endif
 #endif
   test_vm();
   test_repl();

@@ -296,7 +296,7 @@ test-host-normal-transcript: host-normal
 		'blink_times is fn with count [ repeat count [ blink: ] ]' \
 		'boot is fn [ blink_times: 3 ]' \
 		'gpio.high: $$led_builtin' \
-		'gpio.read: $$led_builtin' \
+		'1000 + gpio.read: $$led_builtin' \
 		'see gpio.high' \
 		'counter is cells(1)' \
 		'set counter[0] to 7' \
@@ -340,9 +340,10 @@ test-host-normal-transcript: host-normal
 		'> A' \
 		'2' \
 		'overlay code' \
+		'1001' \
 		'to boot [ blink_times: 3 ]' \
 		'to gpio.high with pin [ gpio.write: pin, 1 ]' \
-		'time blink blink_times'; do \
+		'gpio.high time blink blink_times'; do \
 		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
 			printf '%s\nmissing expected text: %s\n' "$$out" "$$expected"; \
 			exit 1; \
@@ -384,8 +385,9 @@ test-esp32-plain-host-transcript: esp32-plain-host
 		'status is cells(1)' \
 		'set status[0] to message' \
 		'boot is fn [ pin: $$led_builtin, 1 ]' \
+		'gpio.write: $$led_builtin, 0' \
 		'gpio.high: $$led_builtin' \
-		'gpio.read: $$led_builtin' \
+		'1000 + gpio.read: $$led_builtin' \
 		'see gpio.high' \
 		'save' \
 		'clear' \
@@ -397,7 +399,7 @@ test-esp32-plain-host-transcript: esp32-plain-host
 		'see boot' \
 		| build/esp32-plain-host/frothy); \
 	ok_count=$$(printf '%s\n' "$$out" | grep -c 'ok$$'); \
-	if [ "$$ok_count" != 23 ]; then \
+	if [ "$$ok_count" != 24 ]; then \
 		printf '%s\n' "$$out"; \
 		exit 1; \
 	fi; \
@@ -410,7 +412,7 @@ test-esp32-plain-host-transcript: esp32-plain-host
 		'$$boot_button' \
 		'2' \
 		'34' \
-		'1' \
+		'1001' \
 		'512' \
 		'"ready"' \
 		'overlay text 5' \
