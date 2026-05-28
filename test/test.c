@@ -1676,6 +1676,90 @@ static void test_uart(void) {
 }
 #endif
 
+#if FR_FEATURE_RANDOM
+static void test_random(void) {
+  fr_runtime_t runtime;
+  char out[128];
+
+  CHECK("random installs base image",
+        fr_base_image_install(&runtime) == FR_OK);
+
+  CHECK("random.next renders signature",
+        fr_repl_eval_line(&runtime, "see random.next", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "random.next() -> int\n"
+                   "return the next pseudo-random nonnegative int\n"
+                   "ok\n") == 0);
+  CHECK("random.below renders signature",
+        fr_repl_eval_line(&runtime, "see random.below", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "random.below(limit: int) -> int\n"
+                   "return a pseudo-random int in [0, limit)\n"
+                   "ok\n") == 0);
+  CHECK("random.seed renders signature",
+        fr_repl_eval_line(&runtime, "see random.seed", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "random.seed(seed: int) -> nil\n"
+                   "seed the pseudo-random generator\n"
+                   "ok\n") == 0);
+
+  /* The raw xorshift32 sequence is identical across every target; only the
+   * FR_TAGGED_INT_MAX mask in the language wrapper changes the visible value
+   * per word size. */
+#if FR_WORD_SIZE == 16
+#define FR_TEST_RANDOM_SEED1_NEXT1 "8225\nok\n"
+#define FR_TEST_RANDOM_SEED1_NEXT2 "1537\nok\n"
+#define FR_TEST_RANDOM_SEED1_NEXT3 "10437\nok\n"
+#define FR_TEST_RANDOM_SEED2_NEXT1 "66\nok\n"
+#else
+#define FR_TEST_RANDOM_SEED1_NEXT1 "270369\nok\n"
+#define FR_TEST_RANDOM_SEED1_NEXT2 "67634689\nok\n"
+#define FR_TEST_RANDOM_SEED1_NEXT3 "499951813\nok\n"
+#define FR_TEST_RANDOM_SEED2_NEXT1 "540738\nok\n"
+#endif
+  CHECK("random.seed=1 pins the first three next values",
+        fr_repl_eval_line(&runtime, "random.seed: 1", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "random.next:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, FR_TEST_RANDOM_SEED1_NEXT1) == 0 &&
+            fr_repl_eval_line(&runtime, "random.next:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, FR_TEST_RANDOM_SEED1_NEXT2) == 0 &&
+            fr_repl_eval_line(&runtime, "random.next:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, FR_TEST_RANDOM_SEED1_NEXT3) == 0);
+  CHECK("random.seed=2 diverges from seed=1",
+        fr_repl_eval_line(&runtime, "random.seed: 2", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "random.next:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, FR_TEST_RANDOM_SEED2_NEXT1) == 0);
+
+  CHECK("random.below: 0 rejects",
+        fr_repl_eval_line(&runtime, "random.below: 0", out, sizeof(out)) ==
+            FR_ERR_DOMAIN);
+  CHECK("random.below: -1 rejects",
+        fr_repl_eval_line(&runtime, "random.below: -1", out, sizeof(out)) ==
+            FR_ERR_DOMAIN);
+
+  CHECK("random.below: 10 reseeds for the range walk",
+        fr_repl_eval_line(&runtime, "random.seed: 1", out, sizeof(out)) ==
+            FR_OK);
+  for (int i = 0; i < 10; i++) {
+    CHECK("random.below: 10 sample is one decimal digit",
+          fr_repl_eval_line(&runtime, "random.below: 10", out, sizeof(out)) ==
+                  FR_OK &&
+              strlen(out) == 5u && out[0] >= '0' && out[0] <= '9' &&
+              strcmp(out + 1, "\nok\n") == 0);
+  }
+}
+#endif
+
 #if FR_FEATURE_CELLS
 static void test_cells(void) {
   fr_runtime_t runtime;
@@ -7049,6 +7133,9 @@ int main(void) {
 #endif
 #if FR_FEATURE_UART
   test_uart();
+#endif
+#if FR_FEATURE_RANDOM
+  test_random();
 #endif
 #if FR_FEATURE_PAD
   test_pad();
