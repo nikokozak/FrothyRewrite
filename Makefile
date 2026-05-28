@@ -292,8 +292,8 @@ test-host-normal-transcript: host-normal
 	@out=$$(printf '%s\n' \
 		'status' \
 		'time is 200' \
-		'blink is fn [ pin: $$led_builtin, 1; ms: time; pin: $$led_builtin, 0; ms: time ]' \
-		'blink_times is fn with count [ repeat count [ blink: ] ]' \
+		'myblink is fn [ pin: $$led_builtin, 1; ms: time; pin: $$led_builtin, 0; ms: time ]' \
+		'blink_times is fn with count [ repeat count [ myblink: ] ]' \
 		'boot is fn [ blink_times: 3 ]' \
 		'gpio.high: $$led_builtin' \
 		'1000 + gpio.read: $$led_builtin' \
@@ -343,7 +343,7 @@ test-host-normal-transcript: host-normal
 		'1001' \
 		'to boot [ blink_times: 3 ]' \
 		'to gpio.high with pin [ gpio.write: pin, 1 ]' \
-		'gpio.high time blink blink_times'; do \
+		'wrap time myblink blink_times'; do \
 		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
 			printf '%s\nmissing expected text: %s\n' "$$out" "$$expected"; \
 			exit 1; \

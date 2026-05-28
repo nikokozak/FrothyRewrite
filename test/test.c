@@ -108,11 +108,11 @@ enum {
   "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_SOURCE_WORDS " led\nok\n"
-#define FR_TEST_WORDS_WITH_LED_AND_BLINK                                      \
+#define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
   "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_SOURCE_WORDS " led blink\nok\n"
+          FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (13 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
@@ -128,11 +128,11 @@ enum {
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_SOURCE_WORDS " led\nok\n"
-#define FR_TEST_WORDS_WITH_LED_AND_BLINK                                      \
+#define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_SOURCE_WORDS " led blink\nok\n"
+          FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (10 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
@@ -143,8 +143,10 @@ enum {
    user words in a fully installed base image start above them, and `words`
    lists them between the base and overlay names. */
 #if FR_FEATURE_SOURCE_BASE
-#define FR_TEST_SOURCE_BASE_WORD_COUNT 1
-#define FR_TEST_SOURCE_WORDS " gpio.high"
+#define FR_TEST_SOURCE_BASE_WORD_COUNT 9
+#define FR_TEST_SOURCE_WORDS                                                 \
+  " gpio.high gpio.low gpio.toggle led.on led.off led.toggle blink "         \
+  "led.blink wrap"
 #else
 #define FR_TEST_SOURCE_BASE_WORD_COUNT 0
 #define FR_TEST_SOURCE_WORDS ""
@@ -4571,10 +4573,10 @@ static void test_compile(void) {
 #endif
   CHECK("compile runtime dynamic function",
         fr_compile_overlay_update_for_runtime(
-            &runtime, "blink is fn [ pin: led, 1 ]", &update) == FR_OK &&
+            &runtime, "myblink is fn [ pin: led, 1 ]", &update) == FR_OK &&
             update.slot_inits[0].slot_id == FR_TEST_FIRST_USER_SLOT + 1 &&
             update.overlay_update.slot_name_count == 1 &&
-            strcmp(update.slot_name.name, "blink") == 0 &&
+            strcmp(update.slot_name.name, "myblink") == 0 &&
             update.instruction_bytes[2] == FR_OP_LOAD_SLOT &&
             update.instruction_bytes[3] == FR_TEST_FIRST_USER_SLOT &&
             update.instruction_bytes[5] == FR_OP_PUSH_INT &&
@@ -4583,7 +4585,7 @@ static void test_compile(void) {
             update.instruction_bytes[6u + push_size] == FR_SLOT_GPIO_WRITE);
   CHECK("compiled runtime dynamic function applies and runs",
         fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
-            fr_slot_id_for_name(&runtime, "blink", &slot_id) == FR_OK &&
+            fr_slot_id_for_name(&runtime, "myblink", &slot_id) == FR_OK &&
             slot_id == FR_TEST_FIRST_USER_SLOT + 1 &&
             fr_vm_run_slot(&runtime, slot_id, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
@@ -5591,8 +5593,8 @@ static void test_compiler_overlay_wire_parity(void) {
   fr_tagged_t wire_result = 0;
   const char *sources[] = {
       "led is $led_builtin",
-      "blink is fn [ pin: led, 1 ]",
-      "boot is fn [ blink: ]",
+      "myblink is fn [ pin: led, 1 ]",
+      "boot is fn [ myblink: ]",
   };
 
   CHECK("compiler parity installs base runtimes",
@@ -5622,7 +5624,7 @@ static void test_compiler_overlay_wire_parity(void) {
   CHECK("compiler parity literal slot matches",
         test_named_slot_effects_match(&direct_runtime, &wire_runtime, "led"));
   CHECK("compiler parity code slot matches",
-        test_named_slot_effects_match(&direct_runtime, &wire_runtime, "blink"));
+        test_named_slot_effects_match(&direct_runtime, &wire_runtime, "myblink"));
   CHECK("compiler parity boot slot matches",
         test_named_slot_effects_match(&direct_runtime, &wire_runtime, "boot"));
   CHECK("compiler parity host mirror matches target",
@@ -5984,7 +5986,7 @@ static void test_persist(void) {
                 &runtime, "boot is fn [ pin: led, 1 ]", &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
-                &runtime, "blink is fn [ pin: led, 1 ]", &update) == FR_OK &&
+                &runtime, "myblink is fn [ pin: led, 1 ]", &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK &&
             fr_base_image_install(&runtime) == FR_OK &&
@@ -6848,7 +6850,7 @@ static void test_repl(void) {
   const fr_code_offset_t run_gpio_write_call_ip =
       2u + (FR_INSTRUCTION_PUSH_INT_SIZE * 2u);
 #endif
-  char out[512];
+  char out[1024];
 #if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS
   uint16_t before_ms = 0;
   uint16_t after_ms = 0;
@@ -7187,10 +7189,11 @@ static void test_repl(void) {
         fr_repl_eval_line(&runtime, "boot:", out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
 #if FR_FEATURE_SOURCE_BASE
-  /* gpio.high's code object takes id 0 at boot compile, so boot's is 1. */
+  /* Source-base words take code object ids 0..N-1 at boot compile, so boot's
+     id is the source-word count (9 today). */
   CHECK("repl displays bare compiled boot",
         fr_repl_eval_line(&runtime, "boot", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "code 1\nok\n") == 0);
+            strcmp(out, "code 9\nok\n") == 0);
 #else
   CHECK("repl displays bare compiled boot",
         fr_repl_eval_line(&runtime, "boot", out, sizeof(out)) == FR_OK &&
@@ -7203,19 +7206,20 @@ static void test_repl(void) {
         fr_repl_eval_line(&runtime, "see 0", out, sizeof(out)) == FR_OK &&
             strcmp(out, "overlay code\nto boot [ 1 ]\nok\n") == 0);
   CHECK("repl compiles dynamic function",
-        fr_repl_eval_line(&runtime, "blink is fn [ pin: led, 1 ]", out,
+        fr_repl_eval_line(&runtime, "myblink is fn [ pin: led, 1 ]", out,
                           sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("repl runs dynamic function",
-        fr_repl_eval_line(&runtime, "blink:", out, sizeof(out)) == FR_OK &&
+        fr_repl_eval_line(&runtime, "myblink:", out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("repl see dynamic function",
-        fr_repl_eval_line(&runtime, "see blink", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "overlay code\nto blink [ gpio.write: led, 1 ]\nok\n") ==
+        fr_repl_eval_line(&runtime, "see myblink", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "overlay code\nto myblink [ gpio.write: led, 1 ]\nok\n") ==
                 0);
   CHECK("repl words includes dynamic function",
         fr_repl_eval_line(&runtime, "words", out, sizeof(out)) == FR_OK &&
-            strcmp(out, FR_TEST_WORDS_WITH_LED_AND_BLINK) == 0);
+            strcmp(out, FR_TEST_WORDS_WITH_LED_AND_MYBLINK) == 0);
   CHECK("repl redefines overlay name to nil",
         fr_repl_eval_line(&runtime, "led is nil", out, sizeof(out)) ==
                 FR_OK &&
@@ -7224,20 +7228,22 @@ static void test_repl(void) {
         fr_repl_eval_line(&runtime, "see led", out, sizeof(out)) == FR_OK &&
             strcmp(out, "overlay nil\nok\n") == 0);
   CHECK("repl compiles parameter function",
-        fr_repl_eval_line(&runtime, "blink is fn with value [ value ]", out,
+        fr_repl_eval_line(&runtime, "myblink is fn with value [ value ]", out,
                           sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("repl runs parameter function call",
-        fr_repl_eval_line(&runtime, "blink: 9", out, sizeof(out)) == FR_OK &&
+        fr_repl_eval_line(&runtime, "myblink: 9", out, sizeof(out)) == FR_OK &&
             strcmp(out, "9\nok\n") == 0);
 #if FR_FEATURE_INTROSPECTION
   CHECK("repl see parameter function",
-        fr_repl_eval_line(&runtime, "see blink", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "overlay code\nto blink with value [ value ]\nok\n") ==
-                0);
+        fr_repl_eval_line(&runtime, "see myblink", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(
+                out,
+                "overlay code\nto myblink with value [ value ]\nok\n") == 0);
 #endif
   CHECK("repl compiles boot with parameter call",
-        fr_repl_eval_line(&runtime, "boot is fn [ blink: 7 ]", out,
+        fr_repl_eval_line(&runtime, "boot is fn [ myblink: 7 ]", out,
                           sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_vm_run_boot(&runtime, &result) == FR_OK &&
@@ -7610,13 +7616,13 @@ static void test_repl_see_source_form(void) {
         fr_base_image_install(&runtime) == FR_OK &&
             fr_repl_eval_line(
                 &runtime,
-                "blink is fn with p [ repeat 3 [ gpio.write: p, 1 ] ]", out,
+                "myblink is fn with p [ repeat 3 [ gpio.write: p, 1 ] ]", out,
                 sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "see blink", out, sizeof(out)) ==
+            fr_repl_eval_line(&runtime, "see myblink", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "overlay code\n"
-                        "to blink with p [ repeat 3 [ gpio.write: p, 1 ] ]\n"
+                        "to myblink with p [ repeat 3 [ gpio.write: p, 1 ] ]\n"
                         "ok\n") == 0);
   /* Nested form: an if/else inside a while. The while body must reduce to one
    * fragment, and the if/else does, so the span walk renders both. Fresh
@@ -7714,7 +7720,7 @@ static void test_repl_pump(void) {
 
 static void test_repl_transcript(void) {
   fr_runtime_t runtime;
-  char out[512];
+  char out[1024];
 
 #if FR_FEATURE_PERSISTENCE
   fr_platform_storage_debug_reset();

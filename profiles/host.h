@@ -38,3 +38,8 @@
 /* Math adds six rows on top of the same 13, overshooting the 16 cap. */
 #undef FR_FEATURE_MATH
 #define FR_FEATURE_MATH 0
+
+/* The convenience-word base library (T7) calls mod and assumes math is
+   on; with math off here, the pressure profile skips source-base. */
+#undef FR_FEATURE_SOURCE_BASE
+#define FR_FEATURE_SOURCE_BASE 0

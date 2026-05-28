@@ -12,7 +12,7 @@
 
 #include <string.h>
 
-enum { FR_SOURCE_BASE_RECORD_MAX = 8 };
+enum { FR_SOURCE_BASE_RECORD_MAX = 16 };
 
 typedef struct {
   fr_slot_id_t slot_id;
