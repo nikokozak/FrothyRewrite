@@ -76,6 +76,17 @@ fr_err_t fr_base_source_slot_id_for_name(const char *name,
   return FR_ERR_NOT_FOUND;
 }
 
+uint16_t fr_base_source_record_count(void) { return fr_source_base_slot_count; }
+
+fr_err_t fr_base_source_record_slot_id_at(uint16_t index,
+                                          fr_slot_id_t *out_slot_id) {
+  if (out_slot_id == NULL || index >= fr_source_base_slot_count) {
+    return FR_ERR_INVALID;
+  }
+  *out_slot_id = fr_source_base_records[index].slot_id;
+  return FR_OK;
+}
+
 static fr_err_t fr_base_compile_source_line(fr_runtime_t *runtime,
                                             const char *line) {
   fr_compile_overlay_update_t compiled = {0};

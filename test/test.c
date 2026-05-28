@@ -133,7 +133,6 @@ enum {
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT)
 #endif
 
-#define FR_TEST_PROJECT_SLOT_BASE FR_SLOT_BOARD_LOCAL_BASE
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
    user words in a fully installed base image start above them. */
 #if FR_FEATURE_SOURCE_BASE
@@ -2950,7 +2949,7 @@ static void test_image(void) {
   };
   const fr_tagged_t image_cell_initial[] = {one};
   const fr_image_slot_init_t image_cell_slots[] = {
-      {FR_TEST_PROJECT_SLOT_BASE, {FR_IMAGE_REF_CELL_OBJECT, 0, 0}},
+      {FR_TEST_FIRST_USER_SLOT, {FR_IMAGE_REF_CELL_OBJECT, 0, 0}},
   };
   const fr_image_cell_object_t image_cell_objects[] = {
       {.length = 1, .initial_values = image_cell_initial},
@@ -2977,7 +2976,7 @@ static void test_image(void) {
 #if FR_FEATURE_TEXT
   const uint8_t overlay_text_bytes[] = {'o', 'k'};
   const fr_image_slot_init_t text_update_slots[] = {
-      {FR_TEST_PROJECT_SLOT_BASE, {FR_IMAGE_REF_TEXT_OBJECT, 0, 0}},
+      {FR_TEST_FIRST_USER_SLOT, {FR_IMAGE_REF_TEXT_OBJECT, 0, 0}},
   };
   const fr_image_text_object_t text_update_objects[] = {
       {.bytes = overlay_text_bytes, .length = sizeof(overlay_text_bytes)},
@@ -3013,7 +3012,7 @@ static void test_image(void) {
        .field_count = 2},
   };
   const fr_image_slot_init_t record_update_slots[] = {
-      {FR_TEST_PROJECT_SLOT_BASE, {FR_IMAGE_REF_RECORD_OBJECT, 0, 0}},
+      {FR_TEST_FIRST_USER_SLOT, {FR_IMAGE_REF_RECORD_OBJECT, 0, 0}},
   };
   const fr_overlay_update_t record_overlay_update = {
       .slot_inits = record_update_slots,
@@ -3025,7 +3024,7 @@ static void test_image(void) {
   };
 #endif
   const fr_image_slot_init_t invalid_code_slots[] = {
-      {FR_TEST_PROJECT_SLOT_BASE, {FR_IMAGE_REF_CODE_OBJECT, 0, 0}},
+      {FR_TEST_FIRST_USER_SLOT, {FR_IMAGE_REF_CODE_OBJECT, 0, 0}},
   };
   const fr_image_code_object_t invalid_code_update_code[] = {
       {{invalid_opcode, sizeof(invalid_opcode)}, NULL, 0},
@@ -3038,10 +3037,10 @@ static void test_image(void) {
   };
 #if FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES > 0
   const fr_image_slot_init_t named_update_slots[] = {
-      {FR_TEST_PROJECT_SLOT_BASE, {FR_IMAGE_REF_CODE_OBJECT, 0, 0}},
+      {FR_TEST_FIRST_USER_SLOT, {FR_IMAGE_REF_CODE_OBJECT, 0, 0}},
   };
   const fr_slot_name_t update_names[] = {
-      {FR_TEST_PROJECT_SLOT_BASE, "three"},
+      {FR_TEST_FIRST_USER_SLOT, "three"},
   };
   const fr_overlay_update_t named_overlay_update = {
       .slot_inits = named_update_slots,
@@ -3077,7 +3076,7 @@ static void test_image(void) {
 #if FR_FEATURE_CELLS
   CHECK("image installs base cell object",
         fr_image_install(&runtime, &image_cells) == FR_OK &&
-            fr_slot_read(&runtime, FR_TEST_PROJECT_SLOT_BASE, &tagged) ==
+            fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &tagged) ==
                 FR_OK &&
             fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
             object_id == 0 &&
@@ -3133,7 +3132,7 @@ static void test_image(void) {
 #if FR_FEATURE_RECORDS
   CHECK("overlay installs record objects",
         fr_overlay_apply(&runtime, &record_overlay_update) == FR_OK &&
-            fr_slot_read(&runtime, FR_TEST_PROJECT_SLOT_BASE, &tagged) ==
+            fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &tagged) ==
                 FR_OK &&
             fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
             fr_record_read_field(
@@ -3180,7 +3179,7 @@ static void test_image(void) {
                                      &decoded_update) == FR_OK &&
             fr_image_install(&runtime, &image_a) == FR_OK &&
             fr_overlay_apply(&runtime, &decoded_update.update) == FR_OK &&
-            fr_vm_run_slot(&runtime, FR_TEST_PROJECT_SLOT_BASE, &tagged) ==
+            fr_vm_run_slot(&runtime, FR_TEST_FIRST_USER_SLOT, &tagged) ==
                 FR_ERR_INVALID);
 #if FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES > 0
   CHECK("overlay update byte codec applies",
@@ -3193,7 +3192,7 @@ static void test_image(void) {
             fr_image_install(&runtime, &image_a) == FR_OK &&
             fr_overlay_apply(&runtime, &decoded_update.update) == FR_OK &&
             fr_slot_id_for_name(&runtime, "three", &slot_id) == FR_OK &&
-            slot_id == FR_TEST_PROJECT_SLOT_BASE &&
+            slot_id == FR_TEST_FIRST_USER_SLOT &&
             fr_vm_run_slot(&runtime, slot_id, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 3);
   CHECK("overlay update encode checks capacity",
@@ -5688,7 +5687,7 @@ static void test_persist(void) {
 #endif
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_WORD_SIZE == 16
   write_u16_little_endian(&old_name_free_payload[6],
-                          FR_TEST_PROJECT_SLOT_BASE);
+                          FR_TEST_FIRST_USER_SLOT);
   write_u16_little_endian(&old_name_free_payload[9], (uint16_t)(int16_t)13);
 #endif
 #if !FR_FEATURE_CELLS
@@ -5712,7 +5711,7 @@ static void test_persist(void) {
             fr_persist_payload_restore(&runtime, old_name_free_payload,
                                        (uint16_t)sizeof(old_name_free_payload)) ==
                 FR_OK &&
-            fr_slot_read(&runtime, FR_TEST_PROJECT_SLOT_BASE, &tagged) ==
+            fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &tagged) ==
                 FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 13 &&
             fr_slot_id_for_name(&runtime, "legacy", &slot_id) ==
@@ -6182,7 +6181,7 @@ static void test_persist(void) {
 
   fr_platform_storage_debug_reset();
 #if FR_PROFILE_MAX_OVERLAY_NAMES == 0
-  write_u16_little_endian(&named_payload[6], FR_TEST_PROJECT_SLOT_BASE);
+  write_u16_little_endian(&named_payload[6], FR_TEST_FIRST_USER_SLOT);
 #endif
 #if !FR_FEATURE_CELLS
   write_u16_little_endian(&cell_payload[8], 1);

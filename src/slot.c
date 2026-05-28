@@ -37,6 +37,19 @@ fr_slot_id_t fr_slot_first_project_id(void) {
     }
   }
 
+#if FR_FEATURE_SOURCE_BASE
+  for (uint16_t i = 0; i < fr_base_source_record_count(); i++) {
+    fr_slot_id_t source_slot = 0;
+
+    if (fr_base_source_record_slot_id_at(i, &source_slot) != FR_OK) {
+      continue;
+    }
+    if (source_slot >= next) {
+      next = (fr_slot_id_t)(source_slot + 1);
+    }
+  }
+#endif
+
   return next;
 }
 
