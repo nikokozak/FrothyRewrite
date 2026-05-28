@@ -64,7 +64,8 @@ static fr_esp_app_uart_t
 
 #if FR_FEATURE_PWM
 /* One LEDC timer per channel: timer sharing across channels is a deferred
- * optimization (see ADR). Capacity is the timer count, not the channel count. */
+ * optimization (see ADR 0046). Capacity is the timer count, not the channel
+ * count. */
 enum {
   FR_ESP_PWM_MAX = SOC_LEDC_TIMER_NUM,
   FR_ESP_PWM_DUTY_RESOLUTION_BITS = 10,
