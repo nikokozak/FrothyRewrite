@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 #include "image.h"
 #include "native.h"
 #include "types.h"
@@ -95,6 +97,7 @@ typedef enum fr_base_layer_t {
   FR_BASE_LAYER_CORE,
   FR_BASE_LAYER_TARGET,
   FR_BASE_LAYER_BOARD,
+  FR_BASE_LAYER_SOURCE,
   FR_BASE_LAYER_PERSISTENCE,
 } fr_base_layer_t;
 
@@ -146,3 +149,11 @@ fr_err_t fr_base_slot_id_for_name(const char *name, fr_slot_id_t *out_slot_id);
 fr_err_t fr_base_slot_layer(fr_slot_id_t slot_id,
                             fr_base_layer_t *out_layer);
 fr_err_t fr_base_slot_ref(fr_slot_id_t slot_id, fr_image_ref_t *out_ref);
+
+#if FR_FEATURE_SOURCE_BASE
+/* Runtime record of slots bound from base/core.frothy at boot. Owned by
+   base_image.c; base_defs reads it so source words report their layer. */
+void fr_base_source_record_reset(void);
+fr_err_t fr_base_source_record_add(fr_slot_id_t slot_id);
+bool fr_base_is_source_slot(fr_slot_id_t slot_id);
+#endif

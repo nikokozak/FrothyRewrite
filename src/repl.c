@@ -799,6 +799,8 @@ static const char *fr_repl_base_layer_name(fr_base_layer_t layer) {
     return "target";
   case FR_BASE_LAYER_BOARD:
     return "board";
+  case FR_BASE_LAYER_SOURCE:
+    return "source";
   case FR_BASE_LAYER_PERSISTENCE:
     return "persistence";
   }

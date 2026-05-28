@@ -348,7 +348,16 @@ fr_err_t fr_base_slot_layer(fr_slot_id_t slot_id, fr_base_layer_t *out_layer) {
     return FR_ERR_INVALID;
   }
 
-  return fr_base_def_for_slot(slot_id, &def, out_layer);
+  if (fr_base_def_for_slot(slot_id, &def, out_layer) == FR_OK) {
+    return FR_OK;
+  }
+#if FR_FEATURE_SOURCE_BASE
+  if (fr_base_is_source_slot(slot_id)) {
+    *out_layer = FR_BASE_LAYER_SOURCE;
+    return FR_OK;
+  }
+#endif
+  return FR_ERR_NOT_FOUND;
 }
 
 fr_err_t fr_base_slot_ref(fr_slot_id_t slot_id, fr_image_ref_t *out_ref) {

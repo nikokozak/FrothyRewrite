@@ -5,6 +5,32 @@
 #include "slot.h"
 #include "tagged.h"
 
+#if FR_FEATURE_SOURCE_BASE
+enum { FR_SOURCE_BASE_RECORD_MAX = 8 };
+
+static fr_slot_id_t fr_source_base_slots[FR_SOURCE_BASE_RECORD_MAX];
+static uint16_t fr_source_base_slot_count;
+
+void fr_base_source_record_reset(void) { fr_source_base_slot_count = 0; }
+
+fr_err_t fr_base_source_record_add(fr_slot_id_t slot_id) {
+  if (fr_source_base_slot_count >= FR_SOURCE_BASE_RECORD_MAX) {
+    return FR_ERR_CAPACITY;
+  }
+  fr_source_base_slots[fr_source_base_slot_count++] = slot_id;
+  return FR_OK;
+}
+
+bool fr_base_is_source_slot(fr_slot_id_t slot_id) {
+  for (uint16_t i = 0; i < fr_source_base_slot_count; i++) {
+    if (fr_source_base_slots[i] == slot_id) {
+      return true;
+    }
+  }
+  return false;
+}
+#endif
+
 static fr_err_t fr_base_install_def(fr_runtime_t *runtime,
                                     const fr_base_def_t *def) {
   fr_tagged_t tagged = 0;
@@ -43,6 +69,9 @@ fr_err_t fr_base_image_install(fr_runtime_t *runtime) {
     return FR_ERR_INVALID;
   }
 
+#if FR_FEATURE_SOURCE_BASE
+  fr_base_source_record_reset();
+#endif
   FR_TRY(fr_runtime_init(&next));
   for (uint16_t layer = 0; layer < fr_base_def_layer_count(); layer++) {
     fr_base_def_layer_t def_layer = {0};
