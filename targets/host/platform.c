@@ -330,6 +330,25 @@ fr_err_t fr_platform_write_text(const char *text) {
 }
 #endif
 
+#if FR_FEATURE_RANDOM
+/* xorshift32 (Marsaglia 13/17/5). Zero state locks; the seed setter swaps 0
+ * to 1 to avoid it. */
+static uint32_t fr_host_random_state = 1;
+
+uint32_t fr_platform_random_next(void) {
+  uint32_t state = fr_host_random_state;
+  state ^= state << 13;
+  state ^= state >> 17;
+  state ^= state << 5;
+  fr_host_random_state = state;
+  return state;
+}
+
+void fr_platform_random_seed(uint32_t seed) {
+  fr_host_random_state = seed == 0u ? 1u : seed;
+}
+#endif
+
 #if FR_FEATURE_PAD
 fr_err_t fr_platform_write_bytes(const uint8_t *bytes, uint16_t length) {
   if (bytes == NULL && length > 0) {

@@ -43,6 +43,11 @@ fr_err_t fr_platform_write_text(const char *text);
 fr_err_t fr_platform_write_bytes(const uint8_t *bytes, uint16_t length);
 #endif
 
+#if FR_FEATURE_RANDOM
+uint32_t fr_platform_random_next(void);
+void fr_platform_random_seed(uint32_t seed);
+#endif
+
 #if FR_FEATURE_PERSISTENCE
 fr_err_t fr_platform_storage_read(uint8_t slot, uint16_t offset, uint8_t *bytes,
                                   uint16_t length);

@@ -325,6 +325,62 @@ static fr_err_t fr_native_uart_close(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_RANDOM
+static fr_err_t fr_native_random_next(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  (void)runtime;
+  if (args == NULL && arg_count > 0) {
+    return FR_ERR_INVALID;
+  }
+  if (arg_count != 0) {
+    return FR_ERR_INVALID;
+  }
+
+  /* Mask to the tagged-int payload range so the result is nonnegative on
+   * both 16- and 32-bit; skews toward the low bits, accepted for T5b. */
+  return fr_tagged_encode_int(
+      (int32_t)(fr_platform_random_next() & (uint32_t)FR_TAGGED_INT_MAX), out);
+}
+
+static fr_err_t fr_native_random_below(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  fr_int_t limit = 0;
+
+  (void)runtime;
+  if (args == NULL || arg_count != 1) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_int(args[0], &limit));
+  if (limit <= 0) {
+    return FR_ERR_DOMAIN;
+  }
+
+  /* `% limit` accepts a small modulo bias; a reject-and-retry uniform
+   * variant is a follow-up. */
+  return fr_tagged_encode_int(
+      (int32_t)(fr_platform_random_next() % (uint32_t)limit), out);
+}
+
+static fr_err_t fr_native_random_seed(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  fr_int_t seed = 0;
+
+  (void)runtime;
+  if (args == NULL || arg_count != 1) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_int(args[0], &seed));
+  fr_platform_random_seed((uint32_t)seed);
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+#endif
+
 #if FR_FEATURE_PAD
 static fr_err_t fr_native_pad_reset(fr_runtime_t *runtime,
                                     const fr_tagged_t *args,
@@ -588,6 +644,35 @@ static const fr_native_signature_t fr_native_handle_to_nil_signature = {
     .help = NULL,
 };
 #endif
+
+#if FR_FEATURE_RANDOM
+static const fr_native_signature_t fr_native_random_next_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the next pseudo-random nonnegative int",
+};
+
+static const fr_native_param_t fr_native_random_below_params[] = {
+    {"limit", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_random_below_signature = {
+    .params = fr_native_random_below_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return a pseudo-random int in [0, limit)",
+};
+
+static const fr_native_param_t fr_native_random_seed_params[] = {
+    {"seed", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_random_seed_signature = {
+    .params = fr_native_random_seed_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "seed the pseudo-random generator",
+};
+#endif
 #endif
 
 #if FR_FEATURE_UART
@@ -798,6 +883,44 @@ const fr_base_def_t fr_target_base_defs[] = {
 #endif
         .kind = FR_BASE_DEF_LITERAL,
         .literal_tagged = FR_TARGET_TAGGED_BAUD_115200,
+    },
+#endif
+#if FR_FEATURE_RANDOM
+    {
+        .slot_id = FR_SLOT_RANDOM_NEXT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "random.next",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_random_next,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_random_next_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_RANDOM_BELOW,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "random.below",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_random_below,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_random_below_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_RANDOM_SEED,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "random.seed",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_random_seed,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_random_seed_signature,
+#endif
     },
 #endif
 #if FR_FEATURE_PAD

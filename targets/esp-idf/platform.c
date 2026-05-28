@@ -680,6 +680,26 @@ fr_err_t fr_platform_write_text(const char *text) {
 }
 #endif
 
+#if FR_FEATURE_RANDOM
+/* Same xorshift32 (Marsaglia 13/17/5) as host so a given seed produces the
+ * same sequence on both targets. Zero state locks; the seed setter swaps 0
+ * to 1 to avoid it. */
+static uint32_t fr_esp_random_state = 1;
+
+uint32_t fr_platform_random_next(void) {
+  uint32_t state = fr_esp_random_state;
+  state ^= state << 13;
+  state ^= state >> 17;
+  state ^= state << 5;
+  fr_esp_random_state = state;
+  return state;
+}
+
+void fr_platform_random_seed(uint32_t seed) {
+  fr_esp_random_state = seed == 0u ? 1u : seed;
+}
+#endif
+
 #if FR_FEATURE_PERSISTENCE
 static uint8_t fr_esp_storage_image[FR_PROFILE_PERSISTENCE_BYTES];
 
