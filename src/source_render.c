@@ -259,6 +259,19 @@ static fr_err_t fr_source_reduce_while(fr_source_render_t *r,
   return fr_source_seal(r, start, false);
 }
 
+static fr_err_t fr_source_reduce_repeat(fr_source_render_t *r,
+                                        fr_source_frag_t count,
+                                        uint16_t body_start) {
+  uint16_t start = r->used;
+
+  FR_TRY(fr_source_puts(r, "repeat "));
+  FR_TRY(fr_source_puts(r, &fr_source_render_arena[count.start]));
+  FR_TRY(fr_source_puts(r, " [ "));
+  FR_TRY(fr_source_puts(r, &fr_source_render_arena[body_start]));
+  FR_TRY(fr_source_puts(r, " ]"));
+  return fr_source_seal(r, start, false);
+}
+
 /* if/else leaves one value; assemble it from the already-rendered fragments.
  * The condition prints raw — a comparison reads fine without parens here. */
 static fr_err_t fr_source_reduce_if(fr_source_render_t *r,
@@ -374,6 +387,44 @@ static fr_err_t fr_source_render_while(fr_source_render_t *r,
                                  &body_start));
   FR_TRY(fr_source_reduce_while(r, cond, body_start));
   *out_ip = (fr_code_offset_t)(false_target + 1u);
+  return FR_OK;
+}
+
+/* count REPEAT_BEGIN(done) <body> DROP REPEAT_NEXT(body) done:PUSH_NIL — same
+ * shape as while, with the count already on the stack as the operand. */
+static fr_err_t fr_source_render_repeat(fr_source_render_t *r,
+                                        const fr_instruction_stream_t *view,
+                                        const char *names, uint16_t names_len,
+                                        fr_code_offset_t ip,
+                                        fr_code_offset_t *out_ip) {
+  fr_code_offset_t done_target = 0;
+  fr_code_offset_t drop_ip = 0;
+  fr_code_offset_t next_ip = 0;
+  fr_source_frag_t count;
+  uint16_t body_start = 0;
+
+  if (r->depth < 1) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  FR_TRY(fr_instruction_read_jump_operand(view, ip, &done_target));
+  if (done_target < (fr_code_offset_t)(ip + 8u)) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  drop_ip = (fr_code_offset_t)(done_target - 4u);
+  next_ip = (fr_code_offset_t)(done_target - 3u);
+  if ((fr_opcode_t)view->bytes[drop_ip] != FR_OP_DROP ||
+      (fr_opcode_t)view->bytes[next_ip] != FR_OP_REPEAT_NEXT ||
+      (fr_opcode_t)view->bytes[done_target] != FR_OP_PUSH_NIL) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  count = r->stack[r->depth - 1];
+  r->depth = (uint8_t)(r->depth - 1u);
+
+  FR_TRY(fr_source_render_branch(r, view, names, names_len,
+                                 (fr_code_offset_t)(ip + 3u), drop_ip,
+                                 &body_start));
+  FR_TRY(fr_source_reduce_repeat(r, count, body_start));
+  *out_ip = (fr_code_offset_t)(done_target + 1u);
   return FR_OK;
 }
 
@@ -508,6 +559,9 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       }
       break;
     }
+    case FR_OP_REPEAT_BEGIN:
+      FR_TRY(fr_source_render_repeat(r, view, names, names_len, ip, &ip));
+      break;
     default:
       return FR_ERR_UNSUPPORTED;
     }

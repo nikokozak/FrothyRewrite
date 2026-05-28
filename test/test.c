@@ -7480,6 +7480,20 @@ static void test_repl_see_source_form(void) {
             strcmp(out, "overlay code\n"
                         "to wait with p [ while gpio.read: p [ ms: 1 ] ]\n"
                         "ok\n") == 0);
+  /* repeat count: a blink-shaped body that drives a pin a fixed number of
+   * passes. Fresh install for the same overlay-name budget reason. */
+  CHECK("see source repeat",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "blink is fn with p [ repeat 3 [ gpio.write: p, 1 ] ]", out,
+                sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see blink", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to blink with p [ repeat 3 [ gpio.write: p, 1 ] ]\n"
+                        "ok\n") == 0);
 }
 #endif
 
