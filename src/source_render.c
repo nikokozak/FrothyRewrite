@@ -225,6 +225,40 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
                                       const char *names, uint16_t names_len,
                                       fr_code_offset_t ip, fr_code_offset_t end);
 
+/* A while closes its body with a JUMP back to the condition; if/else jumps
+ * forward past the else. The JUMP sits at false_target-3 for both shapes. */
+static bool fr_source_is_while(const fr_instruction_stream_t *view,
+                               fr_code_offset_t ip,
+                               fr_code_offset_t false_target) {
+  fr_code_offset_t jump_ip = 0;
+  fr_code_offset_t back_target = 0;
+
+  if (false_target < (fr_code_offset_t)(ip + 6u)) {
+    return false;
+  }
+  jump_ip = (fr_code_offset_t)(false_target - 3u);
+  if ((fr_opcode_t)view->bytes[jump_ip] != FR_OP_JUMP) {
+    return false;
+  }
+  if (fr_instruction_read_jump_operand(view, jump_ip, &back_target) != FR_OK) {
+    return false;
+  }
+  return back_target <= ip;
+}
+
+static fr_err_t fr_source_reduce_while(fr_source_render_t *r,
+                                       fr_source_frag_t cond,
+                                       uint16_t body_start) {
+  uint16_t start = r->used;
+
+  FR_TRY(fr_source_puts(r, "while "));
+  FR_TRY(fr_source_puts(r, &fr_source_render_arena[cond.start]));
+  FR_TRY(fr_source_puts(r, " [ "));
+  FR_TRY(fr_source_puts(r, &fr_source_render_arena[body_start]));
+  FR_TRY(fr_source_puts(r, " ]"));
+  return fr_source_seal(r, start, false);
+}
+
 /* if/else leaves one value; assemble it from the already-rendered fragments.
  * The condition prints raw — a comparison reads fine without parens here. */
 static fr_err_t fr_source_reduce_if(fr_source_render_t *r,
@@ -310,6 +344,36 @@ static fr_err_t fr_source_render_if(fr_source_render_t *r,
   }
   FR_TRY(fr_source_reduce_if(r, cond, then_start, else_start, has_else));
   *out_ip = end_target;
+  return FR_OK;
+}
+
+/* cond JUMP_IF_FALSY(done) <body> DROP JUMP(cond) done:PUSH_NIL — the loop's
+ * value is that nil, so skip it and let the while text stand in its place. */
+static fr_err_t fr_source_render_while(fr_source_render_t *r,
+                                       const fr_instruction_stream_t *view,
+                                       const char *names, uint16_t names_len,
+                                       fr_code_offset_t ip,
+                                       fr_code_offset_t false_target,
+                                       fr_code_offset_t *out_ip) {
+  fr_code_offset_t drop_ip = (fr_code_offset_t)(false_target - 4u);
+  fr_source_frag_t cond;
+  uint16_t body_start = 0;
+
+  if (r->depth < 1) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  if ((fr_opcode_t)view->bytes[drop_ip] != FR_OP_DROP ||
+      (fr_opcode_t)view->bytes[false_target] != FR_OP_PUSH_NIL) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  cond = r->stack[r->depth - 1];
+  r->depth = (uint8_t)(r->depth - 1u);
+
+  FR_TRY(fr_source_render_branch(r, view, names, names_len,
+                                 (fr_code_offset_t)(ip + 3u), drop_ip,
+                                 &body_start));
+  FR_TRY(fr_source_reduce_while(r, cond, body_start));
+  *out_ip = (fr_code_offset_t)(false_target + 1u);
   return FR_OK;
 }
 
@@ -432,9 +496,18 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       ip = (fr_code_offset_t)(ip + 4u);
       break;
     }
-    case FR_OP_JUMP_IF_FALSY:
-      FR_TRY(fr_source_render_if(r, view, names, names_len, ip, &ip));
+    case FR_OP_JUMP_IF_FALSY: {
+      fr_code_offset_t false_target = 0;
+
+      FR_TRY(fr_instruction_read_jump_operand(view, ip, &false_target));
+      if (fr_source_is_while(view, ip, false_target)) {
+        FR_TRY(fr_source_render_while(r, view, names, names_len, ip,
+                                      false_target, &ip));
+      } else {
+        FR_TRY(fr_source_render_if(r, view, names, names_len, ip, &ip));
+      }
       break;
+    }
     default:
       return FR_ERR_UNSUPPORTED;
     }

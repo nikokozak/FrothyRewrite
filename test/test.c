@@ -7466,6 +7466,18 @@ static void test_repl_see_source_form(void) {
             strcmp(out, "overlay code\n"
                         "to abs1 with n [ if n < 0 [ -1 * n ] else [ n ] ]\n"
                         "ok\n") == 0);
+  /* Fresh install: tiny's overlay-name budget only holds two words at once. */
+  CHECK("see source while",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "spin is fn with n [ while n > 0 [ n - 1 ] ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see spin", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to spin with n [ while n > 0 [ n - 1 ] ]\n"
+                        "ok\n") == 0);
 }
 #endif
 
