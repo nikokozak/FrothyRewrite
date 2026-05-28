@@ -35,6 +35,11 @@ ARTIFACT_HEX ?= $(BUILD_DIR)/frothy.hex
 ARTIFACT_MAP ?= $(BUILD_DIR)/frothy.map
 ARTIFACT_SIZE ?= $(BUILD_DIR)/frothy.size
 
+SOURCE_BASE := base/core.frothy
+GEN_DIR := $(BUILD_DIR)/gen
+SOURCE_BASE_C := $(GEN_DIR)/fr_source_base.c
+SOURCE_BASE_H := $(GEN_DIR)/fr_source_base.h
+
 ifeq ($(origin CC),default)
 FR_CC := $(TARGET_CC)
 else
@@ -48,6 +53,7 @@ FR_CFLAGS := \
 	-Werror \
 	-pedantic \
 	-Isrc \
+	-I$(GEN_DIR) \
 	-Iprofiles \
 	-I$(TARGET_DIR) \
 	-I$(BOARD_DIR) \
@@ -83,6 +89,7 @@ KERNEL_SOURCES = \
 	src/base_defs.c \
 	src/base_image.c \
 	src/vm.c \
+	$(SOURCE_BASE_C) \
 	$(COMPILER_SOURCES) \
 	$(REPL_SOURCES)
 
@@ -144,6 +151,7 @@ KERNEL_DEPS = \
 	src/compile.h src/compile.c \
 	src/repl.h src/repl.c \
 	src/source_render.h src/source_render.c \
+	$(SOURCE_BASE_C) $(SOURCE_BASE_H) \
 	$(PROFILE_HEADERS) \
 	$(PROFILE_MKS)
 
@@ -207,6 +215,20 @@ artifacts: $(ARTIFACTS)
 
 $(BUILD_DIR):
 	mkdir -p $@
+
+# Bake base/core.frothy into a C object the boot compiler reads. Hex encoding
+# only -- the same compiler that handles REPL input compiles these bytes. The
+# generated files live under build/ and are never checked in.
+$(SOURCE_BASE_H): Makefile | $(BUILD_DIR)
+	@mkdir -p $(GEN_DIR)
+	printf '#pragma once\n#include "config.h"\n#include <stdint.h>\n#if FR_FEATURE_SOURCE_BASE\nextern const char fr_source_base_bytes[];\nextern const uint16_t fr_source_base_bytes_len;\n#endif\n' > $@
+
+$(SOURCE_BASE_C): $(SOURCE_BASE) Makefile | $(BUILD_DIR)
+	@mkdir -p $(GEN_DIR)
+	{ printf '#include "fr_source_base.h"\n#if FR_FEATURE_SOURCE_BASE\nconst char fr_source_base_bytes[] = {\n'; \
+	  xxd -i < $(SOURCE_BASE); \
+	  printf '};\nconst uint16_t fr_source_base_bytes_len = %s;\n#endif\n' "$$(wc -c < $(SOURCE_BASE) | tr -d ' ')"; \
+	} > $@
 
 ifneq ($(TARGET_BUILD_COMMAND),)
 $(ARTIFACT_ELF): $(FROTHY_DEPS) | $(BUILD_DIR)

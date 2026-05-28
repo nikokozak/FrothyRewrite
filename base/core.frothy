@@ -1,0 +1,1 @@
+to gpio.high with pin [ gpio.write: pin, 1 ]

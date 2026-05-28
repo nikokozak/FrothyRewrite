@@ -9,6 +9,9 @@
 #endif
 #include "platform.h"
 #include "repl.h"
+#if FR_FEATURE_SOURCE_BASE
+#include "fr_source_base.h"
+#endif
 
 #ifndef FR_HOST_TINY_NAMES_MODE
 #define FR_HOST_TINY_NAMES_MODE 0
@@ -3460,6 +3463,9 @@ static void test_image(void) {
         fr_base_slot_layer(FR_SLOT_BOARD_LOCAL_BASE, &layer) ==
                 FR_ERR_NOT_FOUND &&
             fr_base_slot_name(FR_SLOT_BOARD_LOCAL_BASE) == NULL);
+  CHECK("baked source bytes carry base/core.frothy",
+        fr_source_base_bytes_len > 0 &&
+            memcmp(fr_source_base_bytes, "to gpio.high", 12) == 0);
 #endif
   CHECK("image replacement clears old code and natives",
         fr_image_install(&runtime, &image_a) == FR_OK &&
