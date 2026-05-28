@@ -569,6 +569,131 @@ static fr_err_t fr_native_i2c_close(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_MATH
+static fr_err_t fr_native_abs(fr_runtime_t *runtime, const fr_tagged_t *args,
+                              uint8_t arg_count, fr_tagged_t *out) {
+  fr_int_t x = 0;
+  int32_t result = 0;
+
+  (void)runtime;
+  if (args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_int(args[0], &x));
+  result = x < 0 ? -(int32_t)x : (int32_t)x;
+  if (result > FR_TAGGED_INT_MAX) {
+    return FR_ERR_RANGE;
+  }
+  return fr_tagged_encode_int(result, out);
+}
+
+static fr_err_t fr_native_min(fr_runtime_t *runtime, const fr_tagged_t *args,
+                              uint8_t arg_count, fr_tagged_t *out) {
+  fr_int_t a = 0;
+  fr_int_t b = 0;
+
+  (void)runtime;
+  if (args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_int(args[0], &a));
+  FR_TRY(fr_tagged_decode_int(args[1], &b));
+  return fr_tagged_encode_int(a < b ? a : b, out);
+}
+
+static fr_err_t fr_native_max(fr_runtime_t *runtime, const fr_tagged_t *args,
+                              uint8_t arg_count, fr_tagged_t *out) {
+  fr_int_t a = 0;
+  fr_int_t b = 0;
+
+  (void)runtime;
+  if (args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_int(args[0], &a));
+  FR_TRY(fr_tagged_decode_int(args[1], &b));
+  return fr_tagged_encode_int(a > b ? a : b, out);
+}
+
+static fr_err_t fr_native_clamp(fr_runtime_t *runtime,
+                                const fr_tagged_t *args, uint8_t arg_count,
+                                fr_tagged_t *out) {
+  fr_int_t x = 0;
+  fr_int_t lo = 0;
+  fr_int_t hi = 0;
+
+  (void)runtime;
+  if (args == NULL || arg_count != 3 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_int(args[0], &x));
+  FR_TRY(fr_tagged_decode_int(args[1], &lo));
+  FR_TRY(fr_tagged_decode_int(args[2], &hi));
+  if (lo > hi) {
+    return FR_ERR_DOMAIN;
+  }
+  return fr_tagged_encode_int(x < lo ? lo : (x > hi ? hi : x), out);
+}
+
+/* Wide temp matches T1's fr_vm_add_int discipline: the (x-in_lo) *
+ * (out_hi-out_lo) product can blow past the tagged band before the
+ * division pulls it back. */
+static fr_err_t fr_native_map(fr_runtime_t *runtime, const fr_tagged_t *args,
+                              uint8_t arg_count, fr_tagged_t *out) {
+  fr_int_t x = 0;
+  fr_int_t in_lo = 0;
+  fr_int_t in_hi = 0;
+  fr_int_t out_lo = 0;
+  fr_int_t out_hi = 0;
+  int64_t result = 0;
+
+  (void)runtime;
+  if (args == NULL || arg_count != 5 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_int(args[0], &x));
+  FR_TRY(fr_tagged_decode_int(args[1], &in_lo));
+  FR_TRY(fr_tagged_decode_int(args[2], &in_hi));
+  FR_TRY(fr_tagged_decode_int(args[3], &out_lo));
+  FR_TRY(fr_tagged_decode_int(args[4], &out_hi));
+  if (in_hi == in_lo) {
+    return FR_ERR_DOMAIN;
+  }
+  result = (int64_t)out_lo +
+           ((int64_t)x - (int64_t)in_lo) *
+               ((int64_t)out_hi - (int64_t)out_lo) /
+               ((int64_t)in_hi - (int64_t)in_lo);
+  if (result > (int64_t)FR_TAGGED_INT_MAX ||
+      result < (int64_t)FR_TAGGED_INT_MIN) {
+    return FR_ERR_RANGE;
+  }
+  return fr_tagged_encode_int((int32_t)result, out);
+}
+
+static fr_err_t fr_native_mod(fr_runtime_t *runtime, const fr_tagged_t *args,
+                              uint8_t arg_count, fr_tagged_t *out) {
+  fr_int_t a = 0;
+  fr_int_t b = 0;
+
+  (void)runtime;
+  if (args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_int(args[0], &a));
+  FR_TRY(fr_tagged_decode_int(args[1], &b));
+  if (b == 0) {
+    return FR_ERR_DOMAIN;
+  }
+  return fr_tagged_encode_int(a % b, out);
+}
+#endif
+
 #if FR_FEATURE_RANDOM
 static fr_err_t fr_native_random_next(fr_runtime_t *runtime,
                                       const fr_tagged_t *args,
@@ -972,6 +1097,77 @@ static const fr_native_signature_t fr_native_i2c_close_signature = {
 };
 #endif
 
+#if FR_FEATURE_MATH
+static const fr_native_param_t fr_native_abs_params[] = {
+    {"x", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_abs_signature = {
+    .params = fr_native_abs_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the absolute value of an int",
+};
+
+static const fr_native_param_t fr_native_min_params[] = {
+    {"a", FR_NATIVE_VALUE_INT},
+    {"b", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_min_signature = {
+    .params = fr_native_min_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the smaller of two ints",
+};
+
+static const fr_native_param_t fr_native_max_params[] = {
+    {"a", FR_NATIVE_VALUE_INT},
+    {"b", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_max_signature = {
+    .params = fr_native_max_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the larger of two ints",
+};
+
+static const fr_native_param_t fr_native_clamp_params[] = {
+    {"x", FR_NATIVE_VALUE_INT},
+    {"lo", FR_NATIVE_VALUE_INT},
+    {"hi", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_clamp_signature = {
+    .params = fr_native_clamp_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "clamp x to the inclusive range [lo, hi]",
+};
+
+static const fr_native_param_t fr_native_map_params[] = {
+    {"x", FR_NATIVE_VALUE_INT},
+    {"in_lo", FR_NATIVE_VALUE_INT},
+    {"in_hi", FR_NATIVE_VALUE_INT},
+    {"out_lo", FR_NATIVE_VALUE_INT},
+    {"out_hi", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_map_signature = {
+    .params = fr_native_map_params,
+    .arg_count = 5,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "linearly remap x from one range to another",
+};
+
+static const fr_native_param_t fr_native_mod_params[] = {
+    {"a", FR_NATIVE_VALUE_INT},
+    {"b", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_mod_signature = {
+    .params = fr_native_mod_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return a modulo b (C truncating semantics)",
+};
+#endif
+
 #if FR_FEATURE_RANDOM
 static const fr_native_signature_t fr_native_random_next_signature = {
     .params = NULL,
@@ -1335,6 +1531,80 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_i2c_close_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_MATH
+    {
+        .slot_id = FR_SLOT_ABS,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "abs",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_abs,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_abs_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_MIN,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "min",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_min,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_min_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_MAX,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "max",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_max,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_max_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_CLAMP,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "clamp",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_clamp,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_clamp_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_MAP,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "map",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_map,
+        .native_arity = 5,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_map_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_MOD,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "mod",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_mod,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_mod_signature,
 #endif
     },
 #endif
