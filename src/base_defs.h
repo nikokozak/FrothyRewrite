@@ -154,6 +154,7 @@ fr_err_t fr_base_slot_ref(fr_slot_id_t slot_id, fr_image_ref_t *out_ref);
 /* Runtime record of slots bound from base/core.frothy at boot. Owned by
    base_image.c; base_defs reads it so source words report their layer. */
 void fr_base_source_record_reset(void);
-fr_err_t fr_base_source_record_add(fr_slot_id_t slot_id);
+fr_err_t fr_base_source_record_add(fr_slot_id_t slot_id, const char *name);
 bool fr_base_is_source_slot(fr_slot_id_t slot_id);
+const char *fr_base_source_slot_name(fr_slot_id_t slot_id);
 #endif

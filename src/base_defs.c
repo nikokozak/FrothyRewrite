@@ -313,7 +313,11 @@ const char *fr_base_slot_name(fr_slot_id_t slot_id) {
 #else
   (void)slot_id;
 #endif
+#if FR_FEATURE_SOURCE_BASE
+  return fr_base_source_slot_name(slot_id);
+#else
   return NULL;
+#endif
 }
 
 fr_err_t fr_base_slot_id_for_name(const char *name, fr_slot_id_t *out_slot_id) {

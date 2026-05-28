@@ -3447,13 +3447,19 @@ static void test_image(void) {
   fr_base_source_record_reset();
   CHECK("source slot absent before registration",
         fr_base_slot_layer(FR_SLOT_BOARD_LOCAL_BASE, &layer) == FR_ERR_NOT_FOUND);
-  CHECK("source record reports source layer",
-        fr_base_source_record_add(FR_SLOT_BOARD_LOCAL_BASE) == FR_OK &&
+  CHECK("source record reports source layer and name",
+        fr_base_source_record_add(FR_SLOT_BOARD_LOCAL_BASE, "gpio.high") ==
+                FR_OK &&
             fr_base_slot_layer(FR_SLOT_BOARD_LOCAL_BASE, &layer) == FR_OK &&
-            layer == FR_BASE_LAYER_SOURCE);
+            layer == FR_BASE_LAYER_SOURCE &&
+            fr_base_slot_name(FR_SLOT_BOARD_LOCAL_BASE) != NULL &&
+            strcmp(fr_base_slot_name(FR_SLOT_BOARD_LOCAL_BASE), "gpio.high") ==
+                0);
   fr_base_source_record_reset();
   CHECK("source record clears on reset",
-        fr_base_slot_layer(FR_SLOT_BOARD_LOCAL_BASE, &layer) == FR_ERR_NOT_FOUND);
+        fr_base_slot_layer(FR_SLOT_BOARD_LOCAL_BASE, &layer) ==
+                FR_ERR_NOT_FOUND &&
+            fr_base_slot_name(FR_SLOT_BOARD_LOCAL_BASE) == NULL);
 #endif
   CHECK("image replacement clears old code and natives",
         fr_image_install(&runtime, &image_a) == FR_OK &&
