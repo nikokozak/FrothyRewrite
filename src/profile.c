@@ -5,6 +5,10 @@
 #include "crc.h"
 #include "tagged.h"
 
+#if FR_FEATURE_SOURCE_BASE
+#include "fr_source_base.h"
+#endif
+
 #ifndef FR_PROFILE_NAME
 #define FR_PROFILE_NAME FR_PROFILE_HEADER
 #endif
@@ -226,8 +230,12 @@ const char *fr_profile_name(void) { return FR_PROFILE_NAME; }
 
 const char *fr_profile_contract_name(void) { return FR_PROFILE_CONTRACT_NAME; }
 
-uint32_t fr_profile_debug_hash_for_word_size(uint16_t word_size) {
+static uint32_t fr_profile_hash_body(uint16_t word_size,
+                                     const char *source_bytes,
+                                     uint16_t source_length) {
   uint32_t crc = 0xffffffffu;
+  (void)source_bytes;
+  (void)source_length;
 
   /* Compact drift fingerprint, not a cryptographic identity. */
   fr_profile_hash_u16(&crc, word_size);
@@ -288,8 +296,31 @@ uint32_t fr_profile_debug_hash_for_word_size(uint16_t word_size) {
 #endif
   }
 
+#if FR_FEATURE_SOURCE_BASE
+  fr_profile_hash_u16(&crc, source_length);
+  for (uint16_t i = 0; i < source_length; i++) {
+    fr_profile_hash_u16(&crc, (uint16_t)(uint8_t)source_bytes[i]);
+  }
+#endif
+
   return ~crc;
 }
+
+uint32_t fr_profile_debug_hash_for_word_size(uint16_t word_size) {
+#if FR_FEATURE_SOURCE_BASE
+  return fr_profile_hash_body(word_size, fr_source_base_bytes,
+                              fr_source_base_bytes_len);
+#else
+  return fr_profile_hash_body(word_size, NULL, 0);
+#endif
+}
+
+#if FR_FEATURE_SOURCE_BASE
+uint32_t fr_profile_debug_hash_for_source(uint16_t word_size, const char *bytes,
+                                          uint16_t length) {
+  return fr_profile_hash_body(word_size, bytes, length);
+}
+#endif
 
 uint32_t fr_profile_hash(void) {
   return fr_profile_debug_hash_for_word_size(FR_PROFILE_HASH_WORD_SIZE);

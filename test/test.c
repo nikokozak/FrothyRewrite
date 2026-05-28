@@ -375,6 +375,27 @@ static void test_profile_hash_word_size(void) {
   uint16_t other = (FR_WORD_SIZE == 16) ? 32u : 16u;
   CHECK("profile hash differs when word size differs",
         fr_profile_hash() != fr_profile_debug_hash_for_word_size(other));
+#if FR_FEATURE_SOURCE_BASE
+  /* A one-byte edit to base/core.frothy must produce a different hash; that
+     proves a rebuild with changed source rejects an old persisted overlay. */
+  {
+    char perturbed[FR_PROFILE_REPL_LINE_BYTES];
+    uint16_t length = fr_source_base_bytes_len;
+
+    if (length > sizeof(perturbed)) {
+      length = (uint16_t)sizeof(perturbed);
+    }
+    memcpy(perturbed, fr_source_base_bytes, length);
+    perturbed[0] = (char)(perturbed[0] ^ 0x01);
+    CHECK("profile hash differs when source bytes differ",
+          fr_profile_hash() !=
+              fr_profile_debug_hash_for_source(FR_WORD_SIZE, perturbed, length));
+    CHECK("profile hash matches when source bytes match",
+          fr_profile_hash() == fr_profile_debug_hash_for_source(
+                                   FR_WORD_SIZE, fr_source_base_bytes,
+                                   fr_source_base_bytes_len));
+  }
+#endif
 }
 
 #if FR_FEATURE_PERSISTENCE
@@ -3480,6 +3501,16 @@ static void test_image(void) {
   CHECK("baked source bytes carry base/core.frothy",
         fr_source_base_bytes_len > 0 &&
             memcmp(fr_source_base_bytes, "to gpio.high", 12) == 0);
+  /* After boot compile, gpio.high resolves by name, sits past the fixed base
+     slot range, reports the source layer, and pushes user words past it. */
+  CHECK("boot compile binds gpio.high as a source-layer base word",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_base_image_install(&runtime) == FR_OK &&
+            fr_slot_id_for_name(&runtime, "gpio.high", &slot_id) == FR_OK &&
+            slot_id >= FR_SLOT_BOARD_LOCAL_BASE &&
+            fr_base_slot_layer(slot_id, &layer) == FR_OK &&
+            layer == FR_BASE_LAYER_SOURCE &&
+            fr_slot_first_project_id() > slot_id);
 #endif
   CHECK("image replacement clears old code and natives",
         fr_image_install(&runtime, &image_a) == FR_OK &&

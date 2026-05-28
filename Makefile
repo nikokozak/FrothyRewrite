@@ -295,6 +295,9 @@ test-host-normal-transcript: host-normal
 		'blink is fn [ pin: $$led_builtin, 1; ms: time; pin: $$led_builtin, 0; ms: time ]' \
 		'blink_times is fn with count [ repeat count [ blink: ] ]' \
 		'boot is fn [ blink_times: 3 ]' \
+		'gpio.high: $$led_builtin' \
+		'gpio.read: $$led_builtin' \
+		'see gpio.high' \
 		'counter is cells(1)' \
 		'set counter[0] to 7' \
 		'counter[0]' \
@@ -320,7 +323,7 @@ test-host-normal-transcript: host-normal
 		'words' \
 		| build/host/frothy-host-normal); \
 	ok_count=$$(printf '%s\n' "$$out" | grep -c 'ok$$'); \
-	if [ "$$ok_count" != 28 ]; then \
+	if [ "$$ok_count" != 31 ]; then \
 		printf '%s\n' "$$out"; \
 		exit 1; \
 	fi; \
@@ -338,6 +341,7 @@ test-host-normal-transcript: host-normal
 		'2' \
 		'overlay code' \
 		'to boot [ blink_times: 3 ]' \
+		'to gpio.high with pin [ gpio.write: pin, 1 ]' \
 		'time blink blink_times'; do \
 		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
 			printf '%s\nmissing expected text: %s\n' "$$out" "$$expected"; \
@@ -380,6 +384,9 @@ test-esp32-plain-host-transcript: esp32-plain-host
 		'status is cells(1)' \
 		'set status[0] to message' \
 		'boot is fn [ pin: $$led_builtin, 1 ]' \
+		'gpio.high: $$led_builtin' \
+		'gpio.read: $$led_builtin' \
+		'see gpio.high' \
 		'save' \
 		'clear' \
 		'restore' \
@@ -390,7 +397,7 @@ test-esp32-plain-host-transcript: esp32-plain-host
 		'see boot' \
 		| build/esp32-plain-host/frothy); \
 	ok_count=$$(printf '%s\n' "$$out" | grep -c 'ok$$'); \
-	if [ "$$ok_count" != 20 ]; then \
+	if [ "$$ok_count" != 23 ]; then \
 		printf '%s\n' "$$out"; \
 		exit 1; \
 	fi; \
@@ -408,7 +415,8 @@ test-esp32-plain-host-transcript: esp32-plain-host
 		'"ready"' \
 		'overlay text 5' \
 		'overlay cells 1' \
-		'to boot [ gpio.write: $$led_builtin, 1 ]'; do \
+		'to boot [ gpio.write: $$led_builtin, 1 ]' \
+		'to gpio.high with pin [ gpio.write: pin, 1 ]'; do \
 		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
 			printf '%s\nmissing expected text: %s\n' "$$out" "$$expected"; \
 			exit 1; \
