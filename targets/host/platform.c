@@ -52,6 +52,61 @@ static fr_err_t fr_host_pwm_entry(uint16_t platform_index,
 }
 #endif
 
+#if FR_FEATURE_I2C
+enum {
+  FR_HOST_I2C_MAX_PORT = 1,
+  FR_HOST_I2C_ADDR_MAX = 0x7F,
+};
+
+typedef struct fr_host_i2c_t {
+  bool in_use;
+  uint16_t port;
+  uint16_t sda;
+  uint16_t scl;
+  uint32_t freq;
+} fr_host_i2c_t;
+
+static fr_host_i2c_t fr_host_i2cs[FR_PROFILE_MAX_HANDLES];
+
+static bool fr_host_i2c_port_in_use(uint16_t port) {
+  for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
+    if (fr_host_i2cs[i].in_use && fr_host_i2cs[i].port == port) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool fr_host_i2c_pin_in_use(uint16_t sda, uint16_t scl) {
+  for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
+    const fr_host_i2c_t *i2c = &fr_host_i2cs[i];
+
+    if (!i2c->in_use) {
+      continue;
+    }
+    if (i2c->sda == sda || i2c->sda == scl || i2c->scl == sda ||
+        i2c->scl == scl) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static fr_err_t fr_host_i2c_entry(uint16_t platform_index,
+                                  fr_host_i2c_t **out_i2c) {
+  if (out_i2c == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (platform_index >= FR_PROFILE_MAX_HANDLES ||
+      !fr_host_i2cs[platform_index].in_use) {
+    return FR_ERR_HANDLE;
+  }
+
+  *out_i2c = &fr_host_i2cs[platform_index];
+  return FR_OK;
+}
+#endif
+
 #if FR_FEATURE_UART
 enum {
   FR_HOST_UART_MAX_PORT = 7,
@@ -190,6 +245,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
 #if FR_FEATURE_PWM
   if (kind == FR_HANDLE_KIND_PWM) {
     return fr_platform_pwm_close(platform_index);
+  }
+#endif
+#if FR_FEATURE_I2C
+  if (kind == FR_HANDLE_KIND_I2C_BUS) {
+    return fr_platform_i2c_close(platform_index);
   }
 #endif
   (void)kind;
@@ -430,6 +490,83 @@ fr_err_t fr_platform_pwm_close(uint16_t platform_index) {
     return FR_OK;
   }
   memset(&fr_host_pwms[platform_index], 0, sizeof(fr_host_pwms[platform_index]));
+  return FR_OK;
+}
+#endif
+
+#if FR_FEATURE_I2C
+fr_err_t fr_platform_i2c_open(uint16_t port, uint16_t sda, uint16_t scl,
+                              uint32_t freq, uint16_t *out_platform_index) {
+  if (out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (port > FR_HOST_I2C_MAX_PORT || sda > FR_HOST_MAX_PIN ||
+      scl > FR_HOST_MAX_PIN || sda == scl || freq == 0 ||
+      fr_host_i2c_port_in_use(port) || fr_host_i2c_pin_in_use(sda, scl)) {
+    return FR_ERR_DOMAIN;
+  }
+
+  for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
+    fr_host_i2c_t *i2c = &fr_host_i2cs[i];
+
+    if (i2c->in_use) {
+      continue;
+    }
+
+    *i2c = (fr_host_i2c_t){
+        .in_use = true,
+        .port = port,
+        .sda = sda,
+        .scl = scl,
+        .freq = freq,
+    };
+    *out_platform_index = i;
+    return FR_OK;
+  }
+
+  return FR_ERR_CAPACITY;
+}
+
+fr_err_t fr_platform_i2c_write(uint16_t platform_index, uint8_t addr,
+                               const uint8_t *bytes, uint16_t length) {
+  fr_host_i2c_t *i2c = NULL;
+
+  if (addr > FR_HOST_I2C_ADDR_MAX) {
+    return FR_ERR_DOMAIN;
+  }
+  if (bytes == NULL && length > 0) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_i2c_entry(platform_index, &i2c));
+  (void)i2c;
+  return FR_OK;
+}
+
+/* Deterministic per-address pattern so tests can assert exact bytes without
+ * an i2c slave. */
+fr_err_t fr_platform_i2c_read(uint16_t platform_index, uint8_t addr,
+                              uint8_t *bytes, uint16_t length) {
+  fr_host_i2c_t *i2c = NULL;
+
+  if (addr > FR_HOST_I2C_ADDR_MAX) {
+    return FR_ERR_DOMAIN;
+  }
+  if (bytes == NULL && length > 0) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_i2c_entry(platform_index, &i2c));
+  (void)i2c;
+  for (uint16_t i = 0; i < length; i++) {
+    bytes[i] = (uint8_t)(addr + i);
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_i2c_close(uint16_t platform_index) {
+  if (platform_index >= FR_PROFILE_MAX_HANDLES) {
+    return FR_OK;
+  }
+  memset(&fr_host_i2cs[platform_index], 0, sizeof(fr_host_i2cs[platform_index]));
   return FR_OK;
 }
 #endif

@@ -46,6 +46,14 @@ static int failures = 0;
 #define FR_TEST_PWM_SLOT_COUNT 0
 #endif
 
+#if FR_FEATURE_I2C
+#define FR_TEST_I2C_WORDS " i2c.open i2c.write i2c.read i2c.close"
+#define FR_TEST_I2C_SLOT_COUNT 4
+#else
+#define FR_TEST_I2C_WORDS ""
+#define FR_TEST_I2C_SLOT_COUNT 0
+#endif
+
 #if FR_FEATURE_PAD
 #if FR_FEATURE_TEXT
 #define FR_TEST_PAD_PACK_WORD " pad.pack"
@@ -82,34 +90,34 @@ enum {
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
   "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
-      FR_TEST_PWM_WORDS FR_TEST_PAD_WORDS "\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_PAD_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
   "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
-      FR_TEST_PWM_WORDS FR_TEST_PAD_WORDS " led\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_PAD_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_BLINK                                      \
   "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
   "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
-      FR_TEST_PWM_WORDS FR_TEST_PAD_WORDS " led blink\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_PAD_WORDS " led blink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (13 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
-   FR_TEST_PWM_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT)
+   FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
-      FR_TEST_PWM_WORDS FR_TEST_PAD_WORDS "\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_PAD_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
-      FR_TEST_PWM_WORDS FR_TEST_PAD_WORDS " led\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_PAD_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_BLINK                                      \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
-      FR_TEST_PWM_WORDS FR_TEST_PAD_WORDS " led blink\nok\n"
+      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_PAD_WORDS " led blink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (10 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
-   FR_TEST_PWM_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT)
+   FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT)
 #endif
 
 #define FR_TEST_PROJECT_SLOT_BASE FR_SLOT_BOARD_LOCAL_BASE
@@ -218,7 +226,7 @@ static void test_base_def_contract(void) {
   uint16_t expected_native_count =
       (FR_FEATURE_PERSISTENCE ? 10 : 7) + (FR_FEATURE_UART ? 6 : 0) +
       (FR_FEATURE_RANDOM ? 3 : 0) + (FR_FEATURE_PWM ? 3 : 0) +
-      FR_TEST_PAD_SLOT_COUNT;
+      (FR_FEATURE_I2C ? 4 : 0) + FR_TEST_PAD_SLOT_COUNT;
   uint16_t global_index = 0;
   uint16_t native_count = 0;
   fr_slot_id_t highest_slot_id = 0;
@@ -231,22 +239,22 @@ static void test_base_def_contract(void) {
                              &(fr_base_def_layer_t){0}) == FR_ERR_NOT_FOUND);
 #if FR_FEATURE_UART
 #if FR_FEATURE_PAD
-  CHECK("pad slot ids follow pwm block",
-        FR_SLOT_PAD_RESET == FR_SLOT_AFTER_PWM);
+  CHECK("pad slot ids follow i2c block",
+        FR_SLOT_PAD_RESET == FR_SLOT_AFTER_I2C);
   CHECK("board local slot ids follow pad ids",
         FR_SLOT_BOARD_LOCAL_BASE == FR_TEST_PAD_LAST_SLOT + 1);
 #else
-  CHECK("board local slot ids follow pwm block",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_AFTER_PWM);
+  CHECK("board local slot ids follow i2c block",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_AFTER_I2C);
 #endif
 #elif FR_FEATURE_PAD
-  CHECK("pad slot ids follow pwm block",
-        FR_SLOT_PAD_RESET == FR_SLOT_AFTER_PWM);
+  CHECK("pad slot ids follow i2c block",
+        FR_SLOT_PAD_RESET == FR_SLOT_AFTER_I2C);
   CHECK("board local slot ids follow pad ids",
         FR_SLOT_BOARD_LOCAL_BASE == FR_TEST_PAD_LAST_SLOT + 1);
 #else
-  CHECK("board local slot ids follow pwm block",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_AFTER_PWM);
+  CHECK("board local slot ids follow i2c block",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_AFTER_I2C);
 #endif
 
   for (uint16_t layer_index = 0; layer_index < fr_base_def_layer_count();

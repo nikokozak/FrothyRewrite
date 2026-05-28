@@ -5,6 +5,9 @@
 #include "runtime.h"
 
 #include "driver/gpio.h"
+#if FR_FEATURE_I2C
+#include "driver/i2c_master.h"
+#endif
 #if FR_FEATURE_PWM
 #include "driver/ledc.h"
 #endif
@@ -60,6 +63,61 @@ static const uart_port_t fr_esp_app_uart_ports[] = {
 static fr_esp_app_uart_t
     fr_esp_app_uarts[sizeof(fr_esp_app_uart_ports) /
                      sizeof(fr_esp_app_uart_ports[0])];
+#endif
+
+#if FR_FEATURE_I2C
+enum {
+  FR_ESP_I2C_MAX = SOC_I2C_NUM,
+  FR_ESP_I2C_ADDR_MAX = 0x7F,
+};
+
+typedef struct fr_esp_i2c_t {
+  bool in_use;
+  uint16_t port;
+  uint16_t sda;
+  uint16_t scl;
+  uint32_t freq;
+  i2c_master_bus_handle_t handle;
+} fr_esp_i2c_t;
+
+static fr_esp_i2c_t fr_esp_i2cs[FR_ESP_I2C_MAX];
+
+static bool fr_esp_i2c_port_in_use(uint16_t port) {
+  for (uint16_t i = 0; i < FR_ESP_I2C_MAX; i++) {
+    if (fr_esp_i2cs[i].in_use && fr_esp_i2cs[i].port == port) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool fr_esp_i2c_pin_in_use(uint16_t sda, uint16_t scl) {
+  for (uint16_t i = 0; i < FR_ESP_I2C_MAX; i++) {
+    const fr_esp_i2c_t *i2c = &fr_esp_i2cs[i];
+
+    if (!i2c->in_use) {
+      continue;
+    }
+    if (i2c->sda == sda || i2c->sda == scl || i2c->scl == sda ||
+        i2c->scl == scl) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static fr_err_t fr_esp_i2c_entry(uint16_t platform_index,
+                                 fr_esp_i2c_t **out_i2c) {
+  if (out_i2c == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (platform_index >= FR_ESP_I2C_MAX || !fr_esp_i2cs[platform_index].in_use) {
+    return FR_ERR_HANDLE;
+  }
+
+  *out_i2c = &fr_esp_i2cs[platform_index];
+  return FR_OK;
+}
 #endif
 
 #if FR_FEATURE_PWM
@@ -473,6 +531,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
     return fr_platform_pwm_close(platform_index);
   }
 #endif
+#if FR_FEATURE_I2C
+  if (kind == FR_HANDLE_KIND_I2C_BUS) {
+    return fr_platform_i2c_close(platform_index);
+  }
+#endif
   (void)kind;
   (void)platform_index;
   return FR_OK;
@@ -817,6 +880,114 @@ fr_err_t fr_platform_pwm_close(uint16_t platform_index) {
   FR_TRY(fr_esp_pwm_entry(platform_index, &pwm));
   FR_TRY(fr_esp_err(ledc_stop(LEDC_LOW_SPEED_MODE, pwm->channel, 0)));
   memset(pwm, 0, sizeof(*pwm));
+  return FR_OK;
+}
+#endif
+
+#if FR_FEATURE_I2C
+/* Per-write/read transactions construct a transient device on the bus using
+ * the stored frequency as scl_speed_hz. Caching the device handle is a
+ * deferred optimization (see ADR). */
+static fr_err_t fr_esp_i2c_dev(fr_esp_i2c_t *i2c, uint8_t addr,
+                               i2c_master_dev_handle_t *out_dev) {
+  const i2c_device_config_t dev_cfg = {
+      .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+      .device_address = addr,
+      .scl_speed_hz = i2c->freq,
+  };
+  return fr_esp_err(i2c_master_bus_add_device(i2c->handle, &dev_cfg, out_dev));
+}
+
+fr_err_t fr_platform_i2c_open(uint16_t port, uint16_t sda, uint16_t scl,
+                              uint32_t freq, uint16_t *out_platform_index) {
+  if (out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (port >= FR_ESP_I2C_MAX || !fr_esp_gpio_output_valid(sda) ||
+      !fr_esp_gpio_output_valid(scl) || sda == scl || freq == 0 ||
+      fr_esp_i2c_port_in_use(port) || fr_esp_i2c_pin_in_use(sda, scl)) {
+    return FR_ERR_DOMAIN;
+  }
+
+  for (uint16_t i = 0; i < FR_ESP_I2C_MAX; i++) {
+    fr_esp_i2c_t *i2c = &fr_esp_i2cs[i];
+    i2c_master_bus_config_t bus_cfg = {
+        .i2c_port = (int)port,
+        .sda_io_num = (gpio_num_t)sda,
+        .scl_io_num = (gpio_num_t)scl,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t handle = NULL;
+
+    if (i2c->in_use) {
+      continue;
+    }
+
+    FR_TRY(fr_esp_err(i2c_new_master_bus(&bus_cfg, &handle)));
+    *i2c = (fr_esp_i2c_t){
+        .in_use = true,
+        .port = port,
+        .sda = sda,
+        .scl = scl,
+        .freq = freq,
+        .handle = handle,
+    };
+    *out_platform_index = i;
+    return FR_OK;
+  }
+
+  return FR_ERR_CAPACITY;
+}
+
+fr_err_t fr_platform_i2c_write(uint16_t platform_index, uint8_t addr,
+                               const uint8_t *bytes, uint16_t length) {
+  fr_esp_i2c_t *i2c = NULL;
+  i2c_master_dev_handle_t dev = NULL;
+  fr_err_t err = FR_OK;
+
+  if (addr > FR_ESP_I2C_ADDR_MAX) {
+    return FR_ERR_DOMAIN;
+  }
+  if (bytes == NULL && length > 0) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_i2c_entry(platform_index, &i2c));
+  FR_TRY(fr_esp_i2c_dev(i2c, addr, &dev));
+  err = fr_esp_err(i2c_master_transmit(dev, bytes, length, -1));
+  (void)i2c_master_bus_rm_device(dev);
+  return err;
+}
+
+fr_err_t fr_platform_i2c_read(uint16_t platform_index, uint8_t addr,
+                              uint8_t *bytes, uint16_t length) {
+  fr_esp_i2c_t *i2c = NULL;
+  i2c_master_dev_handle_t dev = NULL;
+  fr_err_t err = FR_OK;
+
+  if (addr > FR_ESP_I2C_ADDR_MAX) {
+    return FR_ERR_DOMAIN;
+  }
+  if (bytes == NULL && length > 0) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_i2c_entry(platform_index, &i2c));
+  if (length == 0) {
+    return FR_OK;
+  }
+  FR_TRY(fr_esp_i2c_dev(i2c, addr, &dev));
+  err = fr_esp_err(i2c_master_receive(dev, bytes, length, -1));
+  (void)i2c_master_bus_rm_device(dev);
+  return err;
+}
+
+fr_err_t fr_platform_i2c_close(uint16_t platform_index) {
+  fr_esp_i2c_t *i2c = NULL;
+
+  FR_TRY(fr_esp_i2c_entry(platform_index, &i2c));
+  FR_TRY(fr_esp_err(i2c_del_master_bus(i2c->handle)));
+  memset(i2c, 0, sizeof(*i2c));
   return FR_OK;
 }
 #endif

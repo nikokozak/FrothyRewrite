@@ -55,6 +55,16 @@ fr_err_t fr_platform_pwm_write(uint16_t platform_index, uint16_t duty);
 fr_err_t fr_platform_pwm_close(uint16_t platform_index);
 #endif
 
+#if FR_FEATURE_I2C
+fr_err_t fr_platform_i2c_open(uint16_t port, uint16_t sda, uint16_t scl,
+                              uint32_t freq, uint16_t *out_platform_index);
+fr_err_t fr_platform_i2c_write(uint16_t platform_index, uint8_t addr,
+                               const uint8_t *bytes, uint16_t length);
+fr_err_t fr_platform_i2c_read(uint16_t platform_index, uint8_t addr,
+                              uint8_t *bytes, uint16_t length);
+fr_err_t fr_platform_i2c_close(uint16_t platform_index);
+#endif
+
 #if FR_FEATURE_PERSISTENCE
 fr_err_t fr_platform_storage_read(uint8_t slot, uint16_t offset, uint8_t *bytes,
                                   uint16_t length);

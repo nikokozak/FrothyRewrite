@@ -419,6 +419,156 @@ static fr_err_t fr_native_pwm_close(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_I2C
+enum {
+  FR_NATIVE_I2C_ADDR_MAX = 0x7F,
+};
+
+static fr_err_t fr_native_decode_i2c_handle(fr_runtime_t *runtime,
+                                            const fr_tagged_t *args,
+                                            uint8_t arg_count, uint8_t index,
+                                            uint16_t *out_platform_index) {
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || args == NULL || index >= arg_count ||
+      out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_handle_ref(args[index], &ref));
+  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_I2C_BUS, NULL,
+                          out_platform_index);
+}
+
+static fr_err_t fr_native_decode_i2c_addr(const fr_tagged_t *args,
+                                          uint8_t arg_count, uint8_t index,
+                                          uint8_t *out_addr) {
+  fr_int_t addr = 0;
+
+  if (args == NULL || index >= arg_count || out_addr == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_int(args[index], &addr));
+  if (addr < 0 || addr > FR_NATIVE_I2C_ADDR_MAX) {
+    return FR_ERR_DOMAIN;
+  }
+  *out_addr = (uint8_t)addr;
+  return FR_OK;
+}
+
+static fr_err_t fr_native_i2c_open(fr_runtime_t *runtime,
+                                   const fr_tagged_t *args, uint8_t arg_count,
+                                   fr_tagged_t *out) {
+  uint16_t port = 0;
+  uint16_t sda = 0;
+  uint16_t scl = 0;
+  fr_int_t freq = 0;
+  fr_handle_ref_t ref = {0};
+  fr_tagged_t handle = 0;
+  uint16_t platform_index = 0;
+  fr_err_t err = FR_OK;
+
+  if (runtime == NULL || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &port));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &sda));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 2, &scl));
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 3, &freq));
+  if (freq == 0) {
+    return FR_ERR_DOMAIN;
+  }
+
+  FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_I2C_BUS, &ref, &handle));
+  err = fr_platform_i2c_open(port, sda, scl, (uint32_t)freq, &platform_index);
+  if (err != FR_OK) {
+    (void)fr_handle_release_reserved(runtime, ref);
+    return err;
+  }
+
+  err = fr_handle_activate(runtime, ref, platform_index);
+  if (err != FR_OK) {
+    (void)fr_platform_handle_close(FR_HANDLE_KIND_I2C_BUS, platform_index);
+    (void)fr_handle_release_reserved(runtime, ref);
+    return err;
+  }
+
+  *out = handle;
+  return FR_OK;
+}
+
+static fr_err_t fr_native_i2c_write(fr_runtime_t *runtime,
+                                    const fr_tagged_t *args, uint8_t arg_count,
+                                    fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  uint8_t addr = 0;
+  fr_object_id_t object_id = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_decode_i2c_handle(runtime, args, arg_count, 0,
+                                     &platform_index));
+  FR_TRY(fr_native_decode_i2c_addr(args, arg_count, 1, &addr));
+  FR_TRY(fr_tagged_decode_object_id(args[2], &object_id));
+  FR_TRY(fr_text_view(runtime, object_id, &bytes, &length));
+  if (length == 0) {
+    return FR_ERR_DOMAIN;
+  }
+  FR_TRY(fr_platform_i2c_write(platform_index, addr, bytes, length));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_i2c_read(fr_runtime_t *runtime,
+                                   const fr_tagged_t *args, uint8_t arg_count,
+                                   fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  uint8_t addr = 0;
+  fr_int_t count = 0;
+  uint8_t buffer[FR_PROFILE_MAX_TEXT_LENGTH];
+  fr_object_id_t object_id = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_decode_i2c_handle(runtime, args, arg_count, 0,
+                                     &platform_index));
+  FR_TRY(fr_native_decode_i2c_addr(args, arg_count, 1, &addr));
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 2, &count));
+  if (count > FR_PROFILE_MAX_TEXT_LENGTH) {
+    return FR_ERR_RANGE;
+  }
+  if (count > 0) {
+    FR_TRY(fr_platform_i2c_read(platform_index, addr, buffer, (uint16_t)count));
+  }
+  FR_TRY(fr_text_install(runtime, buffer, (uint16_t)count, &object_id));
+  return fr_tagged_encode_object_id(object_id, out);
+}
+
+static fr_err_t fr_native_i2c_close(fr_runtime_t *runtime,
+                                    const fr_tagged_t *args, uint8_t arg_count,
+                                    fr_tagged_t *out) {
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || args == NULL || arg_count == 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_handle_ref(args[0], &ref));
+  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_I2C_BUS, NULL, NULL));
+  FR_TRY(fr_handle_close(runtime, ref));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+#endif
+
 #if FR_FEATURE_RANDOM
 static fr_err_t fr_native_random_next(fr_runtime_t *runtime,
                                       const fr_tagged_t *args,
@@ -773,6 +923,55 @@ static const fr_native_signature_t fr_native_pwm_close_signature = {
 };
 #endif
 
+#if FR_FEATURE_I2C
+static const fr_native_param_t fr_native_i2c_open_params[] = {
+    {"port", FR_NATIVE_VALUE_INT},
+    {"sda", FR_NATIVE_VALUE_INT},
+    {"scl", FR_NATIVE_VALUE_INT},
+    {"freq", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_i2c_open_signature = {
+    .params = fr_native_i2c_open_params,
+    .arg_count = 4,
+    .result = FR_NATIVE_VALUE_HANDLE,
+    .help = "open an i2c bus on a port at sda/scl pins and frequency",
+};
+
+static const fr_native_param_t fr_native_i2c_write_params[] = {
+    {"bus", FR_NATIVE_VALUE_HANDLE},
+    {"addr", FR_NATIVE_VALUE_INT},
+    {"bytes", FR_NATIVE_VALUE_TEXT},
+};
+static const fr_native_signature_t fr_native_i2c_write_signature = {
+    .params = fr_native_i2c_write_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "write bytes to a 7-bit i2c address",
+};
+
+static const fr_native_param_t fr_native_i2c_read_params[] = {
+    {"bus", FR_NATIVE_VALUE_HANDLE},
+    {"addr", FR_NATIVE_VALUE_INT},
+    {"count", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_i2c_read_signature = {
+    .params = fr_native_i2c_read_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_TEXT,
+    .help = "read count bytes from a 7-bit i2c address",
+};
+
+static const fr_native_param_t fr_native_i2c_close_params[] = {
+    {"bus", FR_NATIVE_VALUE_HANDLE},
+};
+static const fr_native_signature_t fr_native_i2c_close_signature = {
+    .params = fr_native_i2c_close_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "release an i2c bus",
+};
+#endif
+
 #if FR_FEATURE_RANDOM
 static const fr_native_signature_t fr_native_random_next_signature = {
     .params = NULL,
@@ -1086,6 +1285,56 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_pwm_close_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_I2C
+    {
+        .slot_id = FR_SLOT_I2C_OPEN,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "i2c.open",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_i2c_open,
+        .native_arity = 4,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_i2c_open_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_I2C_WRITE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "i2c.write",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_i2c_write,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_i2c_write_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_I2C_READ,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "i2c.read",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_i2c_read,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_i2c_read_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_I2C_CLOSE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "i2c.close",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_i2c_close,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_i2c_close_signature,
 #endif
     },
 #endif
