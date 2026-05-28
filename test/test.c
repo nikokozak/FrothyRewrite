@@ -1685,6 +1685,142 @@ static void test_uart(void) {
 }
 #endif
 
+#if FR_FEATURE_PWM
+static fr_err_t test_pwm_entry(fr_runtime_t *runtime, fr_slot_id_t slot_id,
+                               const fr_native_entry_t **out_entry) {
+  fr_tagged_t tagged = 0;
+  fr_native_id_t native_id = 0;
+
+  if (runtime == NULL || out_entry == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
+  FR_TRY(fr_tagged_decode_native_id(tagged, &native_id));
+  return fr_native_get(runtime, native_id, out_entry);
+}
+
+static fr_err_t test_pwm_open_call(fr_runtime_t *runtime,
+                                   const fr_native_entry_t *open_entry,
+                                   uint16_t pin, uint16_t freq,
+                                   fr_tagged_t *out_handle) {
+  fr_tagged_t args[2] = {0};
+
+  if (out_handle == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_encode_int((int32_t)pin, &args[0]));
+  FR_TRY(fr_tagged_encode_int((int32_t)freq, &args[1]));
+  return fr_native_call(runtime, open_entry, args, 2, out_handle);
+}
+
+static fr_err_t test_pwm_write_call(fr_runtime_t *runtime,
+                                    const fr_native_entry_t *write_entry,
+                                    fr_tagged_t handle, fr_int_t duty,
+                                    fr_tagged_t *out) {
+  fr_tagged_t args[2] = {0};
+
+  args[0] = handle;
+  FR_TRY(fr_tagged_encode_int((int32_t)duty, &args[1]));
+  return fr_native_call(runtime, write_entry, args, 2, out);
+}
+
+static fr_err_t test_pwm_close_call(fr_runtime_t *runtime,
+                                    const fr_native_entry_t *close_entry,
+                                    fr_tagged_t handle, fr_tagged_t *out) {
+  return fr_native_call(runtime, close_entry, &handle, 1, out);
+}
+
+static void test_pwm(void) {
+  fr_runtime_t runtime;
+  const fr_native_entry_t *open_entry = NULL;
+  const fr_native_entry_t *write_entry = NULL;
+  const fr_native_entry_t *close_entry = NULL;
+  fr_tagged_t handle = 0;
+  fr_tagged_t second_handle = 0;
+  fr_tagged_t result = 0;
+  char out[128];
+
+  CHECK("pwm installs base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("pwm finds native entries",
+        test_pwm_entry(&runtime, FR_SLOT_PWM_OPEN, &open_entry) == FR_OK &&
+            test_pwm_entry(&runtime, FR_SLOT_PWM_WRITE, &write_entry) ==
+                FR_OK &&
+            test_pwm_entry(&runtime, FR_SLOT_PWM_CLOSE, &close_entry) ==
+                FR_OK);
+
+  CHECK("pwm see open renders signature",
+        fr_repl_eval_line(&runtime, "see pwm.open", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "pwm.open(pin: int, freq: int) -> handle\n"
+                   "open a PWM channel on a pin at a frequency in Hz\n"
+                   "ok\n") == 0);
+  CHECK("pwm see write renders signature",
+        fr_repl_eval_line(&runtime, "see pwm.write", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "pwm.write(handle: handle, duty: int) -> nil\n"
+                   "set a PWM duty cycle in [0, 1023]\n"
+                   "ok\n") == 0);
+  CHECK("pwm see close renders signature",
+        fr_repl_eval_line(&runtime, "see pwm.close", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "pwm.close(handle: handle) -> nil\n"
+                   "release a PWM channel\n"
+                   "ok\n") == 0);
+
+  CHECK("pwm full lifecycle",
+        test_pwm_open_call(&runtime, open_entry, 4, 1000, &handle) == FR_OK &&
+            test_pwm_write_call(&runtime, write_entry, handle, 0, &result) ==
+                FR_OK &&
+            fr_tagged_is_nil(result) &&
+            test_pwm_write_call(&runtime, write_entry, handle, 512, &result) ==
+                FR_OK &&
+            test_pwm_write_call(&runtime, write_entry, handle, 1023,
+                                &result) == FR_OK &&
+            test_pwm_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK &&
+            fr_tagged_is_nil(result));
+
+  CHECK("pwm rejects pin conflict",
+        test_pwm_open_call(&runtime, open_entry, 5, 1000, &handle) == FR_OK &&
+            test_pwm_open_call(&runtime, open_entry, 5, 2000,
+                               &second_handle) == FR_ERR_DOMAIN &&
+            test_pwm_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK);
+
+  CHECK("pwm rejects out-of-range duty",
+        test_pwm_open_call(&runtime, open_entry, 6, 1000, &handle) == FR_OK &&
+            test_pwm_write_call(&runtime, write_entry, handle, -1, &result) ==
+                FR_ERR_DOMAIN &&
+            test_pwm_write_call(&runtime, write_entry, handle, 1024,
+                                &result) == FR_ERR_DOMAIN &&
+            test_pwm_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK);
+
+  CHECK("pwm rejects write after close",
+        test_pwm_open_call(&runtime, open_entry, 7, 1000, &handle) == FR_OK &&
+            test_pwm_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK &&
+            test_pwm_write_call(&runtime, write_entry, handle, 100,
+                                &result) == FR_ERR_HANDLE);
+
+#if FR_FEATURE_PERSISTENCE
+  CHECK("pwm save rejects live handle",
+        test_pwm_open_call(&runtime, open_entry, 8, 1000, &handle) == FR_OK &&
+            fr_slot_write(&runtime, FR_SLOT_BOOT, handle) == FR_OK &&
+            fr_persist_save(&runtime) == FR_ERR_VOLATILE &&
+            test_pwm_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK &&
+            fr_slot_write(&runtime, FR_SLOT_BOOT, fr_tagged_nil()) == FR_OK &&
+            fr_persist_save(&runtime) == FR_OK);
+#endif
+}
+#endif
+
 #if FR_FEATURE_RANDOM
 static void test_random(void) {
   fr_runtime_t runtime;
@@ -7142,6 +7278,9 @@ int main(void) {
 #endif
 #if FR_FEATURE_UART
   test_uart();
+#endif
+#if FR_FEATURE_PWM
+  test_pwm();
 #endif
 #if FR_FEATURE_RANDOM
   test_random();
