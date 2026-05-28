@@ -1279,6 +1279,15 @@ static void test_pad(void) {
             fr_repl_eval_line(&runtime, "see pad.peek-byte", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "base target native arity 1\nok\n") == 0);
+#if FR_FEATURE_TEXT
+  CHECK("pad.pack renders signature",
+        fr_repl_eval_line(&runtime, "see pad.pack", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "pad.pack() -> text\n"
+                   "pack the pad bytes into a text value\n"
+                   "ok\n") == 0);
+#endif
   CHECK("pad emits bytes through human call surface",
         fr_repl_eval_line(&runtime, "pad.emit-byte: 65", out, sizeof(out)) ==
                 FR_OK &&
@@ -1432,10 +1441,13 @@ static void test_uart(void) {
             test_uart_entry(&runtime, FR_SLOT_UART_CLOSE, &close_entry) ==
                 FR_OK);
 
-  CHECK("uart see open",
+  CHECK("uart see open renders signature",
         fr_repl_eval_line(&runtime, "see uart.open", out, sizeof(out)) ==
                 FR_OK &&
-            strcmp(out, "base target native arity 3\nok\n") == 0);
+            strcmp(out,
+                   "uart.open(tx: int, rx: int, baud: int) -> handle\n"
+                   "open a uart port (tx, rx, baud)\n"
+                   "ok\n") == 0);
   CHECK("uart see baud literal",
         fr_repl_eval_line(&runtime, "see $baud_115200", out, sizeof(out)) ==
                 FR_OK &&
@@ -6247,17 +6259,72 @@ static void test_repl(void) {
         fr_repl_eval_line(&runtime, "115200", out, sizeof(out)) ==
             FR_ERR_RANGE);
 #endif
-  CHECK("repl see gpio.write native arity",
+#if FR_FEATURE_NATIVE_SIGNATURES
+  CHECK("repl see gpio.write renders signature",
+        fr_repl_eval_line(&runtime, "see gpio.write", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "gpio.write(pin: int, level: int) -> nil\n"
+                   "set gpio pin to a level (0 or 1)\n"
+                   "ok\n") == 0);
+  CHECK("repl see pin sugar renders signature under canonical name",
+        fr_repl_eval_line(&runtime, "see pin", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "gpio.write(pin: int, level: int) -> nil\n"
+                   "set gpio pin to a level (0 or 1)\n"
+                   "ok\n") == 0);
+  CHECK("repl see gpio.mode falls back without names or help",
+        fr_repl_eval_line(&runtime, "see gpio.mode", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "base target native arity 2\nok\n") == 0);
+  CHECK("repl see millis renders signature",
+        fr_repl_eval_line(&runtime, "see millis", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "millis() -> int\n"
+                   "read the millisecond clock since boot\n"
+                   "ok\n") == 0);
+  CHECK("repl see ms renders signature",
+        fr_repl_eval_line(&runtime, "see ms", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "ms(millis: int) -> nil\n"
+                   "sleep for a number of milliseconds\n"
+                   "ok\n") == 0);
+  CHECK("repl see gpio.read renders signature",
+        fr_repl_eval_line(&runtime, "see gpio.read", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "gpio.read(pin: int) -> int\n"
+                   "read the level of a gpio pin\n"
+                   "ok\n") == 0);
+  CHECK("repl see adc.above renders signature",
+        fr_repl_eval_line(&runtime, "see adc.above", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "adc.above(pin: int, threshold: int) -> any\n"
+                   "true when an adc pin reads above a threshold\n"
+                   "ok\n") == 0);
+#else
+  CHECK("repl see gpio.write falls back on tiny",
         fr_repl_eval_line(&runtime, "see gpio.write", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "base target native arity 2\nok\n") == 0);
-  CHECK("repl see pin sugar native arity",
-        fr_repl_eval_line(&runtime, "see pin", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "base target native arity 2\nok\n") == 0);
+#endif
 #if FR_FEATURE_PERSISTENCE
-  CHECK("repl see persistence native owner",
+#if FR_FEATURE_NATIVE_SIGNATURES
+  CHECK("repl see save renders signature",
+        fr_repl_eval_line(&runtime, "see save", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "save() -> nil\n"
+                   "write the current slot image to persistent storage\n"
+                   "ok\n") == 0);
+  CHECK("repl see restore falls back without help",
+        fr_repl_eval_line(&runtime, "see restore", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "base persistence native arity 0\nok\n") == 0);
+#else
+  CHECK("repl see save falls back on tiny",
         fr_repl_eval_line(&runtime, "see save", out, sizeof(out)) == FR_OK &&
             strcmp(out, "base persistence native arity 0\nok\n") == 0);
+#endif
 #endif
   CHECK("repl runs top-level native call",
         fr_repl_eval_line(&runtime, "pin: $led_builtin, 1", out,

@@ -811,6 +811,59 @@ static fr_err_t fr_repl_write_see_tagged(fr_runtime_t *runtime, char *out,
   return fr_repl_write_tagged_value(runtime, out, out_cap, tagged, true);
 }
 
+#if FR_FEATURE_NATIVE_SIGNATURES
+static fr_err_t fr_repl_write_value_kind(const fr_repl_writer_t *writer,
+                                         fr_native_value_kind_t kind) {
+  switch (kind) {
+  case FR_NATIVE_VALUE_ANY:
+    return fr_repl_writer_write(writer, "any");
+  case FR_NATIVE_VALUE_INT:
+    return fr_repl_writer_write(writer, "int");
+  case FR_NATIVE_VALUE_HANDLE:
+    return fr_repl_writer_write(writer, "handle");
+  case FR_NATIVE_VALUE_NIL:
+    return fr_repl_writer_write(writer, "nil");
+  case FR_NATIVE_VALUE_TEXT:
+    return fr_repl_writer_write(writer, "text");
+  }
+  return FR_ERR_INVALID;
+}
+
+static bool
+fr_repl_signature_is_helped(const fr_native_signature_t *signature) {
+  if (signature == NULL || signature->help == NULL) {
+    return false;
+  }
+  for (uint8_t i = 0; i < signature->arg_count; i++) {
+    if (signature->params == NULL || signature->params[i].name == NULL) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static fr_err_t
+fr_repl_write_native_signature(const fr_repl_writer_t *writer,
+                               const char *func_name,
+                               const fr_native_signature_t *signature) {
+  FR_TRY(fr_repl_writer_write(writer, func_name));
+  FR_TRY(fr_repl_writer_write(writer, "("));
+  for (uint8_t i = 0; i < signature->arg_count; i++) {
+    if (i > 0) {
+      FR_TRY(fr_repl_writer_write(writer, ", "));
+    }
+    FR_TRY(fr_repl_writer_write(writer, signature->params[i].name));
+    FR_TRY(fr_repl_writer_write(writer, ": "));
+    FR_TRY(fr_repl_write_value_kind(writer, signature->params[i].type));
+  }
+  FR_TRY(fr_repl_writer_write(writer, ") -> "));
+  FR_TRY(fr_repl_write_value_kind(writer, signature->result));
+  FR_TRY(fr_repl_writer_write(writer, "\n"));
+  FR_TRY(fr_repl_writer_write(writer, signature->help));
+  return fr_repl_writer_write(writer, "\nok\n");
+}
+#endif
+
 static fr_err_t fr_repl_see_command_slot(fr_runtime_t *runtime,
                                          const char *arg, uint16_t arg_len,
                                          fr_slot_id_t *out_slot_id) {
@@ -889,6 +942,23 @@ static fr_err_t fr_repl_eval_see_arg(fr_runtime_t *runtime, const char *arg,
 
   response[0] = '\0';
   FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
+#if FR_FEATURE_NATIVE_SIGNATURES
+  {
+    fr_native_id_t native_id = 0;
+
+    if (fr_tagged_decode_native_id(tagged, &native_id) == FR_OK) {
+      const fr_native_entry_t *entry = NULL;
+      const char *func_name = fr_base_slot_name(slot_id);
+
+      FR_TRY(fr_native_get(runtime, native_id, &entry));
+      if (func_name != NULL &&
+          fr_repl_signature_is_helped(entry->signature)) {
+        return fr_repl_write_native_signature(writer, func_name,
+                                              entry->signature);
+      }
+    }
+  }
+#endif
   base_name = fr_base_slot_name(slot_id);
   slot_name = fr_slot_name(runtime, slot_id);
   if (fr_slot_is_overlay(runtime, slot_id) ||

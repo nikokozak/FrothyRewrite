@@ -77,6 +77,13 @@ static const fr_base_def_t fr_core_base_defs[] = {
 };
 
 #if FR_FEATURE_PERSISTENCE && FR_FEATURE_NATIVE_SIGNATURES
+static const fr_native_signature_t fr_native_save_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "write the current slot image to persistent storage",
+};
+
 static const fr_native_signature_t fr_native_nil_to_nil_signature = {
     .params = NULL,
     .arg_count = 0,
@@ -96,7 +103,7 @@ static const fr_base_def_t fr_persistence_base_defs[] = {
         .native_fn = fr_native_save,
         .native_arity = 0,
 #if FR_FEATURE_NATIVE_SIGNATURES
-        .native_signature = &fr_native_nil_to_nil_signature,
+        .native_signature = &fr_native_save_signature,
 #endif
     },
     {

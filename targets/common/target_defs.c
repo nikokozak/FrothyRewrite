@@ -396,12 +396,6 @@ static const fr_native_param_t fr_native_two_int_params[] = {
 };
 
 #if FR_FEATURE_UART
-static const fr_native_param_t fr_native_three_int_params[] = {
-    {NULL, FR_NATIVE_VALUE_INT},
-    {NULL, FR_NATIVE_VALUE_INT},
-    {NULL, FR_NATIVE_VALUE_INT},
-};
-
 static const fr_native_param_t fr_native_handle_params[] = {
     {NULL, FR_NATIVE_VALUE_HANDLE},
 };
@@ -412,6 +406,14 @@ static const fr_native_param_t fr_native_handle_int_params[] = {
 };
 #endif
 
+static const fr_native_signature_t fr_native_millis_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "read the millisecond clock since boot",
+};
+
+#if FR_FEATURE_PAD
 static const fr_native_signature_t fr_native_nil_to_int_signature = {
     .params = NULL,
     .arg_count = 0,
@@ -419,7 +421,6 @@ static const fr_native_signature_t fr_native_nil_to_int_signature = {
     .help = NULL,
 };
 
-#if FR_FEATURE_PAD
 static const fr_native_signature_t fr_native_nil_to_nil_signature = {
     .params = NULL,
     .arg_count = 0,
@@ -427,21 +428,41 @@ static const fr_native_signature_t fr_native_nil_to_nil_signature = {
     .help = NULL,
 };
 
-#if FR_FEATURE_TEXT
-static const fr_native_signature_t fr_native_nil_to_text_signature = {
-    .params = NULL,
-    .arg_count = 0,
-    .result = FR_NATIVE_VALUE_TEXT,
-    .help = NULL,
-};
-#endif
-#endif
-
 static const fr_native_signature_t fr_native_int_to_nil_signature = {
     .params = fr_native_int_params,
     .arg_count = 1,
     .result = FR_NATIVE_VALUE_NIL,
     .help = NULL,
+};
+
+#if FR_FEATURE_TEXT
+static const fr_native_signature_t fr_native_pad_pack_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_TEXT,
+    .help = "pack the pad bytes into a text value",
+};
+#endif
+#endif
+
+static const fr_native_param_t fr_native_ms_params[] = {
+    {"millis", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_ms_signature = {
+    .params = fr_native_ms_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "sleep for a number of milliseconds",
+};
+
+static const fr_native_param_t fr_native_gpio_read_params[] = {
+    {"pin", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_gpio_read_signature = {
+    .params = fr_native_gpio_read_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "read the level of a gpio pin",
 };
 
 static const fr_native_signature_t fr_native_int_to_int_signature = {
@@ -451,6 +472,17 @@ static const fr_native_signature_t fr_native_int_to_int_signature = {
     .help = NULL,
 };
 
+static const fr_native_param_t fr_native_gpio_write_params[] = {
+    {"pin", FR_NATIVE_VALUE_INT},
+    {"level", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_gpio_write_signature = {
+    .params = fr_native_gpio_write_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "set gpio pin to a level (0 or 1)",
+};
+
 static const fr_native_signature_t fr_native_gpio_write_to_nil_signature = {
     .params = fr_native_two_int_params,
     .arg_count = 2,
@@ -458,19 +490,28 @@ static const fr_native_signature_t fr_native_gpio_write_to_nil_signature = {
     .help = NULL,
 };
 
-static const fr_native_signature_t fr_native_int_int_to_any_signature = {
-    .params = fr_native_two_int_params,
+static const fr_native_param_t fr_native_adc_above_params[] = {
+    {"pin", FR_NATIVE_VALUE_INT},
+    {"threshold", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_adc_above_signature = {
+    .params = fr_native_adc_above_params,
     .arg_count = 2,
     .result = FR_NATIVE_VALUE_ANY,
-    .help = NULL,
+    .help = "true when an adc pin reads above a threshold",
 };
 
 #if FR_FEATURE_UART
+static const fr_native_param_t fr_native_uart_open_params[] = {
+    {"tx", FR_NATIVE_VALUE_INT},
+    {"rx", FR_NATIVE_VALUE_INT},
+    {"baud", FR_NATIVE_VALUE_INT},
+};
 static const fr_native_signature_t fr_native_uart_open_signature = {
-    .params = fr_native_three_int_params,
+    .params = fr_native_uart_open_params,
     .arg_count = 3,
     .result = FR_NATIVE_VALUE_HANDLE,
-    .help = NULL,
+    .help = "open a uart port (tx, rx, baud)",
 };
 
 static const fr_native_signature_t fr_native_uart_write_byte_signature = {
@@ -516,7 +557,7 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_fn = fr_native_ms,
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
-        .native_signature = &fr_native_int_to_nil_signature,
+        .native_signature = &fr_native_ms_signature,
 #endif
     },
     {
@@ -529,7 +570,7 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_fn = fr_native_gpio_write,
         .native_arity = 2,
 #if FR_FEATURE_NATIVE_SIGNATURES
-        .native_signature = &fr_native_gpio_write_to_nil_signature,
+        .native_signature = &fr_native_gpio_write_signature,
 #endif
     },
     {
@@ -553,7 +594,7 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_fn = fr_native_gpio_read,
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
-        .native_signature = &fr_native_int_to_int_signature,
+        .native_signature = &fr_native_gpio_read_signature,
 #endif
     },
     {
@@ -577,7 +618,7 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_fn = fr_native_adc_above,
         .native_arity = 2,
 #if FR_FEATURE_NATIVE_SIGNATURES
-        .native_signature = &fr_native_int_int_to_any_signature,
+        .native_signature = &fr_native_adc_above_signature,
 #endif
     },
     {
@@ -589,7 +630,7 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_fn = fr_native_millis,
         .native_arity = 0,
 #if FR_FEATURE_NATIVE_SIGNATURES
-        .native_signature = &fr_native_nil_to_int_signature,
+        .native_signature = &fr_native_millis_signature,
 #endif
     },
 #if FR_FEATURE_UART
@@ -765,7 +806,7 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_fn = fr_native_pad_pack,
         .native_arity = 0,
 #if FR_FEATURE_NATIVE_SIGNATURES
-        .native_signature = &fr_native_nil_to_text_signature,
+        .native_signature = &fr_native_pad_pack_signature,
 #endif
     },
 #endif
