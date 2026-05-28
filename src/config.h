@@ -83,6 +83,10 @@
 #define FR_FEATURE_PWM 1
 #endif
 
+#ifndef FR_FEATURE_I2C
+#define FR_FEATURE_I2C 1
+#endif
+
 #ifndef FR_FEATURE_PAD
 #define FR_FEATURE_PAD 0
 #endif
@@ -309,6 +313,14 @@
 
 #if FR_FEATURE_UART && !FR_FEATURE_COMPILER
 #error "FR_FEATURE_UART requires FR_FEATURE_COMPILER in this tranche"
+#endif
+
+#if FR_FEATURE_I2C && !FR_FEATURE_HANDLES
+#error "FR_FEATURE_I2C requires FR_FEATURE_HANDLES"
+#endif
+
+#if FR_FEATURE_I2C && !FR_FEATURE_TEXT
+#error "FR_FEATURE_I2C requires FR_FEATURE_TEXT"
 #endif
 
 #if FR_FEATURE_PAD && FR_PROFILE_PAD_BYTES == 0

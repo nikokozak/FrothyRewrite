@@ -44,3 +44,7 @@
 /* PWM adds three more native rows; tiny's table is already full. */
 #undef FR_FEATURE_PWM
 #define FR_FEATURE_PWM 0
+
+/* I2C needs handles and text, which tiny does not carry. */
+#undef FR_FEATURE_I2C
+#define FR_FEATURE_I2C 0
