@@ -313,7 +313,7 @@ test-host-normal-transcript: host-normal
 		'> A' \
 		'2' \
 		'overlay code' \
-		'CALL_SLOT_ARG 31 1' \
+		'CALL_SLOT_ARG 32 1' \
 		'time blink blink_times'; do \
 		if ! printf '%s\n' "$$out" | grep -q "$$expected"; then \
 			printf '%s\nmissing expected text: %s\n' "$$out" "$$expected"; \

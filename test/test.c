@@ -22,9 +22,9 @@ static int failures = 0;
 
 #if FR_FEATURE_UART
 #define FR_TEST_UART_WORDS                                                   \
-  " uart.open uart.write-byte uart.read-byte uart.available uart.close "      \
-  "$baud_9600 $baud_19200 $baud_38400 $baud_57600 $baud_115200"
-#define FR_TEST_UART_SLOT_COUNT 10
+  " uart.open uart.open-on uart.write-byte uart.read-byte uart.available "   \
+  "uart.close $baud_9600 $baud_19200 $baud_38400 $baud_57600 $baud_115200"
+#define FR_TEST_UART_SLOT_COUNT 11
 #else
 #define FR_TEST_UART_WORDS ""
 #define FR_TEST_UART_SLOT_COUNT 0
@@ -194,7 +194,7 @@ static void test_base_def_contract(void) {
   bool seen_slots[FR_PROFILE_MAX_SLOTS] = {0};
   uint16_t expected_layer_count = FR_FEATURE_PERSISTENCE ? 4 : 3;
   uint16_t expected_native_count =
-      (FR_FEATURE_PERSISTENCE ? 10 : 7) + (FR_FEATURE_UART ? 5 : 0) +
+      (FR_FEATURE_PERSISTENCE ? 10 : 7) + (FR_FEATURE_UART ? 6 : 0) +
       FR_TEST_PAD_SLOT_COUNT;
   uint16_t global_index = 0;
   uint16_t native_count = 0;
@@ -1446,6 +1446,14 @@ static void test_uart(void) {
                    "uart.open(port: int, baud: int) -> handle\n"
                    "open a uart port at a baud rate\n"
                    "ok\n") == 0);
+  CHECK("uart see open-on renders four-arg override signature",
+        fr_repl_eval_line(&runtime, "see uart.open-on", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "uart.open-on(port: int, tx: int, rx: int, baud: int) -> "
+                   "handle\n"
+                   "open a uart on caller-picked tx and rx pins\n"
+                   "ok\n") == 0);
   CHECK("uart see baud literal",
         fr_repl_eval_line(&runtime, "see $baud_115200", out, sizeof(out)) ==
                 FR_OK &&
@@ -1628,6 +1636,29 @@ static void test_uart(void) {
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK);
+
+  /* uart.open-on: caller-picked pins. Host records the pins; esp-idf does
+   * the same plus a console-pin check. The CHECKs below run on host but
+   * exercise the conflict-detection path either platform takes. */
+  CHECK("uart.open-on records pins on a free port",
+        fr_repl_eval_line(&runtime,
+                          "ovr is uart.open-on: 0, 4, 5, $baud_9600", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("uart.open-on rejects overlapping pins on another port",
+        fr_repl_eval_line(&runtime,
+                          "dup is uart.open-on: 1, 4, 5, $baud_9600", out,
+                          sizeof(out)) == FR_ERR_DOMAIN);
+  CHECK("uart.open-on rejects identical tx and rx",
+        fr_repl_eval_line(&runtime,
+                          "same is uart.open-on: 1, 7, 7, $baud_9600", out,
+                          sizeof(out)) == FR_ERR_DOMAIN);
+  CHECK("uart.open-on close frees pins for reuse",
+        fr_repl_eval_line(&runtime, "uart.close: ovr", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "again is uart.open-on: 1, 4, 5, $baud_9600",
+                              out, sizeof(out)) == FR_OK);
 }
 #endif
 
@@ -2654,16 +2685,19 @@ static void test_image(void) {
 #if FR_FEATURE_UART
   CHECK("base image exposes uart slot names",
         strcmp(fr_base_slot_name_at(13), "uart.open") == 0 &&
-            strcmp(fr_base_slot_name_at(14), "uart.write-byte") == 0 &&
-            strcmp(fr_base_slot_name_at(15), "uart.read-byte") == 0 &&
-            strcmp(fr_base_slot_name_at(16), "uart.available") == 0 &&
-            strcmp(fr_base_slot_name_at(17), "uart.close") == 0 &&
-            strcmp(fr_base_slot_name_at(18), "$baud_9600") == 0 &&
-            strcmp(fr_base_slot_name_at(19), "$baud_19200") == 0 &&
-            strcmp(fr_base_slot_name_at(20), "$baud_38400") == 0 &&
-            strcmp(fr_base_slot_name_at(21), "$baud_57600") == 0 &&
-            strcmp(fr_base_slot_name_at(22), "$baud_115200") == 0 &&
+            strcmp(fr_base_slot_name_at(14), "uart.open-on") == 0 &&
+            strcmp(fr_base_slot_name_at(15), "uart.write-byte") == 0 &&
+            strcmp(fr_base_slot_name_at(16), "uart.read-byte") == 0 &&
+            strcmp(fr_base_slot_name_at(17), "uart.available") == 0 &&
+            strcmp(fr_base_slot_name_at(18), "uart.close") == 0 &&
+            strcmp(fr_base_slot_name_at(19), "$baud_9600") == 0 &&
+            strcmp(fr_base_slot_name_at(20), "$baud_19200") == 0 &&
+            strcmp(fr_base_slot_name_at(21), "$baud_38400") == 0 &&
+            strcmp(fr_base_slot_name_at(22), "$baud_57600") == 0 &&
+            strcmp(fr_base_slot_name_at(23), "$baud_115200") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_UART_OPEN), "uart.open") == 0 &&
+            strcmp(fr_base_slot_name(FR_SLOT_UART_OPEN_ON),
+                   "uart.open-on") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_UART_WRITE_BYTE),
                    "uart.write-byte") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_UART_READ_BYTE),

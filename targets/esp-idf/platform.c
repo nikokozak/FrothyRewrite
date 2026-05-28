@@ -35,6 +35,9 @@ enum {
 #if FR_FEATURE_UART
 typedef struct fr_esp_app_uart_t {
   bool in_use;
+  bool custom_pins; /* true only for uart.open-on; tx/rx hold the chosen pins */
+  uint16_t tx;
+  uint16_t rx;
   uint16_t rate_code;
 } fr_esp_app_uart_t;
 
@@ -223,6 +226,30 @@ static fr_err_t fr_esp_app_uart_entry(uint16_t platform_index,
   *out_uart = &fr_esp_app_uarts[platform_index];
   *out_port = fr_esp_app_uart_ports[platform_index];
   return FR_OK;
+}
+
+/* Custom-pin conflict checks for uart.open-on. The default uart.open path
+ * does not set pins (the ESP-IDF driver uses per-port defaults), so it does
+ * not participate in the conflict list. */
+static bool fr_esp_app_uart_console_conflict(uint16_t tx, uint16_t rx) {
+  return tx == FR_BOARD_UART_TX || tx == FR_BOARD_UART_RX ||
+         rx == FR_BOARD_UART_TX || rx == FR_BOARD_UART_RX;
+}
+
+static bool fr_esp_app_uart_pin_conflict(uint16_t tx, uint16_t rx) {
+  for (uint16_t i = 0;
+       i < sizeof(fr_esp_app_uarts) / sizeof(fr_esp_app_uarts[0]); i++) {
+    const fr_esp_app_uart_t *uart = &fr_esp_app_uarts[i];
+
+    if (!uart->in_use || !uart->custom_pins) {
+      continue;
+    }
+    if (uart->tx == tx || uart->tx == rx || uart->rx == tx ||
+        uart->rx == rx) {
+      return true;
+    }
+  }
+  return false;
 }
 #endif
 
@@ -449,6 +476,79 @@ fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
 
   *uart = (fr_esp_app_uart_t){
       .in_use = true,
+      .rate_code = rate_code,
+  };
+  *out_platform_index = port;
+  return FR_OK;
+}
+
+/* uart.open-on: caller picks tx/rx pins, with conflict checks against the
+ * console UART and any already-open custom-pin UART. Setup mirrors
+ * fr_platform_uart_open and adds a uart_set_pin step before flushing input. */
+fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
+                                  uint16_t rate_code,
+                                  uint16_t *out_platform_index) {
+  int baud = 0;
+  fr_esp_app_uart_t *uart = NULL;
+  uart_port_t target_port = UART_NUM_0;
+  esp_err_t err = ESP_OK;
+  uart_config_t config = {
+      .data_bits = UART_DATA_8_BITS,
+      .parity = UART_PARITY_DISABLE,
+      .stop_bits = UART_STOP_BITS_1,
+      .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+      .source_clk = UART_SCLK_DEFAULT,
+  };
+
+  if (out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (port >= sizeof(fr_esp_app_uart_ports) / sizeof(fr_esp_app_uart_ports[0])) {
+    return FR_ERR_DOMAIN;
+  }
+  /* Bad caller-picked pins are a domain error, not the generic INVALID
+   * uart_set_pin would map to after the driver is already installed. */
+  if (!fr_esp_gpio_pin_valid(tx) || !fr_esp_gpio_pin_valid(rx) || tx == rx) {
+    return FR_ERR_DOMAIN;
+  }
+  if (fr_esp_app_uart_console_conflict(tx, rx) ||
+      fr_esp_app_uart_pin_conflict(tx, rx)) {
+    return FR_ERR_DOMAIN;
+  }
+  target_port = fr_esp_app_uart_ports[port];
+  uart = &fr_esp_app_uarts[port];
+  if (uart->in_use) {
+    return FR_ERR_DOMAIN;
+  }
+  FR_TRY(fr_esp_uart_baud(rate_code, &baud));
+  config.baud_rate = baud;
+
+  err = uart_driver_install(target_port, FR_ESP_APP_UART_RX_BYTES,
+                            FR_ESP_APP_UART_TX_BYTES, 0, NULL, 0);
+  if (err != ESP_OK) {
+    return fr_esp_err(err);
+  }
+  err = uart_param_config(target_port, &config);
+  if (err == ESP_OK) {
+    err = uart_set_pin(target_port, tx, rx, UART_PIN_NO_CHANGE,
+                       UART_PIN_NO_CHANGE);
+  }
+  if (err == ESP_OK) {
+    err = uart_set_mode(target_port, UART_MODE_UART);
+  }
+  if (err == ESP_OK) {
+    err = uart_flush_input(target_port);
+  }
+  if (err != ESP_OK) {
+    (void)uart_driver_delete(target_port);
+    return fr_esp_err(err);
+  }
+
+  *uart = (fr_esp_app_uart_t){
+      .in_use = true,
+      .custom_pins = true,
+      .tx = tx,
+      .rx = rx,
       .rate_code = rate_code,
   };
   *out_platform_index = port;

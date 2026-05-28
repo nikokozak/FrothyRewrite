@@ -220,6 +220,49 @@ static fr_err_t fr_native_uart_open(fr_runtime_t *runtime,
   return FR_OK;
 }
 
+/* uart.open-on: caller picks tx/rx pins instead of letting the platform use
+ * its defaults. Pin conflicts are rejected by the platform with
+ * FR_ERR_DOMAIN; what counts as a conflict is platform-specific (esp-idf
+ * also guards the console UART; host only guards already-open custom pins). */
+static fr_err_t fr_native_uart_open_on(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t port = 0;
+  uint16_t tx = 0;
+  uint16_t rx = 0;
+  uint16_t rate_code = 0;
+  fr_handle_ref_t ref = {0};
+  fr_tagged_t handle = 0;
+  uint16_t platform_index = 0;
+  fr_err_t err = FR_OK;
+
+  if (runtime == NULL || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &port));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &tx));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 2, &rx));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 3, &rate_code));
+
+  FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_UART, &ref, &handle));
+  err = fr_platform_uart_open_on(port, tx, rx, rate_code, &platform_index);
+  if (err != FR_OK) {
+    (void)fr_handle_release_reserved(runtime, ref);
+    return err;
+  }
+
+  err = fr_handle_activate(runtime, ref, platform_index);
+  if (err != FR_OK) {
+    (void)fr_platform_handle_close(FR_HANDLE_KIND_UART, platform_index);
+    (void)fr_handle_release_reserved(runtime, ref);
+    return err;
+  }
+
+  *out = handle;
+  return FR_OK;
+}
+
 static fr_err_t fr_native_uart_write_byte(fr_runtime_t *runtime,
                                           const fr_tagged_t *args,
                                           uint8_t arg_count,
@@ -511,6 +554,19 @@ static const fr_native_signature_t fr_native_uart_open_signature = {
     .help = "open a uart port at a baud rate",
 };
 
+static const fr_native_param_t fr_native_uart_open_on_params[] = {
+    {"port", FR_NATIVE_VALUE_INT},
+    {"tx", FR_NATIVE_VALUE_INT},
+    {"rx", FR_NATIVE_VALUE_INT},
+    {"baud", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_uart_open_on_signature = {
+    .params = fr_native_uart_open_on_params,
+    .arg_count = 4,
+    .result = FR_NATIVE_VALUE_HANDLE,
+    .help = "open a uart on caller-picked tx and rx pins",
+};
+
 static const fr_native_signature_t fr_native_uart_write_byte_signature = {
     .params = fr_native_handle_int_params,
     .arg_count = 2,
@@ -641,6 +697,18 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 2,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_uart_open_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_UART_OPEN_ON,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "uart.open-on",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_uart_open_on,
+        .native_arity = 4,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_uart_open_on_signature,
 #endif
     },
     {

@@ -25,7 +25,10 @@ enum {
 
 typedef struct fr_host_uart_t {
   bool in_use;
+  bool custom_pins; /* true only for uart.open-on; tx/rx hold the chosen pins */
   uint16_t port;
+  uint16_t tx;
+  uint16_t rx;
   uint16_t rate_code;
   uint8_t read_index;
   uint8_t last_written;
@@ -176,6 +179,59 @@ fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
     *uart = (fr_host_uart_t){
         .in_use = true,
         .port = port,
+        .rate_code = rate_code,
+    };
+    *out_platform_index = i;
+    return FR_OK;
+  }
+
+  return FR_ERR_CAPACITY;
+}
+
+/* Host has no real GPIO lines, so there is no console UART to collide with.
+ * The host still records tx/rx and rejects two open-on calls that pick the
+ * same pin, which is what lets the test suite exercise the override path
+ * without an ESP32 in the room. */
+static bool fr_host_uart_pin_conflict(uint16_t tx, uint16_t rx) {
+  for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
+    const fr_host_uart_t *uart = &fr_host_uarts[i];
+
+    if (!uart->in_use || !uart->custom_pins) {
+      continue;
+    }
+    if (uart->tx == tx || uart->tx == rx || uart->rx == tx ||
+        uart->rx == rx) {
+      return true;
+    }
+  }
+  return false;
+}
+
+fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
+                                  uint16_t rate_code,
+                                  uint16_t *out_platform_index) {
+  if (out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_rate_valid(rate_code) ||
+      fr_host_uart_port_in_use(port) || tx == rx ||
+      fr_host_uart_pin_conflict(tx, rx)) {
+    return FR_ERR_DOMAIN;
+  }
+
+  for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
+    fr_host_uart_t *uart = &fr_host_uarts[i];
+
+    if (uart->in_use) {
+      continue;
+    }
+
+    *uart = (fr_host_uart_t){
+        .in_use = true,
+        .custom_pins = true,
+        .port = port,
+        .tx = tx,
+        .rx = rx,
         .rate_code = rate_code,
     };
     *out_platform_index = i;
