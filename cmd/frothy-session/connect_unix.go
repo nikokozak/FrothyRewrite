@@ -24,11 +24,7 @@ func defaultConnectDeviceFactory(port string, baud int) (*serialDevice, func(), 
 	return dev, func() { dev.close() }, nil
 }
 
-// runConnectInteractive sets up the input/device goroutines and hands off
-// to runConnectLoop. The loop itself is a thin driver over connectController;
-// the controller's event handlers are synchronous, which lets tests pin the
-// submit-flushes-pending order without a sleep race.
-func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer) int {
+func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer, hist connectHistory) int {
 	inputs := make(chan inputEvent, 64)
 	devices := make(chan deviceEvent, 64)
 	stop := make(chan struct{})
@@ -44,20 +40,27 @@ func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer)
 	go runInputReader(stdin, inputs, stop)
 	go runSerialEventPump(dev.readCh, dev.errCh, devices, stop)
 
+	entries := append([]string(nil), hist.initial...)
 	c := newConnectController(stdout, dev.writeBytes)
-	return runConnectLoop(c, inputs, devices)
+	if hist.enabled {
+		c.addHistory = func(line string) {
+			entries = appendHistory(entries, line)
+		}
+	}
+	code := runConnectLoop(c, inputs, devices)
+	if hist.enabled && hist.path != "" {
+		_ = saveHistory(hist.path, entries)
+	}
+	return code
 }
 
-// connectController owns the line buffer, the pending-device-output buffer,
-// and the redraw policy. Every transition runs synchronously inside an
-// event handler — no timers, no goroutines — so a test can drive a known
-// sequence (printable → deviceBytes → submit) and read stdout directly.
 type connectController struct {
-	out       io.Writer
-	sendLine  func([]byte) error
-	buf       []byte
-	pending   []byte
-	idleArmed bool
+	out        io.Writer
+	sendLine   func([]byte) error
+	addHistory func(string)
+	buf        []byte
+	pending    []byte
+	idleArmed  bool
 }
 
 func newConnectController(out io.Writer, sendLine func([]byte) error) *connectController {
@@ -99,8 +102,11 @@ func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
 			c.pending = c.pending[:0]
 		}
 		c.idleArmed = false
-		line := string(c.buf) + "\n"
-		_ = c.sendLine([]byte(line))
+		line := string(c.buf)
+		if c.addHistory != nil {
+			c.addHistory(line)
+		}
+		_ = c.sendLine([]byte(line + "\n"))
 		c.buf = c.buf[:0]
 		c.writePrompt()
 	case inputInterrupt:

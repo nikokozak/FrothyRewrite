@@ -43,7 +43,7 @@ func TestConnectRedrawAfterDeviceOutputMidTyping(t *testing.T) {
 
 	done := make(chan int, 1)
 	go func() {
-		done <- runConnectInteractive(dev, stdinR, syncedStdout)
+		done <- runConnectInteractive(dev, stdinR, syncedStdout, connectHistory{})
 	}()
 
 	if _, err := stdinW.Write([]byte("foo")); err != nil {

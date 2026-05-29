@@ -4,14 +4,11 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"reflect"
 	"testing"
 )
 
-// Submit with pending device output flushes the notice before the new
-// prompt and sends the buffered line to the device. The previous PTY
-// version of this proof leaned on a 10ms sleep; here every step is a
-// synchronous call to the controller, so the order is what the code
-// does, not what the host scheduler does first.
 func TestConnectControllerSubmitFlushesPending(t *testing.T) {
 	var out bytes.Buffer
 	var sent [][]byte
@@ -46,8 +43,6 @@ func TestConnectControllerSubmitFlushesPending(t *testing.T) {
 	}
 }
 
-// Device output that arrives while the line buffer is empty prints
-// straight through and does not arm the idle flush.
 func TestConnectControllerDeviceBytesWithEmptyBuf(t *testing.T) {
 	var out bytes.Buffer
 	c := newConnectController(&out, func([]byte) error { return nil })
@@ -64,7 +59,30 @@ func TestConnectControllerDeviceBytesWithEmptyBuf(t *testing.T) {
 	}
 }
 
-// Idle fire flushes the pending notice and redraws the prompt + buffer.
+func TestConnectControllerSubmitRecordsHistory(t *testing.T) {
+	var entries []string
+	c := newConnectController(io.Discard, func([]byte) error { return nil })
+	c.addHistory = func(line string) { entries = appendHistory(entries, line) }
+	c.writePrompt()
+
+	for _, seq := range []struct{ keys, submit string }{
+		{"foo", "foo"},
+		{"foo", "foo"}, // dedup against prior
+		{"", ""},       // empty submit skipped
+		{"bar", "bar"},
+	} {
+		if seq.keys != "" {
+			c.onInput(inputPrintable{Bytes: []byte(seq.keys)})
+		}
+		c.onInput(inputSubmit{})
+	}
+
+	want := []string{"foo", "bar"}
+	if !reflect.DeepEqual(entries, want) {
+		t.Fatalf("entries = %q, want %q", entries, want)
+	}
+}
+
 func TestConnectControllerIdleFireRedraws(t *testing.T) {
 	var out bytes.Buffer
 	c := newConnectController(&out, func([]byte) error { return nil })
