@@ -24,10 +24,10 @@ func defaultConnectDeviceFactory(port string, baud int) (*serialDevice, func(), 
 	return dev, func() { dev.close() }, nil
 }
 
-// runConnectInteractive owns the main loop and the redraw. Device output
-// arriving while a partial input line is buffered is held back until the
-// user stops typing for idleFlushDelay, then the input line is erased,
-// the device output is printed, and the prompt + buffer are redrawn.
+// runConnectInteractive sets up the input/device goroutines and hands off
+// to runConnectLoop. The loop itself is a thin driver over connectController;
+// the controller's event handlers are synchronous, which lets tests pin the
+// submit-flushes-pending order without a sleep race.
 func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer) int {
 	inputs := make(chan inputEvent, 64)
 	devices := make(chan deviceEvent, 64)
@@ -44,41 +44,108 @@ func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer)
 	go runInputReader(stdin, inputs, stop)
 	go runSerialEventPump(dev.readCh, dev.errCh, devices, stop)
 
-	var buf []byte
-	var pending []byte
+	c := newConnectController(stdout, dev.writeBytes)
+	return runConnectLoop(c, inputs, devices)
+}
+
+// connectController owns the line buffer, the pending-device-output buffer,
+// and the redraw policy. Every transition runs synchronously inside an
+// event handler — no timers, no goroutines — so a test can drive a known
+// sequence (printable → deviceBytes → submit) and read stdout directly.
+type connectController struct {
+	out       io.Writer
+	sendLine  func([]byte) error
+	buf       []byte
+	pending   []byte
+	idleArmed bool
+}
+
+func newConnectController(out io.Writer, sendLine func([]byte) error) *connectController {
+	return &connectController{out: out, sendLine: sendLine}
+}
+
+func (c *connectController) writePrompt() {
+	_, _ = io.WriteString(c.out, promptPrimary)
+	if len(c.buf) > 0 {
+		_, _ = c.out.Write(c.buf)
+	}
+}
+
+func (c *connectController) flushPending() {
+	if len(c.pending) == 0 {
+		c.idleArmed = false
+		return
+	}
+	if len(c.buf) > 0 {
+		_, _ = io.WriteString(c.out, "\r\x1b[K")
+	}
+	_, _ = c.out.Write(c.pending)
+	c.pending = c.pending[:0]
+	c.idleArmed = false
+	if len(c.buf) > 0 {
+		c.writePrompt()
+	}
+}
+
+func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
+	switch e := ev.(type) {
+	case inputPrintable:
+		c.buf = append(c.buf, e.Bytes...)
+		_, _ = c.out.Write(e.Bytes)
+	case inputSubmit:
+		_, _ = io.WriteString(c.out, "\n")
+		if len(c.pending) > 0 {
+			_, _ = c.out.Write(c.pending)
+			c.pending = c.pending[:0]
+		}
+		c.idleArmed = false
+		line := string(c.buf) + "\n"
+		_ = c.sendLine([]byte(line))
+		c.buf = c.buf[:0]
+		c.writePrompt()
+	case inputInterrupt:
+		// Decision 7 (Ctrl-C rules) is not wired here yet.
+	case inputEOF:
+		c.flushPending()
+		return true, 0
+	case inputError:
+		_ = e
+		c.flushPending()
+		return true, 1
+	}
+	return false, 0
+}
+
+func (c *connectController) onDevice(ev deviceEvent) (exit bool, code int) {
+	switch e := ev.(type) {
+	case deviceBytes:
+		if len(c.buf) == 0 {
+			_, _ = c.out.Write(e.Bytes)
+		} else {
+			c.pending = append(c.pending, e.Bytes...)
+			c.idleArmed = true
+		}
+	case devicePrompt:
+		// Informational; the renderer prints "> " as part of deviceBytes.
+	case deviceError:
+		_ = e
+		c.flushPending()
+		return true, 1
+	}
+	return false, 0
+}
+
+func (c *connectController) onIdleFire() {
+	c.idleArmed = false
+	c.flushPending()
+}
+
+func runConnectLoop(c *connectController, inputs <-chan inputEvent, devices <-chan deviceEvent) int {
 	idle := time.NewTimer(time.Hour)
 	idle.Stop()
-	idleArmed := false
-
-	writePrompt := func() {
-		_, _ = io.WriteString(stdout, promptPrimary)
-		if len(buf) > 0 {
-			_, _ = stdout.Write(buf)
-		}
-	}
-	flushPending := func() {
-		if len(pending) == 0 {
-			idleArmed = false
-			return
-		}
-		if len(buf) > 0 {
-			_, _ = io.WriteString(stdout, "\r\x1b[K")
-		}
-		_, _ = stdout.Write(pending)
-		pending = pending[:0]
-		idleArmed = false
-		if len(buf) > 0 {
-			writePrompt()
-		}
-	}
-	armIdle := func() {
-		if !idleArmed {
-			idle.Reset(idleFlushDelay)
-			idleArmed = true
-		}
-	}
-	resetIdle := func() {
-		if idleArmed {
+	timerArmed := false
+	resetTimer := func() {
+		if timerArmed {
 			if !idle.Stop() {
 				select {
 				case <-idle.C:
@@ -88,64 +155,47 @@ func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer)
 			idle.Reset(idleFlushDelay)
 		}
 	}
+	syncTimer := func() {
+		if c.idleArmed && !timerArmed {
+			idle.Reset(idleFlushDelay)
+			timerArmed = true
+		} else if !c.idleArmed && timerArmed {
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
+			}
+			timerArmed = false
+		}
+	}
 
-	writePrompt()
+	c.writePrompt()
 
 	for {
 		select {
 		case ev, ok := <-inputs:
 			if !ok {
-				flushPending()
+				c.flushPending()
 				return 0
 			}
-			resetIdle()
-			switch e := ev.(type) {
-			case inputPrintable:
-				buf = append(buf, e.Bytes...)
-				_, _ = stdout.Write(e.Bytes)
-			case inputSubmit:
-				_, _ = io.WriteString(stdout, "\n")
-				if len(pending) > 0 {
-					_, _ = stdout.Write(pending)
-					pending = pending[:0]
-				}
-				idleArmed = false
-				line := string(buf) + "\n"
-				_ = dev.writeBytes([]byte(line))
-				buf = buf[:0]
-				writePrompt()
-			case inputInterrupt:
-				// Decision 7 (Ctrl-C rules) is not wired here yet.
-			case inputEOF:
-				flushPending()
-				return 0
-			case inputError:
-				flushPending()
-				return 1
+			resetTimer()
+			if exit, code := c.onInput(ev); exit {
+				return code
 			}
+			syncTimer()
 		case ev, ok := <-devices:
 			if !ok {
-				flushPending()
+				c.flushPending()
 				return 0
 			}
-			switch e := ev.(type) {
-			case deviceBytes:
-				if len(buf) == 0 {
-					_, _ = stdout.Write(e.Bytes)
-				} else {
-					pending = append(pending, e.Bytes...)
-					armIdle()
-				}
-			case devicePrompt:
-				// Informational; the renderer prints "> " as part of the
-				// preceding deviceBytes.
-			case deviceError:
-				flushPending()
-				return 1
+			if exit, code := c.onDevice(ev); exit {
+				return code
 			}
+			syncTimer()
 		case <-idle.C:
-			idleArmed = false
-			flushPending()
+			timerArmed = false
+			c.onIdleFire()
 		}
 	}
 }
