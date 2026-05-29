@@ -1,15 +1,8 @@
 package main
 
-import (
-	"fmt"
-	"os"
-)
-
-// runConnectMain is the connect verb entry. The real Unix line
-// editor lands in connect_unix.go; the Windows error path lands in
-// connect_windows.go. Until those arrive, the verb registers but
-// reports unimplemented so the dispatcher path is exercised.
+// runConnectMain is the connect verb entry. The platform-specific
+// path lives in connect_unix.go and connect_windows.go behind build
+// tags; this file holds the cross-platform dispatch only.
 func runConnectMain() int {
-	fmt.Fprintln(os.Stderr, "frothy connect: not yet implemented")
-	return 1
+	return runConnect()
 }
