@@ -97,6 +97,87 @@ func TestConnectRedrawAfterDeviceOutputMidTyping(t *testing.T) {
 	}
 }
 
+// User types "foo" without Enter; device emits a notice line into the
+// pending buffer; the user submits before the idle window fires. The
+// notice must print between the submit newline and the next prompt; no
+// device bytes are dropped.
+func TestConnectSubmitFlushesPendingDeviceOutput(t *testing.T) {
+	master, slave, _, err := testpty.Open()
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := configureSerial(slave, 115200); err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer slave.Close()
+
+	dev := &serialDevice{
+		file:   slave,
+		readCh: make(chan byte, 256),
+		errCh:  make(chan error, 1),
+	}
+	go dev.readLoop()
+
+	stdinR, stdinW := io.Pipe()
+	defer stdinR.Close()
+
+	var stdoutMu sync.Mutex
+	var stdout bytes.Buffer
+	syncedStdout := &lockedWriter{w: &stdout, mu: &stdoutMu}
+
+	done := make(chan int, 1)
+	go func() {
+		done <- runConnectInteractive(dev, stdinR, syncedStdout)
+	}()
+
+	if _, err := stdinW.Write([]byte("foo")); err != nil {
+		t.Fatal(err)
+	}
+	waitForStdoutContains(t, &stdoutMu, &stdout, promptPrimary+"foo", time.Second)
+
+	if _, err := master.Write([]byte("notice\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	// Beat the 50ms idle flush. 10ms is enough for the PTY → readLoop →
+	// pump pipeline to deposit the notice into pending; the remaining
+	// 40ms covers the submit before the idle timer fires.
+	time.Sleep(10 * time.Millisecond)
+
+	if _, err := stdinW.Write([]byte("\r")); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForStdoutMatches(t, &stdoutMu, &stdout, func(s string) bool {
+		marker := promptPrimary + "foo\n"
+		i := strings.Index(s, marker)
+		if i < 0 {
+			return false
+		}
+		rest := s[i+len(marker):]
+		n := strings.Index(rest, "notice")
+		if n < 0 {
+			return false
+		}
+		p := strings.Index(rest, promptPrimary)
+		return p > n
+	}, time.Second)
+
+	if _, err := stdinW.Write([]byte{0x04}); err != nil {
+		t.Fatal(err)
+	}
+	_ = stdinW.Close()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runConnectInteractive did not return")
+	}
+}
+
 type lockedWriter struct {
 	w  io.Writer
 	mu *sync.Mutex

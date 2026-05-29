@@ -105,11 +105,14 @@ func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer)
 				_, _ = stdout.Write(e.Bytes)
 			case inputSubmit:
 				_, _ = io.WriteString(stdout, "\n")
+				if len(pending) > 0 {
+					_, _ = stdout.Write(pending)
+					pending = pending[:0]
+				}
+				idleArmed = false
 				line := string(buf) + "\n"
 				_ = dev.writeBytes([]byte(line))
 				buf = buf[:0]
-				pending = pending[:0]
-				idleArmed = false
 				writePrompt()
 			case inputInterrupt:
 				// Decision 7 (Ctrl-C rules) is not wired here yet.
