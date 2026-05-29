@@ -270,7 +270,7 @@ func TestDefaultCompilerPathFallsBackToLookPath(t *testing.T) {
 }
 
 func sessionStubVerbs() []verb {
-	return []verb{{name: "session", summary: "stub", run: func() {}}}
+	return []verb{{name: "session", summary: "stub", run: func() int { return 0 }}}
 }
 
 func TestFrothyHelpPrintsUsageToStdoutAndExitsZero(t *testing.T) {
@@ -330,7 +330,7 @@ func TestFrothyDispatchesSessionVerbAndRewritesArgs(t *testing.T) {
 	defer func() { os.Args = savedArgs }()
 
 	var ran bool
-	verbs := []verb{{name: "session", summary: "stub", run: func() { ran = true }}}
+	verbs := []verb{{name: "session", summary: "stub", run: func() int { ran = true; return 0 }}}
 
 	var stdout, stderr bytes.Buffer
 	code := runFrothyCommand([]string{"/usr/local/bin/frothy", "session", "--dry-run"}, &stdout, &stderr, verbs)
@@ -342,6 +342,19 @@ func TestFrothyDispatchesSessionVerbAndRewritesArgs(t *testing.T) {
 	}
 	if got, want := strings.Join(os.Args, "\n"), "/usr/local/bin/frothy session\n--dry-run"; got != want {
 		t.Fatalf("os.Args = %q, want %q", got, want)
+	}
+}
+
+func TestFrothyDispatchPropagatesVerbExitCode(t *testing.T) {
+	savedArgs := os.Args
+	defer func() { os.Args = savedArgs }()
+
+	verbs := []verb{{name: "session", summary: "stub", run: func() int { return 7 }}}
+
+	var stdout, stderr bytes.Buffer
+	code := runFrothyCommand([]string{"/usr/local/bin/frothy", "session"}, &stdout, &stderr, verbs)
+	if code != 7 {
+		t.Fatalf("exit code %d, want 7", code)
 	}
 }
 

@@ -1873,7 +1873,7 @@ func forwardInterruptSignals(dev interface{ sendInterrupt() error }, stderr io.W
 type verb struct {
 	name    string
 	summary string
-	run     func()
+	run     func() int
 }
 
 func availableVerbs() []verb {
@@ -1913,8 +1913,7 @@ func runFrothyCommand(args []string, stdout io.Writer, stderr io.Writer, verbs [
 	for _, v := range verbs {
 		if v.name == args[1] {
 			os.Args = append([]string{args[0] + " " + v.name}, args[2:]...)
-			v.run()
-			return 0
+			return v.run()
 		}
 	}
 	fmt.Fprintf(stderr, "frothy: unknown verb %q\n", args[1])
@@ -1922,7 +1921,7 @@ func runFrothyCommand(args []string, stdout io.Writer, stderr io.Writer, verbs [
 	return 2
 }
 
-func runSessionMain() {
+func runSessionMain() int {
 	var (
 		port         = flag.String("port", "", "serial port, for example /dev/cu.usbmodem101")
 		baud         = flag.Int("baud", 115200, "serial baud rate")
@@ -1972,7 +1971,7 @@ func runSessionMain() {
 			fmt.Fprintf(os.Stderr, "session: %v\n", err)
 			os.Exit(1)
 		}
-		return
+		return 0
 	}
 
 	if *port == "" {
@@ -2059,11 +2058,12 @@ func runSessionMain() {
 			fmt.Fprintf(os.Stderr, "session: %v\n", err)
 			os.Exit(1)
 		}
-		return
+		return 0
 	}
 
 	if err := runSerialWithModeAndInterrupts(input, os.Stdout, comp, dev, *timeout, useCompiler, tracker); err != nil {
 		fmt.Fprintf(os.Stderr, "session: %v\n", err)
 		os.Exit(1)
 	}
+	return 0
 }
