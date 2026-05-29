@@ -161,6 +161,93 @@ func TestConnectInterruptForwardsAndDoubleExits(t *testing.T) {
 	}
 }
 
+// Empty-buffer Ctrl-C forwards 0x03 to the device and then waits for the
+// device's "> " prompt (via the pump's devicePrompt event) before redrawing
+// the client prompt. The proof is in the stdout order: no client redraw
+// between the initial prompt and the device's recovery output.
+func TestConnectInterruptEmptyWaitsForDevicePrompt(t *testing.T) {
+	master, slave, _, err := testpty.Open()
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := configureSerial(slave, 115200); err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer slave.Close()
+
+	dev := &serialDevice{
+		file:   slave,
+		readCh: make(chan byte, 256),
+		errCh:  make(chan error, 1),
+	}
+	go dev.readLoop()
+
+	stdinR, stdinW := io.Pipe()
+	defer stdinR.Close()
+
+	var stdoutMu sync.Mutex
+	var stdout bytes.Buffer
+	syncedStdout := &lockedWriter{w: &stdout, mu: &stdoutMu}
+
+	done := make(chan int, 1)
+	go func() {
+		done <- runConnectInteractive(dev, stdinR, syncedStdout, connectHistory{})
+	}()
+
+	waitForStdoutContains(t, &stdoutMu, &stdout, promptPrimary, time.Second)
+
+	deviceRx := readChan(master)
+
+	if _, err := stdinW.Write([]byte{0x03}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case b := <-deviceRx:
+		if b != 0x03 {
+			t.Fatalf("device byte = %#x, want 0x03", b)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("device did not receive interrupt byte")
+	}
+
+	if _, err := master.Write([]byte("ok\r\n> ")); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForStdoutMatches(t, &stdoutMu, &stdout, func(s string) bool {
+		i := strings.Index(s, "ok\r\n")
+		return i >= 0 && strings.Contains(s[i:], "\r\x1b[K"+promptPrimary)
+	}, time.Second)
+
+	stdoutMu.Lock()
+	out := stdout.String()
+	stdoutMu.Unlock()
+
+	firstPromptEnd := strings.Index(out, promptPrimary) + len(promptPrimary)
+	okIdx := strings.Index(out, "ok\r\n")
+	if okIdx < 0 {
+		t.Fatalf("device output missing from stdout: %q", out)
+	}
+	if strings.Contains(out[firstPromptEnd:okIdx], "\r\x1b[K") {
+		t.Fatalf("client redrew before device's prompt arrived: %q", out)
+	}
+
+	if _, err := stdinW.Write([]byte{0x04}); err != nil {
+		t.Fatal(err)
+	}
+	_ = stdinW.Close()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Ctrl-D did not exit")
+	}
+}
+
 // User types a line then Ctrl-C; the buffer clears (so the device never
 // sees 0x03), and a follow-up Ctrl-D on the now-empty buffer exits.
 func TestConnectInterruptWithBufferClearsThenEOFExits(t *testing.T) {

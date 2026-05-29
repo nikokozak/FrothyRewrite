@@ -74,6 +74,7 @@ type connectController struct {
 	idleArmed       bool
 	lastInterruptAt time.Time
 	hasInterrupt    bool
+	awaitingPrompt  bool
 }
 
 func newConnectController(out io.Writer, sendLine func([]byte) error) *connectController {
@@ -189,6 +190,8 @@ func (c *connectController) onInterrupt() (exit bool, code int) {
 	}
 	if c.sendInterrupt != nil {
 		_ = c.sendInterrupt()
+		c.awaitingPrompt = true
+		return false, 0
 	}
 	c.redrawLine()
 	return false, 0
@@ -294,7 +297,10 @@ func (c *connectController) onDevice(ev deviceEvent) (exit bool, code int) {
 			c.idleArmed = true
 		}
 	case devicePrompt:
-		// Informational; the renderer prints "> " as part of deviceBytes.
+		if c.awaitingPrompt {
+			c.awaitingPrompt = false
+			c.redrawLine()
+		}
 	case deviceError:
 		_ = e
 		c.flushPending()

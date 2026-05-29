@@ -217,17 +217,36 @@ func TestConnectControllerInterruptClearsBuffer(t *testing.T) {
 	}
 }
 
-func TestConnectControllerInterruptEmptyForwardsToDevice(t *testing.T) {
+func TestConnectControllerInterruptEmptyWaitsForDevicePrompt(t *testing.T) {
+	var out bytes.Buffer
 	var interrupts int
-	c := newConnectController(io.Discard, func([]byte) error { return nil })
+	c := newConnectController(&out, func([]byte) error { return nil })
 	c.sendInterrupt = func() error { interrupts++; return nil }
 	c.writePrompt()
 
+	startLen := out.Len()
 	if exit, _ := c.onInput(inputInterrupt{}); exit {
 		t.Fatal("Ctrl-C without buf should not exit on first press")
 	}
 	if interrupts != 1 {
 		t.Fatalf("device interrupts=%d, want 1", interrupts)
+	}
+	if !c.awaitingPrompt {
+		t.Fatal("awaitingPrompt not set after empty-buf Ctrl-C")
+	}
+	if got := out.String()[startLen:]; got != "" {
+		t.Fatalf("client redrew before device prompt arrived: %q", got)
+	}
+
+	if exit, _ := c.onDevice(devicePrompt{}); exit {
+		t.Fatal("devicePrompt exited")
+	}
+	if c.awaitingPrompt {
+		t.Fatal("awaitingPrompt not cleared on devicePrompt")
+	}
+	want := "\r\x1b[K" + promptPrimary
+	if got := out.String()[startLen:]; got != want {
+		t.Fatalf("redraw on devicePrompt = %q, want %q", got, want)
 	}
 }
 
