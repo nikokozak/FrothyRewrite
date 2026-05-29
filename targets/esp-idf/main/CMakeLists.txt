@@ -1,3 +1,5 @@
+set(FR_GEN_DIR ${FR_REWRITE_ROOT}/build/${FR_REWRITE_BOARD}/gen)
+
 set(FR_KERNEL_SOURCES
     ${FR_REWRITE_ROOT}/src/tagged.c
     ${FR_REWRITE_ROOT}/src/crc.c
@@ -8,6 +10,7 @@ set(FR_KERNEL_SOURCES
     ${FR_REWRITE_ROOT}/src/code.c
     ${FR_REWRITE_ROOT}/src/native.c
     ${FR_REWRITE_ROOT}/src/handle.c
+    ${FR_REWRITE_ROOT}/src/pad.c
     ${FR_REWRITE_ROOT}/src/object.c
     ${FR_REWRITE_ROOT}/src/image.c
     ${FR_REWRITE_ROOT}/src/base_defs.c
@@ -16,8 +19,10 @@ set(FR_KERNEL_SOURCES
     ${FR_REWRITE_ROOT}/src/parse.c
     ${FR_REWRITE_ROOT}/src/compile.c
     ${FR_REWRITE_ROOT}/src/repl.c
+    ${FR_REWRITE_ROOT}/src/source_render.c
     ${FR_REWRITE_ROOT}/src/persist.c
-    ${FR_REWRITE_ROOT}/src/persist_payload.c)
+    ${FR_REWRITE_ROOT}/src/persist_payload.c
+    ${FR_GEN_DIR}/fr_source_base.c)
 
 idf_component_register(
     SRCS
@@ -31,6 +36,7 @@ idf_component_register(
         ${FR_REWRITE_ROOT}/profiles
         ${FR_REWRITE_ROOT}/targets/esp-idf
         ${FR_REWRITE_ROOT}/boards/${FR_REWRITE_BOARD}
+        ${FR_GEN_DIR}
     REQUIRES
         driver
         esp_adc
