@@ -143,10 +143,10 @@ enum {
    user words in a fully installed base image start above them, and `words`
    lists them between the base and overlay names. */
 #if FR_FEATURE_SOURCE_BASE
-#define FR_TEST_SOURCE_BASE_WORD_COUNT 9
+#define FR_TEST_SOURCE_BASE_WORD_COUNT 12
 #define FR_TEST_SOURCE_WORDS                                                 \
   " gpio.high gpio.low gpio.toggle led.on led.off led.toggle blink "         \
-  "led.blink wrap"
+  "led.blink wrap random.chance? random.percent? sign"
 #else
 #define FR_TEST_SOURCE_BASE_WORD_COUNT 0
 #define FR_TEST_SOURCE_WORDS ""
@@ -7190,10 +7190,10 @@ static void test_repl(void) {
             strcmp(out, "ok\n") == 0);
 #if FR_FEATURE_SOURCE_BASE
   /* Source-base words take code object ids 0..N-1 at boot compile, so boot's
-     id is the source-word count (9 today). */
+     id is the source-word count (12 today). */
   CHECK("repl displays bare compiled boot",
         fr_repl_eval_line(&runtime, "boot", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "code 9\nok\n") == 0);
+            strcmp(out, "code 12\nok\n") == 0);
 #else
   CHECK("repl displays bare compiled boot",
         fr_repl_eval_line(&runtime, "boot", out, sizeof(out)) == FR_OK &&
@@ -7658,6 +7658,63 @@ static void test_repl_see_source_form(void) {
                         "gpio.write: p, 0 ]\n"
                         "ok\n") == 0);
 }
+
+#if FR_FEATURE_SOURCE_BASE
+/* Every convenience word the boot compile binds from base/core.frothy: it
+   resolves by name past the fixed base slots, owns the source layer, and `see`
+   renders the exact source form. The `;` separators in blink render spaced
+   (` ; `) — that is what the renderer emits, so pin it. */
+static void test_source_base_word_proofs(void) {
+  static const struct {
+    const char *name;
+    const char *source;
+  } words[] = {
+      {"gpio.high", "to gpio.high with pin [ gpio.write: pin, 1 ]"},
+      {"gpio.low", "to gpio.low with pin [ gpio.write: pin, 0 ]"},
+      {"gpio.toggle",
+       "to gpio.toggle with pin [ gpio.write: pin, 1 - gpio.read: pin ]"},
+      {"led.on", "to led.on [ gpio.high: $led_builtin ]"},
+      {"led.off", "to led.off [ gpio.low: $led_builtin ]"},
+      {"led.toggle", "to led.toggle [ gpio.toggle: $led_builtin ]"},
+      {"blink", "to blink with pin, count, wait [ repeat count [ gpio.high: "
+                "pin ; ms: wait ; gpio.low: pin ; ms: wait ] ]"},
+      {"led.blink", "to led.blink with count, wait [ blink: $led_builtin, "
+                    "count, wait ]"},
+      {"wrap", "to wrap with value, size [ if size <= 0 [ 0 ] else [ mod: "
+               "value, size ] ]"},
+      {"random.chance?", "to random.chance? with numer, denom [ if denom <= 0 "
+                         "[ false ] else [ numer > random.below: denom ] ]"},
+      {"random.percent?",
+       "to random.percent? with percent [ random.chance?: percent, 100 ]"},
+      {"sign", "to sign with n [ clamp: n, -1, 1 ]"},
+  };
+  fr_runtime_t runtime;
+  char out[256];
+  char expected[256];
+
+  CHECK("source word count matches the locked library",
+        sizeof(words) / sizeof(words[0]) == FR_TEST_SOURCE_BASE_WORD_COUNT);
+  CHECK("base image installs for source word proofs",
+        fr_base_image_install(&runtime) == FR_OK);
+  for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
+    fr_slot_id_t slot_id = 0;
+    fr_base_layer_t layer = FR_BASE_LAYER_CORE;
+    char see_line[64];
+
+    CHECK("source word resolves to a board-local source slot",
+          fr_slot_id_for_name(&runtime, words[i].name, &slot_id) == FR_OK &&
+              slot_id >= FR_SLOT_BOARD_LOCAL_BASE &&
+              fr_base_slot_layer(slot_id, &layer) == FR_OK &&
+              layer == FR_BASE_LAYER_SOURCE);
+    snprintf(see_line, sizeof(see_line), "see %s", words[i].name);
+    snprintf(expected, sizeof(expected), "base source code\n%s\nok\n",
+             words[i].source);
+    CHECK("source word sees its exact source form",
+          fr_repl_eval_line(&runtime, see_line, out, sizeof(out)) == FR_OK &&
+              strcmp(out, expected) == 0);
+  }
+}
+#endif
 #endif
 
 static void test_repl_pump(void) {
@@ -7937,6 +7994,9 @@ int main(void) {
 #if FR_FEATURE_COMPILER && FR_FEATURE_INTROSPECTION &&                         \
     FR_PROFILE_MAX_OVERLAY_NAMES > 0
   test_repl_see_source_form();
+#if FR_FEATURE_SOURCE_BASE
+  test_source_base_word_proofs();
+#endif
 #endif
   test_repl_pump();
   test_repl_transcript();

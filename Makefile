@@ -298,6 +298,25 @@ test-host-normal-transcript: host-normal
 		'gpio.high: $$led_builtin' \
 		'1000 + gpio.read: $$led_builtin' \
 		'see gpio.high' \
+		'gpio.low: $$led_builtin' \
+		'gpio.read: $$led_builtin' \
+		'gpio.high: $$led_builtin' \
+		'gpio.toggle: $$led_builtin' \
+		'gpio.read: $$led_builtin' \
+		'led.on:' \
+		'gpio.read: $$led_builtin' \
+		'led.off:' \
+		'gpio.read: $$led_builtin' \
+		'wrap: 7, 3' \
+		'wrap: -1, 3' \
+		'sign: -5' \
+		'sign: 0' \
+		'sign: 7' \
+		'random.chance?: 0, 100' \
+		'random.chance?: 100, 100' \
+		'random.chance?: 0, 0' \
+		'random.percent?: 100' \
+		'random.percent?: 0' \
 		'counter is cells(1)' \
 		'set counter[0] to 7' \
 		'counter[0]' \
@@ -323,7 +342,7 @@ test-host-normal-transcript: host-normal
 		'words' \
 		| build/host/frothy-host-normal); \
 	ok_count=$$(printf '%s\n' "$$out" | grep -c 'ok$$'); \
-	if [ "$$ok_count" != 31 ]; then \
+	if [ "$$ok_count" != 50 ]; then \
 		printf '%s\n' "$$out"; \
 		exit 1; \
 	fi; \
@@ -343,7 +362,9 @@ test-host-normal-transcript: host-normal
 		'1001' \
 		'to boot [ blink_times: 3 ]' \
 		'to gpio.high with pin [ gpio.write: pin, 1 ]' \
-		'wrap time myblink blink_times'; do \
+		'true' \
+		'false' \
+		'wrap random.chance? random.percent? sign time myblink blink_times'; do \
 		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
 			printf '%s\nmissing expected text: %s\n' "$$out" "$$expected"; \
 			exit 1; \
@@ -389,6 +410,12 @@ test-esp32-plain-host-transcript: esp32-plain-host
 		'gpio.high: $$led_builtin' \
 		'1000 + gpio.read: $$led_builtin' \
 		'see gpio.high' \
+		'gpio.low: $$led_builtin' \
+		'gpio.read: $$led_builtin' \
+		'led.on:' \
+		'gpio.read: $$led_builtin' \
+		'sign: -5' \
+		'random.chance?: 100, 100' \
 		'save' \
 		'clear' \
 		'restore' \
@@ -399,7 +426,7 @@ test-esp32-plain-host-transcript: esp32-plain-host
 		'see boot' \
 		| build/esp32-plain-host/frothy); \
 	ok_count=$$(printf '%s\n' "$$out" | grep -c 'ok$$'); \
-	if [ "$$ok_count" != 24 ]; then \
+	if [ "$$ok_count" != 30 ]; then \
 		printf '%s\n' "$$out"; \
 		exit 1; \
 	fi; \
@@ -418,7 +445,8 @@ test-esp32-plain-host-transcript: esp32-plain-host
 		'overlay text 5' \
 		'overlay cells 1' \
 		'to boot [ gpio.write: $$led_builtin, 1 ]' \
-		'to gpio.high with pin [ gpio.write: pin, 1 ]'; do \
+		'to gpio.high with pin [ gpio.write: pin, 1 ]' \
+		'true'; do \
 		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
 			printf '%s\nmissing expected text: %s\n' "$$out" "$$expected"; \
 			exit 1; \
