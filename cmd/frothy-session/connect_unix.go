@@ -2,15 +2,16 @@
 
 package main
 
-import (
-	"fmt"
-	"os"
-)
+import "os"
 
-// runConnect is the Unix entry. The pump, line editor, history, and
-// reset recovery land in follow-up slices; this scaffold exists so
-// the platform split is real before any of that code arrives.
 func runConnect() int {
-	fmt.Fprintln(os.Stderr, "frothy connect: scaffold; serial REPL arriving in a follow-up slice")
-	return 1
+	return runConnectCommand(os.Args[1:], os.Stderr, defaultPortLister, defaultConnectDeviceFactory)
+}
+
+func defaultConnectDeviceFactory(port string, baud int) (sessionDevice, func(), error) {
+	dev, err := openSerial(port, baud)
+	if err != nil {
+		return nil, nil, err
+	}
+	return dev, func() { dev.close() }, nil
 }
