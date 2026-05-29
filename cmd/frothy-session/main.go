@@ -1940,6 +1940,7 @@ func availableVerbs() []verb {
 		{name: "send", summary: "compile a source file and apply or run each line", run: runSendMain},
 		{name: "flash", summary: "build the board firmware and flash it over serial", run: runFlashMain},
 		{name: "doctor", summary: "check the host's compile, flash, and serial setup", run: runDoctorMain},
+		{name: "connect", summary: "connect to a device's REPL", run: runConnectMain},
 	}
 }
 
