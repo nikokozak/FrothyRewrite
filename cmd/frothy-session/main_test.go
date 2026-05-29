@@ -446,6 +446,64 @@ func TestFrothySendErrorsWhenPortMissingWithoutDryRun(t *testing.T) {
 	}
 }
 
+func TestPickPortOverrideSkipsDiscovery(t *testing.T) {
+	list := func() ([]string, error) {
+		t.Fatal("lister must not run when --port is set")
+		return nil, nil
+	}
+	got, err := pickPort("/dev/cu.usbserial-OVERRIDE", list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/dev/cu.usbserial-OVERRIDE" {
+		t.Fatalf("got %q, want override path", got)
+	}
+}
+
+func TestPickPortChoosesTheSingleSerialMatch(t *testing.T) {
+	list := func() ([]string, error) {
+		return []string{"/dev/null", "/dev/cu.usbmodem101", "/dev/random"}, nil
+	}
+	got, err := pickPort("", list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/dev/cu.usbmodem101" {
+		t.Fatalf("got %q, want /dev/cu.usbmodem101", got)
+	}
+}
+
+func TestPickPortErrorsWhenNoSerialPortFound(t *testing.T) {
+	list := func() ([]string, error) {
+		return []string{"/dev/null", "/dev/random"}, nil
+	}
+	_, err := pickPort("", list)
+	if err == nil {
+		t.Fatal("err nil, want error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "no serial port") || !strings.Contains(msg, "--port") {
+		t.Fatalf("err %q missing user guidance", msg)
+	}
+}
+
+func TestPickPortErrorsAndListsCandidatesWhenAmbiguous(t *testing.T) {
+	list := func() ([]string, error) {
+		return []string{"/dev/cu.usbmodem101", "/dev/cu.usbserial-0001", "/dev/null"}, nil
+	}
+	_, err := pickPort("", list)
+	if err == nil {
+		t.Fatal("err nil, want error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "/dev/cu.usbmodem101") || !strings.Contains(msg, "/dev/cu.usbserial-0001") {
+		t.Fatalf("err %q does not list both candidates", msg)
+	}
+	if !strings.Contains(msg, "--port") {
+		t.Fatalf("err %q does not mention --port", msg)
+	}
+}
+
 func TestParseDeviceStatus(t *testing.T) {
 	status, err := parseDeviceStatus(statusResponse("host-required"))
 	if err != nil {

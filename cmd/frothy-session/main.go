@@ -1870,6 +1870,52 @@ func forwardInterruptSignals(dev interface{ sendInterrupt() error }, stderr io.W
 	}
 }
 
+// portLister returns candidate device paths. Injected so tests can drive
+// discovery without touching the host filesystem.
+type portLister func() ([]string, error)
+
+// isLikelySerialPort matches the USB-serial naming used on macOS
+// (cu.usbmodem*, cu.usbserial*) and Linux (ttyUSB*, ttyACM*).
+func isLikelySerialPort(path string) bool {
+	base := filepath.Base(path)
+	switch {
+	case strings.HasPrefix(base, "cu.usbmodem"),
+		strings.HasPrefix(base, "cu.usbserial"),
+		strings.HasPrefix(base, "ttyUSB"),
+		strings.HasPrefix(base, "ttyACM"):
+		return true
+	}
+	return false
+}
+
+// pickPort returns override if it is set. Otherwise it asks list for
+// candidates and returns the single USB-serial match. Zero or many matches
+// each return an error that tells the user what to do next.
+func pickPort(override string, list portLister) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	paths, err := list()
+	if err != nil {
+		return "", err
+	}
+	var matches []string
+	for _, p := range paths {
+		if isLikelySerialPort(p) {
+			matches = append(matches, p)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", errors.New("no serial port found; pass --port")
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("multiple serial ports found: %s; pass --port to choose",
+			strings.Join(matches, ", "))
+	}
+}
+
 type verb struct {
 	name    string
 	summary string
