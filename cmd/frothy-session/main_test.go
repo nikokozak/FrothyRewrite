@@ -504,6 +504,96 @@ func TestPickPortErrorsAndListsCandidatesWhenAmbiguous(t *testing.T) {
 	}
 }
 
+func TestFrothyFlashBuildsMakeArgvWithDiscoveredPort(t *testing.T) {
+	var gotName string
+	var gotArgs []string
+	runner := func(name string, args []string) error {
+		gotName = name
+		gotArgs = args
+		return nil
+	}
+	known := func(b string) bool { return b == "esp32_devkit_v1" }
+	list := func() ([]string, error) {
+		return []string{"/dev/null", "/dev/cu.usbserial-0001"}, nil
+	}
+
+	var stderr bytes.Buffer
+	code := runFlashCommand([]string{"esp32_devkit_v1"}, &stderr, known, list, runner)
+	if code != 0 {
+		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotName != "make" {
+		t.Fatalf("ran %q, want make", gotName)
+	}
+	want := []string{"flash", "BOARD=esp32_devkit_v1", "BOARD_PORT=/dev/cu.usbserial-0001"}
+	if strings.Join(gotArgs, " ") != strings.Join(want, " ") {
+		t.Fatalf("argv=%q, want %q", gotArgs, want)
+	}
+}
+
+func TestFrothyFlashPortOverrideSkipsDiscovery(t *testing.T) {
+	var gotArgs []string
+	runner := func(_ string, args []string) error {
+		gotArgs = args
+		return nil
+	}
+	known := func(string) bool { return true }
+	list := func() ([]string, error) {
+		t.Fatal("lister must not run when --port is set")
+		return nil, nil
+	}
+
+	var stderr bytes.Buffer
+	code := runFlashCommand([]string{"--port", "/dev/cu.usbmodem999", "esp32_devkit_v1"}, &stderr, known, list, runner)
+	if code != 0 {
+		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if got := strings.Join(gotArgs, " "); got != "flash BOARD=esp32_devkit_v1 BOARD_PORT=/dev/cu.usbmodem999" {
+		t.Fatalf("argv=%q, want override port", got)
+	}
+}
+
+func TestFrothyFlashErrorsOnUnknownBoardBeforeInvokingMake(t *testing.T) {
+	runner := func(string, []string) error {
+		t.Fatal("runner must not run when the board is unknown")
+		return nil
+	}
+	list := func() ([]string, error) {
+		t.Fatal("lister must not run when the board is unknown")
+		return nil, nil
+	}
+	known := func(string) bool { return false }
+
+	var stderr bytes.Buffer
+	code := runFlashCommand([]string{"made_up_board"}, &stderr, known, list, runner)
+	if code == 0 {
+		t.Fatal("exit code 0, want non-zero")
+	}
+	if !strings.Contains(stderr.String(), `unknown board "made_up_board"`) {
+		t.Fatalf("stderr missing unknown-board message: %q", stderr.String())
+	}
+}
+
+func TestFrothyFlashErrorsWhenNoSerialPortFound(t *testing.T) {
+	runner := func(string, []string) error {
+		t.Fatal("runner must not run when port discovery fails")
+		return nil
+	}
+	known := func(string) bool { return true }
+	list := func() ([]string, error) {
+		return []string{"/dev/null", "/dev/random"}, nil
+	}
+
+	var stderr bytes.Buffer
+	code := runFlashCommand([]string{"esp32_devkit_v1"}, &stderr, known, list, runner)
+	if code == 0 {
+		t.Fatal("exit code 0, want non-zero")
+	}
+	if !strings.Contains(stderr.String(), "no serial port") || !strings.Contains(stderr.String(), "--port") {
+		t.Fatalf("stderr missing discovery guidance: %q", stderr.String())
+	}
+}
+
 func TestParseDeviceStatus(t *testing.T) {
 	status, err := parseDeviceStatus(statusResponse("host-required"))
 	if err != nil {

@@ -1874,6 +1874,18 @@ func forwardInterruptSignals(dev interface{ sendInterrupt() error }, stderr io.W
 // discovery without touching the host filesystem.
 type portLister func() ([]string, error)
 
+func defaultPortLister() ([]string, error) {
+	entries, err := os.ReadDir("/dev")
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(entries))
+	for _, e := range entries {
+		paths = append(paths, filepath.Join("/dev", e.Name()))
+	}
+	return paths, nil
+}
+
 // isLikelySerialPort matches the USB-serial naming used on macOS
 // (cu.usbmodem*, cu.usbserial*) and Linux (ttyUSB*, ttyACM*).
 func isLikelySerialPort(path string) bool {
@@ -1926,6 +1938,7 @@ func availableVerbs() []verb {
 	return []verb{
 		{name: "session", summary: "open an interactive REPL session over serial", run: runSessionMain},
 		{name: "send", summary: "compile a source file and apply or run each line", run: runSendMain},
+		{name: "flash", summary: "build the board firmware and flash it over serial", run: runFlashMain},
 	}
 }
 
@@ -2016,6 +2029,83 @@ func runSendCommand(args []string, stdout io.Writer, stderr io.Writer, newCompil
 	flag.CommandLine = flag.NewFlagSet(sessionArgs[0], flag.ExitOnError)
 	defer func() { flag.CommandLine = oldFlag }()
 	return runSessionMain()
+}
+
+// boardKnown is injected so tests can check unknown-board handling without
+// the boards/ tree being present.
+type boardKnown func(board string) bool
+
+// defaultBoardKnown matches the rule the Makefile uses (boards/<board>/board.mk
+// must exist), so the CLI refuses what make would refuse.
+func defaultBoardKnown(board string) bool {
+	if board == "" || strings.ContainsAny(board, "/\\") {
+		return false
+	}
+	info, err := os.Stat(filepath.Join("boards", board, "board.mk"))
+	return err == nil && !info.IsDir()
+}
+
+// commandRunner runs an external command. Injected so flash tests can capture
+// the make argv instead of executing make.
+type commandRunner func(name string, args []string) error
+
+func defaultCommandRunner(name string, args []string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
+func runFlashMain() int {
+	return runFlashCommand(os.Args[1:], os.Stderr,
+		defaultBoardKnown, defaultPortLister, defaultCommandRunner)
+}
+
+func runFlashCommand(args []string, stderr io.Writer,
+	known boardKnown, list portLister, run commandRunner) int {
+	fs := flag.NewFlagSet("frothy flash", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	port := fs.String("port", "", "serial port, for example /dev/cu.usbmodem101")
+
+	var positional []string
+	remaining := args
+	for {
+		if err := fs.Parse(remaining); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		positional = append(positional, rest[0])
+		remaining = rest[1:]
+	}
+	if len(positional) != 1 {
+		fmt.Fprintln(stderr, "flash: expected exactly one board name")
+		return 2
+	}
+	board := positional[0]
+
+	if !known(board) {
+		fmt.Fprintf(stderr, "flash: unknown board %q\n", board)
+		return 2
+	}
+
+	chosen, err := pickPort(*port, list)
+	if err != nil {
+		fmt.Fprintf(stderr, "flash: %v\n", err)
+		return 2
+	}
+
+	if err := run("make", []string{"flash", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
+		fmt.Fprintf(stderr, "flash: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func printFrothyUsage(out io.Writer, verbs []verb) {
