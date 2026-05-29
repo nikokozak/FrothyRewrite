@@ -553,9 +553,9 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       uint16_t start = r->used;
 
       /* A zero-arg call to a source-defined word: the opcode (not LOAD_SLOT)
-       * marks it a call, so the trailing colon is unambiguous. Only the
-       * call-then-return shape renders, though — mid-span its value would be
-       * dropped, and a CALL before a DROP stays a fallback. */
+       * marks it a call, so the trailing colon is unambiguous. T7b renders
+       * only the tail call-then-return shape; any other zero-arg CALL_SLOT
+       * position falls back. */
       if ((fr_code_offset_t)(ip + 3u) != end) {
         return FR_ERR_UNSUPPORTED;
       }
