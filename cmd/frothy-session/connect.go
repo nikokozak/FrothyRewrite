@@ -8,13 +8,15 @@ import (
 	"time"
 )
 
-type connectDeviceFactory func(port string, baud int) (sessionDevice, func(), error)
+type connectDeviceFactory func(port string, baud int) (*serialDevice, func(), error)
+
+type connectInteractiveFn func(dev *serialDevice, stdin io.Reader, stdout io.Writer) int
 
 func runConnectMain() int {
 	return runConnect()
 }
 
-func runConnectCommand(args []string, stderr io.Writer, list portLister, open connectDeviceFactory) int {
+func runConnectCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, list portLister, open connectDeviceFactory, interactive connectInteractiveFn) int {
 	fs := flag.NewFlagSet("frothy connect", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
@@ -57,6 +59,9 @@ func runConnectCommand(args []string, stderr io.Writer, list portLister, open co
 		return 1
 	}
 
-	fmt.Fprintln(stderr, "frothy connect: not yet implemented")
-	return 1
+	if interactive == nil {
+		fmt.Fprintln(stderr, "frothy connect: not yet implemented")
+		return 1
+	}
+	return interactive(dev, stdin, stdout)
 }

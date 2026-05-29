@@ -8,11 +8,11 @@ import (
 )
 
 func TestConnectRejectsPositionalArgs(t *testing.T) {
-	open := func(string, int) (sessionDevice, func(), error) {
+	open := func(string, int) (*serialDevice, func(), error) {
 		return nil, nil, errors.New("should not be called")
 	}
 	var stderr bytes.Buffer
-	code := runConnectCommand([]string{"extra"}, &stderr, nil, open)
+	code := runConnectCommand([]string{"extra"}, nil, nil, &stderr, nil, open, nil)
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}

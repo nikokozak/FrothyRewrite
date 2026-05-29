@@ -32,7 +32,7 @@ func TestConnectRejectsHostRequiredOverPTY(t *testing.T) {
 		"--settle=0",
 		"--timeout=5s",
 	}
-	code := runConnectCommand(args, &stderr, nil, defaultConnectDeviceFactory)
+	code := runConnectCommand(args, nil, nil, &stderr, nil, defaultConnectDeviceFactory, nil)
 
 	if err := waitForProcessFakeDevice(deviceErrs); err != nil {
 		t.Fatal(err)
