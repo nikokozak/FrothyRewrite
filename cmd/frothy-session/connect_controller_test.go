@@ -7,6 +7,7 @@ import (
 	"io"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestConnectControllerSubmitFlushesPending(t *testing.T) {
@@ -190,6 +191,96 @@ func TestConnectControllerHistoryDisabled(t *testing.T) {
 	c.onInput(inputHistoryUp{})
 	if string(c.buf) != "typed" {
 		t.Fatalf("Up without historyOn altered buf: %q", c.buf)
+	}
+}
+
+func TestConnectControllerInterruptClearsBuffer(t *testing.T) {
+	var out bytes.Buffer
+	var interrupts int
+	c := newConnectController(&out, func([]byte) error { return nil })
+	c.sendInterrupt = func() error { interrupts++; return nil }
+	c.writePrompt()
+	c.onInput(inputPrintable{Bytes: []byte("foo")})
+
+	if exit, _ := c.onInput(inputInterrupt{}); exit {
+		t.Fatal("Ctrl-C with buf should not exit")
+	}
+	if len(c.buf) != 0 || c.cursor != 0 {
+		t.Fatalf("after Ctrl-C buf=%q cursor=%d, want empty/0", c.buf, c.cursor)
+	}
+	if interrupts != 0 {
+		t.Fatalf("device interrupts=%d, want 0 (buf-clear path)", interrupts)
+	}
+	want := promptPrimary + "foo" + "\r\x1b[K" + promptPrimary
+	if got := out.String(); got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestConnectControllerInterruptEmptyForwardsToDevice(t *testing.T) {
+	var interrupts int
+	c := newConnectController(io.Discard, func([]byte) error { return nil })
+	c.sendInterrupt = func() error { interrupts++; return nil }
+	c.writePrompt()
+
+	if exit, _ := c.onInput(inputInterrupt{}); exit {
+		t.Fatal("Ctrl-C without buf should not exit on first press")
+	}
+	if interrupts != 1 {
+		t.Fatalf("device interrupts=%d, want 1", interrupts)
+	}
+}
+
+func TestConnectControllerDoubleInterruptExits(t *testing.T) {
+	c := newConnectController(io.Discard, func([]byte) error { return nil })
+	c.sendInterrupt = func() error { return nil }
+	now := time.Unix(0, 0)
+	c.now = func() time.Time { return now }
+	c.writePrompt()
+
+	if exit, _ := c.onInput(inputInterrupt{}); exit {
+		t.Fatal("first Ctrl-C exited")
+	}
+	now = now.Add(500 * time.Millisecond)
+	exit, code := c.onInput(inputInterrupt{})
+	if !exit || code != 0 {
+		t.Fatalf("second Ctrl-C inside window: exit=%v code=%d, want true/0", exit, code)
+	}
+}
+
+func TestConnectControllerInterruptOutsideWindowDoesNotExit(t *testing.T) {
+	c := newConnectController(io.Discard, func([]byte) error { return nil })
+	c.sendInterrupt = func() error { return nil }
+	now := time.Unix(0, 0)
+	c.now = func() time.Time { return now }
+	c.writePrompt()
+
+	c.onInput(inputInterrupt{})
+	now = now.Add(2 * time.Second)
+	if exit, _ := c.onInput(inputInterrupt{}); exit {
+		t.Fatal("second Ctrl-C after window exited; should be treated as new first")
+	}
+}
+
+func TestConnectControllerEOFKeepsBuffer(t *testing.T) {
+	c := newConnectController(io.Discard, func([]byte) error { return nil })
+	c.writePrompt()
+	c.onInput(inputPrintable{Bytes: []byte("foo")})
+
+	if exit, _ := c.onInput(inputEOF{}); exit {
+		t.Fatal("Ctrl-D with buf should not exit")
+	}
+	if string(c.buf) != "foo" {
+		t.Fatalf("Ctrl-D mutated buf: %q", c.buf)
+	}
+}
+
+func TestConnectControllerEOFEmptyExits(t *testing.T) {
+	c := newConnectController(io.Discard, func([]byte) error { return nil })
+	c.writePrompt()
+	exit, code := c.onInput(inputEOF{})
+	if !exit || code != 0 {
+		t.Fatalf("Ctrl-D on empty: exit=%v code=%d, want true/0", exit, code)
 	}
 }
 

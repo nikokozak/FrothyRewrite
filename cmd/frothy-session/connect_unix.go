@@ -13,6 +13,10 @@ import (
 // buffered device output is flushed and the input line is redrawn.
 const idleFlushDelay = 50 * time.Millisecond
 
+// doubleInterruptWindow is the window for decision 7's second Ctrl-C
+// to exit the client.
+const doubleInterruptWindow = time.Second
+
 func runConnect() int {
 	return runConnectCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, defaultPortLister, defaultConnectDeviceFactory, runConnectInteractive)
 }
@@ -42,6 +46,7 @@ func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer,
 	go runSerialEventPump(dev.readCh, dev.errCh, devices, stop)
 
 	c := newConnectController(stdout, dev.writeBytes)
+	c.sendInterrupt = dev.sendInterrupt
 	if hist.enabled {
 		c.historyOn = true
 		c.history = append([]string(nil), hist.initial...)
@@ -54,21 +59,25 @@ func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer,
 }
 
 type connectController struct {
-	out       io.Writer
-	sendLine  func([]byte) error
-	historyOn bool
-	history   []string
-	histIdx   int // -1 = editing current line; >=0 = replayed entry index
-	savedLine []byte
-	savedCur  int
-	buf       []byte
-	cursor    int
-	pending   []byte
-	idleArmed bool
+	out             io.Writer
+	sendLine        func([]byte) error
+	sendInterrupt   func() error
+	now             func() time.Time
+	historyOn       bool
+	history         []string
+	histIdx         int // -1 = editing current line; >=0 = replayed entry index
+	savedLine       []byte
+	savedCur        int
+	buf             []byte
+	cursor          int
+	pending         []byte
+	idleArmed       bool
+	lastInterruptAt time.Time
+	hasInterrupt    bool
 }
 
 func newConnectController(out io.Writer, sendLine func([]byte) error) *connectController {
-	return &connectController{out: out, sendLine: sendLine, histIdx: -1}
+	return &connectController{out: out, sendLine: sendLine, now: time.Now, histIdx: -1}
 }
 
 func (c *connectController) writePrompt() {
@@ -143,8 +152,11 @@ func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
 		c.savedCur = 0
 		c.writePrompt()
 	case inputInterrupt:
-		// Decision 7 (Ctrl-C rules) is not wired here yet.
+		return c.onInterrupt()
 	case inputEOF:
+		if len(c.buf) > 0 {
+			return false, 0
+		}
 		c.flushPending()
 		return true, 0
 	case inputError:
@@ -152,6 +164,33 @@ func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
 		c.flushPending()
 		return true, 1
 	}
+	return false, 0
+}
+
+// Decision 7: second Ctrl-C inside the window exits; first Ctrl-C with a
+// buffered line clears it without poking the device; first Ctrl-C with an
+// empty line forwards 0x03 to the device.
+func (c *connectController) onInterrupt() (exit bool, code int) {
+	now := c.now()
+	if c.hasInterrupt && now.Sub(c.lastInterruptAt) <= doubleInterruptWindow {
+		c.flushPending()
+		return true, 0
+	}
+	c.hasInterrupt = true
+	c.lastInterruptAt = now
+	if len(c.buf) > 0 {
+		c.buf = c.buf[:0]
+		c.cursor = 0
+		c.histIdx = -1
+		c.savedLine = c.savedLine[:0]
+		c.savedCur = 0
+		c.redrawLine()
+		return false, 0
+	}
+	if c.sendInterrupt != nil {
+		_ = c.sendInterrupt()
+	}
+	c.redrawLine()
 	return false, 0
 }
 
