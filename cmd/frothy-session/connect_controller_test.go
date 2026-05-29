@@ -60,26 +60,136 @@ func TestConnectControllerDeviceBytesWithEmptyBuf(t *testing.T) {
 }
 
 func TestConnectControllerSubmitRecordsHistory(t *testing.T) {
-	var entries []string
 	c := newConnectController(io.Discard, func([]byte) error { return nil })
-	c.addHistory = func(line string) { entries = appendHistory(entries, line) }
+	c.historyOn = true
 	c.writePrompt()
 
-	for _, seq := range []struct{ keys, submit string }{
-		{"foo", "foo"},
-		{"foo", "foo"}, // dedup against prior
-		{"", ""},       // empty submit skipped
-		{"bar", "bar"},
-	} {
-		if seq.keys != "" {
-			c.onInput(inputPrintable{Bytes: []byte(seq.keys)})
+	for _, seq := range []string{"foo", "foo", "", "bar"} {
+		if seq != "" {
+			c.onInput(inputPrintable{Bytes: []byte(seq)})
 		}
 		c.onInput(inputSubmit{})
 	}
 
 	want := []string{"foo", "bar"}
-	if !reflect.DeepEqual(entries, want) {
-		t.Fatalf("entries = %q, want %q", entries, want)
+	if !reflect.DeepEqual(c.history, want) {
+		t.Fatalf("history = %q, want %q", c.history, want)
+	}
+}
+
+func TestConnectControllerInsertMidLine(t *testing.T) {
+	var out bytes.Buffer
+	c := newConnectController(&out, func([]byte) error { return nil })
+	c.writePrompt()
+	c.onInput(inputPrintable{Bytes: []byte("foo")})
+	c.onInput(inputCursorMove{Dir: cursorLeft})
+	c.onInput(inputPrintable{Bytes: []byte("X")})
+
+	if string(c.buf) != "foXo" || c.cursor != 3 {
+		t.Fatalf("buf=%q cursor=%d, want foXo / 3", c.buf, c.cursor)
+	}
+	want := promptPrimary + "foo" +
+		"\r\x1b[K" + promptPrimary + "foo" + "\x1b[1D" +
+		"\r\x1b[K" + promptPrimary + "foXo" + "\x1b[1D"
+	if got := out.String(); got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestConnectControllerCursorHomeEnd(t *testing.T) {
+	c := newConnectController(io.Discard, func([]byte) error { return nil })
+	c.writePrompt()
+	c.onInput(inputPrintable{Bytes: []byte("hello")})
+	c.onInput(inputCursorMove{Dir: cursorHome})
+	if c.cursor != 0 {
+		t.Fatalf("after Home cursor=%d, want 0", c.cursor)
+	}
+	c.onInput(inputCursorMove{Dir: cursorEnd})
+	if c.cursor != 5 {
+		t.Fatalf("after End cursor=%d, want 5", c.cursor)
+	}
+	c.onInput(inputCursorMove{Dir: cursorRight})
+	if c.cursor != 5 {
+		t.Fatalf("Right past end advanced: cursor=%d", c.cursor)
+	}
+	c.onInput(inputCursorMove{Dir: cursorHome})
+	c.onInput(inputCursorMove{Dir: cursorLeft})
+	if c.cursor != 0 {
+		t.Fatalf("Left past start advanced: cursor=%d", c.cursor)
+	}
+}
+
+func TestConnectControllerErase(t *testing.T) {
+	cases := []struct {
+		name           string
+		seed           string
+		seedCursor     int
+		kind           eraseKind
+		wantBuf        string
+		wantCursor     int
+	}{
+		{"backspace mid", "abc", 2, eraseCharBack, "ac", 1},
+		{"backspace at zero", "abc", 0, eraseCharBack, "abc", 0},
+		{"to start", "abcdef", 3, eraseToStart, "def", 0},
+		{"to end", "abcdef", 3, eraseToEnd, "abc", 3},
+		{"word back", "one two three", 13, eraseWordBack, "one two ", 8},
+		{"word back over spaces", "one two  ", 9, eraseWordBack, "one ", 4},
+		{"word back at zero", "abc", 0, eraseWordBack, "abc", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newConnectController(io.Discard, func([]byte) error { return nil })
+			c.buf = []byte(tc.seed)
+			c.cursor = tc.seedCursor
+			c.onInput(inputErase{Kind: tc.kind})
+			if string(c.buf) != tc.wantBuf || c.cursor != tc.wantCursor {
+				t.Fatalf("buf=%q cursor=%d, want %q / %d", c.buf, c.cursor, tc.wantBuf, tc.wantCursor)
+			}
+		})
+	}
+}
+
+func TestConnectControllerHistoryUpDown(t *testing.T) {
+	c := newConnectController(io.Discard, func([]byte) error { return nil })
+	c.historyOn = true
+	c.history = []string{"alpha", "beta"}
+	c.writePrompt()
+	c.onInput(inputPrintable{Bytes: []byte("wip")})
+
+	c.onInput(inputHistoryUp{})
+	if string(c.buf) != "beta" || c.cursor != 4 {
+		t.Fatalf("first Up: buf=%q cursor=%d, want beta / 4", c.buf, c.cursor)
+	}
+	c.onInput(inputHistoryUp{})
+	if string(c.buf) != "alpha" || c.cursor != 5 {
+		t.Fatalf("second Up: buf=%q cursor=%d, want alpha / 5", c.buf, c.cursor)
+	}
+	c.onInput(inputHistoryUp{})
+	if string(c.buf) != "alpha" {
+		t.Fatalf("Up past top changed buf: %q", c.buf)
+	}
+	c.onInput(inputHistoryDown{})
+	if string(c.buf) != "beta" {
+		t.Fatalf("Down: buf=%q, want beta", c.buf)
+	}
+	c.onInput(inputHistoryDown{})
+	if string(c.buf) != "wip" || c.cursor != 3 {
+		t.Fatalf("Down to current: buf=%q cursor=%d, want wip / 3", c.buf, c.cursor)
+	}
+	c.onInput(inputHistoryDown{})
+	if string(c.buf) != "wip" {
+		t.Fatalf("Down past current changed buf: %q", c.buf)
+	}
+}
+
+func TestConnectControllerHistoryDisabled(t *testing.T) {
+	c := newConnectController(io.Discard, func([]byte) error { return nil })
+	c.history = []string{"alpha"}
+	c.writePrompt()
+	c.onInput(inputPrintable{Bytes: []byte("typed")})
+	c.onInput(inputHistoryUp{})
+	if string(c.buf) != "typed" {
+		t.Fatalf("Up without historyOn altered buf: %q", c.buf)
 	}
 }
 

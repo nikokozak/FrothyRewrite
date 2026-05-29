@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -40,31 +41,34 @@ func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer,
 	go runInputReader(stdin, inputs, stop)
 	go runSerialEventPump(dev.readCh, dev.errCh, devices, stop)
 
-	entries := append([]string(nil), hist.initial...)
 	c := newConnectController(stdout, dev.writeBytes)
 	if hist.enabled {
-		c.addHistory = func(line string) {
-			entries = appendHistory(entries, line)
-		}
+		c.historyOn = true
+		c.history = append([]string(nil), hist.initial...)
 	}
 	code := runConnectLoop(c, inputs, devices)
 	if hist.enabled && hist.path != "" {
-		_ = saveHistory(hist.path, entries)
+		_ = saveHistory(hist.path, c.history)
 	}
 	return code
 }
 
 type connectController struct {
-	out        io.Writer
-	sendLine   func([]byte) error
-	addHistory func(string)
-	buf        []byte
-	pending    []byte
-	idleArmed  bool
+	out       io.Writer
+	sendLine  func([]byte) error
+	historyOn bool
+	history   []string
+	histIdx   int // -1 = editing current line; >=0 = replayed entry index
+	savedLine []byte
+	savedCur  int
+	buf       []byte
+	cursor    int
+	pending   []byte
+	idleArmed bool
 }
 
 func newConnectController(out io.Writer, sendLine func([]byte) error) *connectController {
-	return &connectController{out: out, sendLine: sendLine}
+	return &connectController{out: out, sendLine: sendLine, histIdx: -1}
 }
 
 func (c *connectController) writePrompt() {
@@ -72,6 +76,14 @@ func (c *connectController) writePrompt() {
 	if len(c.buf) > 0 {
 		_, _ = c.out.Write(c.buf)
 	}
+	if back := len(c.buf) - c.cursor; back > 0 {
+		fmt.Fprintf(c.out, "\x1b[%dD", back)
+	}
+}
+
+func (c *connectController) redrawLine() {
+	_, _ = io.WriteString(c.out, "\r\x1b[K")
+	c.writePrompt()
 }
 
 func (c *connectController) flushPending() {
@@ -93,8 +105,25 @@ func (c *connectController) flushPending() {
 func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
 	switch e := ev.(type) {
 	case inputPrintable:
-		c.buf = append(c.buf, e.Bytes...)
-		_, _ = c.out.Write(e.Bytes)
+		if c.cursor == len(c.buf) {
+			c.buf = append(c.buf, e.Bytes...)
+			c.cursor = len(c.buf)
+			_, _ = c.out.Write(e.Bytes)
+		} else {
+			tail := append([]byte(nil), c.buf[c.cursor:]...)
+			c.buf = append(c.buf[:c.cursor], e.Bytes...)
+			c.buf = append(c.buf, tail...)
+			c.cursor += len(e.Bytes)
+			c.redrawLine()
+		}
+	case inputCursorMove:
+		c.moveCursor(e.Dir)
+	case inputErase:
+		c.erase(e.Kind)
+	case inputHistoryUp:
+		c.historyUp()
+	case inputHistoryDown:
+		c.historyDown()
 	case inputSubmit:
 		_, _ = io.WriteString(c.out, "\n")
 		if len(c.pending) > 0 {
@@ -103,11 +132,15 @@ func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
 		}
 		c.idleArmed = false
 		line := string(c.buf)
-		if c.addHistory != nil {
-			c.addHistory(line)
+		if c.historyOn {
+			c.history = appendHistory(c.history, line)
 		}
 		_ = c.sendLine([]byte(line + "\n"))
 		c.buf = c.buf[:0]
+		c.cursor = 0
+		c.histIdx = -1
+		c.savedLine = c.savedLine[:0]
+		c.savedCur = 0
 		c.writePrompt()
 	case inputInterrupt:
 		// Decision 7 (Ctrl-C rules) is not wired here yet.
@@ -120,6 +153,96 @@ func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
 		return true, 1
 	}
 	return false, 0
+}
+
+func (c *connectController) moveCursor(d cursorDir) {
+	switch d {
+	case cursorHome:
+		c.cursor = 0
+	case cursorEnd:
+		c.cursor = len(c.buf)
+	case cursorLeft:
+		if c.cursor > 0 {
+			c.cursor--
+		}
+	case cursorRight:
+		if c.cursor < len(c.buf) {
+			c.cursor++
+		}
+	}
+	c.redrawLine()
+}
+
+func (c *connectController) erase(k eraseKind) {
+	switch k {
+	case eraseCharBack:
+		if c.cursor == 0 {
+			return
+		}
+		c.buf = append(c.buf[:c.cursor-1], c.buf[c.cursor:]...)
+		c.cursor--
+	case eraseWordBack:
+		end := c.cursor
+		i := end
+		for i > 0 && c.buf[i-1] == ' ' {
+			i--
+		}
+		for i > 0 && c.buf[i-1] != ' ' {
+			i--
+		}
+		if i == end {
+			return
+		}
+		c.buf = append(c.buf[:i], c.buf[end:]...)
+		c.cursor = i
+	case eraseToStart:
+		if c.cursor == 0 {
+			return
+		}
+		c.buf = append(c.buf[:0], c.buf[c.cursor:]...)
+		c.cursor = 0
+	case eraseToEnd:
+		if c.cursor == len(c.buf) {
+			return
+		}
+		c.buf = c.buf[:c.cursor]
+	}
+	c.redrawLine()
+}
+
+func (c *connectController) historyUp() {
+	if !c.historyOn || len(c.history) == 0 {
+		return
+	}
+	switch {
+	case c.histIdx == -1:
+		c.savedLine = append(c.savedLine[:0], c.buf...)
+		c.savedCur = c.cursor
+		c.histIdx = len(c.history) - 1
+	case c.histIdx > 0:
+		c.histIdx--
+	default:
+		return
+	}
+	c.buf = append(c.buf[:0], c.history[c.histIdx]...)
+	c.cursor = len(c.buf)
+	c.redrawLine()
+}
+
+func (c *connectController) historyDown() {
+	if !c.historyOn || c.histIdx == -1 {
+		return
+	}
+	if c.histIdx < len(c.history)-1 {
+		c.histIdx++
+		c.buf = append(c.buf[:0], c.history[c.histIdx]...)
+		c.cursor = len(c.buf)
+	} else {
+		c.histIdx = -1
+		c.buf = append(c.buf[:0], c.savedLine...)
+		c.cursor = c.savedCur
+	}
+	c.redrawLine()
 }
 
 func (c *connectController) onDevice(ev deviceEvent) (exit bool, code int) {
