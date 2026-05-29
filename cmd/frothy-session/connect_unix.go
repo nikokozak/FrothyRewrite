@@ -287,15 +287,23 @@ func (c *connectController) historyDown() {
 	c.redrawLine()
 }
 
+func (c *connectController) writeDeviceText(b []byte) {
+	if len(c.buf) == 0 {
+		_, _ = c.out.Write(b)
+		return
+	}
+	c.pending = append(c.pending, b...)
+	c.idleArmed = true
+}
+
 func (c *connectController) onDevice(ev deviceEvent) (exit bool, code int) {
 	switch e := ev.(type) {
 	case deviceBytes:
-		if len(c.buf) == 0 {
-			_, _ = c.out.Write(e.Bytes)
-		} else {
-			c.pending = append(c.pending, e.Bytes...)
-			c.idleArmed = true
-		}
+		c.writeDeviceText(e.Bytes)
+	case deviceResetStart:
+		c.writeDeviceText([]byte("[device reset]\r\n"))
+	case deviceResetEnd:
+		c.writeDeviceText([]byte("[device ready]\r\n"))
 	case devicePrompt:
 		if c.awaitingPrompt {
 			c.awaitingPrompt = false

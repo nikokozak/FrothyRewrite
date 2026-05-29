@@ -11,11 +11,20 @@ type deviceEvent interface{ deviceEventMarker() }
 
 type deviceBytes struct{ Bytes []byte }
 type devicePrompt struct{}
+type deviceResetStart struct{}
+type deviceResetEnd struct{}
 type deviceError struct{ Err error }
 
-func (deviceBytes) deviceEventMarker()  {}
-func (devicePrompt) deviceEventMarker() {}
-func (deviceError) deviceEventMarker()  {}
+func (deviceBytes) deviceEventMarker()      {}
+func (devicePrompt) deviceEventMarker()     {}
+func (deviceResetStart) deviceEventMarker() {}
+func (deviceResetEnd) deviceEventMarker()   {}
+func (deviceError) deviceEventMarker()      {}
+
+// resetLineCap bounds the per-line buffer used for banner-prefix matching.
+// Banner prefixes are short ("ets ", "entry 0x"); a few dozen bytes is
+// plenty, and the cap stops a single runaway line from growing forever.
+const resetLineCap = 64
 
 func runSerialEventPump(readCh <-chan byte, errCh <-chan error, events chan<- deviceEvent, stop <-chan struct{}) {
 	defer close(events)
@@ -30,6 +39,8 @@ func runSerialEventPump(readCh <-chan byte, errCh <-chan error, events chan<- de
 	}
 
 	var prev byte
+	var lineBuf []byte
+	inReset := false
 	for {
 		var b byte
 		select {
@@ -66,12 +77,42 @@ func runSerialEventPump(readCh <-chan byte, errCh <-chan error, events chan<- de
 		promptTail := last == ' ' && ((n >= 2 && chunk[n-2] == '>') || (n == 1 && prev == '>'))
 		prev = last
 
+		// Scan completed lines for the banner. A reset session opens at
+		// the first matching line and closes at the next prompt.
+		resetJustStarted := false
+		for _, bb := range chunk {
+			switch bb {
+			case '\n':
+				if !inReset && isResetBannerLine(string(lineBuf)) {
+					inReset = true
+					resetJustStarted = true
+				}
+				lineBuf = lineBuf[:0]
+			case '\r':
+			default:
+				if len(lineBuf) < resetLineCap {
+					lineBuf = append(lineBuf, bb)
+				}
+			}
+		}
+
 		if !emit(deviceBytes{Bytes: chunk}) {
 			return
+		}
+		if resetJustStarted {
+			if !emit(deviceResetStart{}) {
+				return
+			}
 		}
 		if promptTail {
 			if !emit(devicePrompt{}) {
 				return
+			}
+			if inReset {
+				inReset = false
+				if !emit(deviceResetEnd{}) {
+					return
+				}
 			}
 		}
 	}

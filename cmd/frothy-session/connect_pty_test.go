@@ -315,6 +315,111 @@ func TestConnectInterruptWithBufferClearsThenEOFExits(t *testing.T) {
 	}
 }
 
+// The pump detects the ESP boot banner and emits start/end events; the
+// client renders a reset notice when the first banner line completes and a
+// ready notice after the next prompt. Non-banner output (an `ok` ack or a
+// line that merely mentions `rst:0x` mid-text) must not trigger either.
+func TestConnectResetDetectionRendersNotices(t *testing.T) {
+	master, slave, _, err := testpty.Open()
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := configureSerial(slave, 115200); err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer slave.Close()
+
+	dev := &serialDevice{
+		file:   slave,
+		readCh: make(chan byte, 256),
+		errCh:  make(chan error, 1),
+	}
+	go dev.readLoop()
+
+	stdinR, stdinW := io.Pipe()
+	defer stdinR.Close()
+
+	var stdoutMu sync.Mutex
+	var stdout bytes.Buffer
+	syncedStdout := &lockedWriter{w: &stdout, mu: &stdoutMu}
+
+	done := make(chan int, 1)
+	go func() {
+		done <- runConnectInteractive(dev, stdinR, syncedStdout, connectHistory{})
+	}()
+
+	waitForStdoutContains(t, &stdoutMu, &stdout, promptPrimary, time.Second)
+
+	negatives := "ok\r\nlook at rst:0x stuff\r\nvalue is 42\r\n> "
+	if _, err := master.Write([]byte(negatives)); err != nil {
+		t.Fatal(err)
+	}
+	waitForStdoutContains(t, &stdoutMu, &stdout, "value is 42", time.Second)
+
+	stdoutMu.Lock()
+	before := stdout.String()
+	stdoutMu.Unlock()
+	if strings.Contains(before, "[device reset]") || strings.Contains(before, "[device ready]") {
+		t.Fatalf("non-banner output triggered reset notices: %q", before)
+	}
+
+	banner := "ets Jul 29 2019 12:21:46\r\n" +
+		"\r\n" +
+		"rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\r\n" +
+		"configsip: 0, SPIWP:0xee\r\n" +
+		"clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00\r\n" +
+		"mode:DIO, clock div:2\r\n" +
+		"load:0x3fff0030,len:1184\r\n" +
+		"load:0x40078000,len:13076\r\n" +
+		"load:0x40080400,len:3076\r\n" +
+		"entry 0x400805f0\r\n" +
+		"> "
+	if _, err := master.Write([]byte(banner)); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForStdoutContains(t, &stdoutMu, &stdout, "[device reset]", time.Second)
+	waitForStdoutContains(t, &stdoutMu, &stdout, "[device ready]", time.Second)
+
+	stdoutMu.Lock()
+	after := stdout.String()
+	stdoutMu.Unlock()
+	resetIdx := strings.Index(after, "[device reset]")
+	readyIdx := strings.Index(after, "[device ready]")
+	if readyIdx <= resetIdx {
+		t.Fatalf("reset notice order wrong: reset=%d ready=%d in %q", resetIdx, readyIdx, after)
+	}
+	if !strings.Contains(after, "entry 0x400805f0") {
+		t.Fatalf("banner content missing from stdout: %q", after)
+	}
+
+	if _, err := stdinW.Write([]byte("bar")); err != nil {
+		t.Fatal(err)
+	}
+	waitForStdoutMatches(t, &stdoutMu, &stdout, func(s string) bool {
+		i := strings.Index(s, "[device ready]")
+		return i >= 0 && strings.Contains(s[i:], "bar")
+	}, time.Second)
+
+	if _, err := stdinW.Write([]byte{0x03}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stdinW.Write([]byte{0x04}); err != nil {
+		t.Fatal(err)
+	}
+	_ = stdinW.Close()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("exit did not return")
+	}
+}
+
 // readChan reads bytes from r forever and forwards them one by one. The
 // goroutine exits when r returns an error (typically when the test
 // closes the PTY).
