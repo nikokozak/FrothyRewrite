@@ -547,6 +547,24 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       FR_TRY(fr_source_reduce_binop(r, "/"));
       ip = (fr_code_offset_t)(ip + 1u);
       break;
+    case FR_OP_CALL_SLOT: {
+      fr_slot_id_t slot_id = 0;
+      const char *name = NULL;
+      uint16_t start = r->used;
+
+      /* A zero-arg call to a source-defined word: the opcode (not LOAD_SLOT)
+       * marks it a call, so the trailing colon is unambiguous. */
+      FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
+      name = fr_source_slot_name(r, slot_id);
+      if (name == NULL) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      FR_TRY(fr_source_puts(r, name));
+      FR_TRY(fr_source_putc(r, ':'));
+      FR_TRY(fr_source_seal(r, start, false));
+      ip = (fr_code_offset_t)(ip + 3u);
+      break;
+    }
     case FR_OP_CALL_NATIVE_SLOT: {
       fr_slot_id_t slot_id = 0;
       uint8_t arity = 0;

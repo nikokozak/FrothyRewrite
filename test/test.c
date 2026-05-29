@@ -7657,6 +7657,19 @@ static void test_repl_see_source_form(void) {
                         "to flash with p [ gpio.write: p, 1 ; "
                         "gpio.write: p, 0 ]\n"
                         "ok\n") == 0);
+  /* Bare zero-arg call to a source-defined word: the body is one CALL_SLOT
+   * before the return. Two overlay names fit tiny's budget. */
+  CHECK("see source bare zero-arg call",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "tick is fn [ 1 ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "kick is fn [ tick: ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see kick", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\nto kick [ tick: ]\nok\n") == 0);
 }
 
 #if FR_FEATURE_SOURCE_BASE
