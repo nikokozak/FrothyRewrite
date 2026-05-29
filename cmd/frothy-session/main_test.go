@@ -618,6 +618,53 @@ func TestFrothyFlashErrorsWhenMultipleSerialPortsFound(t *testing.T) {
 	}
 }
 
+func TestFrothyDoctorExitsZeroWhenAllChecksPass(t *testing.T) {
+	checks := []doctorCheck{
+		{name: "compiler", run: func() (bool, string) { return true, "/opt/frothy/libexec/frothy-compile-overlay" }},
+		{name: "make", run: func() (bool, string) { return true, "/usr/bin/make" }},
+		{name: "serial", run: func() (bool, string) { return true, "/dev/cu.usbserial-0001" }},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runDoctorCommand(nil, &stdout, &stderr, checks)
+	if code != 0 {
+		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"ok    compiler: /opt/frothy/libexec/frothy-compile-overlay\n",
+		"ok    make: /usr/bin/make\n",
+		"ok    serial: /dev/cu.usbserial-0001\n",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q: %q", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "fail") {
+		t.Fatalf("stdout has fail line when all checks pass: %q", stdout.String())
+	}
+}
+
+func TestFrothyDoctorExitsNonZeroWhenAnyCheckFails(t *testing.T) {
+	checks := []doctorCheck{
+		{name: "compiler", run: func() (bool, string) { return true, "/opt/frothy/libexec/frothy-compile-overlay" }},
+		{name: "make", run: func() (bool, string) { return false, "not on PATH; install build tools" }},
+		{name: "serial", run: func() (bool, string) { return true, "/dev/cu.usbserial-0001" }},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runDoctorCommand(nil, &stdout, &stderr, checks)
+	if code == 0 {
+		t.Fatalf("exit code 0, want non-zero; stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "fail  make: not on PATH; install build tools\n") {
+		t.Fatalf("stdout missing failed check: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "ok    compiler: ") ||
+		!strings.Contains(stdout.String(), "ok    serial: ") {
+		t.Fatalf("stdout missing passing checks: %q", stdout.String())
+	}
+}
+
 func TestParseDeviceStatus(t *testing.T) {
 	status, err := parseDeviceStatus(statusResponse("host-required"))
 	if err != nil {

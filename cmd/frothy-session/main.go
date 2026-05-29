@@ -1939,6 +1939,7 @@ func availableVerbs() []verb {
 		{name: "session", summary: "open an interactive REPL session over serial", run: runSessionMain},
 		{name: "send", summary: "compile a source file and apply or run each line", run: runSendMain},
 		{name: "flash", summary: "build the board firmware and flash it over serial", run: runFlashMain},
+		{name: "doctor", summary: "check the host's compile, flash, and serial setup", run: runDoctorMain},
 	}
 }
 
@@ -2103,6 +2104,83 @@ func runFlashCommand(args []string, stderr io.Writer,
 
 	if err := run("make", []string{"flash", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
 		fmt.Fprintf(stderr, "flash: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+type doctorCheck struct {
+	name string
+	run  func() (bool, string)
+}
+
+func defaultDoctorChecks() []doctorCheck {
+	return []doctorCheck{
+		{
+			name: "compiler",
+			run: func() (bool, string) {
+				path := defaultCompilerPath()
+				if path == "" {
+					return false, "frothy-compile-overlay not found; run make frothy-session"
+				}
+				return true, path
+			},
+		},
+		{
+			name: "make",
+			run: func() (bool, string) {
+				path, err := exec.LookPath("make")
+				if err != nil {
+					return false, "not on PATH; install build tools"
+				}
+				return true, path
+			},
+		},
+		{
+			name: "serial",
+			run: func() (bool, string) {
+				chosen, err := pickPort("", defaultPortLister)
+				if err != nil {
+					return false, err.Error()
+				}
+				return true, chosen
+			},
+		},
+	}
+}
+
+func runDoctorMain() int {
+	return runDoctorCommand(os.Args[1:], os.Stdout, os.Stderr, defaultDoctorChecks())
+}
+
+func runDoctorCommand(args []string, stdout io.Writer, stderr io.Writer, checks []doctorCheck) int {
+	fs := flag.NewFlagSet("frothy doctor", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "doctor: takes no positional arguments")
+		return 2
+	}
+	failed := 0
+	for _, c := range checks {
+		ok, detail := c.run()
+		label := "ok"
+		if !ok {
+			label = "fail"
+			failed += 1
+		}
+		if detail == "" {
+			fmt.Fprintf(stdout, "%-4s  %s\n", label, c.name)
+		} else {
+			fmt.Fprintf(stdout, "%-4s  %s: %s\n", label, c.name, detail)
+		}
+	}
+	if failed > 0 {
 		return 1
 	}
 	return 0
