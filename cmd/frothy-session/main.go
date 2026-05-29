@@ -1879,7 +1879,88 @@ type verb struct {
 func availableVerbs() []verb {
 	return []verb{
 		{name: "session", summary: "open an interactive REPL session over serial", run: runSessionMain},
+		{name: "send", summary: "compile a source file and apply or run each line", run: runSendMain},
 	}
+}
+
+type sendCompilerFactory func(path string) (sessionCompiler, func(), error)
+
+func defaultSendCompilerFactory(path string) (sessionCompiler, func(), error) {
+	c, err := startCompiler(path, shareTerminalInterrupt)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c, c.close, nil
+}
+
+func runSendMain() int {
+	return runSendCommand(os.Args[1:], os.Stdout, os.Stderr, defaultSendCompilerFactory)
+}
+
+func runSendCommand(args []string, stdout io.Writer, stderr io.Writer, newCompiler sendCompilerFactory) int {
+	fs := flag.NewFlagSet("frothy send", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		dryRun       = fs.Bool("dry-run", false, "compile lines without opening serial")
+		port         = fs.String("port", "", "serial port, for example /dev/cu.usbmodem101")
+		baud         = fs.Int("baud", 115200, "serial baud rate")
+		compilerPath = fs.String("compiler", defaultCompilerPath(), "C overlay compiler helper")
+		hostCompile  = fs.Bool("host-compile", false, "use host compiler when the device advertises host-optional mode")
+		timeout      = fs.Duration("timeout", 3*time.Second, "serial prompt timeout")
+		settle       = fs.Duration("settle", 2*time.Second, "delay after opening serial")
+	)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fmt.Fprintln(stderr, "send: expected exactly one source file")
+		return 2
+	}
+	path := rest[0]
+
+	if !*dryRun && *port == "" {
+		fmt.Fprintln(stderr, "send: --port is required unless --dry-run is set")
+		return 2
+	}
+
+	lines, err := readFileLines(path)
+	if err != nil {
+		fmt.Fprintf(stderr, "send: %v\n", err)
+		return 1
+	}
+
+	if *dryRun {
+		comp, closeComp, err := newCompiler(*compilerPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "compiler: %v\n", err)
+			return 1
+		}
+		defer closeComp()
+		if err := runDry(readerFromLines(lines), stdout, comp); err != nil {
+			fmt.Fprintf(stderr, "send: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	// Reuse session's --file path so the compile+apply engine is not forked.
+	sessionArgs := []string{os.Args[0], "--file", path, "--port", *port,
+		"--baud", strconv.Itoa(*baud), "--compiler", *compilerPath,
+		"--timeout", timeout.String(), "--settle", settle.String()}
+	if *hostCompile {
+		sessionArgs = append(sessionArgs, "--host-compile")
+	}
+	oldArgs := os.Args
+	os.Args = sessionArgs
+	defer func() { os.Args = oldArgs }()
+	oldFlag := flag.CommandLine
+	flag.CommandLine = flag.NewFlagSet(sessionArgs[0], flag.ExitOnError)
+	defer func() { flag.CommandLine = oldFlag }()
+	return runSessionMain()
 }
 
 func printFrothyUsage(out io.Writer, verbs []verb) {

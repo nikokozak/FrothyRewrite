@@ -358,6 +358,70 @@ func TestFrothyDispatchPropagatesVerbExitCode(t *testing.T) {
 	}
 }
 
+func TestFrothySendDryRunCompilesFileToApplyAndRunLines(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "src.frothy")
+	if err := os.WriteFile(file, []byte("see 42\nlet x is 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeCompiler{
+		results: []compileResult{
+			{action: actionSend, line: "see 42"},
+			{action: actionApply, line: "apply x 01 00"},
+		},
+	}
+	factory := func(_ string) (sessionCompiler, func(), error) {
+		return fake, func() {}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runSendCommand([]string{"--dry-run", file}, &stdout, &stderr, factory)
+	if code != 0 {
+		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
+	}
+	want := "see 42\napply x 01 00\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout=%q, want %q", got, want)
+	}
+	if fake.commits != 1 {
+		t.Fatalf("commits=%d, want 1", fake.commits)
+	}
+}
+
+func TestFrothySendErrorsOnMissingFile(t *testing.T) {
+	factory := func(_ string) (sessionCompiler, func(), error) {
+		t.Fatal("compiler factory must not run when the file is missing")
+		return nil, nil, nil
+	}
+	var stdout, stderr bytes.Buffer
+	code := runSendCommand([]string{"--dry-run", "/nonexistent/missing-source.frothy"}, &stdout, &stderr, factory)
+	if code == 0 {
+		t.Fatal("exit code 0, want non-zero")
+	}
+	if !strings.Contains(stderr.String(), "send:") {
+		t.Fatalf("stderr missing send: prefix: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "missing-source.frothy") {
+		t.Fatalf("stderr missing file path: %q", stderr.String())
+	}
+}
+
+func TestFrothySendErrorsWhenPortMissingWithoutDryRun(t *testing.T) {
+	factory := func(_ string) (sessionCompiler, func(), error) {
+		t.Fatal("compiler factory must not run on the missing-port path")
+		return nil, nil, nil
+	}
+	var stdout, stderr bytes.Buffer
+	code := runSendCommand([]string{"some.frothy"}, &stdout, &stderr, factory)
+	if code == 0 {
+		t.Fatal("exit code 0, want non-zero")
+	}
+	if !strings.Contains(stderr.String(), "--port is required") {
+		t.Fatalf("stderr missing --port required message: %q", stderr.String())
+	}
+}
+
 func TestParseDeviceStatus(t *testing.T) {
 	status, err := parseDeviceStatus(statusResponse("host-required"))
 	if err != nil {
