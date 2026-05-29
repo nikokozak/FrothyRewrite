@@ -594,6 +594,30 @@ func TestFrothyFlashErrorsWhenNoSerialPortFound(t *testing.T) {
 	}
 }
 
+func TestFrothyFlashErrorsWhenMultipleSerialPortsFound(t *testing.T) {
+	runner := func(string, []string) error {
+		t.Fatal("runner must not run when port discovery is ambiguous")
+		return nil
+	}
+	known := func(string) bool { return true }
+	list := func() ([]string, error) {
+		return []string{"/dev/cu.usbserial-0001", "/dev/cu.usbmodem101"}, nil
+	}
+
+	var stderr bytes.Buffer
+	code := runFlashCommand([]string{"esp32_devkit_v1"}, &stderr, known, list, runner)
+	if code == 0 {
+		t.Fatal("exit code 0, want non-zero")
+	}
+	msg := stderr.String()
+	if !strings.Contains(msg, "/dev/cu.usbserial-0001") || !strings.Contains(msg, "/dev/cu.usbmodem101") {
+		t.Fatalf("stderr does not list both candidates: %q", msg)
+	}
+	if !strings.Contains(msg, "--port") {
+		t.Fatalf("stderr missing --port guidance: %q", msg)
+	}
+}
+
 func TestParseDeviceStatus(t *testing.T) {
 	status, err := parseDeviceStatus(statusResponse("host-required"))
 	if err != nil {
