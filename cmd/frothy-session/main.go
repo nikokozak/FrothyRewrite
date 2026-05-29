@@ -1909,18 +1909,27 @@ func runSendCommand(args []string, stdout io.Writer, stderr io.Writer, newCompil
 		timeout      = fs.Duration("timeout", 3*time.Second, "serial prompt timeout")
 		settle       = fs.Duration("settle", 2*time.Second, "delay after opening serial")
 	)
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
+	var positional []string
+	remaining := args
+	for {
+		if err := fs.Parse(remaining); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
 		}
-		return 2
+		rest := fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		positional = append(positional, rest[0])
+		remaining = rest[1:]
 	}
-	rest := fs.Args()
-	if len(rest) != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(stderr, "send: expected exactly one source file")
 		return 2
 	}
-	path := rest[0]
+	path := positional[0]
 
 	if !*dryRun && *port == "" {
 		fmt.Fprintln(stderr, "send: --port is required unless --dry-run is set")

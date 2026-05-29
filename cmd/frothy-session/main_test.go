@@ -389,6 +389,30 @@ func TestFrothySendDryRunCompilesFileToApplyAndRunLines(t *testing.T) {
 	}
 }
 
+func TestFrothySendDryRunFlagAfterFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "src.frothy")
+	if err := os.WriteFile(file, []byte("see 42\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeCompiler{
+		results: []compileResult{{action: actionSend, line: "see 42"}},
+	}
+	factory := func(_ string) (sessionCompiler, func(), error) {
+		return fake, func() {}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runSendCommand([]string{file, "--dry-run"}, &stdout, &stderr, factory)
+	if code != 0 {
+		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if got := stdout.String(); got != "see 42\n" {
+		t.Fatalf("stdout=%q, want %q", got, "see 42\n")
+	}
+}
+
 func TestFrothySendErrorsOnMissingFile(t *testing.T) {
 	factory := func(_ string) (sessionCompiler, func(), error) {
 		t.Fatal("compiler factory must not run when the file is missing")
