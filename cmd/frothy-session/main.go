@@ -1870,25 +1870,56 @@ func forwardInterruptSignals(dev interface{ sendInterrupt() error }, stderr io.W
 	}
 }
 
-func main() {
-	args, err := sessionArgsForCommand(os.Args)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+type verb struct {
+	name    string
+	summary string
+	run     func()
+}
+
+func availableVerbs() []verb {
+	return []verb{
+		{name: "session", summary: "open an interactive REPL session over serial", run: runSessionMain},
 	}
-	os.Args = args
+}
+
+func printFrothyUsage(out io.Writer, verbs []verb) {
+	fmt.Fprintln(out, "usage: frothy <verb> [options]")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "verbs:")
+	for _, v := range verbs {
+		fmt.Fprintf(out, "  %-8s  %s\n", v.name, v.summary)
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Run 'frothy <verb> --help' to see the verb's options.")
+}
+
+func main() {
+	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "frothy" {
+		os.Exit(runFrothyCommand(os.Args, os.Stdout, os.Stderr, availableVerbs()))
+	}
 	runSessionMain()
 }
 
-func sessionArgsForCommand(args []string) ([]string, error) {
-	if len(args) == 0 || filepath.Base(args[0]) != "frothy" {
-		return args, nil
+func runFrothyCommand(args []string, stdout io.Writer, stderr io.Writer, verbs []verb) int {
+	if len(args) < 2 {
+		printFrothyUsage(stderr, verbs)
+		return 2
 	}
-	if len(args) >= 2 && args[1] == "session" {
-		sessionArgs := append([]string{args[0] + " session"}, args[2:]...)
-		return sessionArgs, nil
+	switch args[1] {
+	case "help", "--help", "-h":
+		printFrothyUsage(stdout, verbs)
+		return 0
 	}
-	return nil, errors.New("usage: frothy session [options]")
+	for _, v := range verbs {
+		if v.name == args[1] {
+			os.Args = append([]string{args[0] + " " + v.name}, args[2:]...)
+			v.run()
+			return 0
+		}
+	}
+	fmt.Fprintf(stderr, "frothy: unknown verb %q\n", args[1])
+	printFrothyUsage(stderr, verbs)
+	return 2
 }
 
 func runSessionMain() {

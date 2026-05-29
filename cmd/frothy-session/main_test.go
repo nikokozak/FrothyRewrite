@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -268,30 +269,79 @@ func TestDefaultCompilerPathFallsBackToLookPath(t *testing.T) {
 	}
 }
 
-func TestSessionArgsForInstalledFrothyCommand(t *testing.T) {
-	args, err := sessionArgsForCommand([]string{"/usr/local/bin/frothy", "session", "--dry-run"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := strings.Join(args, "\n"), "/usr/local/bin/frothy session\n--dry-run"; got != want {
-		t.Fatalf("args %q, want %q", got, want)
+func sessionStubVerbs() []verb {
+	return []verb{{name: "session", summary: "stub", run: func() {}}}
+}
+
+func TestFrothyHelpPrintsUsageToStdoutAndExitsZero(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	for _, flag := range []string{"--help", "-h", "help"} {
+		stdout.Reset()
+		stderr.Reset()
+		code := runFrothyCommand([]string{"/usr/local/bin/frothy", flag}, &stdout, &stderr, sessionStubVerbs())
+		if code != 0 {
+			t.Fatalf("%s: exit code %d, want 0", flag, code)
+		}
+		if !strings.Contains(stdout.String(), "usage: frothy <verb>") {
+			t.Fatalf("%s: stdout missing usage banner: %q", flag, stdout.String())
+		}
+		if !strings.Contains(stdout.String(), "session") {
+			t.Fatalf("%s: stdout missing session verb: %q", flag, stdout.String())
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("%s: stderr nonempty: %q", flag, stderr.String())
+		}
 	}
 }
 
-func TestSessionArgsForDirectSessionCommand(t *testing.T) {
-	args, err := sessionArgsForCommand([]string{"frothy-session", "--dry-run"})
-	if err != nil {
-		t.Fatal(err)
+func TestFrothyWithoutVerbPrintsUsageToStderrAndExitsNonZero(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runFrothyCommand([]string{"/usr/local/bin/frothy"}, &stdout, &stderr, sessionStubVerbs())
+	if code == 0 {
+		t.Fatal("exit code 0, want non-zero")
 	}
-	if got, want := strings.Join(args, "\n"), "frothy-session\n--dry-run"; got != want {
-		t.Fatalf("args %q, want %q", got, want)
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout nonempty: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "usage: frothy <verb>") {
+		t.Fatalf("stderr missing usage banner: %q", stderr.String())
 	}
 }
 
-func TestSessionArgsForInstalledFrothyRequiresSession(t *testing.T) {
-	_, err := sessionArgsForCommand([]string{"frothy", "--dry-run"})
-	if err == nil {
-		t.Fatal("accepted frothy without session subcommand")
+func TestFrothyUnknownVerbPrintsUsageToStderrAndExitsNonZero(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runFrothyCommand([]string{"/usr/local/bin/frothy", "bogus"}, &stdout, &stderr, sessionStubVerbs())
+	if code == 0 {
+		t.Fatal("exit code 0, want non-zero")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout nonempty: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `unknown verb "bogus"`) {
+		t.Fatalf("stderr missing unknown verb message: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "usage: frothy <verb>") {
+		t.Fatalf("stderr missing usage banner: %q", stderr.String())
+	}
+}
+
+func TestFrothyDispatchesSessionVerbAndRewritesArgs(t *testing.T) {
+	savedArgs := os.Args
+	defer func() { os.Args = savedArgs }()
+
+	var ran bool
+	verbs := []verb{{name: "session", summary: "stub", run: func() { ran = true }}}
+
+	var stdout, stderr bytes.Buffer
+	code := runFrothyCommand([]string{"/usr/local/bin/frothy", "session", "--dry-run"}, &stdout, &stderr, verbs)
+	if code != 0 {
+		t.Fatalf("exit code %d, want 0", code)
+	}
+	if !ran {
+		t.Fatal("verb run was not called")
+	}
+	if got, want := strings.Join(os.Args, "\n"), "/usr/local/bin/frothy session\n--dry-run"; got != want {
+		t.Fatalf("os.Args = %q, want %q", got, want)
 	}
 }
 
