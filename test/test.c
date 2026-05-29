@@ -7670,6 +7670,63 @@ static void test_repl_see_source_form(void) {
             fr_repl_eval_line(&runtime, "see kick", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "overlay code\nto kick [ tick: ]\nok\n") == 0);
+  /* Bare one-arg native call: the count sits on the stack, the native arity
+   * picks up the lone arg. Fresh install for the overlay-name budget. */
+  CHECK("see source bare native one-arg call",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "baz is fn [ ms: 100 ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see baz", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "overlay code\nto baz [ ms: 100 ]\nok\n") == 0);
+  /* Bare two-arg native call over two params. Fresh install for the budget. */
+  CHECK("see source bare native two-arg call",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "dim is fn with pin, lvl [ gpio.write: pin, lvl ]",
+                              out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see dim", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "overlay code\nto dim with pin, lvl [ gpio.write: pin, lvl ]"
+                   "\nok\n") == 0);
+  /* CALL before a DROP is not call-then-return, so it stays a fallback. Pin
+   * the marker, not the disassembly tail (which is opcode-encoding specific). */
+  {
+    char fallback[256];
+    const char *prefix = "overlay code\n;; source reconstruction unavailable\n";
+
+    CHECK("see source non-tail call falls back",
+          fr_base_image_install(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime, "tick is fn [ 1 ]", fallback,
+                                sizeof(fallback)) == FR_OK &&
+              strcmp(fallback, "ok\n") == 0 &&
+              fr_repl_eval_line(&runtime, "tock is fn [ tick: ; 2 ]", fallback,
+                                sizeof(fallback)) == FR_OK &&
+              strcmp(fallback, "ok\n") == 0 &&
+              fr_repl_eval_line(&runtime, "see tock", fallback,
+                                sizeof(fallback)) == FR_OK &&
+              strncmp(fallback, prefix, strlen(prefix)) == 0);
+  }
+#if FR_FEATURE_SOURCE_BASE
+  /* The spec-named examples use base words, present only under source-base:
+   * a zero-arg source call (led.on) and a one-arg source call (gpio.high). */
+  CHECK("see source bare zero-arg base call",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "boot is fn [ led.on: ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see boot", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "overlay code\nto boot [ led.on: ]\nok\n") == 0);
+  CHECK("see source bare one-arg base call",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "bar is fn with pin [ gpio.high: pin ]",
+                              out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see bar", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "overlay code\nto bar with pin [ gpio.high: pin ]"
+                        "\nok\n") == 0);
+#endif
 }
 
 #if FR_FEATURE_SOURCE_BASE
