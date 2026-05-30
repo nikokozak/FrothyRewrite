@@ -301,9 +301,9 @@ func (c *connectController) onDevice(ev deviceEvent) (exit bool, code int) {
 	case deviceBytes:
 		c.writeDeviceText(e.Bytes)
 	case deviceResetStart:
-		c.writeDeviceText([]byte("[device reset]\r\n"))
+		c.writeDeviceText([]byte("-- device reset detected; waiting for prompt --\r\n"))
 	case deviceResetEnd:
-		c.writeDeviceText([]byte("[device ready]\r\n"))
+		c.writeDeviceText([]byte("-- prompt restored --\r\n"))
 	case devicePrompt:
 		if c.awaitingPrompt {
 			c.awaitingPrompt = false

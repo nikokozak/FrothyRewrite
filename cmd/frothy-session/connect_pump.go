@@ -78,14 +78,17 @@ func runSerialEventPump(readCh <-chan byte, errCh <-chan error, events chan<- de
 		prev = last
 
 		// Scan completed lines for the banner. A reset session opens at
-		// the first matching line and closes at the next prompt.
-		resetJustStarted := false
-		for _, bb := range chunk {
+		// the first matching line and closes at the next prompt. The
+		// split index is the byte right after the \n that closed the
+		// matched line: the reset notice has to land before any further
+		// device bytes (especially the recovery `> `) reach the user.
+		splitAt := -1
+		for i, bb := range chunk {
 			switch bb {
 			case '\n':
 				if !inReset && isResetBannerLine(string(lineBuf)) {
 					inReset = true
-					resetJustStarted = true
+					splitAt = i + 1
 				}
 				lineBuf = lineBuf[:0]
 			case '\r':
@@ -96,23 +99,34 @@ func runSerialEventPump(readCh <-chan byte, errCh <-chan error, events chan<- de
 			}
 		}
 
-		if !emit(deviceBytes{Bytes: chunk}) {
-			return
-		}
-		if resetJustStarted {
+		if splitAt >= 0 {
+			if splitAt > 0 {
+				if !emit(deviceBytes{Bytes: chunk[:splitAt]}) {
+					return
+				}
+			}
 			if !emit(deviceResetStart{}) {
+				return
+			}
+			if splitAt < len(chunk) {
+				if !emit(deviceBytes{Bytes: chunk[splitAt:]}) {
+					return
+				}
+			}
+		} else {
+			if !emit(deviceBytes{Bytes: chunk}) {
 				return
 			}
 		}
 		if promptTail {
-			if !emit(devicePrompt{}) {
-				return
-			}
 			if inReset {
 				inReset = false
 				if !emit(deviceResetEnd{}) {
 					return
 				}
+			}
+			if !emit(devicePrompt{}) {
+				return
 			}
 		}
 	}

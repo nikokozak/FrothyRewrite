@@ -355,12 +355,13 @@ func TestConnectResetDetectionRendersNotices(t *testing.T) {
 	if _, err := master.Write([]byte(negatives)); err != nil {
 		t.Fatal(err)
 	}
-	waitForStdoutContains(t, &stdoutMu, &stdout, "value is 42", time.Second)
+	waitForStdoutContains(t, &stdoutMu, &stdout, "value is 42\r\n> ", time.Second)
 
 	stdoutMu.Lock()
 	before := stdout.String()
+	beforeLen := len(before)
 	stdoutMu.Unlock()
-	if strings.Contains(before, "[device reset]") || strings.Contains(before, "[device ready]") {
+	if strings.Contains(before, "-- device reset detected") || strings.Contains(before, "-- prompt restored --") {
 		t.Fatalf("non-banner output triggered reset notices: %q", before)
 	}
 
@@ -379,26 +380,39 @@ func TestConnectResetDetectionRendersNotices(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	waitForStdoutContains(t, &stdoutMu, &stdout, "[device reset]", time.Second)
-	waitForStdoutContains(t, &stdoutMu, &stdout, "[device ready]", time.Second)
+	waitForStdoutContains(t, &stdoutMu, &stdout, "-- device reset detected; waiting for prompt --", time.Second)
+	waitForStdoutContains(t, &stdoutMu, &stdout, "-- prompt restored --", time.Second)
 
 	stdoutMu.Lock()
 	after := stdout.String()
 	stdoutMu.Unlock()
-	resetIdx := strings.Index(after, "[device reset]")
-	readyIdx := strings.Index(after, "[device ready]")
-	if readyIdx <= resetIdx {
-		t.Fatalf("reset notice order wrong: reset=%d ready=%d in %q", resetIdx, readyIdx, after)
+	resetTail := after[beforeLen:]
+	noticeIdx := strings.Index(resetTail, "-- device reset detected; waiting for prompt --")
+	restoredIdx := strings.Index(resetTail, "-- prompt restored --")
+	entryIdx := strings.Index(resetTail, "entry 0x400805f0")
+	recoveryPromptIdx := strings.Index(resetTail, "> ")
+	if noticeIdx < 0 || restoredIdx < 0 || entryIdx < 0 || recoveryPromptIdx < 0 {
+		t.Fatalf("reset segments missing: notice=%d restored=%d entry=%d recoveryPrompt=%d in %q",
+			noticeIdx, restoredIdx, entryIdx, recoveryPromptIdx, resetTail)
 	}
-	if !strings.Contains(after, "entry 0x400805f0") {
-		t.Fatalf("banner content missing from stdout: %q", after)
+	if noticeIdx >= recoveryPromptIdx {
+		t.Fatalf("reset notice did not precede recovery `> ` prompt: notice=%d recoveryPrompt=%d in %q",
+			noticeIdx, recoveryPromptIdx, resetTail)
+	}
+	if noticeIdx >= entryIdx {
+		t.Fatalf("reset notice did not precede banner tail: notice=%d entry=%d in %q",
+			noticeIdx, entryIdx, resetTail)
+	}
+	if restoredIdx <= entryIdx {
+		t.Fatalf("restored notice did not follow banner tail: restored=%d entry=%d in %q",
+			restoredIdx, entryIdx, resetTail)
 	}
 
 	if _, err := stdinW.Write([]byte("bar")); err != nil {
 		t.Fatal(err)
 	}
 	waitForStdoutMatches(t, &stdoutMu, &stdout, func(s string) bool {
-		i := strings.Index(s, "[device ready]")
+		i := strings.Index(s, "-- prompt restored --")
 		return i >= 0 && strings.Contains(s[i:], "bar")
 	}, time.Second)
 
