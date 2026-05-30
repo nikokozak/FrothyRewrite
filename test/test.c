@@ -2685,9 +2685,24 @@ static void test_text_natives(void) {
             "text.equals?: (text.concat: \"led=\", text.from-int: 1), \"led=1\"",
             out, sizeof(out)) == FR_OK &&
             strcmp(out, "true\nok\n") == 0);
-  CHECK("function body with text literal is unsupported until slice B",
-        fr_repl_eval_line(&runtime, "to greet [ text.length: \"hi\" ]", out,
-                          sizeof(out)) == FR_ERR_UNSUPPORTED);
+  CHECK("function body with text literal defines and evaluates",
+        fr_repl_eval_line(&runtime,
+                          "to greet with x [ text.concat: \"led=\", "
+                          "text.from-int: x ]",
+                          out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "labeled is greet: 1", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "text.length: labeled", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "5\nok\n") == 0 &&
+            test_text_bytes_match(&runtime, "labeled", "led=1"));
+  CHECK("see renders a saved function with a text literal",
+        fr_repl_eval_line(&runtime, "see greet", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "overlay code\n"
+                   "to greet with x [ text.concat: \"led=\", "
+                   "text.from-int: x ]\n"
+                   "ok\n") == 0);
   {
     const uint8_t marker[] = {'i', 'n', 't', 'e', 'r', 'n', 'e', 'd'};
     fr_object_id_t first_id = 0;
@@ -3503,7 +3518,7 @@ static void test_image(void) {
             fr_overlay_update_decode(overlay_bytes, overlay_length,
                                      &decoded_update) == FR_ERR_CORRUPT);
 #if FR_FEATURE_TEXT
-  CHECK("overlay update byte codec rejects text objects",
+  CHECK("overlay update byte codec rejects text-object slot inits",
         fr_overlay_update_encode(&text_overlay_update, overlay_bytes,
                                  (uint16_t)sizeof(overlay_bytes),
                                  &overlay_length) == FR_ERR_UNSUPPORTED);

@@ -111,10 +111,13 @@ typedef struct fr_overlay_update_decoded_t {
   fr_image_slot_init_t slot_inits[FR_PROFILE_MAX_OVERLAY_UPDATE_SLOT_INITS];
   fr_image_code_object_t
       code_objects[FR_PROFILE_MAX_OVERLAY_UPDATE_CODE_OBJECTS];
+  fr_image_text_object_t
+      text_objects[FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS];
   fr_slot_name_t slot_names[FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES > 0
                                 ? FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES
                                 : 1];
   uint8_t instruction_bytes[FR_PROFILE_MAX_OVERLAY_UPDATE_INSTRUCTION_BYTES];
+  uint8_t text_bytes[FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_BYTES];
   char slot_name_text[FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES > 0
                           ? FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES
                           : 1]
