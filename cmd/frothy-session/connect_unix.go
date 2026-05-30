@@ -33,12 +33,14 @@ func defaultConnectDeviceFactory(port string, baud int) (*serialDevice, func(), 
 }
 
 // runConnectInteractiveWithCleanup is the production entry: it installs a
-// SIGTERM/SIGHUP handler, puts stdin in raw mode if it points at a tty,
-// turns on bracketed paste, and runs the interactive loop. All of that is
-// undone on every exit path through a single sync.Once cleanup.
+// SIGTERM/SIGHUP/SIGINT handler, puts stdin in raw mode if it points at a
+// tty, turns on bracketed paste, and runs the interactive loop. All of that
+// is undone on every exit path through a single sync.Once cleanup. Raw mode
+// stops Ctrl-C on stdin from generating SIGINT (decision 7 owns 0x03);
+// SIGINT here covers external `kill -INT`.
 func runConnectInteractiveWithCleanup(dev *serialDevice, stdin io.Reader, stdout io.Writer, hist connectHistory) int {
 	sigCh := make(chan os.Signal, 4)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGHUP)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
 	defer signal.Stop(sigCh)
 	return runConnectInteractiveTermios(dev, stdin, stdout, hist, sigCh)
 }

@@ -58,4 +58,3 @@ func runStty(file *os.File, args []string) (string, error) {
 	}
 	return stdout.String(), nil
 }
-
