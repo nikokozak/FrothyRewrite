@@ -3,6 +3,7 @@
 #include "base_defs.h"
 #include "code.h"
 #include "native.h"
+#include "object.h"
 #include "parse.h"
 #include "slot.h"
 
@@ -310,6 +311,41 @@ static fr_err_t fr_compile_emit_push_int(uint8_t instruction_bytes[],
   FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_PUSH_INT));
   return fr_compile_write_int_operand(instruction_bytes, offset, value);
 }
+
+#if FR_FEATURE_TEXT
+static fr_err_t fr_compile_emit_push_object_id(uint8_t instruction_bytes[],
+                                               uint16_t *offset,
+                                               fr_object_id_t object_id) {
+  if ((fr_tagged_t)object_id > FR_TAGGED_OBJECT_MAX_ID) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_compile_write_byte(instruction_bytes, offset,
+                               FR_OP_PUSH_OBJECT_ID));
+  return fr_compile_write_u16(instruction_bytes, offset, (uint16_t)object_id);
+}
+
+/* Bare expressions compile against a live runtime: install the text now and
+ * emit the runtime object id. Function bodies defer install to apply time. */
+static fr_err_t fr_compile_emit_text_literal(const fr_compile_context_t *ctx,
+                                             const fr_parse_expr_t *expr,
+                                             uint8_t instruction_bytes[],
+                                             uint16_t *offset) {
+  fr_object_id_t object_id = 0;
+
+  if (ctx == NULL || ctx->runtime == NULL) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  if (expr->text.length > FR_PROFILE_MAX_TEXT_LENGTH) {
+    return FR_ERR_RANGE;
+  }
+  if (expr->text.length > 0 && expr->text.start == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_text_install(ctx->runtime, (const uint8_t *)expr->text.start,
+                         expr->text.length, &object_id));
+  return fr_compile_emit_push_object_id(instruction_bytes, offset, object_id);
+}
+#endif
 
 static fr_err_t fr_compile_emit_push_nil(uint8_t instruction_bytes[],
                                          uint16_t *offset) {
@@ -634,7 +670,12 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_INT:
     return fr_compile_emit_push_int(instruction_bytes, offset, expr->int_value);
   case FR_PARSE_EXPR_TEXT:
+#if FR_FEATURE_TEXT
+    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_TEXT));
+    return fr_compile_emit_text_literal(ctx, expr, instruction_bytes, offset);
+#else
     return FR_ERR_UNSUPPORTED;
+#endif
   case FR_PARSE_EXPR_NAME:
     if (fr_compile_param_for_name(ctx, expr->name, &arg_index)) {
       return fr_compile_emit_load_arg(instruction_bytes, offset, arg_index);

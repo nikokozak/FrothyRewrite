@@ -2659,6 +2659,53 @@ static void test_text_natives(void) {
                    "render an int as decimal text\n"
                    "ok\n") == 0);
 
+  CHECK("text.length on bare literal evaluates",
+        fr_repl_eval_line(&runtime, "text.length: \"hello\"", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "5\nok\n") == 0);
+  CHECK("text.length on empty literal evaluates to zero",
+        fr_repl_eval_line(&runtime, "text.length: \"\"", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "0\nok\n") == 0);
+  CHECK("text.equals? on equal literals is true",
+        fr_repl_eval_line(&runtime, "text.equals?: \"abc\", \"abc\"", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "true\nok\n") == 0);
+  CHECK("text.concat on literal with text.from-int evaluates",
+        fr_repl_eval_line(&runtime,
+                          "labeled is text.concat: \"led=\", text.from-int: 1",
+                          out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "text.length: labeled", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "5\nok\n") == 0 &&
+            test_text_bytes_match(&runtime, "labeled", "led=1"));
+  {
+    const uint8_t marker[] = {'i', 'n', 't', 'e', 'r', 'n', 'e', 'd'};
+    fr_object_id_t first_id = 0;
+    fr_object_id_t second_id = 0;
+
+    CHECK("repeated bare literals intern to the same object id",
+          fr_repl_eval_line(&runtime, "text.length: \"interned\"", out,
+                            sizeof(out)) == FR_OK &&
+              fr_text_find(&runtime, marker, (uint16_t)sizeof(marker), 0,
+                           &first_id) == FR_OK &&
+              fr_repl_eval_line(&runtime, "text.length: \"interned\"", out,
+                                sizeof(out)) == FR_OK &&
+              fr_text_find(&runtime, marker, (uint16_t)sizeof(marker), 0,
+                           &second_id) == FR_OK &&
+              first_id == second_id);
+  }
+  {
+    char over_long[FR_PROFILE_MAX_TEXT_LENGTH + 16];
+    over_long[0] = '"';
+    memset(&over_long[1], 'x', FR_PROFILE_MAX_TEXT_LENGTH + 1);
+    over_long[FR_PROFILE_MAX_TEXT_LENGTH + 2] = '"';
+    over_long[FR_PROFILE_MAX_TEXT_LENGTH + 3] = '\0';
+    CHECK("bare literal over the per-text cap is rejected",
+          fr_repl_eval_line(&runtime, over_long, out, sizeof(out)) ==
+              FR_ERR_RANGE);
+  }
+
   CHECK("text natives bind sample texts",
         fr_repl_eval_line(&runtime, "hello is \"hello\"", out, sizeof(out)) ==
                 FR_OK &&
@@ -4550,9 +4597,21 @@ static void test_compile(void) {
             fr_text_view(&text_runtime, object_id, &text_bytes, &text_length) ==
                 FR_OK &&
             text_length == 5 && memcmp(text_bytes, "ready", 5) == 0);
-  CHECK("compile text expression unsupported",
+  CHECK("compile text expression pushes object id",
         fr_compile_expression_for_runtime(&text_runtime, "\"ready\"",
-                                          &expression) == FR_ERR_UNSUPPORTED);
+                                          &expression) == FR_OK &&
+            expression.instructions.length ==
+                FR_INSTRUCTION_MIN_HEADER_SIZE +
+                    FR_INSTRUCTION_PUSH_OBJECT_ID_SIZE + 1u &&
+            expression.instruction_bytes[2] == FR_OP_PUSH_OBJECT_ID &&
+            fr_vm_run_instruction_stream(&text_runtime, &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+            fr_text_view(&text_runtime, object_id, &text_bytes, &text_length) ==
+                FR_OK &&
+            text_length == 5 && memcmp(text_bytes, "ready", 5) == 0);
+  CHECK("compile text expression without runtime stays unsupported",
+        fr_compile_expression("\"ready\"", &expression) == FR_ERR_UNSUPPORTED);
 #else
   CHECK("compile text unsupported without feature",
         fr_compile_overlay_update_for_runtime(&runtime, "message is \"ready\"",
