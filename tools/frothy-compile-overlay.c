@@ -129,8 +129,6 @@ static int handle_target(void) {
 #if FR_HOST_TINY_NAMES_MODE
 static bool is_space(char ch) { return ch == ' ' || ch == '\t'; }
 
-static bool is_digit(char ch) { return ch >= '0' && ch <= '9'; }
-
 static int print_send_slot_call(fr_slot_id_t slot_id) {
   printf("send %u:\n", (unsigned)slot_id);
   fflush(stdout);
@@ -222,10 +220,8 @@ static int handle_named_slot_call(const char *source, bool *out_handled) {
     *out_handled = true;
     return print_err(err);
   }
-  if (!is_digit(name[0])) {
-    *out_handled = true;
-    return print_err(FR_ERR_NOT_FOUND);
-  }
+  /* Mirror doesn't know the name. Forward to the device — it may have
+   * defined the word from a pass-forwarded text-bearing source line. */
   *out_handled = true;
   return print_send_source(source);
 }
@@ -336,6 +332,13 @@ static int handle_expression(const char *source) {
 
   if (err == FR_OK) {
     return print_send_run(&expression.instructions);
+  }
+  if (err == FR_ERR_NOT_FOUND) {
+    /* Mirror missed the name. The device may have it from a pass-forwarded
+     * text-bearing definition; let it decide. */
+    fputs("pass\n", stdout);
+    fflush(stdout);
+    return 0;
   }
   return print_err(err);
 }
