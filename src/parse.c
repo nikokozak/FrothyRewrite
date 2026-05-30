@@ -28,6 +28,7 @@ typedef enum fr_token_kind_t {
   FR_TOKEN_MINUS,
   FR_TOKEN_STAR,
   FR_TOKEN_SLASH,
+  FR_TOKEN_PERCENT,
 } fr_token_kind_t;
 
 typedef struct fr_token_t {
@@ -262,7 +263,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     return FR_OK;
   }
 
-  if (c == '*' || c == '/' ||
+  if (c == '*' || c == '/' || c == '%' ||
       (c == '-' &&
        (!fr_parse_is_digit(parser->cursor[1]) ||
         (!leading_space && fr_parse_minus_infix_after(prev_kind))))) {
@@ -273,6 +274,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     parser->token.leading_space = leading_space;
     parser->token.kind = (c == '*')   ? FR_TOKEN_STAR
                          : (c == '/') ? FR_TOKEN_SLASH
+                         : (c == '%') ? FR_TOKEN_PERCENT
                                       : FR_TOKEN_MINUS;
     return FR_OK;
   }
@@ -310,7 +312,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
          !fr_parse_is_punctuation(*parser->cursor) &&
          !fr_parse_is_compare_op_char(*parser->cursor) &&
          *parser->cursor != '*' && *parser->cursor != '/' &&
-         *parser->cursor != '+' &&
+         *parser->cursor != '%' && *parser->cursor != '+' &&
          !fr_parse_is_arrow_start(parser->cursor) &&
          !(*parser->cursor == '-' && span.length > 0 &&
            (fr_parse_is_digit(span.start[0]) ||
@@ -787,10 +789,13 @@ static fr_err_t fr_parse_multiplicative(fr_parser_t *parser,
 
   FR_TRY(fr_parse_expression_inner(parser, &lhs));
   while (parser->token.kind == FR_TOKEN_STAR ||
-         parser->token.kind == FR_TOKEN_SLASH) {
+         parser->token.kind == FR_TOKEN_SLASH ||
+         parser->token.kind == FR_TOKEN_PERCENT) {
     fr_parse_expr_kind_t op_kind = parser->token.kind == FR_TOKEN_STAR
                                        ? FR_PARSE_EXPR_MUL
-                                       : FR_PARSE_EXPR_DIV;
+                                   : parser->token.kind == FR_TOKEN_SLASH
+                                       ? FR_PARSE_EXPR_DIV
+                                       : FR_PARSE_EXPR_MOD;
     fr_parse_expr_id_t rhs = 0;
     fr_parse_expr_t binop = {.kind = op_kind, .child_count = 2};
 
@@ -873,8 +878,6 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     return FR_ERR_INVALID;
   }
 
-  /* No FR_PARSE_EXPR_PAREN node by design — paren grouping yields its inner
-   * expression's id unchanged, so AST shape is identical with or without. */
   if (parser->token.kind == FR_TOKEN_LPAREN) {
     FR_TRY(fr_parse_advance(parser));
     FR_TRY(fr_parse_expression(parser, out_id));

@@ -581,7 +581,14 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
         return FR_ERR_UNSUPPORTED;
       }
       FR_TRY(fr_source_native_arity(r, slot_id, &arity));
-      FR_TRY(fr_source_reduce_call(r, name, arity));
+#if FR_FEATURE_MATH
+      if (slot_id == FR_SLOT_MOD && arity == 2) {
+        FR_TRY(fr_source_reduce_binop(r, "%"));
+      } else
+#endif
+      {
+        FR_TRY(fr_source_reduce_call(r, name, arity));
+      }
       ip = (fr_code_offset_t)(ip + 3u);
       break;
     }

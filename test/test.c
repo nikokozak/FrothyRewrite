@@ -2357,6 +2357,18 @@ static void test_math(void) {
   CHECK("mod by zero rejects",
         fr_repl_eval_line(&runtime, "mod: 5, 0", out, sizeof(out)) ==
             FR_ERR_DOMAIN);
+  CHECK("percent infix positive remainder",
+        fr_repl_eval_line(&runtime, "7 % 3", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+  CHECK("percent infix negative dividend keeps sign",
+        fr_repl_eval_line(&runtime, "-7 % 3", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "-1\nok\n") == 0);
+  CHECK("percent infix by zero rejects",
+        fr_repl_eval_line(&runtime, "7 % 0", out, sizeof(out)) ==
+            FR_ERR_DOMAIN);
+  CHECK("percent infix binds left-to-right with star",
+        fr_repl_eval_line(&runtime, "7 % 2 * 3", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "3\nok\n") == 0);
 }
 #endif
 
@@ -4092,6 +4104,17 @@ static void test_parse(void) {
         fr_parse_expression_line("(", &parsed, &expr_id) == FR_ERR_INVALID);
   CHECK("parse rejects missing rparen",
         fr_parse_expression_line("(1", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse percent reads as mod binop",
+        fr_parse_expression_line("7 % 3", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_MOD &&
+            parsed.exprs[expr_id].child_count == 2 &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].int_value == 7 &&
+            parsed.exprs[parsed.exprs[expr_id].children[1]].int_value == 3);
+  CHECK("parse percent shares multiplicative precedence",
+        fr_parse_expression_line("7 % 2 * 3", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_MUL &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_MOD);
   CHECK("parse rejects null out",
         fr_parse_line("boot is nil", NULL) == FR_ERR_INVALID);
 }
@@ -7748,6 +7771,45 @@ static void test_repl_see_source_form(void) {
                                 sizeof(fallback)) == FR_OK &&
               strncmp(fallback, prefix, strlen(prefix)) == 0);
   }
+  CHECK("see source paren overrides precedence",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "lift is fn with a, b, c [ (a + b) * c ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see lift", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\nto lift with a, b, c "
+                        "[ (a + b) * c ]\nok\n") == 0);
+  CHECK("see source conservative wrap on nested binop",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "step is fn with a, b, c [ a + b * c ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see step", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\nto step with a, b, c "
+                        "[ a + (b * c) ]\nok\n") == 0);
+#if FR_FEATURE_MATH
+  CHECK("see source percent infix",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "rem is fn with a, b [ a % b ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see rem", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "overlay code\nto rem with a, b [ a % b ]\nok\n") == 0);
+  CHECK("see source percent feeds add with parens",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "shift is fn with a, b, c [ (a % b) + c ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see shift", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\nto shift with a, b, c "
+                        "[ (a % b) + c ]\nok\n") == 0);
+#endif
 #if FR_FEATURE_SOURCE_BASE
   /* The spec-named examples use base words, present only under source-base:
    * a zero-arg source call (led.on) and a one-arg source call (gpio.high). */
@@ -7790,8 +7852,8 @@ static void test_source_base_word_proofs(void) {
                 "pin ; ms: wait ; gpio.low: pin ; ms: wait ] ]"},
       {"led.blink", "to led.blink with count, wait [ blink: $led_builtin, "
                     "count, wait ]"},
-      {"wrap", "to wrap with value, size [ if size <= 0 [ 0 ] else [ mod: "
-               "value, size ] ]"},
+      {"wrap", "to wrap with value, size [ if size <= 0 [ 0 ] else "
+               "[ value % size ] ]"},
       {"random.chance?", "to random.chance? with numer, denom [ if denom <= 0 "
                          "[ false ] else [ numer > random.below: denom ] ]"},
       {"random.percent?",
