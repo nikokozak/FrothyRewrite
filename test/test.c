@@ -4072,6 +4072,26 @@ static void test_parse(void) {
   CHECK("parse rejects excessive expression depth",
         fr_parse_line("boot is fn [ a: b: c: d: e: f: g: h: i: 1 ]",
                       &parsed) == FR_ERR_OVERFLOW);
+  CHECK("parse paren overrides precedence",
+        fr_parse_expression_line("(1 + 2) * 3", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_MUL &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_ADD &&
+            parsed.exprs[parsed.exprs[expr_id].children[1]].kind ==
+                FR_PARSE_EXPR_INT &&
+            parsed.exprs[parsed.exprs[expr_id].children[1]].int_value == 3);
+  CHECK("parse paren chain reaches max depth",
+        fr_parse_expression_line("(((((((1)))))))", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 1);
+  CHECK("parse rejects overflow paren chain",
+        fr_parse_expression_line("((((((((1))))))))", &parsed, &expr_id) ==
+            FR_ERR_OVERFLOW);
+  CHECK("parse rejects lonely lparen",
+        fr_parse_expression_line("(", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse rejects missing rparen",
+        fr_parse_expression_line("(1", &parsed, &expr_id) == FR_ERR_INVALID);
   CHECK("parse rejects null out",
         fr_parse_line("boot is nil", NULL) == FR_ERR_INVALID);
 }
@@ -4998,6 +5018,26 @@ static void test_compile(void) {
              fr_compile_overlay_update(line, &update) == FR_OK &&
              fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
              fr_vm_run_boot(&runtime, &tagged) == FR_ERR_RANGE));
+  CHECK("compiled parens override precedence",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ (1 + 2) * 3 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 9);
+  CHECK("compiled precedence unchanged without parens",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ 1 + 2 * 3 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 7);
+  CHECK("compiled paren chain at max depth",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_expression("(((((((1)))))))", &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
   CHECK("compiled native call owns instruction bytes",
         fr_compile_overlay_update("boot is fn [ ms: 100 ]", &update) == FR_OK &&
             update.slot_inits[0].slot_id == FR_SLOT_BOOT &&

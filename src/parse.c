@@ -873,6 +873,14 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     return FR_ERR_INVALID;
   }
 
+  /* No FR_PARSE_EXPR_PAREN node by design — paren grouping yields its inner
+   * expression's id unchanged, so AST shape is identical with or without. */
+  if (parser->token.kind == FR_TOKEN_LPAREN) {
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_expression(parser, out_id));
+    return fr_parse_expect(parser, FR_TOKEN_RPAREN);
+  }
+
   if (parser->token.kind == FR_TOKEN_INT) {
     fr_int_t int_value = parser->token.int_value;
 
