@@ -4115,6 +4115,49 @@ static void test_parse(void) {
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_MUL &&
             parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
                 FR_PARSE_EXPR_MOD);
+  CHECK("parse hex literal lowercase",
+        fr_parse_expression_line("0xff", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 255);
+  CHECK("parse hex literal uppercase",
+        fr_parse_expression_line("0xFF", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 255);
+  CHECK("parse hex literal big X",
+        fr_parse_expression_line("0Xff", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 255);
+  CHECK("parse hex literal negative",
+        fr_parse_expression_line("-0x10", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == -16);
+  CHECK("parse binary literal",
+        fr_parse_expression_line("0b1010", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 10);
+  CHECK("parse binary literal zero",
+        fr_parse_expression_line("0b0", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 0);
+  CHECK("parse binary literal negative big B",
+        fr_parse_expression_line("-0B1", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == -1);
+  CHECK("parse bare zero stays decimal",
+        fr_parse_expression_line("0", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 0);
+  CHECK("parse rejects bare hex prefix",
+        fr_parse_expression_line("0x", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse rejects non-hex digit",
+        fr_parse_expression_line("0xg", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse rejects bare binary prefix",
+        fr_parse_expression_line("0b", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse rejects non-binary digit",
+        fr_parse_expression_line("0b2", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse rejects hex overflow",
+        fr_parse_expression_line("0x80000000", &parsed, &expr_id) ==
+            FR_ERR_RANGE);
   CHECK("parse rejects null out",
         fr_parse_line("boot is nil", NULL) == FR_ERR_INVALID);
 }
