@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -18,7 +21,7 @@ const idleFlushDelay = 50 * time.Millisecond
 const doubleInterruptWindow = time.Second
 
 func runConnect() int {
-	return runConnectCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, defaultPortLister, defaultConnectDeviceFactory, runConnectInteractive)
+	return runConnectCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, defaultPortLister, defaultConnectDeviceFactory, runConnectInteractiveWithCleanup)
 }
 
 func defaultConnectDeviceFactory(port string, baud int) (*serialDevice, func(), error) {
@@ -29,7 +32,69 @@ func defaultConnectDeviceFactory(port string, baud int) (*serialDevice, func(), 
 	return dev, func() { dev.close() }, nil
 }
 
+// runConnectInteractiveWithCleanup is the production entry: it installs a
+// SIGTERM/SIGHUP handler, puts stdin in raw mode if it points at a tty,
+// turns on bracketed paste, and runs the interactive loop. All of that is
+// undone on every exit path through a single sync.Once cleanup.
+func runConnectInteractiveWithCleanup(dev *serialDevice, stdin io.Reader, stdout io.Writer, hist connectHistory) int {
+	sigCh := make(chan os.Signal, 4)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
+	return runConnectInteractiveTermios(dev, stdin, stdout, hist, sigCh)
+}
+
+// runConnectInteractiveTermios is the seam tests reach for: the production
+// wrapper is signal.Notify + this; tests inject a plain channel and send
+// signal values directly without poking the real process.
+func runConnectInteractiveTermios(dev *serialDevice, stdin io.Reader, stdout io.Writer, hist connectHistory, sigCh <-chan os.Signal) int {
+	var state *terminalState
+	if f, ok := stdin.(*os.File); ok {
+		if s, err := enterRawMode(f); err == nil {
+			state = s
+		}
+	}
+	_, _ = io.WriteString(stdout, bracketedPasteOn)
+
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			_, _ = io.WriteString(stdout, bracketedPasteOff)
+			if state != nil {
+				_ = state.restore()
+			}
+		})
+	}
+	defer cleanup()
+
+	shutdown := make(chan int, 1)
+	sigDone := make(chan struct{})
+	defer close(sigDone)
+	go func() {
+		select {
+		case sig := <-sigCh:
+			shutdown <- signalExitCode(sig)
+		case <-sigDone:
+		}
+	}()
+
+	return runConnectInteractiveBase(dev, stdin, stdout, hist, shutdown)
+}
+
+// signalExitCode follows the conventional 128+signum mapping. Decision 9
+// names SIGTERM (143) and SIGINT (130); SIGHUP (129) rounds out the
+// posted signals.
+func signalExitCode(sig os.Signal) int {
+	if s, ok := sig.(syscall.Signal); ok {
+		return 128 + int(s)
+	}
+	return 1
+}
+
 func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer, hist connectHistory) int {
+	return runConnectInteractiveBase(dev, stdin, stdout, hist, nil)
+}
+
+func runConnectInteractiveBase(dev *serialDevice, stdin io.Reader, stdout io.Writer, hist connectHistory, shutdown <-chan int) int {
 	inputs := make(chan inputEvent, 64)
 	devices := make(chan deviceEvent, 64)
 	stop := make(chan struct{})
@@ -51,7 +116,7 @@ func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer,
 		c.historyOn = true
 		c.history = append([]string(nil), hist.initial...)
 	}
-	code := runConnectLoop(c, inputs, devices)
+	code := runConnectLoop(c, inputs, devices, shutdown)
 	if hist.enabled && hist.path != "" {
 		_ = saveHistory(hist.path, c.history)
 	}
@@ -330,7 +395,7 @@ func (c *connectController) onIdleFire() {
 	c.flushPending()
 }
 
-func runConnectLoop(c *connectController, inputs <-chan inputEvent, devices <-chan deviceEvent) int {
+func runConnectLoop(c *connectController, inputs <-chan inputEvent, devices <-chan deviceEvent, shutdown <-chan int) int {
 	idle := time.NewTimer(time.Hour)
 	idle.Stop()
 	timerArmed := false
@@ -386,6 +451,9 @@ func runConnectLoop(c *connectController, inputs <-chan inputEvent, devices <-ch
 		case <-idle.C:
 			timerArmed = false
 			c.onIdleFire()
+		case code := <-shutdown:
+			c.flushPending()
+			return code
 		}
 	}
 }
