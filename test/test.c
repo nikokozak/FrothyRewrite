@@ -2679,6 +2679,15 @@ static void test_text_natives(void) {
                               sizeof(out)) == FR_OK &&
             strcmp(out, "5\nok\n") == 0 &&
             test_text_bytes_match(&runtime, "labeled", "led=1"));
+  CHECK("bare text.concat literal expression has bytes 'led=1'",
+        fr_repl_eval_line(
+            &runtime,
+            "text.equals?: (text.concat: \"led=\", text.from-int: 1), \"led=1\"",
+            out, sizeof(out)) == FR_OK &&
+            strcmp(out, "true\nok\n") == 0);
+  CHECK("function body with text literal is unsupported until slice B",
+        fr_repl_eval_line(&runtime, "to greet [ text.length: \"hi\" ]", out,
+                          sizeof(out)) == FR_ERR_UNSUPPORTED);
   {
     const uint8_t marker[] = {'i', 'n', 't', 'e', 'r', 'n', 'e', 'd'};
     fr_object_id_t first_id = 0;

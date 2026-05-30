@@ -14,6 +14,7 @@ typedef struct fr_compile_context_t {
   fr_runtime_t *runtime;
   const fr_parse_span_t *params;
   uint8_t param_count;
+  bool in_function_body;
 } fr_compile_context_t;
 
 typedef enum fr_compile_source_feature_t {
@@ -324,15 +325,17 @@ static fr_err_t fr_compile_emit_push_object_id(uint8_t instruction_bytes[],
   return fr_compile_write_u16(instruction_bytes, offset, (uint16_t)object_id);
 }
 
-/* Bare expressions compile against a live runtime: install the text now and
- * emit the runtime object id. Function bodies defer install to apply time. */
+/* Bare expressions install the text now and emit the live runtime id.
+ * Function bodies must wait for the overlay text-object channel (Slice B);
+ * embedding a runtime id in code that may be saved would be a persistence
+ * trap on the next restore. */
 static fr_err_t fr_compile_emit_text_literal(const fr_compile_context_t *ctx,
                                              const fr_parse_expr_t *expr,
                                              uint8_t instruction_bytes[],
                                              uint16_t *offset) {
   fr_object_id_t object_id = 0;
 
-  if (ctx == NULL || ctx->runtime == NULL) {
+  if (ctx == NULL || ctx->runtime == NULL || ctx->in_function_body) {
     return FR_ERR_UNSUPPORTED;
   }
   if (expr->text.length > FR_PROFILE_MAX_TEXT_LENGTH) {
@@ -1074,6 +1077,7 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
   }
   body_ctx.params = arity > 0 ? &parsed->params[function->param_start] : NULL;
   body_ctx.param_count = arity;
+  body_ctx.in_function_body = true;
 
   out->instruction_bytes[0] = FR_INSTRUCTION_FORMAT_VERSION;
   out->instruction_bytes[1] = header_size;
