@@ -84,6 +84,15 @@ static int failures = 0;
 #define FR_TEST_PAD_SLOT_COUNT 0
 #endif
 
+#if FR_FEATURE_TEXT
+#define FR_TEST_TEXT_WORDS                                                    \
+  " text.length text.equals? text.concat text.at text.from-int"
+#define FR_TEST_TEXT_SLOT_COUNT 5
+#else
+#define FR_TEST_TEXT_WORDS ""
+#define FR_TEST_TEXT_SLOT_COUNT 0
+#endif
+
 enum {
   FR_TEST_PERSIST_RECORD_BIND = 2,
   FR_TEST_PERSIST_RECORD_NAME = 3,
@@ -102,41 +111,43 @@ enum {
   "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
   "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_SOURCE_WORDS "\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
   "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_SOURCE_WORDS " led\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
   "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_SOURCE_WORDS " led myblink\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (13 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
-   FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT)
+   FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
+   FR_TEST_TEXT_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_SOURCE_WORDS "\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_SOURCE_WORDS " led\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_SOURCE_WORDS " led myblink\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (10 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
-   FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT)
+   FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
+   FR_TEST_TEXT_SLOT_COUNT)
 #endif
 
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
@@ -259,7 +270,7 @@ static void test_base_def_contract(void) {
       (FR_FEATURE_PERSISTENCE ? 10 : 7) + (FR_FEATURE_UART ? 6 : 0) +
       (FR_FEATURE_RANDOM ? 3 : 0) + (FR_FEATURE_PWM ? 3 : 0) +
       (FR_FEATURE_I2C ? 4 : 0) + (FR_FEATURE_MATH ? 6 : 0) +
-      FR_TEST_PAD_SLOT_COUNT;
+      FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT;
   uint16_t global_index = 0;
   uint16_t native_count = 0;
   fr_slot_id_t highest_slot_id = 0;
@@ -270,19 +281,16 @@ static void test_base_def_contract(void) {
   CHECK("base def rejects one-past layer",
         fr_base_def_layer_at(fr_base_def_layer_count(),
                              &(fr_base_def_layer_t){0}) == FR_ERR_NOT_FOUND);
-#if FR_FEATURE_UART
 #if FR_FEATURE_PAD
   CHECK("pad slot ids follow math block",
         FR_SLOT_PAD_RESET == FR_SLOT_AFTER_MATH);
-  CHECK("board local slot ids follow pad ids",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_TEST_PAD_LAST_SLOT + 1);
-#else
-  CHECK("board local slot ids follow math block",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_AFTER_MATH);
 #endif
+#if FR_FEATURE_TEXT
+  CHECK("text slot ids follow pad block",
+        FR_SLOT_TEXT_LENGTH == FR_SLOT_AFTER_PAD);
+  CHECK("board local slot ids follow text ids",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_TEXT_FROM_INT + 1);
 #elif FR_FEATURE_PAD
-  CHECK("pad slot ids follow math block",
-        FR_SLOT_PAD_RESET == FR_SLOT_AFTER_MATH);
   CHECK("board local slot ids follow pad ids",
         FR_SLOT_BOARD_LOCAL_BASE == FR_TEST_PAD_LAST_SLOT + 1);
 #else
@@ -2568,6 +2576,238 @@ static void test_text_objects(void) {
             fr_cells_install(&runtime, 1, NULL, &binary_id) ==
                 FR_ERR_CAPACITY);
 #endif
+}
+
+static fr_err_t test_text_native_id(fr_runtime_t *runtime, fr_slot_id_t slot_id,
+                                    const fr_native_entry_t **out_entry) {
+  fr_tagged_t slot_value = 0;
+  fr_native_id_t native_id = 0;
+
+  FR_TRY(fr_slot_read(runtime, slot_id, &slot_value));
+  FR_TRY(fr_tagged_decode_native_id(slot_value, &native_id));
+  return fr_native_get(runtime, native_id, out_entry);
+}
+
+/* Walk the named text via text.at, asserting each byte equals expected[i]. */
+static int test_text_bytes_match(fr_runtime_t *runtime, const char *name,
+                                 const char *expected) {
+  char cmd[64];
+  char out[32];
+  char want[16];
+  size_t n = strlen(expected);
+
+  for (size_t i = 0; i < n; i++) {
+    snprintf(cmd, sizeof(cmd), "text.at: %s, %zu", name, i);
+    snprintf(want, sizeof(want), "%u\nok\n",
+             (unsigned)(unsigned char)expected[i]);
+    if (fr_repl_eval_line(runtime, cmd, out, sizeof(out)) != FR_OK) {
+      return 0;
+    }
+    if (strcmp(out, want) != 0) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static void test_text_natives(void) {
+  fr_runtime_t runtime;
+  char out[128];
+  const fr_native_entry_t *concat_entry = NULL;
+  fr_tagged_t concat_args[2] = {0};
+  fr_tagged_t concat_result = 0;
+  uint8_t long_bytes[FR_PROFILE_MAX_TEXT_LENGTH];
+  fr_object_id_t long_id = 0;
+  fr_object_id_t fill_id = 0;
+  uint16_t fill_counter = 0;
+
+  CHECK("text natives install base image",
+        fr_base_image_install(&runtime) == FR_OK);
+
+  CHECK("text.length renders signature",
+        fr_repl_eval_line(&runtime, "see text.length", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "text.length(t: text) -> int\n"
+                   "return the byte length of a text\n"
+                   "ok\n") == 0);
+  CHECK("text.equals? renders signature",
+        fr_repl_eval_line(&runtime, "see text.equals?", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "text.equals?(a: text, b: text) -> any\n"
+                   "return true if two texts have equal bytes\n"
+                   "ok\n") == 0);
+  CHECK("text.concat renders signature",
+        fr_repl_eval_line(&runtime, "see text.concat", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "text.concat(a: text, b: text) -> text\n"
+                   "join two texts into a new text\n"
+                   "ok\n") == 0);
+  CHECK("text.at renders signature",
+        fr_repl_eval_line(&runtime, "see text.at", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "text.at(t: text, i: int) -> int\n"
+                   "return the byte at index i of a text\n"
+                   "ok\n") == 0);
+  CHECK("text.from-int renders signature",
+        fr_repl_eval_line(&runtime, "see text.from-int", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "text.from-int(n: int) -> text\n"
+                   "render an int as decimal text\n"
+                   "ok\n") == 0);
+
+  CHECK("text natives bind sample texts",
+        fr_repl_eval_line(&runtime, "hello is \"hello\"", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "empty is \"\"", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "abc is \"abc\"", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "abcd is \"abcd\"", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "abd is \"abd\"", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "foo is \"foo\"", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "bar is \"bar\"", out, sizeof(out)) ==
+                FR_OK);
+
+  CHECK("text.length of hello is five",
+        fr_repl_eval_line(&runtime, "text.length: hello", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "5\nok\n") == 0);
+  CHECK("text.length of empty is zero",
+        fr_repl_eval_line(&runtime, "text.length: empty", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "0\nok\n") == 0);
+  CHECK("text.length rejects int arg",
+        fr_repl_eval_line(&runtime, "text.length: 7", out, sizeof(out)) ==
+            FR_ERR_TYPE);
+
+  CHECK("text.equals? of equal texts is true",
+        fr_repl_eval_line(&runtime, "text.equals?: abc, abc", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "true\nok\n") == 0);
+  CHECK("text.equals? rejects mismatched lengths",
+        fr_repl_eval_line(&runtime, "text.equals?: abc, abcd", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "false\nok\n") == 0);
+  CHECK("text.equals? rejects mismatched bytes",
+        fr_repl_eval_line(&runtime, "text.equals?: abc, abd", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "false\nok\n") == 0);
+
+  CHECK("text.concat joins two texts",
+        fr_repl_eval_line(&runtime, "joined is text.concat: foo, bar", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "text.length: joined", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "6\nok\n") == 0 &&
+            test_text_bytes_match(&runtime, "joined", "foobar"));
+  CHECK("text.concat with empty interns to the original",
+        fr_repl_eval_line(&runtime, "joined_empty is text.concat: abc, empty",
+                          out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "text.equals?: joined_empty, abc", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "true\nok\n") == 0);
+
+  {
+    const uint8_t abc_bytes[3] = {'a', 'b', 'c'};
+    const fr_native_entry_t *empty_concat_entry = NULL;
+    fr_object_id_t abc_id = 0;
+    fr_object_id_t empty_id = 0;
+    fr_object_id_t result_id = 0;
+    fr_tagged_t empty_args[2] = {0};
+    fr_tagged_t empty_result = 0;
+
+    CHECK("text.concat with empty returns the same object id as the original",
+          fr_text_find(&runtime, abc_bytes, (uint16_t)sizeof(abc_bytes), 0,
+                       &abc_id) == FR_OK &&
+              fr_text_find(&runtime, NULL, 0, 0, &empty_id) == FR_OK &&
+              fr_tagged_encode_object_id(abc_id, &empty_args[0]) == FR_OK &&
+              fr_tagged_encode_object_id(empty_id, &empty_args[1]) == FR_OK &&
+              test_text_native_id(&runtime, FR_SLOT_TEXT_CONCAT,
+                                  &empty_concat_entry) == FR_OK &&
+              fr_native_call(&runtime, empty_concat_entry, empty_args, 2,
+                             &empty_result) == FR_OK &&
+              fr_tagged_decode_object_id(empty_result, &result_id) == FR_OK &&
+              result_id == abc_id);
+  }
+
+  CHECK("text.at reads first byte",
+        fr_repl_eval_line(&runtime, "text.at: abc, 0", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "97\nok\n") == 0);
+  CHECK("text.at reads last byte",
+        fr_repl_eval_line(&runtime, "text.at: abc, 2", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "99\nok\n") == 0);
+  CHECK("text.at rejects index at length",
+        fr_repl_eval_line(&runtime, "text.at: abc, 3", out, sizeof(out)) ==
+            FR_ERR_RANGE);
+  CHECK("text.at rejects negative index",
+        fr_repl_eval_line(&runtime, "text.at: abc, -1", out, sizeof(out)) ==
+            FR_ERR_RANGE);
+
+  CHECK("text.from-int renders zero",
+        fr_repl_eval_line(&runtime, "zero_text is text.from-int: 0", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "text.length: zero_text", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "text.at: zero_text, 0", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "48\nok\n") == 0);
+  CHECK("text.from-int renders 123 as three bytes",
+        fr_repl_eval_line(&runtime, "n123 is text.from-int: 123", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "text.length: n123", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "3\nok\n") == 0 &&
+            test_text_bytes_match(&runtime, "n123", "123"));
+  CHECK("text.from-int renders tagged int min",
+        fr_repl_eval_line(&runtime, "tmin is text.from-int: -1073741824", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "text.length: tmin", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "11\nok\n") == 0 &&
+            test_text_bytes_match(&runtime, "tmin", "-1073741824"));
+  CHECK("text.from-int rejects text arg",
+        fr_repl_eval_line(&runtime, "text.from-int: abc", out, sizeof(out)) ==
+            FR_ERR_TYPE);
+  CHECK("text.from-int round-trips through text.length",
+        fr_repl_eval_line(&runtime, "n42 is text.from-int: 42", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "text.length: n42", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "2\nok\n") == 0);
+
+  memset(long_bytes, 'a', sizeof(long_bytes));
+  CHECK("text.concat rejects joined length over the per-text cap",
+        fr_text_install(&runtime, long_bytes, (uint16_t)sizeof(long_bytes),
+                        &long_id) == FR_OK &&
+            test_text_native_id(&runtime, FR_SLOT_TEXT_CONCAT, &concat_entry) ==
+                FR_OK &&
+            fr_tagged_encode_object_id(long_id, &concat_args[0]) == FR_OK &&
+            (concat_args[1] = concat_args[0], true) &&
+            fr_native_call(&runtime, concat_entry, concat_args, 2,
+                           &concat_result) == FR_ERR_RANGE);
+
+  while (fr_object_count(&runtime) < FR_PROFILE_OBJECT_TABLE_SIZE) {
+    uint8_t fill_buf[2] = {(uint8_t)('A' + (fill_counter / 26)),
+                           (uint8_t)('a' + (fill_counter % 26))};
+    if (fr_text_install(&runtime, fill_buf, 2, &fill_id) != FR_OK) {
+      break;
+    }
+    fill_counter++;
+  }
+  CHECK("text.concat hits capacity once the object table is full",
+        fr_object_count(&runtime) == FR_PROFILE_OBJECT_TABLE_SIZE &&
+            fr_repl_eval_line(&runtime, "text.concat: foo, foo", out,
+                              sizeof(out)) == FR_ERR_CAPACITY);
 }
 #endif
 
@@ -7081,6 +7321,15 @@ static void test_repl(void) {
   CHECK("repl words",
         fr_repl_eval_line(&runtime, "words", out, sizeof(out)) == FR_OK &&
             strcmp(out, FR_TEST_WORDS) == 0);
+#if !FR_FEATURE_TEXT
+  CHECK("repl words omits text natives when text is off",
+        fr_repl_eval_line(&runtime, "words", out, sizeof(out)) == FR_OK &&
+            strstr(out, "text.length") == NULL &&
+            strstr(out, "text.equals?") == NULL &&
+            strstr(out, "text.concat") == NULL &&
+            strstr(out, "text.at") == NULL &&
+            strstr(out, "text.from-int") == NULL);
+#endif
 #else
   CHECK("repl rejects words without introspection",
         fr_repl_eval_line(&runtime, "words", out, sizeof(out)) ==
@@ -8181,6 +8430,7 @@ int main(void) {
 #endif
 #if FR_FEATURE_TEXT
   test_text_objects();
+  test_text_natives();
 #endif
 #if FR_FEATURE_RECORDS
   test_records();
