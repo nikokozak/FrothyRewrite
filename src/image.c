@@ -19,6 +19,7 @@ enum {
   FR_OVERLAY_UPDATE_RECORD_CODE = 1,
   FR_OVERLAY_UPDATE_RECORD_BIND = 2,
   FR_OVERLAY_UPDATE_RECORD_NAME = 3,
+  FR_OVERLAY_UPDATE_RECORD_TEXT = 4,
   FR_OVERLAY_UPDATE_RECORD_END = 0xff,
   FR_OVERLAY_UPDATE_VALUE_NIL = 0,
   FR_OVERLAY_UPDATE_VALUE_FALSE = 1,
@@ -808,6 +809,49 @@ static fr_err_t fr_image_resolve_ref(const fr_image_records_t *records,
   }
 }
 
+#if FR_FEATURE_TEXT
+/* The caller owns writable storage for these instruction bytes (compile output
+ * or decoded scratch) and passes the writable pointer in explicitly. We read
+ * the operand through the instruction reader before writing the runtime id. */
+static fr_err_t fr_image_patch_code_text_refs(
+    uint8_t *bytes, uint16_t length, const fr_object_id_t text_ids[],
+    uint16_t text_object_count) {
+  fr_instruction_stream_t view;
+  fr_instruction_header_t header = {0};
+  fr_code_offset_t ip = 0;
+  char scratch[64];
+
+  if (bytes == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_instruction_stream_init(&view, bytes, length));
+  FR_TRY(fr_instruction_read_header(&view, &header));
+  ip = (fr_code_offset_t)header.header_size;
+  while (ip < view.length) {
+    fr_code_offset_t next_ip = 0;
+
+    if ((fr_opcode_t)bytes[ip] == FR_OP_PUSH_OBJECT_ID) {
+      fr_object_id_t local_index = 0;
+
+      FR_TRY(fr_instruction_read_object_id_operand(&view, ip, &local_index));
+      if (local_index >= text_object_count) {
+        return FR_ERR_CORRUPT;
+      }
+      bytes[ip + 1] = (uint8_t)(text_ids[local_index] & 0xffu);
+      bytes[ip + 2] = (uint8_t)(text_ids[local_index] >> 8);
+    }
+    FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
+                                         (uint16_t)sizeof(scratch), NULL,
+                                         &next_ip));
+    if (next_ip <= ip) {
+      return FR_ERR_CORRUPT;
+    }
+    ip = next_ip;
+  }
+  return FR_OK;
+}
+#endif
+
 static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
                                           const fr_image_records_t *records,
                                           fr_image_apply_mode_t mode) {
@@ -818,20 +862,33 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
   fr_object_id_t record_ids[FR_OBJECT_TABLE_CAPACITY];
   fr_native_id_t native_ids[FR_PROFILE_NATIVE_TABLE_SIZE];
 
+#if FR_FEATURE_TEXT
+  /* Text install runs first so PUSH_OBJECT_ID operands can be patched from
+   * local indices to runtime ids before code install copies the bytes. */
+  for (uint16_t i = 0; i < records->text_object_count; i++) {
+    FR_TRY(fr_text_install(runtime, records->text_objects[i].bytes,
+                           records->text_objects[i].length, &text_ids[i]));
+  }
+  if (records->text_object_count > 0) {
+    for (uint16_t i = 0; i < records->code_object_count; i++) {
+      /* Records views are const, but the compile output and decoded overlay
+       * arenas under them are writable. Cast once at the call site. */
+      uint8_t *writable = (uint8_t *)records->code_objects[i].instructions.bytes;
+
+      FR_TRY(fr_image_patch_code_text_refs(
+          writable, records->code_objects[i].instructions.length, text_ids,
+          records->text_object_count));
+    }
+  }
+#else
+  (void)text_ids;
+#endif
   for (uint16_t i = 0; i < records->code_object_count; i++) {
     FR_TRY(fr_code_install(runtime, &records->code_objects[i].instructions,
                            records->code_objects[i].param_names,
                            records->code_objects[i].param_names_length,
                            &code_ids[i]));
   }
-#if FR_FEATURE_TEXT
-  for (uint16_t i = 0; i < records->text_object_count; i++) {
-    FR_TRY(fr_text_install(runtime, records->text_objects[i].bytes,
-                           records->text_objects[i].length, &text_ids[i]));
-  }
-#else
-  (void)text_ids;
-#endif
 #if FR_FEATURE_RECORDS
   for (uint16_t i = 0; i < records->record_shape_object_count; i++) {
     FR_TRY(fr_record_shape_install(
@@ -1071,14 +1128,12 @@ fr_err_t fr_overlay_update_encode(const fr_overlay_update_t *update,
   if (records.cell_object_count > 0) {
     return FR_ERR_UNSUPPORTED;
   }
-  if (records.text_object_count > 0) {
-    return FR_ERR_UNSUPPORTED;
-  }
   if (records.record_shape_object_count > 0 || records.record_object_count > 0) {
     return FR_ERR_UNSUPPORTED;
   }
   if (records.slot_init_count > FR_PROFILE_MAX_OVERLAY_UPDATE_SLOT_INITS ||
       records.code_object_count > FR_PROFILE_MAX_OVERLAY_UPDATE_CODE_OBJECTS ||
+      records.text_object_count > FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS ||
       records.slot_name_count > FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES) {
     return FR_ERR_CAPACITY;
   }
@@ -1112,6 +1167,26 @@ fr_err_t fr_overlay_update_encode(const fr_overlay_update_t *update,
     FR_TRY(fr_overlay_update_writer_bytes(&writer, instructions->bytes,
                                           instructions->length));
   }
+
+#if FR_FEATURE_TEXT
+  for (uint16_t i = 0; i < records.text_object_count; i++) {
+    const fr_image_text_object_t *text = &records.text_objects[i];
+
+    if (text->length > FR_PROFILE_MAX_TEXT_LENGTH) {
+      return FR_ERR_RANGE;
+    }
+    if (text->length > 0 && text->bytes == NULL) {
+      return FR_ERR_INVALID;
+    }
+    FR_TRY(fr_overlay_update_writer_u8(&writer,
+                                       FR_OVERLAY_UPDATE_RECORD_TEXT));
+    FR_TRY(fr_overlay_update_writer_u16(&writer, i));
+    FR_TRY(fr_overlay_update_writer_u16(&writer, text->length));
+    if (text->length > 0) {
+      FR_TRY(fr_overlay_update_writer_bytes(&writer, text->bytes, text->length));
+    }
+  }
+#endif
 
   for (uint16_t i = 0; i < records.slot_init_count; i++) {
     if (records.slot_inits[i].slot_id >= FR_PROFILE_MAX_SLOTS) {
@@ -1272,12 +1347,60 @@ fr_overlay_update_decode_name(fr_overlay_update_reader_t *reader,
 #endif
 }
 
+#if FR_FEATURE_TEXT
+static fr_err_t
+fr_overlay_update_decode_text(fr_overlay_update_reader_t *reader,
+                              fr_overlay_update_decoded_t *out,
+                              uint16_t *text_bytes_used) {
+  const uint8_t *text_bytes = NULL;
+  uint16_t local_id = 0;
+  uint16_t length = 0;
+
+  if (reader == NULL || out == NULL || text_bytes_used == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (out->update.text_object_count >=
+      FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS) {
+    return FR_ERR_CAPACITY;
+  }
+
+  FR_TRY(fr_overlay_update_reader_u16(reader, &local_id));
+  if (local_id != out->update.text_object_count) {
+    return FR_ERR_CORRUPT;
+  }
+  FR_TRY(fr_overlay_update_reader_u16(reader, &length));
+  if (length > FR_PROFILE_MAX_TEXT_LENGTH) {
+    return FR_ERR_CORRUPT;
+  }
+  if ((uint32_t)*text_bytes_used + length >
+      FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_BYTES) {
+    return FR_ERR_CAPACITY;
+  }
+  if (length > 0) {
+    FR_TRY(fr_overlay_update_reader_bytes(reader, length, &text_bytes));
+    memcpy(&out->text_bytes[*text_bytes_used], text_bytes, length);
+  }
+
+  out->text_objects[out->update.text_object_count] = (fr_image_text_object_t){
+      .bytes = length > 0 ? &out->text_bytes[*text_bytes_used] : NULL,
+      .length = length,
+  };
+  *text_bytes_used = (uint16_t)(*text_bytes_used + length);
+  out->update.text_object_count =
+      (uint16_t)(out->update.text_object_count + 1);
+  return FR_OK;
+}
+#endif
+
 fr_err_t fr_overlay_update_decode(const uint8_t *bytes, uint16_t length,
                                   fr_overlay_update_decoded_t *out) {
   fr_overlay_update_reader_t reader = {bytes, length, 0};
   const uint8_t *magic = NULL;
   uint32_t stored_crc = 0;
   uint16_t instruction_bytes_used = 0;
+#if FR_FEATURE_TEXT
+  uint16_t text_bytes_used = 0;
+#endif
   uint8_t version = 0;
   uint8_t record = 0;
 
@@ -1296,6 +1419,9 @@ fr_err_t fr_overlay_update_decode(const uint8_t *bytes, uint16_t length,
   memset(out, 0, sizeof(*out));
   out->update.slot_inits = out->slot_inits;
   out->update.code_objects = out->code_objects;
+#if FR_FEATURE_TEXT
+  out->update.text_objects = out->text_objects;
+#endif
   out->update.slot_names = out->slot_names;
 
   FR_TRY(fr_overlay_update_reader_bytes(
@@ -1321,6 +1447,10 @@ fr_err_t fr_overlay_update_decode(const uint8_t *bytes, uint16_t length,
       FR_TRY(fr_overlay_update_decode_bind(&reader, out));
     } else if (record == FR_OVERLAY_UPDATE_RECORD_NAME) {
       FR_TRY(fr_overlay_update_decode_name(&reader, out));
+#if FR_FEATURE_TEXT
+    } else if (record == FR_OVERLAY_UPDATE_RECORD_TEXT) {
+      FR_TRY(fr_overlay_update_decode_text(&reader, out, &text_bytes_used));
+#endif
     } else {
       return FR_ERR_CORRUPT;
     }

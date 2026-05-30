@@ -8,6 +8,10 @@
 #include "tagged.h"
 #include "types.h"
 
+#if FR_FEATURE_TEXT
+#include "parse.h"
+#endif
+
 #include <stdbool.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -125,8 +129,6 @@ static int handle_target(void) {
 #if FR_HOST_TINY_NAMES_MODE
 static bool is_space(char ch) { return ch == ' ' || ch == '\t'; }
 
-static bool is_digit(char ch) { return ch >= '0' && ch <= '9'; }
-
 static int print_send_slot_call(fr_slot_id_t slot_id) {
   printf("send %u:\n", (unsigned)slot_id);
   fflush(stdout);
@@ -218,10 +220,8 @@ static int handle_named_slot_call(const char *source, bool *out_handled) {
     *out_handled = true;
     return print_err(err);
   }
-  if (!is_digit(name[0])) {
-    *out_handled = true;
-    return print_err(FR_ERR_NOT_FOUND);
-  }
+  /* Mirror doesn't know the name. Forward to the device — it may have
+   * defined the word from a pass-forwarded text-bearing source line. */
   *out_handled = true;
   return print_send_source(source);
 }
@@ -293,6 +293,17 @@ static int print_send_run(const fr_instruction_stream_t *instructions) {
   return 0;
 }
 
+#if FR_FEATURE_TEXT
+static bool line_has_text_literal(const fr_parse_line_t *line) {
+  for (uint8_t i = 0; i < line->expr_count; i++) {
+    if (line->exprs[i].kind == FR_PARSE_EXPR_TEXT) {
+      return true;
+    }
+  }
+  return false;
+}
+#endif
+
 static int handle_expression(const char *source) {
   fr_compile_expression_t expression;
   fr_err_t err = FR_OK;
@@ -303,10 +314,31 @@ static int handle_expression(const char *source) {
     return 0;
   }
 
+#if FR_FEATURE_TEXT
+  {
+    fr_parse_line_t line = {0};
+    fr_parse_expr_id_t root = 0;
+
+    if (fr_parse_expression_line(source, &line, &root) == FR_OK &&
+        line_has_text_literal(&line)) {
+      fputs("pass\n", stdout);
+      fflush(stdout);
+      return 0;
+    }
+  }
+#endif
+
   err = fr_compile_expression_for_runtime(&runtime, source, &expression);
 
   if (err == FR_OK) {
     return print_send_run(&expression.instructions);
+  }
+  if (err == FR_ERR_NOT_FOUND) {
+    /* Mirror missed the name. The device may have it from a pass-forwarded
+     * text-bearing definition; let it decide. */
+    fputs("pass\n", stdout);
+    fflush(stdout);
+    return 0;
   }
   return print_err(err);
 }
@@ -339,6 +371,15 @@ static int handle_source(const char *source) {
     return 0;
   }
   if (handle_bare_zero_arg_command(source, &handled) != 0 || handled) {
+    return 0;
+  }
+#endif
+
+#if !FR_FEATURE_TEXT
+  /* Helper profile cannot parse text literals; forward to the device. */
+  if (strchr(source, '"') != NULL) {
+    fputs("pass\n", stdout);
+    fflush(stdout);
     return 0;
   }
 #endif

@@ -181,8 +181,22 @@
  * derived from FR_WORD_SIZE -- cross-width rejection is the hash's job.
  * Separate from the persistence payload version in persist_payload.c; bump
  * each only when its own wire format changes.
+ *
+ * v2 added a text-object record so function bodies can carry text literals.
  */
-#define FR_PROFILE_OVERLAY_UPDATE_VERSION 1
+#define FR_PROFILE_OVERLAY_UPDATE_VERSION 2
+#endif
+
+/* Must equal FR_PARSE_MAX_BODY_EXPRS; static-asserted in compile.h. The literal
+ * is repeated here because config.h sits below parse.h in the include order. */
+#ifndef FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS
+#define FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS 4
+#endif
+
+#ifndef FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_BYTES
+#define FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_BYTES                              \
+  (FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS *                                \
+   (FR_PROFILE_MAX_TEXT_LENGTH > 0 ? FR_PROFILE_MAX_TEXT_LENGTH : 1))
 #endif
 
 #ifndef FR_PROFILE_REPL_LINE_BYTES

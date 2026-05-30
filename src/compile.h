@@ -5,6 +5,11 @@
 
 #include <stdbool.h>
 
+typedef char fr_compile_assert_overlay_text_cap_matches_parse_body
+    [(FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS == FR_PARSE_MAX_BODY_EXPRS)
+         ? 1
+         : -1];
+
 enum {
   FR_COMPILE_MAX_INSTRUCTION_BYTES = FR_PROFILE_MAX_INSTRUCTION_BYTES,
   /* One function's packed param names: every arg at max token length plus its
@@ -30,10 +35,12 @@ typedef struct fr_compile_overlay_update_t {
   uint8_t text_bytes[FR_PROFILE_MAX_TEXT_LENGTH > 0
                          ? FR_PROFILE_MAX_TEXT_LENGTH
                          : 1];
-  uint8_t record_text_bytes[FR_PARSE_MAX_BODY_EXPRS]
-                           [FR_PROFILE_MAX_TEXT_LENGTH > 0
-                                ? FR_PROFILE_MAX_TEXT_LENGTH
-                                : 1];
+  /* Scratch for text bytes collected from one line, either record-field
+   * defaults or function-body literals. Both paths feed text_objects[]. */
+  uint8_t body_text_bytes[FR_PARSE_MAX_BODY_EXPRS]
+                         [FR_PROFILE_MAX_TEXT_LENGTH > 0
+                              ? FR_PROFILE_MAX_TEXT_LENGTH
+                              : 1];
   char record_name_text[FR_PROFILE_MAX_NAME_BYTES + 1];
   char record_field_name_text[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY]
                              [FR_PROFILE_MAX_NAME_BYTES + 1];

@@ -3,16 +3,29 @@
 #include "base_defs.h"
 #include "code.h"
 #include "native.h"
+#include "object.h"
 #include "parse.h"
 #include "slot.h"
 
 #include <stdint.h>
 #include <string.h>
 
+/* Function bodies stash each text literal here so apply can install the bytes
+ * and patch the PUSH_OBJECT_ID operands before code install. NULL means the
+ * caller is a bare expression that installs its own text now. */
+typedef struct fr_compile_body_texts_t {
+  fr_image_text_object_t *objects;
+  uint8_t (*storage)[FR_PROFILE_MAX_TEXT_LENGTH > 0 ? FR_PROFILE_MAX_TEXT_LENGTH
+                                                    : 1];
+  uint16_t capacity;
+  uint16_t count;
+} fr_compile_body_texts_t;
+
 typedef struct fr_compile_context_t {
   fr_runtime_t *runtime;
   const fr_parse_span_t *params;
   uint8_t param_count;
+  fr_compile_body_texts_t *body_texts;
 } fr_compile_context_t;
 
 typedef enum fr_compile_source_feature_t {
@@ -310,6 +323,68 @@ static fr_err_t fr_compile_emit_push_int(uint8_t instruction_bytes[],
   FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_PUSH_INT));
   return fr_compile_write_int_operand(instruction_bytes, offset, value);
 }
+
+#if FR_FEATURE_TEXT
+static fr_err_t fr_compile_emit_push_object_id(uint8_t instruction_bytes[],
+                                               uint16_t *offset,
+                                               fr_object_id_t object_id) {
+#if FR_WORD_SIZE == 16
+  if ((fr_tagged_t)object_id > FR_TAGGED_OBJECT_MAX_ID) {
+    return FR_ERR_RANGE;
+  }
+#endif
+  FR_TRY(fr_compile_write_byte(instruction_bytes, offset,
+                               FR_OP_PUSH_OBJECT_ID));
+  return fr_compile_write_u16(instruction_bytes, offset, (uint16_t)object_id);
+}
+
+/* Bare expressions install the text now and emit the live runtime id. Function
+ * bodies stash bytes in the overlay update's text_objects[] and emit the local
+ * index; apply patches each operand to the runtime id before code install, so
+ * the saved code carries no host-time runtime id. */
+static fr_err_t fr_compile_emit_text_literal(const fr_compile_context_t *ctx,
+                                             const fr_parse_expr_t *expr,
+                                             uint8_t instruction_bytes[],
+                                             uint16_t *offset) {
+  fr_object_id_t object_id = 0;
+
+  if (expr == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (ctx == NULL) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  if (expr->text.length > FR_PROFILE_MAX_TEXT_LENGTH) {
+    return FR_ERR_RANGE;
+  }
+  if (expr->text.length > 0 && expr->text.start == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (ctx->body_texts != NULL) {
+    fr_compile_body_texts_t *bt = ctx->body_texts;
+
+    if (bt->count >= bt->capacity) {
+      return FR_ERR_RANGE;
+    }
+    if (expr->text.length > 0) {
+      memcpy(bt->storage[bt->count], expr->text.start, expr->text.length);
+    }
+    bt->objects[bt->count] = (fr_image_text_object_t){
+        .bytes = bt->storage[bt->count],
+        .length = expr->text.length,
+    };
+    object_id = (fr_object_id_t)bt->count;
+    bt->count = (uint16_t)(bt->count + 1);
+    return fr_compile_emit_push_object_id(instruction_bytes, offset, object_id);
+  }
+  if (ctx->runtime == NULL) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  FR_TRY(fr_text_install(ctx->runtime, (const uint8_t *)expr->text.start,
+                         expr->text.length, &object_id));
+  return fr_compile_emit_push_object_id(instruction_bytes, offset, object_id);
+}
+#endif
 
 static fr_err_t fr_compile_emit_push_nil(uint8_t instruction_bytes[],
                                          uint16_t *offset) {
@@ -634,7 +709,12 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_INT:
     return fr_compile_emit_push_int(instruction_bytes, offset, expr->int_value);
   case FR_PARSE_EXPR_TEXT:
+#if FR_FEATURE_TEXT
+    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_TEXT));
+    return fr_compile_emit_text_literal(ctx, expr, instruction_bytes, offset);
+#else
     return FR_ERR_UNSUPPORTED;
+#endif
   case FR_PARSE_EXPR_NAME:
     if (fr_compile_param_for_name(ctx, expr->name, &arg_index)) {
       return fr_compile_emit_load_arg(instruction_bytes, offset, arg_index);
@@ -929,11 +1009,11 @@ static fr_err_t fr_compile_record_field_ref(
       return FR_ERR_INVALID;
     }
     if (expr->text.length > 0) {
-      memcpy(out->record_text_bytes[*text_count], expr->text.start,
+      memcpy(out->body_text_bytes[*text_count], expr->text.start,
              expr->text.length);
     }
     out->text_objects[*text_count] = (fr_image_text_object_t){
-        .bytes = out->record_text_bytes[*text_count],
+        .bytes = out->body_text_bytes[*text_count],
         .length = expr->text.length,
     };
     *out_ref =
@@ -1009,6 +1089,12 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
                                     const fr_parse_expr_t *function,
                                     fr_compile_overlay_update_t *out) {
   fr_compile_context_t body_ctx = {0};
+  fr_compile_body_texts_t body_texts = {
+      .objects = out->text_objects,
+      .storage = out->body_text_bytes,
+      .capacity = FR_PARSE_MAX_BODY_EXPRS,
+      .count = 0,
+  };
   uint8_t arity = 0;
   uint8_t header_size = FR_INSTRUCTION_MIN_HEADER_SIZE;
   uint16_t offset = 0;
@@ -1033,6 +1119,7 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
   }
   body_ctx.params = arity > 0 ? &parsed->params[function->param_start] : NULL;
   body_ctx.param_count = arity;
+  body_ctx.body_texts = &body_texts;
 
   out->instruction_bytes[0] = FR_INSTRUCTION_FORMAT_VERSION;
   out->instruction_bytes[1] = header_size;
@@ -1063,6 +1150,8 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
       .slot_init_count = 1,
       .code_objects = &out->code_object,
       .code_object_count = 1,
+      .text_objects = body_texts.count > 0 ? out->text_objects : NULL,
+      .text_object_count = body_texts.count,
       .natives = NULL,
       .native_count = 0,
   };

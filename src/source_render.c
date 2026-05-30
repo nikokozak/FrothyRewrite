@@ -13,6 +13,7 @@
 #include "code.h"
 #include "instruction.h"
 #include "native.h"
+#include "object.h"
 #include "slot.h"
 #include "tagged.h"
 
@@ -482,6 +483,23 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       FR_TRY(fr_instruction_read_int_operand(view, ip, &value));
       FR_TRY(fr_source_push_int(r, value));
       ip = (fr_code_offset_t)(ip + FR_INSTRUCTION_PUSH_INT_SIZE);
+      break;
+    }
+    case FR_OP_PUSH_OBJECT_ID: {
+      fr_object_id_t object_id = 0;
+      const uint8_t *bytes = NULL;
+      uint16_t length = 0;
+      uint16_t start = r->used;
+
+      FR_TRY(fr_instruction_read_object_id_operand(view, ip, &object_id));
+      FR_TRY(fr_text_view(r->runtime, object_id, &bytes, &length));
+      FR_TRY(fr_source_putc(r, '"'));
+      for (uint16_t i = 0; i < length; i++) {
+        FR_TRY(fr_source_putc(r, (char)bytes[i]));
+      }
+      FR_TRY(fr_source_putc(r, '"'));
+      FR_TRY(fr_source_seal(r, start, false));
+      ip = (fr_code_offset_t)(ip + FR_INSTRUCTION_PUSH_OBJECT_ID_SIZE);
       break;
     }
     case FR_OP_LOAD_ARG: {

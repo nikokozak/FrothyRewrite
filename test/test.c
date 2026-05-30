@@ -2659,6 +2659,77 @@ static void test_text_natives(void) {
                    "render an int as decimal text\n"
                    "ok\n") == 0);
 
+  CHECK("text.length on bare literal evaluates",
+        fr_repl_eval_line(&runtime, "text.length: \"hello\"", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "5\nok\n") == 0);
+  CHECK("text.length on empty literal evaluates to zero",
+        fr_repl_eval_line(&runtime, "text.length: \"\"", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "0\nok\n") == 0);
+  CHECK("text.equals? on equal literals is true",
+        fr_repl_eval_line(&runtime, "text.equals?: \"abc\", \"abc\"", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "true\nok\n") == 0);
+  CHECK("text.concat on literal with text.from-int evaluates",
+        fr_repl_eval_line(&runtime,
+                          "labeled is text.concat: \"led=\", text.from-int: 1",
+                          out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "text.length: labeled", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "5\nok\n") == 0 &&
+            test_text_bytes_match(&runtime, "labeled", "led=1"));
+  CHECK("bare text.concat literal expression has bytes 'led=1'",
+        fr_repl_eval_line(
+            &runtime,
+            "text.equals?: (text.concat: \"led=\", text.from-int: 1), \"led=1\"",
+            out, sizeof(out)) == FR_OK &&
+            strcmp(out, "true\nok\n") == 0);
+  CHECK("function body with text literal defines and evaluates",
+        fr_repl_eval_line(&runtime,
+                          "to greet with x [ text.concat: \"led=\", "
+                          "text.from-int: x ]",
+                          out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "labeled is greet: 1", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "text.length: labeled", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "5\nok\n") == 0 &&
+            test_text_bytes_match(&runtime, "labeled", "led=1"));
+  CHECK("see renders a saved function with a text literal",
+        fr_repl_eval_line(&runtime, "see greet", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "overlay code\n"
+                   "to greet with x [ text.concat: \"led=\", "
+                   "text.from-int: x ]\n"
+                   "ok\n") == 0);
+  {
+    const uint8_t marker[] = {'i', 'n', 't', 'e', 'r', 'n', 'e', 'd'};
+    fr_object_id_t first_id = 0;
+    fr_object_id_t second_id = 0;
+
+    CHECK("repeated bare literals intern to the same object id",
+          fr_repl_eval_line(&runtime, "text.length: \"interned\"", out,
+                            sizeof(out)) == FR_OK &&
+              fr_text_find(&runtime, marker, (uint16_t)sizeof(marker), 0,
+                           &first_id) == FR_OK &&
+              fr_repl_eval_line(&runtime, "text.length: \"interned\"", out,
+                                sizeof(out)) == FR_OK &&
+              fr_text_find(&runtime, marker, (uint16_t)sizeof(marker), 0,
+                           &second_id) == FR_OK &&
+              first_id == second_id);
+  }
+  {
+    char over_long[FR_PROFILE_MAX_TEXT_LENGTH + 16];
+    over_long[0] = '"';
+    memset(&over_long[1], 'x', FR_PROFILE_MAX_TEXT_LENGTH + 1);
+    over_long[FR_PROFILE_MAX_TEXT_LENGTH + 2] = '"';
+    over_long[FR_PROFILE_MAX_TEXT_LENGTH + 3] = '\0';
+    CHECK("bare literal over the per-text cap is rejected",
+          fr_repl_eval_line(&runtime, over_long, out, sizeof(out)) ==
+              FR_ERR_RANGE);
+  }
+
   CHECK("text natives bind sample texts",
         fr_repl_eval_line(&runtime, "hello is \"hello\"", out, sizeof(out)) ==
                 FR_OK &&
@@ -3447,7 +3518,7 @@ static void test_image(void) {
             fr_overlay_update_decode(overlay_bytes, overlay_length,
                                      &decoded_update) == FR_ERR_CORRUPT);
 #if FR_FEATURE_TEXT
-  CHECK("overlay update byte codec rejects text objects",
+  CHECK("overlay update byte codec rejects text-object slot inits",
         fr_overlay_update_encode(&text_overlay_update, overlay_bytes,
                                  (uint16_t)sizeof(overlay_bytes),
                                  &overlay_length) == FR_ERR_UNSUPPORTED);
@@ -4550,9 +4621,21 @@ static void test_compile(void) {
             fr_text_view(&text_runtime, object_id, &text_bytes, &text_length) ==
                 FR_OK &&
             text_length == 5 && memcmp(text_bytes, "ready", 5) == 0);
-  CHECK("compile text expression unsupported",
+  CHECK("compile text expression pushes object id",
         fr_compile_expression_for_runtime(&text_runtime, "\"ready\"",
-                                          &expression) == FR_ERR_UNSUPPORTED);
+                                          &expression) == FR_OK &&
+            expression.instructions.length ==
+                FR_INSTRUCTION_MIN_HEADER_SIZE +
+                    FR_INSTRUCTION_PUSH_OBJECT_ID_SIZE + 1u &&
+            expression.instruction_bytes[2] == FR_OP_PUSH_OBJECT_ID &&
+            fr_vm_run_instruction_stream(&text_runtime, &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+            fr_text_view(&text_runtime, object_id, &text_bytes, &text_length) ==
+                FR_OK &&
+            text_length == 5 && memcmp(text_bytes, "ready", 5) == 0);
+  CHECK("compile text expression without runtime stays unsupported",
+        fr_compile_expression("\"ready\"", &expression) == FR_ERR_UNSUPPORTED);
 #else
   CHECK("compile text unsupported without feature",
         fr_compile_overlay_update_for_runtime(&runtime, "message is \"ready\"",
@@ -6394,6 +6477,25 @@ static void test_persist(void) {
             fr_text_view(&runtime, object_id, &text_bytes, &text_length) ==
                 FR_OK &&
             text_length == 5 && memcmp(text_bytes, "ready", 5) == 0);
+  {
+    char out[64];
+
+    CHECK("persist restores function with embedded text literal",
+          fr_base_image_install(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime,
+                                "to greet with x [ text.concat: \"led=\", "
+                                "text.from-int: x ]",
+                                out, sizeof(out)) == FR_OK &&
+              fr_persist_save(&runtime) == FR_OK &&
+              fr_base_image_install(&runtime) == FR_OK &&
+              fr_persist_restore(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime, "labeled is greet: 1", out,
+                                sizeof(out)) == FR_OK &&
+              fr_repl_eval_line(&runtime, "text.length: labeled", out,
+                                sizeof(out)) == FR_OK &&
+              strcmp(out, "5\nok\n") == 0 &&
+              test_text_bytes_match(&runtime, "labeled", "led=1"));
+  }
 #if FR_FEATURE_CELLS
   CHECK("persist restores cell-held binary text",
         fr_base_image_install(&runtime) == FR_OK &&
