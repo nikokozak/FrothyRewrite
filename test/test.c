@@ -2696,6 +2696,29 @@ static void test_text_natives(void) {
                               sizeof(out)) == FR_OK &&
             strcmp(out, "true\nok\n") == 0);
 
+  {
+    const uint8_t abc_bytes[3] = {'a', 'b', 'c'};
+    const fr_native_entry_t *empty_concat_entry = NULL;
+    fr_object_id_t abc_id = 0;
+    fr_object_id_t empty_id = 0;
+    fr_object_id_t result_id = 0;
+    fr_tagged_t empty_args[2] = {0};
+    fr_tagged_t empty_result = 0;
+
+    CHECK("text.concat with empty returns the same object id as the original",
+          fr_text_find(&runtime, abc_bytes, (uint16_t)sizeof(abc_bytes), 0,
+                       &abc_id) == FR_OK &&
+              fr_text_find(&runtime, NULL, 0, 0, &empty_id) == FR_OK &&
+              fr_tagged_encode_object_id(abc_id, &empty_args[0]) == FR_OK &&
+              fr_tagged_encode_object_id(empty_id, &empty_args[1]) == FR_OK &&
+              test_text_native_id(&runtime, FR_SLOT_TEXT_CONCAT,
+                                  &empty_concat_entry) == FR_OK &&
+              fr_native_call(&runtime, empty_concat_entry, empty_args, 2,
+                             &empty_result) == FR_OK &&
+              fr_tagged_decode_object_id(empty_result, &result_id) == FR_OK &&
+              result_id == abc_id);
+  }
+
   CHECK("text.at reads first byte",
         fr_repl_eval_line(&runtime, "text.at: abc, 0", out, sizeof(out)) ==
                 FR_OK &&
@@ -7281,6 +7304,15 @@ static void test_repl(void) {
   CHECK("repl words",
         fr_repl_eval_line(&runtime, "words", out, sizeof(out)) == FR_OK &&
             strcmp(out, FR_TEST_WORDS) == 0);
+#if !FR_FEATURE_TEXT
+  CHECK("repl words omits text natives when text is off",
+        fr_repl_eval_line(&runtime, "words", out, sizeof(out)) == FR_OK &&
+            strstr(out, "text.length") == NULL &&
+            strstr(out, "text.equals?") == NULL &&
+            strstr(out, "text.concat") == NULL &&
+            strstr(out, "text.at") == NULL &&
+            strstr(out, "text.from-int") == NULL);
+#endif
 #else
   CHECK("repl rejects words without introspection",
         fr_repl_eval_line(&runtime, "words", out, sizeof(out)) ==
