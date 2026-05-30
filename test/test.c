@@ -2588,6 +2588,28 @@ static fr_err_t test_text_native_id(fr_runtime_t *runtime, fr_slot_id_t slot_id,
   return fr_native_get(runtime, native_id, out_entry);
 }
 
+/* Walk the named text via text.at, asserting each byte equals expected[i]. */
+static int test_text_bytes_match(fr_runtime_t *runtime, const char *name,
+                                 const char *expected) {
+  char cmd[64];
+  char out[32];
+  char want[16];
+  size_t n = strlen(expected);
+
+  for (size_t i = 0; i < n; i++) {
+    snprintf(cmd, sizeof(cmd), "text.at: %s, %zu", name, i);
+    snprintf(want, sizeof(want), "%u\nok\n",
+             (unsigned)(unsigned char)expected[i]);
+    if (fr_repl_eval_line(runtime, cmd, out, sizeof(out)) != FR_OK) {
+      return 0;
+    }
+    if (strcmp(out, want) != 0) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
 static void test_text_natives(void) {
   fr_runtime_t runtime;
   char out[128];
@@ -2651,9 +2673,7 @@ static void test_text_natives(void) {
             fr_repl_eval_line(&runtime, "foo is \"foo\"", out, sizeof(out)) ==
                 FR_OK &&
             fr_repl_eval_line(&runtime, "bar is \"bar\"", out, sizeof(out)) ==
-                FR_OK &&
-            fr_repl_eval_line(&runtime, "foobar is \"foobar\"", out,
-                              sizeof(out)) == FR_OK);
+                FR_OK);
 
   CHECK("text.length of hello is five",
         fr_repl_eval_line(&runtime, "text.length: hello", out, sizeof(out)) ==
@@ -2686,9 +2706,7 @@ static void test_text_natives(void) {
             fr_repl_eval_line(&runtime, "text.length: joined", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "6\nok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "text.equals?: joined, foobar", out,
-                              sizeof(out)) == FR_OK &&
-            strcmp(out, "true\nok\n") == 0);
+            test_text_bytes_match(&runtime, "joined", "foobar"));
   CHECK("text.concat with empty interns to the original",
         fr_repl_eval_line(&runtime, "joined_empty is text.concat: abc, empty",
                           out, sizeof(out)) == FR_OK &&
@@ -2748,16 +2766,15 @@ static void test_text_natives(void) {
                           sizeof(out)) == FR_OK &&
             fr_repl_eval_line(&runtime, "text.length: n123", out,
                               sizeof(out)) == FR_OK &&
-            strcmp(out, "3\nok\n") == 0);
+            strcmp(out, "3\nok\n") == 0 &&
+            test_text_bytes_match(&runtime, "n123", "123"));
   CHECK("text.from-int renders tagged int min",
         fr_repl_eval_line(&runtime, "tmin is text.from-int: -1073741824", out,
                           sizeof(out)) == FR_OK &&
             fr_repl_eval_line(&runtime, "text.length: tmin", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "11\nok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "text.at: tmin, 0", out,
-                              sizeof(out)) == FR_OK &&
-            strcmp(out, "45\nok\n") == 0);
+            test_text_bytes_match(&runtime, "tmin", "-1073741824"));
   CHECK("text.from-int rejects text arg",
         fr_repl_eval_line(&runtime, "text.from-int: abc", out, sizeof(out)) ==
             FR_ERR_TYPE);
