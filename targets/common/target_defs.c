@@ -8,6 +8,8 @@
 #include "tagged.h"
 
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 static fr_err_t fr_native_decode_nonnegative_int(const fr_tagged_t *args,
                                                  uint8_t arg_count,
@@ -858,6 +860,124 @@ static fr_err_t fr_native_pad_pack(fr_runtime_t *runtime,
 #endif
 #endif
 
+#if FR_FEATURE_TEXT
+static fr_err_t fr_native_text_length(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  fr_object_id_t object_id = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_object_id(args[0], &object_id));
+  FR_TRY(fr_text_view(runtime, object_id, &bytes, &length));
+  return fr_tagged_encode_int((int32_t)length, out);
+}
+
+static fr_err_t fr_native_text_equals_p(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count, fr_tagged_t *out) {
+  fr_object_id_t a_id = 0;
+  fr_object_id_t b_id = 0;
+  const uint8_t *a_bytes = NULL;
+  const uint8_t *b_bytes = NULL;
+  uint16_t a_length = 0;
+  uint16_t b_length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_object_id(args[0], &a_id));
+  FR_TRY(fr_tagged_decode_object_id(args[1], &b_id));
+  FR_TRY(fr_text_view(runtime, a_id, &a_bytes, &a_length));
+  FR_TRY(fr_text_view(runtime, b_id, &b_bytes, &b_length));
+  return fr_tagged_encode_bool(
+      a_length == b_length && memcmp(a_bytes, b_bytes, a_length) == 0, out);
+}
+
+static fr_err_t fr_native_text_at(fr_runtime_t *runtime,
+                                  const fr_tagged_t *args, uint8_t arg_count,
+                                  fr_tagged_t *out) {
+  fr_object_id_t object_id = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+  fr_int_t index = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_object_id(args[0], &object_id));
+  FR_TRY(fr_text_view(runtime, object_id, &bytes, &length));
+  FR_TRY(fr_tagged_decode_int(args[1], &index));
+  if (index < 0 || (uint32_t)index >= length) {
+    return FR_ERR_RANGE;
+  }
+  return fr_tagged_encode_int((int32_t)bytes[index], out);
+}
+
+static fr_err_t fr_native_text_concat(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  fr_object_id_t a_id = 0;
+  fr_object_id_t b_id = 0;
+  const uint8_t *a_bytes = NULL;
+  const uint8_t *b_bytes = NULL;
+  uint16_t a_length = 0;
+  uint16_t b_length = 0;
+  uint8_t joined[FR_PROFILE_MAX_TEXT_LENGTH];
+  fr_object_id_t object_id = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_object_id(args[0], &a_id));
+  FR_TRY(fr_tagged_decode_object_id(args[1], &b_id));
+  FR_TRY(fr_text_view(runtime, a_id, &a_bytes, &a_length));
+  FR_TRY(fr_text_view(runtime, b_id, &b_bytes, &b_length));
+  if ((uint32_t)a_length + (uint32_t)b_length > FR_PROFILE_MAX_TEXT_LENGTH) {
+    return FR_ERR_RANGE;
+  }
+  if (a_length > 0) {
+    memcpy(joined, a_bytes, a_length);
+  }
+  if (b_length > 0) {
+    memcpy(joined + a_length, b_bytes, b_length);
+  }
+  FR_TRY(fr_text_install(runtime, joined, (uint16_t)(a_length + b_length),
+                         &object_id));
+  return fr_tagged_encode_object_id(object_id, out);
+}
+
+static fr_err_t fr_native_text_from_int(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count, fr_tagged_t *out) {
+  /* Twelve bytes covers tagged int min "-1073741824" (11 chars) plus NUL. */
+  char buffer[12];
+  fr_int_t value = 0;
+  int written = 0;
+  fr_object_id_t object_id = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_int(args[0], &value));
+  written = snprintf(buffer, sizeof(buffer), "%ld", (long)value);
+  if (written <= 0 || (size_t)written >= sizeof(buffer)) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_text_install(runtime, (const uint8_t *)buffer, (uint16_t)written,
+                         &object_id));
+  return fr_tagged_encode_object_id(object_id, out);
+}
+#endif
+
 #if FR_FEATURE_NATIVE_SIGNATURES
 static const fr_native_param_t fr_native_int_params[] = {
     {NULL, FR_NATIVE_VALUE_INT},
@@ -916,6 +1036,61 @@ static const fr_native_signature_t fr_native_pad_pack_signature = {
     .help = "pack the pad bytes into a text value",
 };
 #endif
+#endif
+
+#if FR_FEATURE_TEXT
+static const fr_native_param_t fr_native_text_length_params[] = {
+    {"t", FR_NATIVE_VALUE_TEXT},
+};
+static const fr_native_signature_t fr_native_text_length_signature = {
+    .params = fr_native_text_length_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the byte length of a text",
+};
+
+static const fr_native_param_t fr_native_text_equals_p_params[] = {
+    {"a", FR_NATIVE_VALUE_TEXT},
+    {"b", FR_NATIVE_VALUE_TEXT},
+};
+static const fr_native_signature_t fr_native_text_equals_p_signature = {
+    .params = fr_native_text_equals_p_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "return true if two texts have equal bytes",
+};
+
+static const fr_native_param_t fr_native_text_at_params[] = {
+    {"t", FR_NATIVE_VALUE_TEXT},
+    {"i", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_text_at_signature = {
+    .params = fr_native_text_at_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the byte at index i of a text",
+};
+
+static const fr_native_param_t fr_native_text_concat_params[] = {
+    {"a", FR_NATIVE_VALUE_TEXT},
+    {"b", FR_NATIVE_VALUE_TEXT},
+};
+static const fr_native_signature_t fr_native_text_concat_signature = {
+    .params = fr_native_text_concat_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_TEXT,
+    .help = "join two texts into a new text",
+};
+
+static const fr_native_param_t fr_native_text_from_int_params[] = {
+    {"n", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_text_from_int_signature = {
+    .params = fr_native_text_from_int_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_TEXT,
+    .help = "render an int as decimal text",
+};
 #endif
 
 static const fr_native_param_t fr_native_ms_params[] = {
@@ -1690,6 +1865,68 @@ const fr_base_def_t fr_target_base_defs[] = {
 #endif
     },
 #endif
+#endif
+#if FR_FEATURE_TEXT
+    {
+        .slot_id = FR_SLOT_TEXT_LENGTH,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "text.length",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_text_length,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_text_length_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TEXT_EQUALS_P,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "text.equals?",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_text_equals_p,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_text_equals_p_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TEXT_CONCAT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "text.concat",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_text_concat,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_text_concat_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TEXT_AT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "text.at",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_text_at,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_text_at_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TEXT_FROM_INT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "text.from-int",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_text_from_int,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_text_from_int_signature,
+#endif
+    },
 #endif
 };
 
