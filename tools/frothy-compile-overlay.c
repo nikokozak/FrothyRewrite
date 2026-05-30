@@ -372,6 +372,15 @@ static int handle_source(const char *source) {
   }
 #endif
 
+#if !FR_FEATURE_TEXT
+  /* Helper profile cannot parse text literals; forward to the device. */
+  if (strchr(source, '"') != NULL) {
+    fputs("pass\n", stdout);
+    fflush(stdout);
+    return 0;
+  }
+#endif
+
   err = fr_compile_overlay_update_for_runtime(&runtime, source, &pending);
   if (err == FR_ERR_INVALID) {
     return handle_expression(source);
