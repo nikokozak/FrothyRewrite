@@ -336,11 +336,25 @@ static fr_err_t fr_persist_reader_bytes(fr_persist_reader_t *reader,
   return FR_OK;
 }
 
+#if FR_FEATURE_TEXT
+static fr_err_t fr_persist_encode_text_ref(
+    fr_persist_writer_t *writer, const fr_runtime_t *runtime,
+    fr_object_id_t runtime_object_id, fr_object_id_t runtime_object_ids[],
+    fr_persist_object_record_kind_t object_kinds[], uint16_t *object_count,
+    uint16_t *out_local_id);
+#endif
+
 static fr_err_t fr_persist_encode_code_ref(
     fr_persist_writer_t *writer, const fr_runtime_t *runtime,
     fr_code_object_id_t runtime_code_id, fr_code_object_id_t runtime_code_ids[],
-    uint16_t *code_count, uint16_t *out_local_id) {
+    uint16_t *code_count, fr_object_id_t runtime_object_ids[],
+    fr_persist_object_record_kind_t object_kinds[], uint16_t *object_count,
+    uint16_t *out_local_id) {
   fr_instruction_stream_t instructions;
+#if FR_FEATURE_TEXT
+  uint8_t patched[FR_PROFILE_MAX_INSTRUCTION_BYTES];
+  const uint8_t *write_bytes = NULL;
+#endif
 
   FR_TRY(fr_code_get_instructions(runtime, runtime_code_id, &instructions));
 
@@ -362,11 +376,59 @@ static fr_err_t fr_persist_encode_code_ref(
   if (*code_count >= FR_PROFILE_CODE_OBJECT_TABLE_SIZE) {
     return FR_ERR_CAPACITY;
   }
+#if FR_FEATURE_TEXT
+  {
+    fr_instruction_stream_t view;
+    fr_instruction_header_t header = {0};
+    fr_code_offset_t ip = 0;
+    char scratch[64];
+
+    if (instructions.length > (uint16_t)sizeof(patched)) {
+      return FR_ERR_CAPACITY;
+    }
+    memcpy(patched, instructions.bytes, instructions.length);
+    FR_TRY(fr_instruction_stream_init(&view, patched, instructions.length));
+    FR_TRY(fr_instruction_read_header(&view, &header));
+    ip = (fr_code_offset_t)header.header_size;
+    while (ip < view.length) {
+      fr_code_offset_t next_ip = 0;
+
+      if ((fr_opcode_t)patched[ip] == FR_OP_PUSH_OBJECT_ID) {
+        fr_object_id_t runtime_id = 0;
+        uint16_t local_text_id = 0;
+
+        FR_TRY(fr_instruction_read_object_id_operand(&view, ip, &runtime_id));
+        FR_TRY(fr_persist_encode_text_ref(writer, runtime, runtime_id,
+                                          runtime_object_ids, object_kinds,
+                                          object_count, &local_text_id));
+        patched[ip + 1] = (uint8_t)(local_text_id & 0xffu);
+        patched[ip + 2] = (uint8_t)(local_text_id >> 8);
+      }
+      FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
+                                           (uint16_t)sizeof(scratch), NULL,
+                                           &next_ip));
+      if (next_ip <= ip) {
+        return FR_ERR_CORRUPT;
+      }
+      ip = next_ip;
+    }
+    write_bytes = patched;
+  }
+#else
+  (void)runtime_object_ids;
+  (void)object_kinds;
+  (void)object_count;
+#endif
+
   FR_TRY(fr_persist_writer_u8(writer, FR_PERSIST_RECORD_CODE));
   FR_TRY(fr_persist_writer_u16(writer, *code_count));
   FR_TRY(fr_persist_writer_u16(writer, instructions.length));
+#if FR_FEATURE_TEXT
+  FR_TRY(fr_persist_writer_bytes(writer, write_bytes, instructions.length));
+#else
   FR_TRY(fr_persist_writer_bytes(writer, instructions.bytes,
                                  instructions.length));
+#endif
 
   runtime_code_ids[*code_count] = runtime_code_id;
   *out_local_id = *code_count;
@@ -1028,7 +1090,8 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
                                         &code_id) == FR_OK) {
       FR_TRY(fr_persist_encode_code_ref(&writer, runtime, code_id,
                                         runtime_code_ids, &code_count,
-                                        &ignored));
+                                        runtime_object_ids, object_kinds,
+                                        &object_count, &ignored));
     }
   }
 
@@ -1992,18 +2055,56 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
 #endif
 
   FR_TRY(fr_runtime_reset(runtime));
-  for (uint16_t i = 0; i < code_count; i++) {
-    fr_instruction_stream_t instructions;
-
-    FR_TRY(fr_instruction_stream_init(&instructions, code_records[i].bytes,
-                                      code_records[i].length));
-    FR_TRY(fr_code_install(runtime, &instructions, NULL, 0, &code_map[i]));
-  }
   for (uint16_t i = 0; i < text_count; i++) {
     FR_TRY(fr_text_install_since(runtime, text_records[i].bytes,
                                  text_records[i].length,
                                  runtime->objects.base_count,
                                  &object_map[text_records[i].local_id]));
+  }
+  for (uint16_t i = 0; i < code_count; i++) {
+    fr_instruction_stream_t instructions;
+#if FR_FEATURE_TEXT
+    uint8_t patched[FR_PROFILE_MAX_INSTRUCTION_BYTES];
+    fr_instruction_header_t header = {0};
+    fr_code_offset_t ip = 0;
+    char scratch[64];
+
+    if (code_records[i].length > (uint16_t)sizeof(patched)) {
+      return FR_ERR_CORRUPT;
+    }
+    memcpy(patched, code_records[i].bytes, code_records[i].length);
+    FR_TRY(fr_instruction_stream_init(&instructions, patched,
+                                      code_records[i].length));
+    FR_TRY(fr_instruction_read_header(&instructions, &header));
+    ip = (fr_code_offset_t)header.header_size;
+    while (ip < instructions.length) {
+      fr_code_offset_t next_ip = 0;
+
+      if ((fr_opcode_t)patched[ip] == FR_OP_PUSH_OBJECT_ID) {
+        fr_object_id_t local_id = 0;
+
+        FR_TRY(fr_instruction_read_object_id_operand(&instructions, ip,
+                                                     &local_id));
+        if (local_id >= object_count ||
+            object_kinds[local_id] != FR_PERSIST_OBJECT_TEXT) {
+          return FR_ERR_CORRUPT;
+        }
+        patched[ip + 1] = (uint8_t)(object_map[local_id] & 0xffu);
+        patched[ip + 2] = (uint8_t)(object_map[local_id] >> 8);
+      }
+      FR_TRY(fr_instruction_disassemble_at(&instructions, ip, scratch,
+                                           (uint16_t)sizeof(scratch), NULL,
+                                           &next_ip));
+      if (next_ip <= ip) {
+        return FR_ERR_CORRUPT;
+      }
+      ip = next_ip;
+    }
+#else
+    FR_TRY(fr_instruction_stream_init(&instructions, code_records[i].bytes,
+                                      code_records[i].length));
+#endif
+    FR_TRY(fr_code_install(runtime, &instructions, NULL, 0, &code_map[i]));
   }
   /*
    * Restore object refs in dependency order: record fields may point at text,

@@ -231,9 +231,11 @@ fr_err_t fr_instruction_read_object_id_operand(
 
   *out_object_id =
       (fr_object_id_t)fr_read_u16_little_endian(&view->bytes[ip + 1]);
+#if FR_WORD_SIZE == 16
   if ((fr_tagged_t)*out_object_id > FR_TAGGED_OBJECT_MAX_ID) {
     return FR_ERR_RANGE;
   }
+#endif
   return FR_OK;
 }
 

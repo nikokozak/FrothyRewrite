@@ -6477,6 +6477,25 @@ static void test_persist(void) {
             fr_text_view(&runtime, object_id, &text_bytes, &text_length) ==
                 FR_OK &&
             text_length == 5 && memcmp(text_bytes, "ready", 5) == 0);
+  {
+    char out[64];
+
+    CHECK("persist restores function with embedded text literal",
+          fr_base_image_install(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime,
+                                "to greet with x [ text.concat: \"led=\", "
+                                "text.from-int: x ]",
+                                out, sizeof(out)) == FR_OK &&
+              fr_persist_save(&runtime) == FR_OK &&
+              fr_base_image_install(&runtime) == FR_OK &&
+              fr_persist_restore(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime, "labeled is greet: 1", out,
+                                sizeof(out)) == FR_OK &&
+              fr_repl_eval_line(&runtime, "text.length: labeled", out,
+                                sizeof(out)) == FR_OK &&
+              strcmp(out, "5\nok\n") == 0 &&
+              test_text_bytes_match(&runtime, "labeled", "led=1"));
+  }
 #if FR_FEATURE_CELLS
   CHECK("persist restores cell-held binary text",
         fr_base_image_install(&runtime) == FR_OK &&

@@ -8,6 +8,10 @@
 #include "tagged.h"
 #include "types.h"
 
+#if FR_FEATURE_TEXT
+#include "parse.h"
+#endif
+
 #include <stdbool.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -293,6 +297,17 @@ static int print_send_run(const fr_instruction_stream_t *instructions) {
   return 0;
 }
 
+#if FR_FEATURE_TEXT
+static bool line_has_text_literal(const fr_parse_line_t *line) {
+  for (uint8_t i = 0; i < line->expr_count; i++) {
+    if (line->exprs[i].kind == FR_PARSE_EXPR_TEXT) {
+      return true;
+    }
+  }
+  return false;
+}
+#endif
+
 static int handle_expression(const char *source) {
   fr_compile_expression_t expression;
   fr_err_t err = FR_OK;
@@ -302,6 +317,20 @@ static int handle_expression(const char *source) {
     fflush(stdout);
     return 0;
   }
+
+#if FR_FEATURE_TEXT
+  {
+    fr_parse_line_t line = {0};
+    fr_parse_expr_id_t root = 0;
+
+    if (fr_parse_expression_line(source, &line, &root) == FR_OK &&
+        line_has_text_literal(&line)) {
+      fputs("pass\n", stdout);
+      fflush(stdout);
+      return 0;
+    }
+  }
+#endif
 
   err = fr_compile_expression_for_runtime(&runtime, source, &expression);
 

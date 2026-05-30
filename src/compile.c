@@ -328,9 +328,11 @@ static fr_err_t fr_compile_emit_push_int(uint8_t instruction_bytes[],
 static fr_err_t fr_compile_emit_push_object_id(uint8_t instruction_bytes[],
                                                uint16_t *offset,
                                                fr_object_id_t object_id) {
+#if FR_WORD_SIZE == 16
   if ((fr_tagged_t)object_id > FR_TAGGED_OBJECT_MAX_ID) {
     return FR_ERR_RANGE;
   }
+#endif
   FR_TRY(fr_compile_write_byte(instruction_bytes, offset,
                                FR_OP_PUSH_OBJECT_ID));
   return fr_compile_write_u16(instruction_bytes, offset, (uint16_t)object_id);

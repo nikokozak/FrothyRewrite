@@ -810,37 +810,37 @@ static fr_err_t fr_image_resolve_ref(const fr_image_records_t *records,
 }
 
 #if FR_FEATURE_TEXT
-/* The compiler may emit FR_OP_PUSH_OBJECT_ID with the operand set to the local
- * index of a text object carried alongside in the same overlay update. The
- * caller owns writable storage for these instruction bytes (compile output or
- * decoded scratch), so the cast away const here is the documented contract. */
+/* The caller owns writable storage for these instruction bytes (compile output
+ * or decoded scratch) and passes the writable pointer in explicitly. We read
+ * the operand through the instruction reader before writing the runtime id. */
 static fr_err_t fr_image_patch_code_text_refs(
-    const fr_image_code_object_t *code, const fr_object_id_t text_ids[],
+    uint8_t *bytes, uint16_t length, const fr_object_id_t text_ids[],
     uint16_t text_object_count) {
+  fr_instruction_stream_t view;
   fr_instruction_header_t header = {0};
   fr_code_offset_t ip = 0;
-  uint8_t *bytes = (uint8_t *)code->instructions.bytes;
   char scratch[64];
 
   if (bytes == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_instruction_read_header(&code->instructions, &header));
+  FR_TRY(fr_instruction_stream_init(&view, bytes, length));
+  FR_TRY(fr_instruction_read_header(&view, &header));
   ip = (fr_code_offset_t)header.header_size;
-  while (ip < code->instructions.length) {
+  while (ip < view.length) {
     fr_code_offset_t next_ip = 0;
 
     if ((fr_opcode_t)bytes[ip] == FR_OP_PUSH_OBJECT_ID) {
-      uint16_t local_index =
-          (uint16_t)(bytes[ip + 1] | ((uint16_t)bytes[ip + 2] << 8));
+      fr_object_id_t local_index = 0;
 
+      FR_TRY(fr_instruction_read_object_id_operand(&view, ip, &local_index));
       if (local_index >= text_object_count) {
         return FR_ERR_CORRUPT;
       }
       bytes[ip + 1] = (uint8_t)(text_ids[local_index] & 0xffu);
       bytes[ip + 2] = (uint8_t)(text_ids[local_index] >> 8);
     }
-    FR_TRY(fr_instruction_disassemble_at(&code->instructions, ip, scratch,
+    FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
                                          (uint16_t)sizeof(scratch), NULL,
                                          &next_ip));
     if (next_ip <= ip) {
@@ -871,8 +871,13 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
   }
   if (records->text_object_count > 0) {
     for (uint16_t i = 0; i < records->code_object_count; i++) {
-      FR_TRY(fr_image_patch_code_text_refs(&records->code_objects[i], text_ids,
-                                           records->text_object_count));
+      /* Records views are const, but the compile output and decoded overlay
+       * arenas under them are writable. Cast once at the call site. */
+      uint8_t *writable = (uint8_t *)records->code_objects[i].instructions.bytes;
+
+      FR_TRY(fr_image_patch_code_text_refs(
+          writable, records->code_objects[i].instructions.length, text_ids,
+          records->text_object_count));
     }
   }
 #else
