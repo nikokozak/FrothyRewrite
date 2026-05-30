@@ -434,6 +434,99 @@ func TestConnectResetDetectionRendersNotices(t *testing.T) {
 	}
 }
 
+// A bracket-balanced form typed across three lines feeds through
+// sourceFormState: the device receives one joined form, and the user
+// sees a continuation prompt for each interior line.
+func TestConnectMultiLineContinuationSubmitsOneForm(t *testing.T) {
+	master, slave, _, err := testpty.Open()
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := configureSerial(slave, 115200); err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer slave.Close()
+
+	dev := &serialDevice{
+		file:   slave,
+		readCh: make(chan byte, 256),
+		errCh:  make(chan error, 1),
+	}
+	go dev.readLoop()
+
+	stdinR, stdinW := io.Pipe()
+	defer stdinR.Close()
+
+	var stdoutMu sync.Mutex
+	var stdout bytes.Buffer
+	syncedStdout := &lockedWriter{w: &stdout, mu: &stdoutMu}
+
+	done := make(chan int, 1)
+	go func() {
+		done <- runConnectInteractive(dev, stdinR, syncedStdout, connectHistory{})
+	}()
+
+	waitForStdoutContains(t, &stdoutMu, &stdout, promptPrimary, time.Second)
+
+	deviceRx := readChan(master)
+
+	if _, err := stdinW.Write([]byte("to foo with x [\r")); err != nil {
+		t.Fatal(err)
+	}
+	waitForStdoutContains(t, &stdoutMu, &stdout, promptContinuation, time.Second)
+
+	if _, err := stdinW.Write([]byte("gpio.high: x\r")); err != nil {
+		t.Fatal(err)
+	}
+	waitForStdoutMatches(t, &stdoutMu, &stdout, func(s string) bool {
+		return strings.Count(s, promptContinuation) >= 2
+	}, time.Second)
+
+	if _, err := stdinW.Write([]byte("]\r")); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []byte("to foo with x [ gpio.high: x ]\n")
+	got := make([]byte, 0, len(want))
+	deadline := time.After(2 * time.Second)
+	for len(got) < len(want) {
+		select {
+		case b := <-deviceRx:
+			got = append(got, b)
+		case <-deadline:
+			t.Fatalf("device received %q, want %q", got, want)
+		}
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("device received %q, want %q", got, want)
+	}
+
+	waitForStdoutMatches(t, &stdoutMu, &stdout, func(s string) bool {
+		return strings.HasSuffix(s, promptPrimary)
+	}, time.Second)
+
+	if _, err := stdinW.Write([]byte{0x04}); err != nil {
+		t.Fatal(err)
+	}
+	_ = stdinW.Close()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runConnectInteractive did not return")
+	}
+
+	select {
+	case b := <-deviceRx:
+		t.Fatalf("device received unexpected trailing byte %#x", b)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 // readChan reads bytes from r forever and forwards them one by one. The
 // goroutine exits when r returns an error (typically when the test
 // closes the PTY).

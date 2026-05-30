@@ -70,6 +70,7 @@ type connectController struct {
 	savedCur        int
 	buf             []byte
 	cursor          int
+	form            sourceFormState
 	pending         []byte
 	idleArmed       bool
 	lastInterruptAt time.Time
@@ -82,7 +83,11 @@ func newConnectController(out io.Writer, sendLine func([]byte) error) *connectCo
 }
 
 func (c *connectController) writePrompt() {
-	_, _ = io.WriteString(c.out, promptPrimary)
+	prompt := promptPrimary
+	if c.form.hasPending() {
+		prompt = promptContinuation
+	}
+	_, _ = io.WriteString(c.out, prompt)
 	if len(c.buf) > 0 {
 		_, _ = c.out.Write(c.buf)
 	}
@@ -142,20 +147,22 @@ func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
 		}
 		c.idleArmed = false
 		line := string(c.buf)
-		if c.historyOn {
-			c.history = appendHistory(c.history, line)
-		}
-		_ = c.sendLine([]byte(line + "\n"))
 		c.buf = c.buf[:0]
 		c.cursor = 0
 		c.histIdx = -1
 		c.savedLine = c.savedLine[:0]
 		c.savedCur = 0
+		if source, complete := c.form.appendLine(line); complete {
+			if c.historyOn {
+				c.history = appendHistory(c.history, source)
+			}
+			_ = c.sendLine([]byte(source + "\n"))
+		}
 		c.writePrompt()
 	case inputInterrupt:
 		return c.onInterrupt()
 	case inputEOF:
-		if len(c.buf) > 0 {
+		if len(c.buf) > 0 || c.form.hasPending() {
 			return false, 0
 		}
 		c.flushPending()
@@ -179,12 +186,13 @@ func (c *connectController) onInterrupt() (exit bool, code int) {
 	}
 	c.hasInterrupt = true
 	c.lastInterruptAt = now
-	if len(c.buf) > 0 {
+	if len(c.buf) > 0 || c.form.hasPending() {
 		c.buf = c.buf[:0]
 		c.cursor = 0
 		c.histIdx = -1
 		c.savedLine = c.savedLine[:0]
 		c.savedCur = 0
+		c.form.reset()
 		c.redrawLine()
 		return false, 0
 	}
