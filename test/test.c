@@ -2357,6 +2357,18 @@ static void test_math(void) {
   CHECK("mod by zero rejects",
         fr_repl_eval_line(&runtime, "mod: 5, 0", out, sizeof(out)) ==
             FR_ERR_DOMAIN);
+  CHECK("percent infix positive remainder",
+        fr_repl_eval_line(&runtime, "7 % 3", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+  CHECK("percent infix negative dividend keeps sign",
+        fr_repl_eval_line(&runtime, "-7 % 3", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "-1\nok\n") == 0);
+  CHECK("percent infix by zero rejects",
+        fr_repl_eval_line(&runtime, "7 % 0", out, sizeof(out)) ==
+            FR_ERR_DOMAIN);
+  CHECK("percent infix binds left-to-right with star",
+        fr_repl_eval_line(&runtime, "7 % 2 * 3", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "3\nok\n") == 0);
 }
 #endif
 
@@ -4072,6 +4084,80 @@ static void test_parse(void) {
   CHECK("parse rejects excessive expression depth",
         fr_parse_line("boot is fn [ a: b: c: d: e: f: g: h: i: 1 ]",
                       &parsed) == FR_ERR_OVERFLOW);
+  CHECK("parse paren overrides precedence",
+        fr_parse_expression_line("(1 + 2) * 3", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_MUL &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_ADD &&
+            parsed.exprs[parsed.exprs[expr_id].children[1]].kind ==
+                FR_PARSE_EXPR_INT &&
+            parsed.exprs[parsed.exprs[expr_id].children[1]].int_value == 3);
+  CHECK("parse paren chain reaches max depth",
+        fr_parse_expression_line("(((((((1)))))))", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 1);
+  CHECK("parse rejects overflow paren chain",
+        fr_parse_expression_line("((((((((1))))))))", &parsed, &expr_id) ==
+            FR_ERR_OVERFLOW);
+  CHECK("parse rejects lonely lparen",
+        fr_parse_expression_line("(", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse rejects missing rparen",
+        fr_parse_expression_line("(1", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse percent reads as mod binop",
+        fr_parse_expression_line("7 % 3", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_MOD &&
+            parsed.exprs[expr_id].child_count == 2 &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].int_value == 7 &&
+            parsed.exprs[parsed.exprs[expr_id].children[1]].int_value == 3);
+  CHECK("parse percent shares multiplicative precedence",
+        fr_parse_expression_line("7 % 2 * 3", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_MUL &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_MOD);
+  CHECK("parse hex literal lowercase",
+        fr_parse_expression_line("0xff", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 255);
+  CHECK("parse hex literal uppercase",
+        fr_parse_expression_line("0xFF", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 255);
+  CHECK("parse hex literal big X",
+        fr_parse_expression_line("0Xff", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 255);
+  CHECK("parse hex literal negative",
+        fr_parse_expression_line("-0x10", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == -16);
+  CHECK("parse binary literal",
+        fr_parse_expression_line("0b1010", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 10);
+  CHECK("parse binary literal zero",
+        fr_parse_expression_line("0b0", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 0);
+  CHECK("parse binary literal negative big B",
+        fr_parse_expression_line("-0B1", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == -1);
+  CHECK("parse bare zero stays decimal",
+        fr_parse_expression_line("0", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 0);
+  CHECK("parse rejects bare hex prefix",
+        fr_parse_expression_line("0x", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse rejects non-hex digit",
+        fr_parse_expression_line("0xg", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse rejects bare binary prefix",
+        fr_parse_expression_line("0b", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse rejects non-binary digit",
+        fr_parse_expression_line("0b2", &parsed, &expr_id) == FR_ERR_INVALID);
+  CHECK("parse rejects hex overflow",
+        fr_parse_expression_line("0x80000000", &parsed, &expr_id) ==
+            FR_ERR_RANGE);
   CHECK("parse rejects null out",
         fr_parse_line("boot is nil", NULL) == FR_ERR_INVALID);
 }
@@ -4998,6 +5084,26 @@ static void test_compile(void) {
              fr_compile_overlay_update(line, &update) == FR_OK &&
              fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
              fr_vm_run_boot(&runtime, &tagged) == FR_ERR_RANGE));
+  CHECK("compiled parens override precedence",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ (1 + 2) * 3 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 9);
+  CHECK("compiled precedence unchanged without parens",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ 1 + 2 * 3 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 7);
+  CHECK("compiled paren chain at max depth",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_expression("(((((((1)))))))", &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
   CHECK("compiled native call owns instruction bytes",
         fr_compile_overlay_update("boot is fn [ ms: 100 ]", &update) == FR_OK &&
             update.slot_inits[0].slot_id == FR_SLOT_BOOT &&
@@ -7708,6 +7814,45 @@ static void test_repl_see_source_form(void) {
                                 sizeof(fallback)) == FR_OK &&
               strncmp(fallback, prefix, strlen(prefix)) == 0);
   }
+  CHECK("see source paren overrides precedence",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "lift is fn with a, b, c [ (a + b) * c ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see lift", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\nto lift with a, b, c "
+                        "[ (a + b) * c ]\nok\n") == 0);
+  CHECK("see source conservative wrap on nested binop",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "step is fn with a, b, c [ a + b * c ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see step", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\nto step with a, b, c "
+                        "[ a + (b * c) ]\nok\n") == 0);
+#if FR_FEATURE_MATH
+  CHECK("see source percent infix",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "rem is fn with a, b [ a % b ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see rem", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "overlay code\nto rem with a, b [ a % b ]\nok\n") == 0);
+  CHECK("see source percent feeds add with parens",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "shift is fn with a, b, c [ (a % b) + c ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see shift", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\nto shift with a, b, c "
+                        "[ (a % b) + c ]\nok\n") == 0);
+#endif
 #if FR_FEATURE_SOURCE_BASE
   /* The spec-named examples use base words, present only under source-base:
    * a zero-arg source call (led.on) and a one-arg source call (gpio.high). */
@@ -7750,8 +7895,8 @@ static void test_source_base_word_proofs(void) {
                 "pin ; ms: wait ; gpio.low: pin ; ms: wait ] ]"},
       {"led.blink", "to led.blink with count, wait [ blink: $led_builtin, "
                     "count, wait ]"},
-      {"wrap", "to wrap with value, size [ if size <= 0 [ 0 ] else [ mod: "
-               "value, size ] ]"},
+      {"wrap", "to wrap with value, size [ if size <= 0 [ 0 ] else "
+               "[ value % size ] ]"},
       {"random.chance?", "to random.chance? with numer, denom [ if denom <= 0 "
                          "[ false ] else [ numer > random.below: denom ] ]"},
       {"random.percent?",

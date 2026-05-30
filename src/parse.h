@@ -54,6 +54,7 @@ typedef enum fr_parse_expr_kind_t {
   FR_PARSE_EXPR_SUB,
   FR_PARSE_EXPR_MUL,
   FR_PARSE_EXPR_DIV,
+  FR_PARSE_EXPR_MOD,
 } fr_parse_expr_kind_t;
 
 typedef struct fr_parse_expr_t {

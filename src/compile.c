@@ -736,6 +736,18 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_DIV:
     return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
                                  FR_OP_DIV_INT);
+#if FR_FEATURE_MATH
+  case FR_PARSE_EXPR_MOD:
+    if (expr->child_count != 2) {
+      return FR_ERR_INVALID;
+    }
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
+                                instruction_bytes, offset));
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[1],
+                                instruction_bytes, offset));
+    return fr_compile_emit_slot_op(instruction_bytes, offset,
+                                   FR_OP_CALL_NATIVE_SLOT, FR_SLOT_MOD);
+#endif
   case FR_PARSE_EXPR_CALL:
     return fr_compile_emit_call(ctx, parsed, expr, instruction_bytes, offset);
   case FR_PARSE_EXPR_LIST:

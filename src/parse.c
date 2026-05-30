@@ -28,6 +28,7 @@ typedef enum fr_token_kind_t {
   FR_TOKEN_MINUS,
   FR_TOKEN_STAR,
   FR_TOKEN_SLASH,
+  FR_TOKEN_PERCENT,
 } fr_token_kind_t;
 
 typedef struct fr_token_t {
@@ -54,12 +55,6 @@ typedef uint32_t fr_parse_int_magnitude_t;
   ((fr_parse_int_magnitude_t)FR_TAGGED_INT_MAX)
 #define FR_PARSE_INT_NEG_LIMIT                                                \
   ((fr_parse_int_magnitude_t)(FR_TAGGED_INT_MAX + 1u))
-#define FR_PARSE_INT_POS_CUTOFF                                               \
-  ((fr_parse_int_magnitude_t)(FR_PARSE_INT_POS_LIMIT / 10u))
-#define FR_PARSE_INT_NEG_CUTOFF                                               \
-  ((fr_parse_int_magnitude_t)(FR_PARSE_INT_NEG_LIMIT / 10u))
-#define FR_PARSE_INT_POS_CUTLIM ((uint8_t)(FR_PARSE_INT_POS_LIMIT % 10u))
-#define FR_PARSE_INT_NEG_CUTLIM ((uint8_t)(FR_PARSE_INT_NEG_LIMIT % 10u))
 
 static bool fr_parse_is_space(char c) {
   return c == ' ' || c == '\t' || c == '\n' || c == '\r';
@@ -116,8 +111,10 @@ static bool fr_parse_skip_space(fr_parser_t *parser) {
 static fr_err_t fr_parse_token_int(fr_parse_span_t span, fr_int_t *out_int) {
   bool negative = false;
   fr_parse_int_magnitude_t parsed = 0;
+  fr_parse_int_magnitude_t limit = 0;
   fr_parse_int_magnitude_t cutoff = 0;
   uint8_t cutlim = 0;
+  uint8_t base = 10;
   uint16_t i = 0;
 
   if (span.length == 0 || out_int == NULL) {
@@ -131,19 +128,58 @@ static fr_err_t fr_parse_token_int(fr_parse_span_t span, fr_int_t *out_int) {
   if (i == span.length) {
     return FR_ERR_UNSUPPORTED;
   }
-  cutoff = negative ? FR_PARSE_INT_NEG_CUTOFF : FR_PARSE_INT_POS_CUTOFF;
-  cutlim = negative ? FR_PARSE_INT_NEG_CUTLIM : FR_PARSE_INT_POS_CUTLIM;
+
+  if (span.start[i] == '0' && i + 1 < span.length) {
+    char prefix = span.start[i + 1];
+    if (prefix == 'x' || prefix == 'X') {
+      base = 16;
+      i += 2;
+    } else if (prefix == 'b' || prefix == 'B') {
+      base = 2;
+      i += 2;
+    }
+  }
+  if (i == span.length) {
+    /* Bare `0x` / `0b` with no digits — committed to int by the prefix, so
+     * report a hard error rather than falling back to name. */
+    return FR_ERR_INVALID;
+  }
+
+  limit = negative ? FR_PARSE_INT_NEG_LIMIT : FR_PARSE_INT_POS_LIMIT;
+  cutoff = (fr_parse_int_magnitude_t)(limit / base);
+  cutlim = (uint8_t)(limit % base);
 
   while (i < span.length) {
-    uint8_t digit = (uint8_t)(span.start[i] - '0');
+    char c = span.start[i];
+    uint8_t digit = 0;
 
-    if (!fr_parse_is_digit(span.start[i])) {
-      return FR_ERR_UNSUPPORTED;
+    if (base == 10) {
+      if (!fr_parse_is_digit(c)) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      digit = (uint8_t)(c - '0');
+    } else if (base == 16) {
+      if (c >= '0' && c <= '9') {
+        digit = (uint8_t)(c - '0');
+      } else if (c >= 'a' && c <= 'f') {
+        digit = (uint8_t)(c - 'a' + 10);
+      } else if (c >= 'A' && c <= 'F') {
+        digit = (uint8_t)(c - 'A' + 10);
+      } else {
+        return FR_ERR_INVALID;
+      }
+    } else {
+      if (c == '0' || c == '1') {
+        digit = (uint8_t)(c - '0');
+      } else {
+        return FR_ERR_INVALID;
+      }
     }
+
     if (parsed > cutoff || (parsed == cutoff && digit > cutlim)) {
       return FR_ERR_RANGE;
     }
-    parsed = (fr_parse_int_magnitude_t)((parsed * 10u) + digit);
+    parsed = (fr_parse_int_magnitude_t)((parsed * base) + digit);
     i += 1;
   }
 
@@ -262,7 +298,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     return FR_OK;
   }
 
-  if (c == '*' || c == '/' ||
+  if (c == '*' || c == '/' || c == '%' ||
       (c == '-' &&
        (!fr_parse_is_digit(parser->cursor[1]) ||
         (!leading_space && fr_parse_minus_infix_after(prev_kind))))) {
@@ -273,6 +309,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     parser->token.leading_space = leading_space;
     parser->token.kind = (c == '*')   ? FR_TOKEN_STAR
                          : (c == '/') ? FR_TOKEN_SLASH
+                         : (c == '%') ? FR_TOKEN_PERCENT
                                       : FR_TOKEN_MINUS;
     return FR_OK;
   }
@@ -310,7 +347,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
          !fr_parse_is_punctuation(*parser->cursor) &&
          !fr_parse_is_compare_op_char(*parser->cursor) &&
          *parser->cursor != '*' && *parser->cursor != '/' &&
-         *parser->cursor != '+' &&
+         *parser->cursor != '%' && *parser->cursor != '+' &&
          !fr_parse_is_arrow_start(parser->cursor) &&
          !(*parser->cursor == '-' && span.length > 0 &&
            (fr_parse_is_digit(span.start[0]) ||
@@ -787,10 +824,13 @@ static fr_err_t fr_parse_multiplicative(fr_parser_t *parser,
 
   FR_TRY(fr_parse_expression_inner(parser, &lhs));
   while (parser->token.kind == FR_TOKEN_STAR ||
-         parser->token.kind == FR_TOKEN_SLASH) {
+         parser->token.kind == FR_TOKEN_SLASH ||
+         parser->token.kind == FR_TOKEN_PERCENT) {
     fr_parse_expr_kind_t op_kind = parser->token.kind == FR_TOKEN_STAR
                                        ? FR_PARSE_EXPR_MUL
-                                       : FR_PARSE_EXPR_DIV;
+                                   : parser->token.kind == FR_TOKEN_SLASH
+                                       ? FR_PARSE_EXPR_DIV
+                                       : FR_PARSE_EXPR_MOD;
     fr_parse_expr_id_t rhs = 0;
     fr_parse_expr_t binop = {.kind = op_kind, .child_count = 2};
 
@@ -871,6 +911,12 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
                                           fr_parse_expr_id_t *out_id) {
   if (out_id == NULL) {
     return FR_ERR_INVALID;
+  }
+
+  if (parser->token.kind == FR_TOKEN_LPAREN) {
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_expression(parser, out_id));
+    return fr_parse_expect(parser, FR_TOKEN_RPAREN);
   }
 
   if (parser->token.kind == FR_TOKEN_INT) {
