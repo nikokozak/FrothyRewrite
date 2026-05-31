@@ -267,6 +267,20 @@ flash: $(TARGET_FLASH_DEPS)
 	fi
 	$(TARGET_FLASH_COMMAND)
 
+# Offsets are the default ESP-IDF singleapp NVS range (partitions_singleapp.csv,
+# PARTITION_TABLE_OFFSET=0x8000, 0x1000 table). Update in lockstep with any
+# custom partition table.
+wipe-nvs:
+	@if [ "$(BOARD)" != "esp32_devkit_v1" ]; then \
+		printf 'wipe-nvs: unsupported BOARD "%s"; only esp32_devkit_v1 is supported\n' "$(BOARD)"; \
+		exit 2; \
+	fi
+	@if [ -z "$(BOARD_PORT)" ]; then \
+		printf 'BOARD_PORT is required, for example BOARD_PORT=/dev/cu.usbserial-0001\n'; \
+		exit 2; \
+	fi
+	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null 2>&1 && esptool.py --chip esp32 --port "$(BOARD_PORT)" erase_region 0x9000 0x6000
+
 test-tiny-328:
 	$(MAKE) BOARD=host PROFILE=tiny_328 TEST_BINARY=test/test-tiny-328 test
 
@@ -583,4 +597,4 @@ print-config:
 clean:
 	rm -rf build frothy test/test test/test-tiny-328 test/test-tiny-328-volatile test/test-tiny-328-tethered test/test-tiny-328-tethered-host-names test/test-tiny-328-tethered-host-names-persist test/test-host-normal
 
-.PHONY: test test-unity artifacts flash test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal test-host-normal-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session install-host test-install-host test-helper-targets print-config clean
+.PHONY: test test-unity artifacts flash wipe-nvs test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal test-host-normal-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session install-host test-install-host test-helper-targets print-config clean

@@ -618,6 +618,110 @@ func TestFrothyFlashErrorsWhenMultipleSerialPortsFound(t *testing.T) {
 	}
 }
 
+func TestFrothyWipeCommand(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		wantExit   int
+		wantStderr []string
+		wantArgv   string
+		wantLister bool
+	}{
+		{
+			name:       "missing board name",
+			args:       []string{"--force"},
+			wantExit:   2,
+			wantStderr: []string{"wipe: expected exactly one board name"},
+		},
+		{
+			name:       "unsupported board",
+			args:       []string{"--force", "made_up_board"},
+			wantExit:   2,
+			wantStderr: []string{`wipe: unsupported board "made_up_board"`},
+		},
+		{
+			name:     "missing --force",
+			args:     []string{"--port", "/dev/cu.usbserial-0001", "esp32_devkit_v1"},
+			wantExit: 2,
+			wantStderr: []string{
+				"wipe: refusing to erase persisted device state without --force",
+				"frothy wipe --force esp32_devkit_v1 --port /dev/cu.usbserial-0001",
+			},
+		},
+		{
+			name:       "happy path discovered port",
+			args:       []string{"--force", "esp32_devkit_v1"},
+			wantExit:   0,
+			wantArgv:   "wipe-nvs BOARD=esp32_devkit_v1 BOARD_PORT=/dev/cu.usbserial-0001",
+			wantLister: true,
+		},
+		{
+			name:     "happy path explicit port",
+			args:     []string{"--force", "--port", "/dev/cu.usbmodem999", "esp32_devkit_v1"},
+			wantExit: 0,
+			wantArgv: "wipe-nvs BOARD=esp32_devkit_v1 BOARD_PORT=/dev/cu.usbmodem999",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var gotName string
+			var gotArgs []string
+			var runnerCalls int
+			runner := func(name string, args []string) error {
+				runnerCalls++
+				gotName = name
+				gotArgs = args
+				return nil
+			}
+
+			var listerCalls int
+			list := func() ([]string, error) {
+				listerCalls++
+				return []string{"/dev/null", "/dev/cu.usbserial-0001"}, nil
+			}
+
+			var stderr bytes.Buffer
+			code := runWipeCommand(c.args, &stderr, list, runner)
+			if code != c.wantExit {
+				t.Fatalf("exit code %d, want %d; stderr=%q", code, c.wantExit, stderr.String())
+			}
+			for _, want := range c.wantStderr {
+				if !strings.Contains(stderr.String(), want) {
+					t.Fatalf("stderr missing %q; got %q", want, stderr.String())
+				}
+			}
+			if c.wantArgv == "" {
+				if runnerCalls != 0 {
+					t.Fatalf("runner called %d times, want 0", runnerCalls)
+				}
+			} else {
+				if runnerCalls != 1 {
+					t.Fatalf("runner called %d times, want 1", runnerCalls)
+				}
+				if gotName != "make" {
+					t.Fatalf("ran %q, want make", gotName)
+				}
+				if got := strings.Join(gotArgs, " "); got != c.wantArgv {
+					t.Fatalf("argv=%q, want %q", got, c.wantArgv)
+				}
+				if stderr.Len() != 0 {
+					t.Fatalf("stderr must be empty on success; got %q", stderr.String())
+				}
+			}
+			if c.wantLister {
+				if listerCalls == 0 {
+					t.Fatal("lister must run when --port is not set")
+				}
+			} else {
+				if listerCalls != 0 {
+					t.Fatalf("lister called %d times, want 0", listerCalls)
+				}
+			}
+		})
+	}
+}
+
 func TestFrothyDoctorExitsZeroWhenAllChecksPass(t *testing.T) {
 	checks := []doctorCheck{
 		{name: "compiler", run: func() (bool, string) { return true, "/opt/frothy/libexec/frothy-compile-overlay" }},

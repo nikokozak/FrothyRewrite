@@ -54,7 +54,7 @@ func runConnectCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 
 	status, err := readDeviceStatus(dev, *timeout)
 	if err != nil {
-		fmt.Fprintf(stderr, "connect: %v\n", err)
+		fmt.Fprintf(stderr, "connect: device silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s: %v\n", chosen, err)
 		return 1
 	}
 	if status.compiler == compilerHostRequired {
