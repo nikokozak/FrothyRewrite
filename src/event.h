@@ -10,4 +10,4 @@ fr_err_t fr_event_register(fr_runtime_t *runtime, fr_event_kind_t kind,
 fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
                          uint16_t source);
 
-void fr_event_clear_table(fr_runtime_t *runtime);
+fr_err_t fr_event_clear_table(fr_runtime_t *runtime);

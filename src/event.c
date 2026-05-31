@@ -57,6 +57,7 @@ fr_err_t fr_event_register(fr_runtime_t *runtime, fr_event_kind_t kind,
                            fr_code_object_id_t body) {
   fr_event_binding_t *entry = NULL;
   uint16_t target = FR_EVENT_BINDING_COUNT;
+  uint16_t next_generation = 0;
 
   if (runtime == NULL) {
     return FR_ERR_INVALID;
@@ -84,16 +85,20 @@ fr_err_t fr_event_register(fr_runtime_t *runtime, fr_event_kind_t kind,
   }
 
   entry = &runtime->events.entries[target];
+  next_generation = (uint16_t)(entry->generation + 1);
+  /* Stage: try to arm the platform first. If install fails we leave the
+     prior binding (or the empty slot) untouched. */
+  FR_TRY(fr_event_platform_install(kind, source, target, next_generation));
+
   entry->kind = kind;
   entry->source = source;
   entry->debounce_ms = debounce_ms;
   entry->body = body;
   entry->pending = false;
-  entry->generation = (uint16_t)(entry->generation + 1);
+  entry->generation = next_generation;
   entry->registered_at_ms = fr_event_now_ms();
   entry->last_fire_ms = 0;
-
-  return fr_event_platform_install(kind, source, target, entry->generation);
+  return FR_OK;
 }
 
 fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
@@ -131,15 +136,20 @@ fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
   return FR_OK;
 }
 
-void fr_event_clear_table(fr_runtime_t *runtime) {
+fr_err_t fr_event_clear_table(fr_runtime_t *runtime) {
+  fr_err_t first_err = FR_OK;
   if (runtime == NULL) {
-    return;
+    return FR_ERR_INVALID;
   }
   for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
     fr_event_binding_t *entry = &runtime->events.entries[i];
     if (entry->kind != FR_EVENT_KIND_NONE) {
-      (void)fr_event_platform_remove(entry, i);
+      fr_err_t err = fr_event_platform_remove(entry, i);
+      if (err != FR_OK && first_err == FR_OK) {
+        first_err = err;
+      }
     }
   }
   memset(&runtime->events, 0, sizeof(runtime->events));
+  return first_err;
 }
