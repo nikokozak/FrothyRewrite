@@ -8104,6 +8104,39 @@ static void test_repl_see_source_form(void) {
             strcmp(out, "overlay code\n"
                         "to abs1 with n [ if n < 0 [ -1 * n ] else [ n ] ]\n"
                         "ok\n") == 0);
+  /* Chained else if: a three-arm dispatch with a final else, the canonical
+   * shape from T9b. Fresh install for the overlay-name budget. */
+  CHECK("see source chained else if",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "step is fn with n [ if n < 0 [ -1 ] else if n > 0 [ 1 ] "
+                "else [ 0 ] ]",
+                out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see step", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to step with n [ if n < 0 [ -1 ] else if n > 0 [ 1 ] "
+                        "else [ 0 ] ]\n"
+                        "ok\n") == 0);
+  /* Old recursive form still parses, and `see` canonicalizes it to the chained
+   * spelling per the T9b render decision. Two-level only to fit the 16-node
+   * expression cap. Fresh install for the budget. */
+  CHECK("see source recursive else collapses to chained",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "pick is fn [ if false [ 1 ] else [ if true [ 2 ] "
+                "else [ 3 ] ] ]",
+                out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see pick", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to pick [ if false [ 1 ] else if true [ 2 ] "
+                        "else [ 3 ] ]\n"
+                        "ok\n") == 0);
   /* Fresh install: tiny's overlay-name budget only holds two words at once. A
    * real wait loop polls external state and so can end; spin on a pin read. */
   CHECK("see source while",

@@ -316,6 +316,21 @@ static fr_err_t fr_source_join_statements(fr_source_render_t *r, uint8_t base) {
   return fr_source_seal(r, start, false);
 }
 
+/* When the else branch is a single if-expression, render the chained `else if`
+ * spelling instead of wrapping it in another bracket pair. A top-level `; `
+ * means the else body holds multiple statements, so leave that case bracketed. */
+static bool fr_source_else_chains(const char *text) {
+  if (text[0] != 'i' || text[1] != 'f' || text[2] != ' ') {
+    return false;
+  }
+  for (const char *p = text + 3; *p; p++) {
+    if (p[0] == ' ' && p[1] == ';' && p[2] == ' ') {
+      return false;
+    }
+  }
+  return true;
+}
+
 /* if/else leaves one value; assemble it from the already-rendered fragments.
  * The condition prints raw — a comparison reads fine without parens here. */
 static fr_err_t fr_source_reduce_if(fr_source_render_t *r,
@@ -329,9 +344,15 @@ static fr_err_t fr_source_reduce_if(fr_source_render_t *r,
   FR_TRY(fr_source_puts(r, &fr_source_render_arena[then_start]));
   FR_TRY(fr_source_puts(r, " ]"));
   if (has_else) {
-    FR_TRY(fr_source_puts(r, " else [ "));
-    FR_TRY(fr_source_puts(r, &fr_source_render_arena[else_start]));
-    FR_TRY(fr_source_puts(r, " ]"));
+    const char *else_text = &fr_source_render_arena[else_start];
+    if (fr_source_else_chains(else_text)) {
+      FR_TRY(fr_source_puts(r, " else "));
+      FR_TRY(fr_source_puts(r, else_text));
+    } else {
+      FR_TRY(fr_source_puts(r, " else [ "));
+      FR_TRY(fr_source_puts(r, else_text));
+      FR_TRY(fr_source_puts(r, " ]"));
+    }
   }
   return fr_source_seal(r, start, false);
 }
