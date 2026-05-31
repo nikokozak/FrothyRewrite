@@ -3251,8 +3251,13 @@ static void test_event_table(void) {
   CHECK("clear project clears bindings",
         fr_runtime_clear_project(&runtime) == FR_OK);
   CHECK("entry kind cleared", slot->kind == FR_EVENT_KIND_NONE);
+  CHECK("entry source cleared", slot->source == 0);
+  CHECK("entry debounce cleared", slot->debounce_ms == 0);
   CHECK("entry generation cleared", slot->generation == 0);
+  CHECK("entry body cleared", slot->body == 0);
   CHECK("entry pending cleared", slot->pending == false);
+  CHECK("entry timestamps cleared",
+        slot->registered_at_ms == 0 && slot->last_fire_ms == 0);
   CHECK("overflow cleared", runtime.events.overflow_count == 0);
 }
 
