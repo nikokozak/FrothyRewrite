@@ -23,11 +23,13 @@ typedef struct fr_compile_body_texts_t {
 
 typedef struct fr_compile_local_t {
   fr_parse_span_t name;
+  uint8_t index;
 } fr_compile_local_t;
 
 typedef struct fr_compile_locals_t {
   fr_compile_local_t entries[FR_PARSE_MAX_LOCALS];
   uint8_t count;
+  uint8_t next_index;
 } fr_compile_locals_t;
 
 typedef struct fr_compile_context_t {
@@ -208,8 +210,9 @@ static bool fr_compile_param_for_name(const fr_compile_context_t *ctx,
 }
 
 /* Walk back-to-front so a later `here` with the same name shadows the
- * earlier binding. Each declaration consumes a fresh index; the visible
- * count is the operand to emit. */
+ * earlier binding. Slot indices live on each entry, not the array
+ * position, so a block exit can drop visible entries without disturbing
+ * the slot a later `here` will get. */
 static bool fr_compile_local_for_name(const fr_compile_context_t *ctx,
                                       fr_parse_span_t name,
                                       uint8_t *out_local_index) {
@@ -218,7 +221,7 @@ static bool fr_compile_local_for_name(const fr_compile_context_t *ctx,
   }
   for (uint8_t i = ctx->locals->count; i > 0; i--) {
     if (fr_compile_span_same(ctx->locals->entries[i - 1].name, name)) {
-      *out_local_index = (uint8_t)(i - 1);
+      *out_local_index = ctx->locals->entries[i - 1].index;
       return true;
     }
   }
@@ -236,12 +239,15 @@ static fr_err_t fr_compile_add_local(const fr_compile_context_t *ctx,
   if (fr_compile_param_for_name(ctx, name, &shadow_arg)) {
     return FR_ERR_INVALID;
   }
-  if (ctx->locals->count >= FR_PARSE_MAX_LOCALS) {
+  if (ctx->locals->next_index >= FR_PARSE_MAX_LOCALS ||
+      ctx->locals->count >= FR_PARSE_MAX_LOCALS) {
     return FR_ERR_CAPACITY;
   }
   ctx->locals->entries[ctx->locals->count].name = name;
-  *out_local_index = ctx->locals->count;
+  ctx->locals->entries[ctx->locals->count].index = ctx->locals->next_index;
+  *out_local_index = ctx->locals->next_index;
   ctx->locals->count = (uint8_t)(ctx->locals->count + 1);
+  ctx->locals->next_index = (uint8_t)(ctx->locals->next_index + 1);
   return FR_OK;
 }
 
@@ -933,8 +939,8 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_CALL:
     return fr_compile_emit_call(ctx, parsed, expr, instruction_bytes, offset);
   case FR_PARSE_EXPR_LIST: {
-    /* Bracket statement lists are block boundaries: locals declared inside a
-     * `[ ]` body vanish when the block closes (T9b spec §6). */
+    /* A bracket statement list is a block: locals declared inside go out
+     * of scope at the closing `]`. */
     uint8_t saved_locals_count =
         (ctx != NULL && ctx->locals != NULL) ? ctx->locals->count : 0;
 
