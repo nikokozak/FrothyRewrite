@@ -206,7 +206,8 @@ fr_err_t fr_event_dispatch(fr_runtime_t *runtime) {
     fr_err_t body_err;
 
     if (runtime->interrupted) {
-      return FR_ERR_INTERRUPTED;
+      first_err = FR_ERR_INTERRUPTED;
+      break;
     }
     if (!entry->pending) {
       continue;
