@@ -4327,6 +4327,38 @@ static void test_parse(void) {
         fr_parse_line("to f with changes [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse debounce rejects as parameter",
         fr_parse_line("to f with debounce [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse on rejects as is-definition name",
+        fr_parse_line("on is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse every rejects as is-definition name",
+        fr_parse_line("every is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse after rejects as is-definition name",
+        fr_parse_line("after is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse cancel rejects as is-definition name",
+        fr_parse_line("cancel is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rising rejects as is-definition name",
+        fr_parse_line("rising is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse falling rejects as is-definition name",
+        fr_parse_line("falling is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse changes rejects as is-definition name",
+        fr_parse_line("changes is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse debounce rejects as is-definition name",
+        fr_parse_line("debounce is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse on rejects as to-definition name",
+        fr_parse_line("to on [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse every rejects as to-definition name",
+        fr_parse_line("to every [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse after rejects as to-definition name",
+        fr_parse_line("to after [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse cancel rejects as to-definition name",
+        fr_parse_line("to cancel [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rising rejects as to-definition name",
+        fr_parse_line("to rising [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse falling rejects as to-definition name",
+        fr_parse_line("to falling [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse changes rejects as to-definition name",
+        fr_parse_line("to changes [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse debounce rejects as to-definition name",
+        fr_parse_line("to debounce [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse on rising",
         fr_parse_line("boot is fn [ on 0 rising [ 1 ] ]", &parsed) == FR_OK &&
             (value = &parsed.exprs[parsed.definition.value])->kind ==

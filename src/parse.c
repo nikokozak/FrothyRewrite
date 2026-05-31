@@ -424,6 +424,17 @@ static bool fr_parse_span_same(fr_parse_span_t lhs, fr_parse_span_t rhs) {
   return true;
 }
 
+static bool fr_parse_is_event_keyword(fr_parse_span_t name) {
+  return fr_parse_span_equals(name, "on") ||
+         fr_parse_span_equals(name, "every") ||
+         fr_parse_span_equals(name, "after") ||
+         fr_parse_span_equals(name, "cancel") ||
+         fr_parse_span_equals(name, "rising") ||
+         fr_parse_span_equals(name, "falling") ||
+         fr_parse_span_equals(name, "changes") ||
+         fr_parse_span_equals(name, "debounce");
+}
+
 static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
   return fr_parse_span_equals(name, "nil") ||
          fr_parse_span_equals(name, "true") ||
@@ -443,14 +454,7 @@ static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
          fr_parse_span_equals(name, "set") ||
          fr_parse_span_equals(name, "to") ||
          fr_parse_span_equals(name, "here") ||
-         fr_parse_span_equals(name, "on") ||
-         fr_parse_span_equals(name, "every") ||
-         fr_parse_span_equals(name, "after") ||
-         fr_parse_span_equals(name, "cancel") ||
-         fr_parse_span_equals(name, "rising") ||
-         fr_parse_span_equals(name, "falling") ||
-         fr_parse_span_equals(name, "changes") ||
-         fr_parse_span_equals(name, "debounce");
+         fr_parse_is_event_keyword(name);
 }
 
 #if FR_FEATURE_RECORDS
@@ -1228,7 +1232,8 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
         fr_parse_span_equals(parser.token.span, "to") ||
         fr_parse_span_equals(parser.token.span, "with") ||
         fr_parse_span_equals(parser.token.span, "true") ||
-        fr_parse_span_equals(parser.token.span, "false")) {
+        fr_parse_span_equals(parser.token.span, "false") ||
+        fr_parse_is_event_keyword(parser.token.span)) {
       return FR_ERR_INVALID;
     }
     out->definition.name = parser.token.span;
@@ -1239,7 +1244,8 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
   if (parser.token.kind != FR_TOKEN_NAME ||
       fr_parse_span_equals(parser.token.span, "is") ||
       fr_parse_span_equals(parser.token.span, "true") ||
-      fr_parse_span_equals(parser.token.span, "false")) {
+      fr_parse_span_equals(parser.token.span, "false") ||
+      fr_parse_is_event_keyword(parser.token.span)) {
     return FR_ERR_INVALID;
   }
   out->definition.name = parser.token.span;
