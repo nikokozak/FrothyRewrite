@@ -4311,6 +4311,22 @@ static void test_parse(void) {
         fr_parse_line("to true [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse false rejects as to-definition name",
         fr_parse_line("to false [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse on rejects as parameter",
+        fr_parse_line("to f with on [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse every rejects as parameter",
+        fr_parse_line("to f with every [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse after rejects as parameter",
+        fr_parse_line("to f with after [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse cancel rejects as parameter",
+        fr_parse_line("to f with cancel [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rising rejects as parameter",
+        fr_parse_line("to f with rising [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse falling rejects as parameter",
+        fr_parse_line("to f with falling [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse changes rejects as parameter",
+        fr_parse_line("to f with changes [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse debounce rejects as parameter",
+        fr_parse_line("to f with debounce [ 1 ]", &parsed) == FR_ERR_INVALID);
 #if FR_TAGGED_INT_MAX >= 115200
   CHECK("parse roomier int body",
         fr_parse_line("boot is fn [ 115200 ]", &parsed) == FR_OK &&

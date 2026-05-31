@@ -442,7 +442,15 @@ static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
          fr_parse_span_equals(name, "record") ||
          fr_parse_span_equals(name, "set") ||
          fr_parse_span_equals(name, "to") ||
-         fr_parse_span_equals(name, "here");
+         fr_parse_span_equals(name, "here") ||
+         fr_parse_span_equals(name, "on") ||
+         fr_parse_span_equals(name, "every") ||
+         fr_parse_span_equals(name, "after") ||
+         fr_parse_span_equals(name, "cancel") ||
+         fr_parse_span_equals(name, "rising") ||
+         fr_parse_span_equals(name, "falling") ||
+         fr_parse_span_equals(name, "changes") ||
+         fr_parse_span_equals(name, "debounce");
 }
 
 #if FR_FEATURE_RECORDS
