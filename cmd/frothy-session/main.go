@@ -2380,7 +2380,7 @@ func runSessionMain() int {
 		if recordOutput != nil {
 			_ = recordOutput.sessionError(recordStateError, recordMirrorNone, recordErrorStatusFailed, err.Error())
 		}
-		fmt.Fprintf(os.Stderr, "status: %v\n", err)
+		fmt.Fprintf(os.Stderr, "status: device silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s: %v\n", *port, err)
 		os.Exit(1)
 	}
 
