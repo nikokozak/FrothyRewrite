@@ -566,11 +566,11 @@ test-helper-tiny-blink: frothy-session host-overlay-compiler-tiny-host-names
 	printf 'tiny helper blink transcript ok\n'
 
 $(TEST_BINARY): $(TEST_DEPS)
-	$(FR_CC) $(FR_CFLAGS) $(TEST_SOURCES) $(FR_LDFLAGS) -o $@
+	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 $(TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
 $(UNITY_TEST_BINARY): $(UNITY_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) \
 		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
-	$(FR_CC) $(FR_CFLAGS) $(UNITY_TEST_SOURCES) $(FR_LDFLAGS) -o $@
+	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 $(UNITY_TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
 $(OVERLAY_COMPILER): tools/frothy-compile-overlay.c $(FROTHY_DEPS) | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) tools/frothy-compile-overlay.c $(KERNEL_SOURCES) $(PLATFORM_SOURCES) $(PERSISTENCE_SOURCES) $(FR_LDFLAGS) -o $@

@@ -94,7 +94,7 @@ static int failures = 0;
 #define FR_TEST_TEXT_SLOT_COUNT 0
 #endif
 
-#if FR_FEATURE_EVENT_TEST_NATIVES
+#if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
 #define FR_TEST_EVENT_TEST_WORDS " frothy.fire-event"
 #define FR_TEST_EVENT_TEST_SLOT_COUNT 1
 #else
@@ -304,7 +304,7 @@ static void test_base_def_contract(void) {
 #if FR_FEATURE_TEXT
   CHECK("text slot ids follow pad block",
         FR_SLOT_TEXT_LENGTH == FR_SLOT_AFTER_PAD);
-#if FR_FEATURE_EVENT_TEST_NATIVES
+#if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   CHECK("fire-event slot follows text ids",
         FR_SLOT_FIRE_EVENT == FR_SLOT_TEXT_FROM_INT + 1);
   CHECK("board local slot ids follow fire-event slot",
@@ -3451,7 +3451,7 @@ static void test_event_drain_dispatch(void) {
                                    after_entry->last_fire_ms == 0);
 }
 
-#if FR_FEATURE_EVENT_TEST_NATIVES
+#if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
 static void test_event_fire_event_native(void) {
   fr_runtime_t runtime;
   fr_instruction_stream_t view;
@@ -9070,7 +9070,7 @@ int main(void) {
   test_event_table();
   test_event_register_cancel();
   test_event_drain_dispatch();
-#if FR_FEATURE_EVENT_TEST_NATIVES
+#if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   test_event_fire_event_native();
 #endif
   test_code();

@@ -99,16 +99,6 @@
 #define FR_FEATURE_PAD 0
 #endif
 
-/* Host-only test surface for T11. Exposes frothy.fire-event so transcripts can
- * drive a registered binding directly. Gated off in production profiles. */
-#ifndef FR_FEATURE_EVENT_TEST_NATIVES
-#define FR_FEATURE_EVENT_TEST_NATIVES 0
-#endif
-
-#if FR_FEATURE_EVENT_TEST_NATIVES && !FR_FEATURE_TEXT
-#error "FR_FEATURE_EVENT_TEST_NATIVES requires FR_FEATURE_TEXT"
-#endif
-
 #define FR_FEATURE_OBJECTS                                                   \
   (FR_FEATURE_CELLS || FR_FEATURE_TEXT || FR_FEATURE_RECORDS)
 

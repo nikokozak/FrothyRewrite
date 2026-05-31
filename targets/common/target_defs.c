@@ -978,7 +978,7 @@ static fr_err_t fr_native_text_from_int(fr_runtime_t *runtime,
 }
 #endif
 
-#if FR_FEATURE_EVENT_TEST_NATIVES
+#if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
 static fr_err_t fr_native_fire_event_view_text(const fr_runtime_t *runtime,
                                                fr_tagged_t arg,
                                                const uint8_t **out_bytes,
@@ -1198,7 +1198,7 @@ static const fr_native_signature_t fr_native_text_from_int_signature = {
 };
 #endif
 
-#if FR_FEATURE_EVENT_TEST_NATIVES
+#if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
 static const fr_native_param_t fr_native_fire_event_params[] = {
     {"kind", FR_NATIVE_VALUE_TEXT},
     {"source", FR_NATIVE_VALUE_INT},
@@ -2047,7 +2047,7 @@ const fr_base_def_t fr_target_base_defs[] = {
 #endif
     },
 #endif
-#if FR_FEATURE_EVENT_TEST_NATIVES
+#if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
     {
         .slot_id = FR_SLOT_FIRE_EVENT,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
