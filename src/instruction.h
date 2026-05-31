@@ -6,7 +6,8 @@ enum {
   FR_INSTRUCTION_FORMAT_VERSION = 0u,
   FR_INSTRUCTION_MIN_HEADER_SIZE = 2u,
   FR_INSTRUCTION_ARITY_HEADER_SIZE = 3u,
-  FR_INSTRUCTION_MAX_HEADER_SIZE = FR_INSTRUCTION_ARITY_HEADER_SIZE,
+  FR_INSTRUCTION_LOCALS_HEADER_SIZE = 4u,
+  FR_INSTRUCTION_MAX_HEADER_SIZE = FR_INSTRUCTION_LOCALS_HEADER_SIZE,
   FR_INSTRUCTION_INT_OPERAND_BYTES = FR_TAGGED_WORD_BYTES,
   FR_INSTRUCTION_PUSH_INT_SIZE = 1u + FR_INSTRUCTION_INT_OPERAND_BYTES,
   FR_INSTRUCTION_OBJECT_ID_OPERAND_BYTES = 2u,
@@ -23,6 +24,7 @@ typedef struct fr_instruction_header_t {
   uint8_t format_version;
   uint8_t header_size;
   uint8_t arity;
+  uint8_t local_count;
 } fr_instruction_header_t;
 
 typedef enum fr_opcode_t {
@@ -57,6 +59,8 @@ typedef enum fr_opcode_t {
   FR_OP_MUL_INT = 0x1C,
   FR_OP_DIV_INT = 0x1D,
   FR_OP_PUSH_OBJECT_ID = 0x1E,
+  FR_OP_LOAD_LOCAL = 0x1F,
+  FR_OP_STORE_LOCAL = 0x20,
 } fr_opcode_t;
 
 fr_err_t fr_instruction_stream_init(fr_instruction_stream_t *view,
@@ -78,6 +82,9 @@ fr_err_t fr_instruction_read_jump_operand(const fr_instruction_stream_t *view,
 fr_err_t fr_instruction_read_arg_operand(const fr_instruction_stream_t *view,
                                          fr_code_offset_t ip,
                                          uint8_t *out_arg_index);
+fr_err_t fr_instruction_read_local_operand(const fr_instruction_stream_t *view,
+                                           fr_code_offset_t ip,
+                                           uint8_t *out_local_index);
 fr_err_t fr_instruction_read_call_slot_arg_operands(
     const fr_instruction_stream_t *view, fr_code_offset_t ip,
     fr_slot_id_t *out_slot_id, uint8_t *out_arg_count);

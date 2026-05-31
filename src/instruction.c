@@ -168,6 +168,7 @@ fr_err_t fr_instruction_read_header(const fr_instruction_stream_t *view,
   header->format_version = view->bytes[0];
   header->header_size = view->bytes[1];
   header->arity = 0;
+  header->local_count = 0;
 
   if (header->format_version != FR_INSTRUCTION_FORMAT_VERSION) {
     return FR_ERR_UNSUPPORTED;
@@ -184,6 +185,13 @@ fr_err_t fr_instruction_read_header(const fr_instruction_stream_t *view,
   if (header->header_size >= FR_INSTRUCTION_ARITY_HEADER_SIZE) {
     header->arity = view->bytes[2];
     if (header->arity > FR_PROFILE_MAX_STACK_DEPTH) {
+      return FR_ERR_RANGE;
+    }
+  }
+  if (header->header_size >= FR_INSTRUCTION_LOCALS_HEADER_SIZE) {
+    header->local_count = view->bytes[3];
+    if ((uint16_t)header->arity + header->local_count >
+        FR_PROFILE_MAX_STACK_DEPTH) {
       return FR_ERR_RANGE;
     }
   }
@@ -267,6 +275,24 @@ fr_err_t fr_instruction_read_arg_operand(const fr_instruction_stream_t *view,
 
   *out_arg_index = view->bytes[ip + 1];
   if (*out_arg_index >= header.arity) {
+    return FR_ERR_RANGE;
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_instruction_read_local_operand(const fr_instruction_stream_t *view,
+                                           fr_code_offset_t ip,
+                                           uint8_t *out_local_index) {
+  fr_instruction_header_t header;
+
+  if (out_local_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_require_bytes(view, ip, 2));
+  FR_TRY(fr_instruction_read_header(view, &header));
+
+  *out_local_index = view->bytes[ip + 1];
+  if (*out_local_index >= header.local_count) {
     return FR_ERR_RANGE;
   }
   return FR_OK;
@@ -410,6 +436,22 @@ fr_err_t fr_instruction_disassemble_at(const fr_instruction_stream_t *view,
     FR_TRY(fr_instruction_read_arg_operand(view, ip, &arg_index));
     FR_TRY(fr_append_text(out, out_cap, &used, "LOAD_ARG "));
     FR_TRY(fr_append_u32(out, out_cap, &used, arg_index));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 2),
+                                      next_ip);
+  }
+  case FR_OP_LOAD_LOCAL: {
+    uint8_t local_index = 0;
+    FR_TRY(fr_instruction_read_local_operand(view, ip, &local_index));
+    FR_TRY(fr_append_text(out, out_cap, &used, "LOAD_LOCAL "));
+    FR_TRY(fr_append_u32(out, out_cap, &used, local_index));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 2),
+                                      next_ip);
+  }
+  case FR_OP_STORE_LOCAL: {
+    uint8_t local_index = 0;
+    FR_TRY(fr_instruction_read_local_operand(view, ip, &local_index));
+    FR_TRY(fr_append_text(out, out_cap, &used, "STORE_LOCAL "));
+    FR_TRY(fr_append_u32(out, out_cap, &used, local_index));
     return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 2),
                                       next_ip);
   }

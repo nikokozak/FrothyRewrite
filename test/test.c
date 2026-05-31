@@ -5678,6 +5678,20 @@ static void test_compile(void) {
                 "else if false [ 3 ] else if false [ 4 ] "
                 "else if false [ 5 ] else if false [ 6 ] ]",
                 &update) == FR_ERR_CAPACITY);
+  CHECK("compiled here local binding yields nil",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ here x is 5 ]",
+                                      &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged));
+  CHECK("compiled here local binding reads back its value",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ here x is 5 ; x + 1 ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 6);
   CHECK("compiled when true runs body",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ when true [ 1 ] ]",

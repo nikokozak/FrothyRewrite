@@ -441,7 +441,8 @@ static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
          fr_parse_span_equals(name, "cells") ||
          fr_parse_span_equals(name, "record") ||
          fr_parse_span_equals(name, "set") ||
-         fr_parse_span_equals(name, "to");
+         fr_parse_span_equals(name, "to") ||
+         fr_parse_span_equals(name, "here");
 }
 
 #if FR_FEATURE_RECORDS
@@ -712,6 +713,28 @@ static fr_err_t fr_parse_set(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
         out_id);
   }
   return FR_ERR_INVALID;
+}
+
+static fr_err_t fr_parse_here(fr_parser_t *parser,
+                              fr_parse_expr_id_t *out_id) {
+  fr_parse_span_t name = {0};
+  fr_parse_expr_id_t value = 0;
+
+  FR_TRY(fr_parse_advance(parser));
+  if (parser->token.kind != FR_TOKEN_NAME ||
+      fr_parse_is_reserved_parameter(parser->token.span)) {
+    return FR_ERR_INVALID;
+  }
+  name = parser->token.span;
+  FR_TRY(fr_parse_advance(parser));
+  FR_TRY(fr_parse_expect_word(parser, "is"));
+  FR_TRY(fr_parse_expression(parser, &value));
+  return fr_parse_add_expr(
+      parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_LOCAL_BIND,
+                                .name = name,
+                                .child = value,
+                                .child_count = 1},
+      out_id);
 }
 
 static fr_err_t fr_parse_if(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
@@ -1005,6 +1028,9 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     }
     if (fr_parse_span_equals(parser->token.span, "set")) {
       return fr_parse_set(parser, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "here")) {
+      return fr_parse_here(parser, out_id);
     }
     if (fr_parse_span_equals(parser->token.span, "is")) {
       return FR_ERR_INVALID;

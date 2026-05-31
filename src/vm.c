@@ -20,10 +20,13 @@
 typedef struct fr_vm_state_t {
   fr_code_offset_t ip;
   fr_tagged_t stack[FR_PROFILE_MAX_STACK_DEPTH];
-  const fr_tagged_t *args;
+  /* Args at frame[0..arity-1], locals at frame[arity..arity+local_count-1].
+   * Locals start as nil; STORE_LOCAL writes them, LOAD_LOCAL reads them. */
+  fr_tagged_t frame[FR_PROFILE_MAX_STACK_DEPTH];
   uint16_t depth;
   uint16_t call_depth;
   uint8_t arg_count;
+  uint8_t local_count;
   bool returned;
 } fr_vm_state_t;
 
@@ -145,12 +148,41 @@ static fr_err_t fr_vm_load_arg(const fr_instruction_stream_t *view,
   uint8_t arg_index = 0;
 
   FR_TRY(fr_instruction_read_arg_operand(view, state->ip, &arg_index));
-  if (arg_index >= state->arg_count || state->args == NULL) {
+  if (arg_index >= state->arg_count) {
     return FR_ERR_INVALID;
   }
 
   state->ip += 2;
-  return fr_vm_push(state, state->args[arg_index]);
+  return fr_vm_push(state, state->frame[arg_index]);
+}
+
+static fr_err_t fr_vm_load_local(const fr_instruction_stream_t *view,
+                                 fr_vm_state_t *state) {
+  uint8_t local_index = 0;
+
+  FR_TRY(fr_instruction_read_local_operand(view, state->ip, &local_index));
+  if (local_index >= state->local_count) {
+    return FR_ERR_INVALID;
+  }
+
+  state->ip += 2;
+  return fr_vm_push(state, state->frame[state->arg_count + local_index]);
+}
+
+static fr_err_t fr_vm_store_local(const fr_instruction_stream_t *view,
+                                  fr_vm_state_t *state) {
+  uint8_t local_index = 0;
+  fr_tagged_t value = 0;
+
+  FR_TRY(fr_instruction_read_local_operand(view, state->ip, &local_index));
+  if (local_index >= state->local_count) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_vm_pop(state, &value));
+
+  state->frame[state->arg_count + local_index] = value;
+  state->ip += 2;
+  return fr_vm_push(state, fr_tagged_nil());
 }
 
 #if FR_FEATURE_CELLS
@@ -555,6 +587,10 @@ static fr_err_t fr_vm_step(fr_runtime_t *runtime,
     return fr_vm_push_object_id(view, state);
   case FR_OP_LOAD_ARG:
     return fr_vm_load_arg(view, state);
+  case FR_OP_LOAD_LOCAL:
+    return fr_vm_load_local(view, state);
+  case FR_OP_STORE_LOCAL:
+    return fr_vm_store_local(view, state);
 #if FR_FEATURE_CELLS
   case FR_OP_LOAD_CELL:
     return fr_vm_load_cell(runtime, view, state);
@@ -637,8 +673,14 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
     return FR_ERR_INVALID;
   }
 
-  state.args = args;
+  for (uint8_t i = 0; i < arg_count; i++) {
+    state.frame[i] = args[i];
+  }
+  for (uint8_t i = 0; i < header.local_count; i++) {
+    state.frame[arg_count + i] = fr_tagged_nil();
+  }
   state.arg_count = arg_count;
+  state.local_count = header.local_count;
   state.ip = header.header_size;
   while (state.ip < view->length && !state.returned) {
     FR_TRY(fr_platform_poll_interrupt(runtime));

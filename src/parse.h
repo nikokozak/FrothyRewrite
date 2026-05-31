@@ -10,6 +10,7 @@ enum {
   FR_PARSE_MAX_EXPR_NODES = 16,
   FR_PARSE_MAX_BODY_EXPRS = 8,
   FR_PARSE_MAX_PARAMS = 4,
+  FR_PARSE_MAX_LOCALS = 4,
 };
 
 #define FR_PARSE_MAX_RECORD_FIELDS                                           \
@@ -44,6 +45,7 @@ typedef enum fr_parse_expr_kind_t {
   FR_PARSE_EXPR_FIELD_READ,
   FR_PARSE_EXPR_FIELD_WRITE,
   FR_PARSE_EXPR_SLOT_WRITE,
+  FR_PARSE_EXPR_LOCAL_BIND,
   FR_PARSE_EXPR_LT,
   FR_PARSE_EXPR_GT,
   FR_PARSE_EXPR_LE,
