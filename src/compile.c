@@ -932,7 +932,12 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
 #endif
   case FR_PARSE_EXPR_CALL:
     return fr_compile_emit_call(ctx, parsed, expr, instruction_bytes, offset);
-  case FR_PARSE_EXPR_LIST:
+  case FR_PARSE_EXPR_LIST: {
+    /* Bracket statement lists are block boundaries: locals declared inside a
+     * `[ ]` body vanish when the block closes (T9b spec §6). */
+    uint8_t saved_locals_count =
+        (ctx != NULL && ctx->locals != NULL) ? ctx->locals->count : 0;
+
     if (expr->child_count == 0) {
       return FR_ERR_INVALID;
     }
@@ -949,7 +954,11 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
         FR_TRY(fr_compile_emit_drop(instruction_bytes, offset));
       }
     }
+    if (ctx != NULL && ctx->locals != NULL) {
+      ctx->locals->count = saved_locals_count;
+    }
     return FR_OK;
+  }
   case FR_PARSE_EXPR_IF:
     return fr_compile_emit_if(ctx, parsed, expr, instruction_bytes, offset);
   case FR_PARSE_EXPR_REPEAT:

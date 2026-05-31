@@ -5697,6 +5697,11 @@ static void test_compile(void) {
             fr_vm_run_instruction_stream(&runtime, &expression.instructions,
                                          &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 6);
+  CHECK("here local declared in an if body is not visible after the block",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ here x is 1 ; if true [ here y is 2 ] ; y ]",
+                &update) == FR_ERR_NOT_FOUND);
   CHECK("compiled when true runs body",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ when true [ 1 ] ]",
