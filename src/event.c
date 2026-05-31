@@ -137,16 +137,14 @@ fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
   return FR_OK;
 }
 
-/* Drain platform candidates, mark surviving ones pending, then run each
- * pending binding's body once. Stale candidates (cancelled slot, generation
- * mismatch, queued before the current registration) are dropped per spec §3.
- * AFTER bindings are removed before the body runs per spec §5. Errors from
- * bodies are recorded but do not stop the round; the first one is returned. */
-fr_err_t fr_event_drain_dispatch(fr_runtime_t *runtime) {
+/* Drain platform candidates and mark surviving ones pending. ISR-safe in the
+ * sense that it never runs a Frothy body: callable from the per-step poll path.
+ * Stale candidates (cancelled slot, generation mismatch, queued before the
+ * current registration) are dropped per spec §3. */
+fr_err_t fr_event_drain(fr_runtime_t *runtime) {
   fr_event_candidate_t candidates[FR_EVENT_BINDING_COUNT];
   uint8_t count = 0;
   uint32_t overflow_delta = 0;
-  fr_err_t first_err = FR_OK;
 
   if (runtime == NULL) {
     return FR_ERR_INVALID;
@@ -181,6 +179,20 @@ fr_err_t fr_event_drain_dispatch(fr_runtime_t *runtime) {
     }
     entry->pending = true;
     entry->last_fire_ms = cand->timestamp_ms;
+  }
+
+  return FR_OK;
+}
+
+/* Run each pending binding's body once. Call only at statement-boundary safe
+ * points (after FR_OP_DROP, at loop back-edges, at FR_OP_RETURN). AFTER
+ * bindings are removed before the body runs per spec §5. Errors from bodies
+ * are recorded but do not stop the round; the first one is returned. */
+fr_err_t fr_event_dispatch(fr_runtime_t *runtime) {
+  fr_err_t first_err = FR_OK;
+
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
   }
 
   for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {

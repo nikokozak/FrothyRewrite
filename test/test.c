@@ -3386,7 +3386,8 @@ static void test_event_drain_dispatch(void) {
   /* Stale generation drops without running the body. */
   CHECK("post stale generation",
         fr_platform_event_post_test_candidate(0, 0, 50) == FR_OK);
-  CHECK("drain stale", fr_event_drain_dispatch(&runtime) == FR_OK);
+  CHECK("drain stale", fr_event_drain(&runtime) == FR_OK);
+  CHECK("dispatch stale", fr_event_dispatch(&runtime) == FR_OK);
   CHECK("stale leaves last fire zero", gpio_entry->last_fire_ms == 0);
   CHECK("stale leaves slot unset",
         fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
@@ -3396,7 +3397,8 @@ static void test_event_drain_dispatch(void) {
   CHECK("post fresh candidate",
         fr_platform_event_post_test_candidate(0, gpio_entry->generation, 50) ==
             FR_OK);
-  CHECK("drain fresh", fr_event_drain_dispatch(&runtime) == FR_OK);
+  CHECK("drain fresh", fr_event_drain(&runtime) == FR_OK);
+  CHECK("dispatch fresh", fr_event_dispatch(&runtime) == FR_OK);
   CHECK("body wrote slot",
         fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
             fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
@@ -3417,7 +3419,8 @@ static void test_event_drain_dispatch(void) {
   CHECK("post after candidate",
         fr_platform_event_post_test_candidate(1, after_entry->generation,
                                               200) == FR_OK);
-  CHECK("drain after", fr_event_drain_dispatch(&runtime) == FR_OK);
+  CHECK("drain after", fr_event_drain(&runtime) == FR_OK);
+  CHECK("dispatch after", fr_event_dispatch(&runtime) == FR_OK);
   CHECK("after binding cleared on fire",
         after_entry->kind == FR_EVENT_KIND_NONE);
   CHECK("after generation bumped on fire", after_entry->generation == 2);
