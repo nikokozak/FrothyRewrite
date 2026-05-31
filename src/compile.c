@@ -570,31 +570,53 @@ static fr_err_t fr_compile_emit_if(const fr_compile_context_t *ctx,
                                    const fr_parse_expr_t *expr,
                                    uint8_t instruction_bytes[],
                                    uint16_t *offset) {
-  uint16_t false_target_operand = 0;
-  uint16_t end_target_operand = 0;
+  /* Children alternate cond/body for each arm; an odd trailing child is the
+   * final `else` body. Each arm emits cond → JUMP_IF_FALSY(next-arm) →
+   * body → JUMP(end). Bare `if` (no else) still falls through to PUSH_NIL,
+   * preserving the renderer's existing shape match for the 2-child case. */
+  uint16_t end_operands[FR_PARSE_MAX_BODY_EXPRS / 2];
+  uint8_t end_operand_count = 0;
+  uint8_t arm_count = 0;
+  bool has_final_else = false;
 
-  if (expr == NULL || expr->child_count < 2 || expr->child_count > 3) {
+  if (expr == NULL || expr->child_count < 2 ||
+      expr->child_count > FR_PARSE_MAX_BODY_EXPRS) {
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
 
-  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
-                              instruction_bytes, offset));
-  FR_TRY(fr_compile_emit_jump_placeholder(
-      instruction_bytes, offset, FR_OP_JUMP_IF_FALSY, &false_target_operand));
-  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[1],
-                              instruction_bytes, offset));
-  FR_TRY(fr_compile_emit_jump_placeholder(instruction_bytes, offset, FR_OP_JUMP,
-                                          &end_target_operand));
+  arm_count = (uint8_t)(expr->child_count / 2u);
+  has_final_else = (expr->child_count % 2u) == 1u;
 
-  FR_TRY(fr_compile_patch_u16(instruction_bytes, false_target_operand, *offset));
-  if (expr->child_count == 3) {
-    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[2],
+  for (uint8_t arm = 0; arm < arm_count; arm++) {
+    uint16_t false_target_operand = 0;
+    uint8_t cond_index = (uint8_t)(arm * 2u);
+
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[cond_index],
+                                instruction_bytes, offset));
+    FR_TRY(fr_compile_emit_jump_placeholder(
+        instruction_bytes, offset, FR_OP_JUMP_IF_FALSY, &false_target_operand));
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[cond_index + 1u],
+                                instruction_bytes, offset));
+    FR_TRY(fr_compile_emit_jump_placeholder(
+        instruction_bytes, offset, FR_OP_JUMP,
+        &end_operands[end_operand_count]));
+    end_operand_count = (uint8_t)(end_operand_count + 1u);
+    FR_TRY(
+        fr_compile_patch_u16(instruction_bytes, false_target_operand, *offset));
+  }
+
+  if (has_final_else) {
+    FR_TRY(fr_compile_emit_expr(ctx, parsed,
+                                expr->children[expr->child_count - 1u],
                                 instruction_bytes, offset));
   } else {
     FR_TRY(fr_compile_emit_push_nil(instruction_bytes, offset));
   }
-  return fr_compile_patch_u16(instruction_bytes, end_target_operand, *offset);
+  for (uint8_t i = 0; i < end_operand_count; i++) {
+    FR_TRY(fr_compile_patch_u16(instruction_bytes, end_operands[i], *offset));
+  }
+  return FR_OK;
 }
 
 static fr_err_t fr_compile_emit_repeat(const fr_compile_context_t *ctx,

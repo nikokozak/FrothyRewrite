@@ -190,7 +190,7 @@
 /* Must equal FR_PARSE_MAX_BODY_EXPRS; static-asserted in compile.h. The literal
  * is repeated here because config.h sits below parse.h in the include order. */
 #ifndef FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS
-#define FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS 4
+#define FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS 8
 #endif
 
 #ifndef FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_BYTES

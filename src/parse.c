@@ -723,11 +723,32 @@ static fr_err_t fr_parse_if(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   if_expr.child = if_expr.children[0];
   if_expr.child_count = 2;
 
-  if (parser->token.kind == FR_TOKEN_NAME &&
-      fr_parse_span_equals(parser->token.span, "else")) {
+  /* `else if` chains into the same node as alternating cond/body pairs;
+   * a plain `else [ ... ]` appends one final body. Recursive `else [ if ... ]`
+   * still parses through the inner bracket block. */
+  while (parser->token.kind == FR_TOKEN_NAME &&
+         fr_parse_span_equals(parser->token.span, "else")) {
     FR_TRY(fr_parse_advance(parser));
-    FR_TRY(fr_parse_bracket_block(parser, &if_expr.children[2]));
-    if_expr.child_count = 3;
+    if (parser->token.kind == FR_TOKEN_NAME &&
+        fr_parse_span_equals(parser->token.span, "if")) {
+      if (if_expr.child_count + 2 > FR_PARSE_MAX_BODY_EXPRS) {
+        return FR_ERR_CAPACITY;
+      }
+      FR_TRY(fr_parse_advance(parser));
+      FR_TRY(fr_parse_expression(parser,
+                                 &if_expr.children[if_expr.child_count]));
+      FR_TRY(fr_parse_bracket_block(
+          parser, &if_expr.children[if_expr.child_count + 1]));
+      if_expr.child_count = (uint8_t)(if_expr.child_count + 2);
+      continue;
+    }
+    if (if_expr.child_count + 1 > FR_PARSE_MAX_BODY_EXPRS) {
+      return FR_ERR_CAPACITY;
+    }
+    FR_TRY(fr_parse_bracket_block(parser,
+                                  &if_expr.children[if_expr.child_count]));
+    if_expr.child_count = (uint8_t)(if_expr.child_count + 1);
+    break;
   }
 
   return fr_parse_add_expr(parser, if_expr, out_id);
