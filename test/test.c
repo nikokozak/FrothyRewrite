@@ -5671,6 +5671,13 @@ static void test_compile(void) {
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 2);
+  CHECK("compiled chained else if rejects over-capacity arms",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ if false [ 1 ] else if false [ 2 ] "
+                "else if false [ 3 ] else if false [ 4 ] "
+                "else if false [ 5 ] else if false [ 6 ] ]",
+                &update) == FR_ERR_CAPACITY);
   CHECK("compiled when true runs body",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ when true [ 1 ] ]",
