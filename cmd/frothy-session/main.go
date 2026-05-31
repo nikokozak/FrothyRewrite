@@ -2207,6 +2207,25 @@ func defaultDoctorChecks() []doctorCheck {
 				return true, chosen
 			},
 		},
+		{
+			name: "device",
+			run: func() (bool, string) {
+				port, err := pickPort("", defaultPortLister)
+				if err != nil {
+					return false, err.Error()
+				}
+				dev, err := openSerial(port, 115200)
+				if err != nil {
+					return false, fmt.Sprintf("silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s", port)
+				}
+				defer dev.close()
+				time.Sleep(2 * time.Second)
+				if _, err := readDeviceStatus(dev, 3*time.Second); err != nil {
+					return false, fmt.Sprintf("silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s", port)
+				}
+				return true, port
+			},
+		},
 	}
 }
 
