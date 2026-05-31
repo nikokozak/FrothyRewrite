@@ -1,5 +1,6 @@
 #include "froth.h"
 #include "crc.h"
+#include "event.h"
 #if FR_FEATURE_PERSISTENCE
 #include "persist_payload.h"
 #endif
@@ -3259,6 +3260,94 @@ static void test_event_table(void) {
   CHECK("entry timestamps cleared",
         slot->registered_at_ms == 0 && slot->last_fire_ms == 0);
   CHECK("overflow cleared", runtime.events.overflow_count == 0);
+}
+
+static void test_event_register_cancel(void) {
+  fr_runtime_t runtime;
+  fr_event_binding_t *entry;
+
+  CHECK("event runtime init", fr_runtime_init(&runtime) == FR_OK);
+
+  CHECK("register gpio rising",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 5, 30, 7) ==
+            FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("register fills kind", entry->kind == FR_EVENT_KIND_GPIO_RISING);
+  CHECK("register fills source", entry->source == 5);
+  CHECK("register fills debounce", entry->debounce_ms == 30);
+  CHECK("register fills body", entry->body == 7);
+  CHECK("register starts generation at one", entry->generation == 1);
+  CHECK("register pending false", entry->pending == false);
+  CHECK("register last fire zero", entry->last_fire_ms == 0);
+
+  CHECK("re-register same pin different edge",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_FALLING, 5, 0, 9) ==
+            FR_OK);
+  CHECK("re-register reuses slot zero",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_GPIO_FALLING);
+  CHECK("re-register bumps generation",
+        runtime.events.entries[0].generation == 2);
+  CHECK("re-register replaces body", runtime.events.entries[0].body == 9);
+  CHECK("re-register replaces debounce",
+        runtime.events.entries[0].debounce_ms == 0);
+
+  CHECK("register every takes next slot",
+        fr_event_register(&runtime, FR_EVENT_KIND_EVERY, 100, 0, 11) == FR_OK);
+  CHECK("every lands at slot one",
+        runtime.events.entries[1].kind == FR_EVENT_KIND_EVERY &&
+            runtime.events.entries[1].source == 100);
+
+  CHECK("register after same source as every",
+        fr_event_register(&runtime, FR_EVENT_KIND_AFTER, 100, 0, 13) == FR_OK);
+  CHECK("after takes a separate slot",
+        runtime.events.entries[2].kind == FR_EVENT_KIND_AFTER &&
+            runtime.events.entries[2].source == 100);
+  CHECK("every survives after registration",
+        runtime.events.entries[1].kind == FR_EVENT_KIND_EVERY);
+
+  CHECK("cancel gpio matches any edge on the pin",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_GPIO_CHANGES, 5) == FR_OK);
+  CHECK("cancel clears kind",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_NONE);
+  CHECK("cancel bumps generation",
+        runtime.events.entries[0].generation == 3);
+  CHECK("cancel clears source", runtime.events.entries[0].source == 0);
+  CHECK("cancel clears body", runtime.events.entries[0].body == 0);
+
+  CHECK("second cancel returns not found",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_GPIO_RISING, 5) ==
+            FR_ERR_NOT_FOUND);
+
+  CHECK("cancel every by exact kind",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_EVERY, 100) == FR_OK);
+  CHECK("every slot cleared",
+        runtime.events.entries[1].kind == FR_EVENT_KIND_NONE);
+  CHECK("after slot still present",
+        runtime.events.entries[2].kind == FR_EVENT_KIND_AFTER);
+
+  CHECK("cancel after by exact kind",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_AFTER, 100) == FR_OK);
+  CHECK("after slot cleared",
+        runtime.events.entries[2].kind == FR_EVENT_KIND_NONE);
+
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    CHECK("fill all sixteen slots",
+          fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING,
+                            (uint16_t)(20 + i), 0, 1) == FR_OK);
+  }
+  CHECK("seventeenth distinct source returns capacity",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 99, 0, 1) ==
+            FR_ERR_CAPACITY);
+  CHECK("re-registration under capacity still succeeds",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_FALLING, 20, 0, 1) ==
+            FR_OK);
+
+  CHECK("clear project at capacity",
+        fr_runtime_clear_project(&runtime) == FR_OK);
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    CHECK("clear leaves no live binding",
+          runtime.events.entries[i].kind == FR_EVENT_KIND_NONE);
+  }
 }
 
 static void test_code(void) {
@@ -8835,6 +8924,7 @@ int main(void) {
 #endif
   test_natives();
   test_event_table();
+  test_event_register_cancel();
   test_code();
   test_image();
   test_public_surface();

@@ -89,6 +89,7 @@ KERNEL_SOURCES = \
 	src/image.c \
 	src/base_defs.c \
 	src/base_image.c \
+	src/event.c \
 	src/vm.c \
 	$(SOURCE_BASE_C) \
 	$(COMPILER_SOURCES) \
@@ -144,6 +145,7 @@ KERNEL_DEPS = \
 	src/image.h src/image.c \
 	src/base_defs.h src/base_defs.c \
 	src/base_image.h src/base_image.c \
+	src/event.h src/event.c \
 	src/platform.h \
 	src/persist.h src/persist.c \
 	src/persist_payload.h src/persist_payload.c \

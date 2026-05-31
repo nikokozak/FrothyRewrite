@@ -1,5 +1,6 @@
 #include "runtime.h"
 
+#include "event.h"
 #include "handle.h"
 #include "object.h"
 #include "pad.h"
@@ -44,6 +45,9 @@ fr_err_t fr_runtime_clear_project(fr_runtime_t *runtime) {
   }
 
   fr_handle_close_all(runtime);
+  /* Spec §5: unregister platform resources before code/slots clear so a late
+     edge cannot fire against a body that is about to disappear. */
+  fr_event_clear_table(runtime);
   for (fr_slot_id_t slot_id = 0; slot_id < FR_PROFILE_MAX_SLOTS; slot_id++) {
     runtime->slots.current[slot_id] = runtime->slots.base[slot_id];
     runtime->slots.overlay[slot_id] = false;
@@ -62,7 +66,6 @@ fr_err_t fr_runtime_clear_project(fr_runtime_t *runtime) {
 #if FR_FEATURE_PAD
   FR_TRY(fr_pad_reset(runtime));
 #endif
-  memset(&runtime->events, 0, sizeof(runtime->events));
   runtime->interrupted = false;
   return FR_OK;
 }
