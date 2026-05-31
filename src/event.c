@@ -137,10 +137,10 @@ fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
   return FR_OK;
 }
 
-/* Drain platform candidates and mark surviving ones pending. ISR-safe in the
- * sense that it never runs a Frothy body: callable from the per-step poll path.
- * Stale candidates (cancelled slot, generation mismatch, queued before the
- * current registration) are dropped per spec §3. */
+/* Pull candidates from the platform and mark surviving ones pending. Body-free
+ * so this can run from the per-step poll path. Stale candidates (cancelled
+ * slot, generation mismatch, queued before the current registration) are
+ * dropped per spec §3. */
 fr_err_t fr_event_drain(fr_runtime_t *runtime) {
   fr_event_candidate_t candidates[FR_EVENT_BINDING_COUNT];
   uint8_t count = 0;
@@ -194,6 +194,10 @@ fr_err_t fr_event_dispatch(fr_runtime_t *runtime) {
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
+  if (runtime->dispatching_event) {
+    return FR_OK;
+  }
+  runtime->dispatching_event = true;
 
   for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
     fr_event_binding_t *entry = &runtime->events.entries[i];
@@ -227,6 +231,7 @@ fr_err_t fr_event_dispatch(fr_runtime_t *runtime) {
     }
   }
 
+  runtime->dispatching_event = false;
   return first_err;
 }
 

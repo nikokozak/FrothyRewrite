@@ -36,6 +36,7 @@ fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
 #endif
   memset(&runtime->events, 0, sizeof(runtime->events));
   runtime->interrupted = false;
+  runtime->dispatching_event = false;
   return FR_OK;
 }
 

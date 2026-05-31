@@ -81,6 +81,9 @@ struct fr_runtime_t {
 #endif
   fr_event_table_t events;
   bool interrupted;
+  /* Set while fr_event_dispatch is running a body so the VM step loop does
+     not re-enter dispatch from inside a handler (spec §5: no preemption). */
+  bool dispatching_event;
 };
 
 fr_err_t fr_runtime_init(fr_runtime_t *runtime);
