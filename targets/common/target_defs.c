@@ -978,6 +978,111 @@ static fr_err_t fr_native_text_from_int(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_EVENT_TEST_NATIVES
+static fr_err_t fr_native_fire_event_view_text(const fr_runtime_t *runtime,
+                                               fr_tagged_t arg,
+                                               const uint8_t **out_bytes,
+                                               uint16_t *out_length) {
+  fr_object_id_t object_id = 0;
+  FR_TRY(fr_tagged_decode_object_id(arg, &object_id));
+  return fr_text_view(runtime, object_id, out_bytes, out_length);
+}
+
+static bool fr_native_fire_event_text_equals(const uint8_t *bytes,
+                                             uint16_t length, const char *s) {
+  size_t s_length = strlen(s);
+  return length == s_length && memcmp(bytes, s, s_length) == 0;
+}
+
+static fr_err_t fr_native_fire_event(fr_runtime_t *runtime,
+                                     const fr_tagged_t *args,
+                                     uint8_t arg_count, fr_tagged_t *out) {
+  const uint8_t *kind_bytes = NULL;
+  uint16_t kind_length = 0;
+  const uint8_t *edge_bytes = NULL;
+  uint16_t edge_length = 0;
+  fr_int_t source_int = 0;
+  uint16_t source = 0;
+  bool kind_is_on = false;
+  bool edge_is_rising = false;
+  bool edge_is_falling = false;
+  fr_event_kind_t timer_kind = FR_EVENT_KIND_NONE;
+  uint16_t now_ms = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_fire_event_view_text(runtime, args[0], &kind_bytes,
+                                        &kind_length));
+  FR_TRY(fr_tagged_decode_int(args[1], &source_int));
+  if (source_int < 0 || source_int > 0xFFFF) {
+    return FR_ERR_DOMAIN;
+  }
+  source = (uint16_t)source_int;
+
+  if (fr_native_fire_event_text_equals(kind_bytes, kind_length, "on")) {
+    kind_is_on = true;
+    if (fr_tagged_is_nil(args[2])) {
+      return FR_ERR_DOMAIN;
+    }
+    FR_TRY(fr_native_fire_event_view_text(runtime, args[2], &edge_bytes,
+                                          &edge_length));
+    if (fr_native_fire_event_text_equals(edge_bytes, edge_length, "rising")) {
+      edge_is_rising = true;
+    } else if (fr_native_fire_event_text_equals(edge_bytes, edge_length,
+                                                "falling")) {
+      edge_is_falling = true;
+    } else {
+      return FR_ERR_DOMAIN;
+    }
+  } else if (fr_native_fire_event_text_equals(kind_bytes, kind_length,
+                                              "every")) {
+    timer_kind = FR_EVENT_KIND_EVERY;
+    if (!fr_tagged_is_nil(args[2])) {
+      return FR_ERR_DOMAIN;
+    }
+  } else if (fr_native_fire_event_text_equals(kind_bytes, kind_length,
+                                              "after")) {
+    timer_kind = FR_EVENT_KIND_AFTER;
+    if (!fr_tagged_is_nil(args[2])) {
+      return FR_ERR_DOMAIN;
+    }
+  } else {
+    return FR_ERR_DOMAIN;
+  }
+
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    const fr_event_binding_t *entry = &runtime->events.entries[i];
+    bool matches = false;
+    if (entry->kind == FR_EVENT_KIND_NONE) {
+      continue;
+    }
+    if (entry->source != source) {
+      continue;
+    }
+    if (kind_is_on) {
+      if (entry->kind == FR_EVENT_KIND_GPIO_RISING) {
+        matches = edge_is_rising;
+      } else if (entry->kind == FR_EVENT_KIND_GPIO_FALLING) {
+        matches = edge_is_falling;
+      } else if (entry->kind == FR_EVENT_KIND_GPIO_CHANGES) {
+        matches = edge_is_rising || edge_is_falling;
+      }
+    } else {
+      matches = entry->kind == timer_kind;
+    }
+    if (matches) {
+      FR_TRY(fr_platform_millis(&now_ms));
+      FR_TRY(fr_platform_event_post_test_candidate(i, entry->generation,
+                                                   (uint32_t)now_ms));
+      *out = fr_tagged_nil();
+      return FR_OK;
+    }
+  }
+  return FR_ERR_NOT_FOUND;
+}
+#endif
+
 #if FR_FEATURE_NATIVE_SIGNATURES
 static const fr_native_param_t fr_native_int_params[] = {
     {NULL, FR_NATIVE_VALUE_INT},
@@ -1090,6 +1195,20 @@ static const fr_native_signature_t fr_native_text_from_int_signature = {
     .arg_count = 1,
     .result = FR_NATIVE_VALUE_TEXT,
     .help = "render an int as decimal text",
+};
+#endif
+
+#if FR_FEATURE_EVENT_TEST_NATIVES
+static const fr_native_param_t fr_native_fire_event_params[] = {
+    {"kind", FR_NATIVE_VALUE_TEXT},
+    {"source", FR_NATIVE_VALUE_INT},
+    {"edge", FR_NATIVE_VALUE_ANY},
+};
+static const fr_native_signature_t fr_native_fire_event_signature = {
+    .params = fr_native_fire_event_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "test-only: queue an event candidate for a registered binding",
 };
 #endif
 
@@ -1925,6 +2044,20 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_text_from_int_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_EVENT_TEST_NATIVES
+    {
+        .slot_id = FR_SLOT_FIRE_EVENT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "frothy.fire-event",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_fire_event,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_fire_event_signature,
 #endif
     },
 #endif

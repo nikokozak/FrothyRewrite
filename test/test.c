@@ -94,6 +94,14 @@ static int failures = 0;
 #define FR_TEST_TEXT_SLOT_COUNT 0
 #endif
 
+#if FR_FEATURE_EVENT_TEST_NATIVES
+#define FR_TEST_EVENT_TEST_WORDS " frothy.fire-event"
+#define FR_TEST_EVENT_TEST_SLOT_COUNT 1
+#else
+#define FR_TEST_EVENT_TEST_WORDS ""
+#define FR_TEST_EVENT_TEST_SLOT_COUNT 0
+#endif
+
 enum {
   FR_TEST_PERSIST_RECORD_BIND = 2,
   FR_TEST_PERSIST_RECORD_NAME = 3,
@@ -112,43 +120,49 @@ enum {
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
   "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS "\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_TEST_WORDS                          \
+              FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
   "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_TEST_WORDS                          \
+              FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
   "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led myblink\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_TEST_WORDS                          \
+              FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (13 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
-   FR_TEST_TEXT_SLOT_COUNT)
+   FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS "\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_TEST_WORDS                          \
+              FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_TEST_WORDS                          \
+              FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led myblink\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_TEST_WORDS                          \
+              FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (10 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
-   FR_TEST_TEXT_SLOT_COUNT)
+   FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT)
 #endif
 
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
@@ -271,7 +285,8 @@ static void test_base_def_contract(void) {
       (FR_FEATURE_PERSISTENCE ? 10 : 7) + (FR_FEATURE_UART ? 6 : 0) +
       (FR_FEATURE_RANDOM ? 3 : 0) + (FR_FEATURE_PWM ? 3 : 0) +
       (FR_FEATURE_I2C ? 4 : 0) + (FR_FEATURE_MATH ? 6 : 0) +
-      FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT;
+      FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT +
+      FR_TEST_EVENT_TEST_SLOT_COUNT;
   uint16_t global_index = 0;
   uint16_t native_count = 0;
   fr_slot_id_t highest_slot_id = 0;
@@ -289,8 +304,15 @@ static void test_base_def_contract(void) {
 #if FR_FEATURE_TEXT
   CHECK("text slot ids follow pad block",
         FR_SLOT_TEXT_LENGTH == FR_SLOT_AFTER_PAD);
+#if FR_FEATURE_EVENT_TEST_NATIVES
+  CHECK("fire-event slot follows text ids",
+        FR_SLOT_FIRE_EVENT == FR_SLOT_TEXT_FROM_INT + 1);
+  CHECK("board local slot ids follow fire-event slot",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_FIRE_EVENT + 1);
+#else
   CHECK("board local slot ids follow text ids",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_TEXT_FROM_INT + 1);
+#endif
 #elif FR_FEATURE_PAD
   CHECK("board local slot ids follow pad ids",
         FR_SLOT_BOARD_LOCAL_BASE == FR_TEST_PAD_LAST_SLOT + 1);
@@ -3428,6 +3450,49 @@ static void test_event_drain_dispatch(void) {
                                    after_entry->body == 0 &&
                                    after_entry->last_fire_ms == 0);
 }
+
+#if FR_FEATURE_EVENT_TEST_NATIVES
+static void test_event_fire_event_native(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  char out[64];
+  uint8_t body_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(42),
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  const size_t store_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + FR_INSTRUCTION_PUSH_INT_SIZE + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+
+  CHECK("fire-event installs base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("fire-event view",
+        fr_instruction_stream_init(&view, body_bytes, sizeof(body_bytes)) ==
+            FR_OK);
+  CHECK("fire-event installs body",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+  CHECK("fire-event registers gpio rising binding",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+
+  CHECK("fire-event wrong edge returns not found",
+        fr_repl_eval_line(&runtime,
+                          "frothy.fire-event: \"on\", 0, \"falling\"", out,
+                          sizeof(out)) == FR_ERR_NOT_FOUND);
+  CHECK("fire-event rising fires the body",
+        fr_repl_eval_line(&runtime, "frothy.fire-event: \"on\", 0, \"rising\"",
+                          out, sizeof(out)) == FR_OK);
+  CHECK("fire-event body wrote the slot",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 42);
+}
+#endif
 
 static void test_code(void) {
   fr_runtime_t runtime;
@@ -9005,6 +9070,9 @@ int main(void) {
   test_event_table();
   test_event_register_cancel();
   test_event_drain_dispatch();
+#if FR_FEATURE_EVENT_TEST_NATIVES
+  test_event_fire_event_native();
+#endif
   test_code();
   test_image();
   test_public_surface();
