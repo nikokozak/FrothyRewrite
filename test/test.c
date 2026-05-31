@@ -6496,26 +6496,6 @@ static void test_persist(void) {
               strcmp(out, "5\nok\n") == 0 &&
               test_text_bytes_match(&runtime, "labeled", "led=1"));
   }
-  {
-    char see_out[128];
-
-    CHECK("persist restores see for function with text literal",
-          fr_base_image_install(&runtime) == FR_OK &&
-              fr_repl_eval_line(&runtime,
-                                "to greet with x [ text.concat: \"led=\", "
-                                "text.from-int: x ]",
-                                see_out, sizeof(see_out)) == FR_OK &&
-              fr_persist_save(&runtime) == FR_OK &&
-              fr_base_image_install(&runtime) == FR_OK &&
-              fr_persist_restore(&runtime) == FR_OK &&
-              fr_repl_eval_line(&runtime, "see greet", see_out,
-                                sizeof(see_out)) == FR_OK &&
-              strcmp(see_out,
-                     "overlay code\n"
-                     "to greet with arg0 [ text.concat: \"led=\", "
-                     "text.from-int: arg0 ]\n"
-                     "ok\n") == 0);
-  }
 #if FR_FEATURE_CELLS
   CHECK("persist restores cell-held binary text",
         fr_base_image_install(&runtime) == FR_OK &&

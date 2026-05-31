@@ -203,6 +203,11 @@ test: $(TEST_BINARY)
 
 test-unity: $(UNITY_TEST_BINARY)
 	./$(UNITY_TEST_BINARY)
+	$(MAKE) BOARD=host PROFILE=host_normal \
+		UNITY_TEST_BINARY=build/host/test-unity-host-normal _test-unity-run
+
+_test-unity-run: $(UNITY_TEST_BINARY)
+	./$(UNITY_TEST_BINARY)
 
 ifneq ($(FROTHY_BINARY),frothy)
 frothy: $(FROTHY_BINARY)
