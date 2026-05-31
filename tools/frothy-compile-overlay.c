@@ -66,14 +66,13 @@ static void discard_line(void) {
 }
 
 static int print_err(fr_err_t err) {
-  printf("err %u\n", (unsigned)err);
-  fflush(stdout);
-  return 0;
-}
+  const char *name = fr_err_name(err);
 
-static int print_err_apply_capacity(uint16_t cap, uint16_t required) {
-  printf("err %u apply_bytes=%u required=%u\n", (unsigned)FR_ERR_CAPACITY,
-         (unsigned)cap, (unsigned)required);
+  if (name == NULL) {
+    printf("err %u\n", (unsigned)err);
+  } else {
+    printf("error: %s (%u)\n", name, (unsigned)err);
+  }
   fflush(stdout);
   return 0;
 }
@@ -345,9 +344,7 @@ static int handle_expression(const char *source) {
 
 static int handle_source(const char *source) {
   uint8_t bytes[FR_REPL_APPLY_BYTES];
-  uint8_t measure_bytes[FR_REPL_APPLY_BYTES + 32u];
   uint16_t length = 0;
-  uint16_t measured_length = 0;
   fr_err_t err = FR_OK;
   const fr_overlay_update_t *device_update = NULL;
 #if FR_HOST_TINY_NAMES_MODE
@@ -404,14 +401,6 @@ static int handle_source(const char *source) {
                                  &length);
   if (err != FR_OK) {
     pending_kind = PENDING_NONE;
-    if (err == FR_ERR_CAPACITY &&
-        fr_overlay_update_encode(device_update, measure_bytes,
-                                 (uint16_t)sizeof(measure_bytes),
-                                 &measured_length) == FR_OK &&
-        measured_length > sizeof(bytes)) {
-      return print_err_apply_capacity((uint16_t)sizeof(bytes),
-                                      measured_length);
-    }
     return print_err(err);
   }
 
