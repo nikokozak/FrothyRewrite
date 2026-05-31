@@ -74,6 +74,7 @@ REPL_SOURCES ?= \
 	src/source_render.c
 
 KERNEL_SOURCES = \
+	src/types.c \
 	src/tagged.c \
 	src/crc.c \
 	src/slot.c \
@@ -128,7 +129,7 @@ FROTHY_SOURCES = \
 KERNEL_DEPS = \
 	src/config.h \
 	src/froth.h \
-	src/types.h \
+	src/types.h src/types.c \
 	src/tagged.h src/tagged.c \
 	src/crc.h src/crc.c \
 	src/slot.h src/slot.c \

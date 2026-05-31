@@ -25,6 +25,8 @@ typedef enum fr_err_t {
   FR_ERR_HANDLE,
 } fr_err_t;
 
+const char *fr_err_name(fr_err_t err);
+
 #if FR_WORD_SIZE == 16
 typedef int16_t fr_int_t;
 #elif FR_WORD_SIZE == 32
