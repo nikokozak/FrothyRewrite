@@ -5,6 +5,8 @@
 #include "pad.h"
 #include "tagged.h"
 
+#include <string.h>
+
 fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
   if (runtime == NULL) {
     return FR_ERR_INVALID;
@@ -31,6 +33,7 @@ fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
 #if FR_FEATURE_PAD
   FR_TRY(fr_pad_reset(runtime));
 #endif
+  memset(&runtime->events, 0, sizeof(runtime->events));
   runtime->interrupted = false;
   return FR_OK;
 }
@@ -59,6 +62,7 @@ fr_err_t fr_runtime_clear_project(fr_runtime_t *runtime) {
 #if FR_FEATURE_PAD
   FR_TRY(fr_pad_reset(runtime));
 #endif
+  memset(&runtime->events, 0, sizeof(runtime->events));
   runtime->interrupted = false;
   return FR_OK;
 }

@@ -3211,6 +3211,51 @@ static void test_natives(void) {
             FR_ERR_INVALID);
 }
 
+static void test_event_table(void) {
+  fr_runtime_t runtime;
+  fr_event_binding_t *slot;
+
+  CHECK("runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("event capacity is sixteen", FR_EVENT_BINDING_COUNT == 16);
+  CHECK("overflow starts at zero", runtime.events.overflow_count == 0);
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    CHECK("entry kind starts none",
+          runtime.events.entries[i].kind == FR_EVENT_KIND_NONE);
+    CHECK("entry generation starts zero",
+          runtime.events.entries[i].generation == 0);
+    CHECK("entry pending starts false",
+          runtime.events.entries[i].pending == false);
+    CHECK("entry timestamps start zero",
+          runtime.events.entries[i].registered_at_ms == 0 &&
+              runtime.events.entries[i].last_fire_ms == 0);
+  }
+
+  slot = &runtime.events.entries[3];
+  slot->kind = FR_EVENT_KIND_GPIO_RISING;
+  slot->source = 5;
+  slot->debounce_ms = 30;
+  slot->generation = 42;
+  slot->body = 7;
+  slot->pending = true;
+  slot->registered_at_ms = 12345;
+  slot->last_fire_ms = 1000;
+  runtime.events.overflow_count = 11;
+
+  CHECK("entry round-trips fields",
+        slot->kind == FR_EVENT_KIND_GPIO_RISING && slot->source == 5 &&
+            slot->debounce_ms == 30 && slot->generation == 42 &&
+            slot->body == 7 && slot->pending == true &&
+            slot->registered_at_ms == 12345 && slot->last_fire_ms == 1000);
+  CHECK("overflow round-trips", runtime.events.overflow_count == 11);
+
+  CHECK("clear project clears bindings",
+        fr_runtime_clear_project(&runtime) == FR_OK);
+  CHECK("entry kind cleared", slot->kind == FR_EVENT_KIND_NONE);
+  CHECK("entry generation cleared", slot->generation == 0);
+  CHECK("entry pending cleared", slot->pending == false);
+  CHECK("overflow cleared", runtime.events.overflow_count == 0);
+}
+
 static void test_code(void) {
   fr_runtime_t runtime;
   fr_instruction_stream_t view;
@@ -8784,6 +8829,7 @@ int main(void) {
   test_records();
 #endif
   test_natives();
+  test_event_table();
   test_code();
   test_image();
   test_public_surface();
