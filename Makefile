@@ -381,7 +381,7 @@ test-host-normal-transcript: host-normal
 		'time is 200' \
 		'words' \
 		| build/host/frothy-host-normal); \
-	if ! printf '%s\n' "$$err_out" | grep -q 'err 8'; then \
+	if ! printf '%s\n' "$$err_out" | grep -q 'error: bad source (8)'; then \
 		printf '%s\nmissing bad-source error\n' "$$err_out"; \
 		exit 1; \
 	fi; \
