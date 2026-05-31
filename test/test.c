@@ -3350,6 +3350,82 @@ static void test_event_register_cancel(void) {
   }
 }
 
+static void test_event_drain_dispatch(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *gpio_entry = NULL;
+  fr_event_binding_t *after_entry = NULL;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  /* Body: push 42, store to FR_TEST_FIRST_USER_SLOT, return. The slot
+   * operand sits one byte after the FR_OP_STORE_SLOT op, at offset
+   * header + push_int_size + 1. */
+  uint8_t body_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(42),
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  const size_t store_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + FR_INSTRUCTION_PUSH_INT_SIZE + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+
+  CHECK("dispatch runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("dispatch view",
+        fr_instruction_stream_init(&view, body_bytes, sizeof(body_bytes)) ==
+            FR_OK);
+  CHECK("install body code",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+
+  CHECK("register gpio rising",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+  gpio_entry = &runtime.events.entries[0];
+
+  /* Stale generation drops without running the body. */
+  CHECK("post stale generation",
+        fr_platform_event_post_test_candidate(0, 0, 50) == FR_OK);
+  CHECK("drain stale", fr_event_drain_dispatch(&runtime) == FR_OK);
+  CHECK("stale leaves last fire zero", gpio_entry->last_fire_ms == 0);
+  CHECK("stale leaves slot unset",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) != FR_OK);
+
+  /* Fresh candidate fires the body. */
+  CHECK("post fresh candidate",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 50) ==
+            FR_OK);
+  CHECK("drain fresh", fr_event_drain_dispatch(&runtime) == FR_OK);
+  CHECK("body wrote slot",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 42);
+  CHECK("last fire stamped", gpio_entry->last_fire_ms == 50);
+  CHECK("pending cleared after run", gpio_entry->pending == false);
+  CHECK("binding still registered after fire",
+        gpio_entry->kind == FR_EVENT_KIND_GPIO_RISING);
+
+  /* AFTER binding is removed before its body runs. */
+  CHECK("register after",
+        fr_event_register(&runtime, FR_EVENT_KIND_AFTER, 1000, 0, body_id) ==
+            FR_OK);
+  after_entry = &runtime.events.entries[1];
+  CHECK("after lands at slot one",
+        after_entry->kind == FR_EVENT_KIND_AFTER &&
+            after_entry->generation == 1);
+  CHECK("post after candidate",
+        fr_platform_event_post_test_candidate(1, after_entry->generation,
+                                              200) == FR_OK);
+  CHECK("drain after", fr_event_drain_dispatch(&runtime) == FR_OK);
+  CHECK("after binding cleared on fire",
+        after_entry->kind == FR_EVENT_KIND_NONE);
+  CHECK("after generation bumped on fire", after_entry->generation == 2);
+  CHECK("after slot reverted", after_entry->source == 0 &&
+                                   after_entry->body == 0 &&
+                                   after_entry->last_fire_ms == 0);
+}
+
 static void test_code(void) {
   fr_runtime_t runtime;
   fr_instruction_stream_t view;
@@ -8925,6 +9001,7 @@ int main(void) {
   test_natives();
   test_event_table();
   test_event_register_cancel();
+  test_event_drain_dispatch();
   test_code();
   test_image();
   test_public_surface();

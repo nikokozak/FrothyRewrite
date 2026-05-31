@@ -1174,3 +1174,12 @@ fr_err_t fr_platform_event_drain(fr_event_candidate_t *out_events,
   }
   return FR_OK;
 }
+
+fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
+                                               uint16_t generation,
+                                               uint32_t timestamp_ms) {
+  (void)binding_index;
+  (void)generation;
+  (void)timestamp_ms;
+  return FR_ERR_UNSUPPORTED;
+}

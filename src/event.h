@@ -11,3 +11,5 @@ fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
                          uint16_t source);
 
 fr_err_t fr_event_clear_table(fr_runtime_t *runtime);
+
+fr_err_t fr_event_drain_dispatch(fr_runtime_t *runtime);

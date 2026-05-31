@@ -1,6 +1,7 @@
 #include "event.h"
 
 #include "runtime.h"
+#include "vm.h"
 
 #include <stdbool.h>
 #include <string.h>
@@ -134,6 +135,87 @@ fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
   entry->registered_at_ms = 0;
   entry->last_fire_ms = 0;
   return FR_OK;
+}
+
+/* Drain platform candidates, mark surviving ones pending, then run each
+ * pending binding's body once. Stale candidates (cancelled slot, generation
+ * mismatch, queued before the current registration) are dropped per spec §3.
+ * AFTER bindings are removed before the body runs per spec §5. Errors from
+ * bodies are recorded but do not stop the round; the first one is returned. */
+fr_err_t fr_event_drain_dispatch(fr_runtime_t *runtime) {
+  fr_event_candidate_t candidates[FR_EVENT_BINDING_COUNT];
+  uint8_t count = 0;
+  uint32_t overflow_delta = 0;
+  fr_err_t first_err = FR_OK;
+
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_platform_event_drain(candidates, FR_EVENT_BINDING_COUNT, &count,
+                                 &overflow_delta));
+  runtime->events.overflow_count += overflow_delta;
+
+  for (uint8_t i = 0; i < count; i++) {
+    const fr_event_candidate_t *cand = &candidates[i];
+    fr_event_binding_t *entry;
+
+    if (cand->binding_index >= FR_EVENT_BINDING_COUNT) {
+      continue;
+    }
+    entry = &runtime->events.entries[cand->binding_index];
+    if (entry->kind == FR_EVENT_KIND_NONE) {
+      continue;
+    }
+    if (entry->generation != cand->generation) {
+      continue;
+    }
+    if (cand->timestamp_ms < entry->registered_at_ms) {
+      continue;
+    }
+    /* Debounce drops without updating last_fire_ms. last_fire_ms == 0 means
+     * never fired, so the first event always passes. */
+    if (entry->debounce_ms != 0 && entry->last_fire_ms != 0 &&
+        cand->timestamp_ms - entry->last_fire_ms < entry->debounce_ms) {
+      continue;
+    }
+    entry->pending = true;
+    entry->last_fire_ms = cand->timestamp_ms;
+  }
+
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    fr_event_binding_t *entry = &runtime->events.entries[i];
+    fr_code_object_id_t body;
+    fr_tagged_t result = 0;
+    fr_err_t body_err;
+
+    if (runtime->interrupted) {
+      return FR_ERR_INTERRUPTED;
+    }
+    if (!entry->pending) {
+      continue;
+    }
+    body = entry->body;
+    entry->pending = false;
+
+    if (entry->kind == FR_EVENT_KIND_AFTER) {
+      (void)fr_platform_event_timer_remove(i);
+      entry->kind = FR_EVENT_KIND_NONE;
+      entry->generation = (uint16_t)(entry->generation + 1);
+      entry->source = 0;
+      entry->debounce_ms = 0;
+      entry->body = 0;
+      entry->registered_at_ms = 0;
+      entry->last_fire_ms = 0;
+    }
+
+    body_err = fr_vm_run_code_object(runtime, body, &result);
+    if (body_err != FR_OK && first_err == FR_OK) {
+      first_err = body_err;
+    }
+  }
+
+  return first_err;
 }
 
 fr_err_t fr_event_clear_table(fr_runtime_t *runtime) {

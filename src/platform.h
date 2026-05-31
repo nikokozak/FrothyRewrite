@@ -49,6 +49,11 @@ fr_err_t fr_platform_event_timer_remove(uint16_t binding_index);
 fr_err_t fr_platform_event_drain(fr_event_candidate_t *out_events,
                                  uint8_t out_cap, uint8_t *out_count,
                                  uint32_t *overflow_delta);
+/* Test-only injection. Host backs it with the same queue drain reads from;
+ * other targets stub. Returns FR_ERR_CAPACITY when the test queue is full. */
+fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
+                                               uint16_t generation,
+                                               uint32_t timestamp_ms);
 
 #if FR_FEATURE_UART
 fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
