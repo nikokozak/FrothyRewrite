@@ -1130,3 +1130,47 @@ void fr_platform_storage_debug_reset(void) {
   }
 }
 #endif
+
+fr_err_t fr_platform_event_gpio_install(fr_event_kind_t kind, uint16_t pin,
+                                        uint16_t binding_index,
+                                        uint16_t generation) {
+  (void)kind;
+  (void)pin;
+  (void)binding_index;
+  (void)generation;
+  return FR_ERR_UNSUPPORTED;
+}
+
+fr_err_t fr_platform_event_gpio_remove(uint16_t pin) {
+  (void)pin;
+  return FR_ERR_UNSUPPORTED;
+}
+
+fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
+                                         uint16_t binding_index,
+                                         uint16_t generation) {
+  (void)kind;
+  (void)ms;
+  (void)binding_index;
+  (void)generation;
+  return FR_ERR_UNSUPPORTED;
+}
+
+fr_err_t fr_platform_event_timer_remove(uint16_t binding_index) {
+  (void)binding_index;
+  return FR_ERR_UNSUPPORTED;
+}
+
+fr_err_t fr_platform_event_drain(fr_event_candidate_t *out_events,
+                                 uint8_t out_cap, uint8_t *out_count,
+                                 uint32_t *overflow_delta) {
+  (void)out_events;
+  (void)out_cap;
+  if (out_count != NULL) {
+    *out_count = 0;
+  }
+  if (overflow_delta != NULL) {
+    *overflow_delta = 0;
+  }
+  return FR_OK;
+}
