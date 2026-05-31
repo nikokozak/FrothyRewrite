@@ -1079,6 +1079,7 @@ static fr_err_t fr_parse_statement_list(fr_parser_t *parser,
 fr_err_t fr_parse_expression_line(const char *source, fr_parse_line_t *out,
                                   fr_parse_expr_id_t *out_expr) {
   fr_parser_t parser = {0};
+  fr_parse_expr_t list = {.kind = FR_PARSE_EXPR_LIST};
 
   if (source == NULL || out == NULL || out_expr == NULL) {
     return FR_ERR_INVALID;
@@ -1089,7 +1090,30 @@ fr_err_t fr_parse_expression_line(const char *source, fr_parse_line_t *out,
   parser.out = out;
 
   FR_TRY(fr_parse_advance(&parser));
-  FR_TRY(fr_parse_expression(&parser, out_expr));
+  FR_TRY(fr_parse_expression(&parser, &list.children[0]));
+  list.child_count = 1;
+
+  /* A semicolon followed by another expression collapses into a LIST so
+   * `here name is value; rest` works at the top level the same way it does
+   * inside a `[ ]` block. A trailing `;` with no follow-up stays a single
+   * expression — finish_line eats it. */
+  while (parser.token.kind == FR_TOKEN_SEMICOLON) {
+    FR_TRY(fr_parse_advance(&parser));
+    if (parser.token.kind == FR_TOKEN_EOF) {
+      break;
+    }
+    if (list.child_count >= FR_PARSE_MAX_BODY_EXPRS) {
+      return FR_ERR_CAPACITY;
+    }
+    FR_TRY(fr_parse_expression(&parser, &list.children[list.child_count]));
+    list.child_count = (uint8_t)(list.child_count + 1u);
+  }
+
+  if (list.child_count == 1) {
+    *out_expr = list.children[0];
+  } else {
+    FR_TRY(fr_parse_add_expr(&parser, list, out_expr));
+  }
   return fr_parse_finish_line(&parser);
 }
 

@@ -5692,6 +5692,11 @@ static void test_compile(void) {
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 6);
+  CHECK("top-level expression line carries a here binding across `;`",
+        fr_compile_expression("here x is 5 ; x + 1", &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 6);
   CHECK("compiled when true runs body",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ when true [ 1 ] ]",
