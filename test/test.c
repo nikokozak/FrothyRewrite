@@ -6627,6 +6627,24 @@ static void test_persist(void) {
             memcmp(text_bytes, binary_text, sizeof(binary_text)) == 0);
 #endif
 #endif
+  {
+    char out[32];
+
+    /* Locals ride through persistence as bytecode; the new LOAD_LOCAL /
+     * STORE_LOCAL opcodes have no text dependency, so this case stays
+     * outside the FR_FEATURE_TEXT block and exercises tiny too. */
+    CHECK("persist restores function using here local binding",
+          fr_base_image_install(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime,
+                                "to twice with n [ here x is n * 2 ; x ]",
+                                out, sizeof(out)) == FR_OK &&
+              fr_persist_save(&runtime) == FR_OK &&
+              fr_base_image_install(&runtime) == FR_OK &&
+              fr_persist_restore(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime, "twice: 7", out, sizeof(out)) ==
+                  FR_OK &&
+              strcmp(out, "14\nok\n") == 0);
+  }
 #if FR_FEATURE_CELLS
   CHECK("persist restores cells",
         fr_base_image_install(&runtime) == FR_OK &&
@@ -8205,6 +8223,19 @@ static void test_repl_see_source_form(void) {
             strcmp(out, "overlay code\n"
                         "to pick [ if false [ 1 ] else if true [ 2 ] "
                         "else [ 3 ] ]\n"
+                        "ok\n") == 0);
+  /* Locals render with canonical localN names regardless of the original source
+   * names — local names are not persisted in T9b, mirroring the argN answer for
+   * restored params (T10c). Fresh install for the overlay-name budget. */
+  CHECK("see source with here local binding",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "g is fn [ here x is 5 ; x + 1 ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see g", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to g [ here local0 is 5 ; local0 + 1 ]\n"
                         "ok\n") == 0);
   /* Fresh install: tiny's overlay-name budget only holds two words at once. A
    * real wait loop polls external state and so can end; spin on a pin read. */

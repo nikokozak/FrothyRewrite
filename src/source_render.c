@@ -585,6 +585,52 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       ip = (fr_code_offset_t)(ip + 3u);
       break;
     }
+    case FR_OP_LOAD_LOCAL: {
+      uint8_t local_index = 0;
+      /* canonical localN — local names are not persisted, mirroring
+       * the argN answer for restored params (T10c). Single-digit
+       * suffix matches FR_PARSE_MAX_LOCALS = 4; if that rises past 9,
+       * use the digit-loop in fr_source_param_name_at. */
+      char canon[8];
+
+      FR_TRY(fr_instruction_read_local_operand(view, ip, &local_index));
+      if (local_index >= 10) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      canon[0] = 'l'; canon[1] = 'o'; canon[2] = 'c'; canon[3] = 'a';
+      canon[4] = 'l'; canon[5] = (char)('0' + local_index);
+      canon[6] = '\0';
+      FR_TRY(fr_source_push_text(r, canon));
+      ip = (fr_code_offset_t)(ip + 2u);
+      break;
+    }
+    case FR_OP_STORE_LOCAL: {
+      uint8_t local_index = 0;
+      fr_source_frag_t value;
+      uint16_t start = r->used;
+      char canon[8];
+
+      FR_TRY(fr_instruction_read_local_operand(view, ip, &local_index));
+      if (local_index >= 10) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      if (r->depth < 1) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      value = r->stack[r->depth - 1];
+      r->depth = (uint8_t)(r->depth - 1);
+
+      canon[0] = 'l'; canon[1] = 'o'; canon[2] = 'c'; canon[3] = 'a';
+      canon[4] = 'l'; canon[5] = (char)('0' + local_index);
+      canon[6] = '\0';
+      FR_TRY(fr_source_puts(r, "here "));
+      FR_TRY(fr_source_puts(r, canon));
+      FR_TRY(fr_source_puts(r, " is "));
+      FR_TRY(fr_source_puts(r, &fr_source_render_arena[value.start]));
+      FR_TRY(fr_source_seal(r, start, false));
+      ip = (fr_code_offset_t)(ip + 2u);
+      break;
+    }
     case FR_OP_LT_INT:
       FR_TRY(fr_source_reduce_binop(r, "<"));
       ip = (fr_code_offset_t)(ip + 1u);
