@@ -2,6 +2,7 @@ set(FR_GEN_DIR ${FR_REWRITE_ROOT}/build/${FR_REWRITE_BOARD}/gen)
 
 set(FR_KERNEL_SOURCES
     ${FR_REWRITE_ROOT}/src/tagged.c
+    ${FR_REWRITE_ROOT}/src/types.c
     ${FR_REWRITE_ROOT}/src/crc.c
     ${FR_REWRITE_ROOT}/src/slot.c
     ${FR_REWRITE_ROOT}/src/profile.c
