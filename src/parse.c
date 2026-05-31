@@ -857,6 +857,42 @@ static fr_err_t fr_parse_forever(fr_parser_t *parser,
   return fr_parse_add_expr(parser, forever, out_id);
 }
 
+/* `on <pin-expr> <edge> [debounce <ms-expr>] [body]` — child layout is
+ * (pin, body) or (pin, body, debounce); int_value carries the GPIO edge
+ * as the matching fr_event_kind_t value so the compile slice can lift it
+ * straight into the registration call. */
+static fr_err_t fr_parse_on(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_t reg = {.kind = FR_PARSE_EXPR_EVENT_REGISTER};
+  fr_int_t edge = 0;
+
+  FR_TRY(fr_parse_advance(parser));
+  FR_TRY(fr_parse_expression(parser, &reg.children[0]));
+  if (parser->token.kind != FR_TOKEN_NAME) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_parse_span_equals(parser->token.span, "rising")) {
+    edge = 1;
+  } else if (fr_parse_span_equals(parser->token.span, "falling")) {
+    edge = 2;
+  } else if (fr_parse_span_equals(parser->token.span, "changes")) {
+    edge = 3;
+  } else {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_parse_advance(parser));
+  reg.int_value = edge;
+  reg.child_count = 2;
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "debounce")) {
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_expression(parser, &reg.children[2]));
+    reg.child_count = 3;
+  }
+  FR_TRY(fr_parse_bracket_block(parser, &reg.children[1]));
+  reg.child = reg.children[0];
+  return fr_parse_add_expr(parser, reg, out_id);
+}
+
 static bool fr_parse_compare_token_kind(fr_token_kind_t kind,
                                         fr_parse_expr_kind_t *out_expr_kind) {
   switch (kind) {
@@ -1026,6 +1062,9 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     }
     if (fr_parse_span_equals(parser->token.span, "forever")) {
       return fr_parse_forever(parser, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "on")) {
+      return fr_parse_on(parser, out_id);
     }
     if (fr_parse_span_equals(parser->token.span, "cells")) {
 #if !FR_FEATURE_CELLS

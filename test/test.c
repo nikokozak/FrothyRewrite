@@ -4327,6 +4327,58 @@ static void test_parse(void) {
         fr_parse_line("to f with changes [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse debounce rejects as parameter",
         fr_parse_line("to f with debounce [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse on rising",
+        fr_parse_line("boot is fn [ on 0 rising [ 1 ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 1 && value->child_count == 2 &&
+            parsed.exprs[value->children[0]].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[value->children[0]].int_value == 0 &&
+            (body = &parsed.exprs[value->children[1]])->kind ==
+                FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_INT);
+  CHECK("parse on falling",
+        fr_parse_line("boot is fn [ on 0 falling [ 1 ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 2 && value->child_count == 2);
+  CHECK("parse on changes",
+        fr_parse_line("boot is fn [ on 0 changes [ 1 ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 3 && value->child_count == 2);
+  CHECK("parse on debounce",
+        fr_parse_line("boot is fn [ on 0 rising debounce 30 [ 1 ] ]",
+                      &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 1 && value->child_count == 3 &&
+            parsed.exprs[value->children[2]].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[value->children[2]].int_value == 30);
+  CHECK("parse on rejects unknown edge",
+        fr_parse_line("boot is fn [ on 0 sideways [ 1 ] ]", &parsed) ==
+            FR_ERR_INVALID);
+  CHECK("parse on rejects missing body",
+        fr_parse_line("boot is fn [ on 0 rising ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse on top-level expression",
+        fr_parse_expression_line("on 0 rising [ 1 ]", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_EVENT_REGISTER &&
+            parsed.exprs[expr_id].int_value == 1);
 #if FR_TAGGED_INT_MAX >= 115200
   CHECK("parse roomier int body",
         fr_parse_line("boot is fn [ 115200 ]", &parsed) == FR_OK &&
