@@ -705,6 +705,9 @@ func TestFrothyWipeCommand(t *testing.T) {
 				if got := strings.Join(gotArgs, " "); got != c.wantArgv {
 					t.Fatalf("argv=%q, want %q", got, c.wantArgv)
 				}
+				if stderr.Len() != 0 {
+					t.Fatalf("stderr must be empty on success; got %q", stderr.String())
+				}
 			}
 			if c.wantLister {
 				if listerCalls == 0 {
