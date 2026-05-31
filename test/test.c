@@ -3482,15 +3482,15 @@ static void test_event_register_native(void) {
       FR_TEST_PUSH_INT(1),    /* kind = GPIO_RISING */
       FR_TEST_PUSH_INT(0),    /* source = pin 0 */
       FR_TEST_PUSH_INT(0),    /* debounce = 0 */
-      FR_OP_PUSH_OBJECT_ID, 0x00, 0x00,
+      FR_TEST_PUSH_INT(0),    /* body = code id, patched after install */
       FR_OP_CALL_NATIVE_SLOT, 0x00, 0x00,
       FR_OP_RETURN};
   const size_t store_operand_offset =
       FR_INSTRUCTION_MIN_HEADER_SIZE + FR_INSTRUCTION_PUSH_INT_SIZE + 1u;
-  const size_t push_object_id_offset =
+  const size_t body_int_offset =
       FR_INSTRUCTION_MIN_HEADER_SIZE + FR_INSTRUCTION_PUSH_INT_SIZE * 3u + 1u;
   const size_t call_slot_offset =
-      push_object_id_offset + FR_INSTRUCTION_OBJECT_ID_OPERAND_BYTES + 1u;
+      body_int_offset + FR_INSTRUCTION_INT_OPERAND_BYTES + 1u;
 
   write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
   write_slot_operand(&body_bytes[store_operand_offset],
@@ -3505,8 +3505,9 @@ static void test_event_register_native(void) {
   CHECK("event register native body installs",
         fr_code_install(&runtime, &body_view, NULL, 0, &body_id) == FR_OK);
 
-  write_u16_little_endian(&register_bytes[push_object_id_offset],
-                          (uint16_t)body_id);
+  /* Low 16 bits carry the code id; higher operand bytes (on 32-bit profiles)
+     stay zero from the FR_TEST_PUSH_INT(0) placeholder. */
+  write_u16_little_endian(&register_bytes[body_int_offset], (uint16_t)body_id);
   write_u16_little_endian(&register_bytes[call_slot_offset],
                           FR_SLOT_EVENT_REGISTER);
 

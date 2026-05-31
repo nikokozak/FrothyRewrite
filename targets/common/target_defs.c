@@ -1,5 +1,6 @@
 #include "base_defs.h"
 
+#include "code.h"
 #include "event.h"
 #include "handle.h"
 #include "object.h"
@@ -985,7 +986,8 @@ static fr_err_t fr_native_event_register(fr_runtime_t *runtime,
   fr_int_t kind_int = 0;
   uint16_t source = 0;
   uint16_t debounce_ms = 0;
-  fr_object_id_t body_id = 0;
+  uint16_t body_int = 0;
+  fr_instruction_stream_t body_view;
 
   if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
     return FR_ERR_INVALID;
@@ -996,9 +998,14 @@ static fr_err_t fr_native_event_register(fr_runtime_t *runtime,
   }
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &source));
   FR_TRY(fr_native_decode_u16(args, arg_count, 2, &debounce_ms));
-  FR_TRY(fr_tagged_decode_object_id(args[3], &body_id));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 3, &body_int));
+  /* The body is a code object id; reject anything that does not resolve to a
+     real code object so a stray int or text id cannot install a binding the
+     dispatcher would fail to fire. */
+  FR_TRY(fr_code_get_instructions(runtime, (fr_code_object_id_t)body_int,
+                                  &body_view));
   FR_TRY(fr_event_register(runtime, (fr_event_kind_t)kind_int, source,
-                           debounce_ms, body_id));
+                           debounce_ms, (fr_code_object_id_t)body_int));
   *out = fr_tagged_nil();
   return FR_OK;
 }
@@ -1227,7 +1234,7 @@ static const fr_native_param_t fr_native_event_register_params[] = {
     {"kind", FR_NATIVE_VALUE_INT},
     {"source", FR_NATIVE_VALUE_INT},
     {"debounce", FR_NATIVE_VALUE_INT},
-    {"body", FR_NATIVE_VALUE_ANY},
+    {"body", FR_NATIVE_VALUE_INT},
 };
 static const fr_native_signature_t fr_native_event_register_signature = {
     .params = fr_native_event_register_params,
