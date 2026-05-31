@@ -201,9 +201,37 @@ static uint8_t fr_source_param_count(const char *names, uint16_t names_len) {
   return count;
 }
 
+/* Restored code installs with no stored parameter names (persist payload
+ * stays param-name-less). Render canonical `argN` into the caller buffer
+ * when that case shows up; the VM never sees these names. canon[7] holds
+ * "arg" + up to three decimal digits (index is uint8_t) + NUL. */
 static fr_err_t fr_source_param_name_at(const char *names, uint16_t names_len,
-                                        uint8_t index, const char **out_name) {
+                                        uint8_t index, char canon[7],
+                                        const char **out_name) {
   uint16_t pos = 0;
+
+  if (names_len == 0) {
+    char digits[3];
+    uint8_t digit_count = 0;
+    uint8_t magnitude = index;
+    uint8_t out_pos = 0;
+
+    do {
+      digits[digit_count] = (char)('0' + (magnitude % 10u));
+      digit_count = (uint8_t)(digit_count + 1u);
+      magnitude /= 10u;
+    } while (magnitude > 0);
+    canon[out_pos++] = 'a';
+    canon[out_pos++] = 'r';
+    canon[out_pos++] = 'g';
+    while (digit_count > 0) {
+      digit_count = (uint8_t)(digit_count - 1u);
+      canon[out_pos++] = digits[digit_count];
+    }
+    canon[out_pos] = '\0';
+    *out_name = canon;
+    return FR_OK;
+  }
 
   for (uint8_t seen = 0; seen < index; seen++) {
     while (pos < names_len && names[pos] != '\0') {
@@ -504,10 +532,11 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
     }
     case FR_OP_LOAD_ARG: {
       uint8_t arg_index = 0;
+      char canon[7];
       const char *name = NULL;
 
       FR_TRY(fr_instruction_read_arg_operand(view, ip, &arg_index));
-      FR_TRY(fr_source_param_name_at(names, names_len, arg_index, &name));
+      FR_TRY(fr_source_param_name_at(names, names_len, arg_index, canon, &name));
       FR_TRY(fr_source_push_text(r, name));
       ip = (fr_code_offset_t)(ip + 2u);
       break;
@@ -661,7 +690,7 @@ static fr_err_t fr_source_build(fr_source_render_t *r,
   FR_TRY(fr_instruction_read_header(&view, out_header));
   FR_TRY(fr_code_get_param_names(r->runtime, code_object_id, out_names,
                                  out_names_len));
-  if (out_header->arity > 0 &&
+  if (out_header->arity > 0 && *out_names_len > 0 &&
       fr_source_param_count(*out_names, *out_names_len) != out_header->arity) {
     return FR_ERR_UNSUPPORTED;
   }
@@ -705,12 +734,13 @@ fr_err_t fr_source_render_code(fr_runtime_t *runtime,
   if (header.arity > 0) {
     FR_TRY(write(ctx, " with "));
     for (uint8_t i = 0; i < header.arity; i++) {
+      char canon[7];
       const char *name = NULL;
 
       if (i > 0) {
         FR_TRY(write(ctx, ", "));
       }
-      FR_TRY(fr_source_param_name_at(names, names_len, i, &name));
+      FR_TRY(fr_source_param_name_at(names, names_len, i, canon, &name));
       FR_TRY(write(ctx, name));
     }
   }
