@@ -108,18 +108,18 @@ enum {
 
 #if FR_FEATURE_PERSISTENCE
 #define FR_TEST_WORDS                                                        \
-  "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
-  "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
+  "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
+  "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
-  "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
-  "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
+  "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
+  "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
-  "boot ms one gpio.write $led_builtin save restore wipe gpio.mode gpio.read " \
-  "adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS        \
+  "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
+  "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
@@ -3740,7 +3740,7 @@ static void test_image(void) {
   CHECK("base image exposes persistence slot names",
         strcmp(fr_base_slot_name_at(5), "save") == 0 &&
             strcmp(fr_base_slot_name_at(6), "restore") == 0 &&
-            strcmp(fr_base_slot_name_at(7), "wipe") == 0 &&
+            strcmp(fr_base_slot_name_at(7), "dangerous.wipe") == 0 &&
             strcmp(fr_base_slot_name_at(8), "gpio.mode") == 0 &&
             strcmp(fr_base_slot_name_at(9), "gpio.read") == 0 &&
             strcmp(fr_base_slot_name_at(10), "adc.read") == 0 &&
@@ -3748,7 +3748,7 @@ static void test_image(void) {
             strcmp(fr_base_slot_name_at(12), "millis") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_SAVE), "save") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_RESTORE), "restore") == 0 &&
-            strcmp(fr_base_slot_name(FR_SLOT_WIPE), "wipe") == 0);
+            strcmp(fr_base_slot_name(FR_SLOT_WIPE), "dangerous.wipe") == 0);
 #else
   CHECK("base image exposes glue slot names without persistence",
         fr_base_slot_name(FR_SLOT_SAVE) == NULL &&
@@ -3807,12 +3807,15 @@ static void test_image(void) {
             slot_id == FR_SLOT_SAVE &&
             fr_base_slot_id_for_name("restore", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_RESTORE &&
-            fr_base_slot_id_for_name("wipe", &slot_id) == FR_OK &&
-            slot_id == FR_SLOT_WIPE);
+            fr_base_slot_id_for_name("dangerous.wipe", &slot_id) == FR_OK &&
+            slot_id == FR_SLOT_WIPE &&
+            fr_base_slot_id_for_name("wipe", &slot_id) == FR_ERR_NOT_FOUND);
 #else
   CHECK("base image rejects persistence slot names",
         fr_base_slot_id_for_name("save", &slot_id) == FR_ERR_NOT_FOUND &&
             fr_base_slot_id_for_name("restore", &slot_id) == FR_ERR_NOT_FOUND &&
+            fr_base_slot_id_for_name("dangerous.wipe", &slot_id) ==
+                FR_ERR_NOT_FOUND &&
             fr_base_slot_id_for_name("wipe", &slot_id) == FR_ERR_NOT_FOUND);
 #endif
 #else
@@ -8496,6 +8499,32 @@ static void test_repl_zero_arg_call_result(void) {
 #endif
 
 #if FR_FEATURE_COMPILER && FR_FEATURE_PERSISTENCE && FR_BASE_IMAGE_INCLUDE_SYMBOLS
+static void test_dangerous_wipe_bare_word(void) {
+  fr_runtime_t runtime;
+  fr_tagged_t tagged = 0;
+  fr_slot_id_t slot_id = 0;
+  char out[64];
+
+  fr_platform_storage_debug_reset();
+  CHECK("dangerous.wipe installs base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("dangerous.wipe saves a boot overlay first",
+        fr_repl_eval_line(&runtime, "boot is fn [ one ]", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 && fr_persist_save(&runtime) == FR_OK);
+  CHECK("dangerous.wipe bare word runs and clears persisted state",
+        fr_repl_eval_line(&runtime, "dangerous.wipe", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged) &&
+            fr_persist_restore(&runtime) == FR_ERR_NOT_FOUND);
+  CHECK("dangerous.wipe rename retires the old wipe name",
+        fr_slot_id_for_name(&runtime, "wipe", &slot_id) == FR_ERR_NOT_FOUND);
+}
+#endif
+
+#if FR_FEATURE_COMPILER && FR_FEATURE_PERSISTENCE && FR_BASE_IMAGE_INCLUDE_SYMBOLS
 static void test_repl_startup_restore_and_boot(void) {
   fr_runtime_t runtime;
   char out[128];
@@ -8608,6 +8637,7 @@ int main(void) {
   test_repl_zero_arg_call_result();
 #endif
 #if FR_FEATURE_COMPILER && FR_FEATURE_PERSISTENCE && FR_BASE_IMAGE_INCLUDE_SYMBOLS
+  test_dangerous_wipe_bare_word();
   test_repl_startup_restore_and_boot();
 #endif
 

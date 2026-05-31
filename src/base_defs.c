@@ -121,7 +121,7 @@ static const fr_base_def_t fr_persistence_base_defs[] = {
     {
         .slot_id = FR_SLOT_WIPE,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
-        .name = "wipe",
+        .name = "dangerous.wipe",
 #endif
         .kind = FR_BASE_DEF_NATIVE,
         .native_fn = fr_native_wipe,
