@@ -3566,6 +3566,28 @@ static void test_event_compile_on_form(void) {
         entry->kind == FR_EVENT_KIND_GPIO_FALLING && entry->source == 0 &&
             entry->debounce_ms == 30);
 
+  {
+    fr_instruction_stream_t body_view = {NULL, 0};
+    fr_instruction_header_t body_header = {0};
+
+    CHECK("compile on with here base image",
+          fr_base_image_install(&runtime) == FR_OK);
+    CHECK("compile on with here form",
+          fr_compile_overlay_update_for_runtime(
+              &runtime, "boot is fn [ on 0 rising [ here y is 7 ; y ] ]",
+              &update) == FR_OK);
+    CHECK("compile on with here apply",
+          fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+    CHECK("compile on with here runs",
+          fr_vm_run_boot(&runtime, &result) == FR_OK);
+    entry = &runtime.events.entries[0];
+    CHECK("compile on with here body view",
+          fr_code_get_instructions(&runtime, entry->body, &body_view) == FR_OK);
+    CHECK("compile on with here body header",
+          fr_instruction_read_header(&body_view, &body_header) == FR_OK &&
+              body_header.header_size == FR_INSTRUCTION_LOCALS_HEADER_SIZE &&
+              body_header.arity == 0 && body_header.local_count == 1);
+  }
 }
 #endif
 

@@ -784,7 +784,7 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
   fr_compile_event_body_t *body = NULL;
   fr_compile_context_t body_ctx = {0};
   fr_compile_locals_t body_locals = {0};
-  uint16_t body_offset = FR_INSTRUCTION_MIN_HEADER_SIZE;
+  uint16_t body_offset = FR_INSTRUCTION_LOCALS_HEADER_SIZE;
 
   if (expr == NULL || (expr->child_count != 2 && expr->child_count != 3) ||
       expr->int_value < FR_EVENT_KIND_GPIO_RISING ||
@@ -799,14 +799,21 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
     return FR_ERR_CAPACITY;
   }
 
+  /* Reserve the full locals header so a body that uses `here` runs with a
+   * matching local_count. The byte at offset 3 is patched after emit. */
   body->bytes[0] = FR_INSTRUCTION_FORMAT_VERSION;
-  body->bytes[1] = FR_INSTRUCTION_MIN_HEADER_SIZE;
+  body->bytes[1] = FR_INSTRUCTION_LOCALS_HEADER_SIZE;
+  body->bytes[2] = 0;
+  body->bytes[3] = 0;
   body_ctx.runtime = ctx->runtime;
   body_ctx.body_texts = ctx->body_texts;
   body_ctx.locals = &body_locals;
   FR_TRY(fr_compile_emit_expr(&body_ctx, parsed, expr->children[1], body->bytes,
                               &body_offset));
   FR_TRY(fr_compile_write_byte(body->bytes, &body_offset, FR_OP_RETURN));
+  /* next_index is the high-water-mark; LIST emit restores `count` on close
+   * so the body needs to size locals to what was ever assigned. */
+  body->bytes[3] = body_locals.next_index;
   body->object->instructions =
       (fr_instruction_stream_t){.bytes = body->bytes, .length = body_offset};
   body->object->param_names = NULL;
