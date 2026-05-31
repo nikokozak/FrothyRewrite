@@ -8283,6 +8283,40 @@ static void test_source_base_word_proofs(void) {
 #endif
 #endif
 
+static void test_err_name(void) {
+  static const struct {
+    fr_err_t err;
+    const char *name;
+  } cases[] = {
+      {FR_OK, NULL},
+      {FR_ERR_RANGE, "out of range"},
+      {FR_ERR_TYPE, "wrong type"},
+      {FR_ERR_DOMAIN, "bad value"},
+      {FR_ERR_CAPACITY, "capacity exceeded"},
+      {FR_ERR_OVERFLOW, "overflow"},
+      {FR_ERR_UNDERFLOW, "underflow"},
+      {FR_ERR_NOT_FOUND, "not found"},
+      {FR_ERR_INVALID, "bad source"},
+      {FR_ERR_UNSUPPORTED, "unsupported"},
+      {FR_ERR_INTERRUPTED, "interrupted"},
+      {FR_ERR_CORRUPT, "corrupt data"},
+      {FR_ERR_IO, "i/o failed"},
+      {FR_ERR_VOLATILE, "not saved"},
+      {FR_ERR_HANDLE, "bad handle"},
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    const char *got = fr_err_name(cases[i].err);
+    if (cases[i].name == NULL) {
+      CHECK("fr_err_name returns NULL for FR_OK", got == NULL);
+    } else {
+      CHECK("fr_err_name returns the table phrase",
+            got != NULL && strcmp(got, cases[i].name) == 0);
+    }
+  }
+  CHECK("fr_err_name returns NULL for out-of-range",
+        fr_err_name((fr_err_t)9999) == NULL);
+}
+
 static void test_repl_pump(void) {
   fr_runtime_t runtime;
   char out[1024] = {0};
@@ -8328,15 +8362,17 @@ static void test_repl_pump(void) {
         strcmp(out, "> " FR_TEST_WORDS "> ok\n> overlay code\n"
                     "to boot [ gpio.write: $led_builtin, 1 ; "
                     "gpio.write: $led_builtin, 0 ; one ]\n"
-                    "ok\n> ok\n> err 7\n> ") == 0);
+                    "ok\n> ok\n> error: not found (7)\n> ") == 0);
 #elif FR_FEATURE_INTROSPECTION
   CHECK("repl pump transcript output without compiler",
-        strcmp(out,
-               "> " FR_TEST_WORDS "> base core nil\nok\n> ok\n> err 9\n> ") ==
+        strcmp(out, "> " FR_TEST_WORDS
+                    "> base core nil\nok\n> ok\n> error: unsupported (9)\n> ") ==
             0);
 #else
   CHECK("repl pump transcript output without introspection",
-        strcmp(out, "> err 9\n> ok\n> err 9\n> ") == 0);
+        strcmp(out,
+               "> error: unsupported (9)\n> ok\n> error: unsupported (9)\n> ") ==
+            0);
 #endif
   test_repl_io_state = NULL;
 }
@@ -8565,6 +8601,7 @@ int main(void) {
   test_source_base_word_proofs();
 #endif
 #endif
+  test_err_name();
   test_repl_pump();
   test_repl_transcript();
 #if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS

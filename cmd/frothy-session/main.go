@@ -79,7 +79,7 @@ type compilerTarget struct {
 var errPromptTimeout = errors.New("timed out waiting for prompt")
 
 const (
-	deviceInterruptedStatus  = "err 10"
+	deviceInterruptedStatus  = "error: interrupted (10)"
 	promptPrimary            = "frothy> "
 	promptContinuation       = ".. "
 	shareTerminalInterrupt   = false
@@ -230,7 +230,7 @@ func (c *compiler) compile(line string) (compileResult, error) {
 		return compileResult{action: actionSend, line: strings.TrimPrefix(out, "send ")}, nil
 	case out == "clear":
 		return compileResult{action: actionClear, line: "clear"}, nil
-	case strings.HasPrefix(out, "err "):
+	case strings.HasPrefix(out, "error: "):
 		return compileResult{action: actionError, line: out}, nil
 	default:
 		return compileResult{}, fmt.Errorf("unexpected compiler response %q", out)
@@ -334,7 +334,7 @@ func responseHasTerminalStatus(response string) bool {
 		return true
 	}
 	status := responseStatus(response)
-	return strings.HasPrefix(status, "err ")
+	return strings.HasPrefix(status, "error: ")
 }
 
 func promptComplete(text string, requireStatus bool) bool {
@@ -454,8 +454,7 @@ func recordAction(action compileAction) string {
 }
 
 func compileErrorReason(line string) string {
-	if strings.Contains(line, "apply_bytes=") ||
-		strings.HasPrefix(strings.TrimSpace(line), "err 4") {
+	if strings.HasPrefix(strings.TrimSpace(line), "error: capacity exceeded") {
 		return "budget"
 	}
 	return "source"

@@ -46,7 +46,7 @@ func TestFrothySessionFakeCompilerChild(t *testing.T) {
 		case "@commit", "@drop":
 			fmt.Println("ok")
 		default:
-			fmt.Println("err 4")
+			fmt.Println("error: capacity exceeded (4)")
 		}
 	}
 	os.Exit(0)
@@ -261,7 +261,7 @@ func TestFrothySessionProcessSignalInterruptsForegroundRun(t *testing.T) {
 	}
 	interrupt := recordWithKind(records, "interrupt")
 	if interrupt["state"] != "idle" || interrupt["mirror"] != "clean" ||
-		interrupt["settled"] != true || interrupt["status"] != "err 10" {
+		interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
 		t.Fatalf("interrupt record = %#v\nstdout:\n%s\nstderr:\n%s", interrupt, stdout.String(), stderr.String())
 	}
 }
@@ -349,7 +349,7 @@ func serveProcessInterruptFakeDevice(master *os.File, foregroundLine chan<- stri
 					}
 					count += 1
 					interrupts <- count
-					if _, err := master.Write([]byte("err 10\r\n> ")); err != nil {
+					if _, err := master.Write([]byte("error: interrupted (10)\r\n> ")); err != nil {
 						errs <- fmt.Errorf("fake serial interrupt response: %w", err)
 						return
 					}

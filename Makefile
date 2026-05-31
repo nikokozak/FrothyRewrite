@@ -74,6 +74,7 @@ REPL_SOURCES ?= \
 	src/source_render.c
 
 KERNEL_SOURCES = \
+	src/types.c \
 	src/tagged.c \
 	src/crc.c \
 	src/slot.c \
@@ -128,7 +129,7 @@ FROTHY_SOURCES = \
 KERNEL_DEPS = \
 	src/config.h \
 	src/froth.h \
-	src/types.h \
+	src/types.h src/types.c \
 	src/tagged.h src/tagged.c \
 	src/crc.h src/crc.c \
 	src/slot.h src/slot.c \
@@ -380,7 +381,7 @@ test-host-normal-transcript: host-normal
 		'time is 200' \
 		'words' \
 		| build/host/frothy-host-normal); \
-	if ! printf '%s\n' "$$err_out" | grep -q 'err 8'; then \
+	if ! printf '%s\n' "$$err_out" | grep -q 'error: bad source (8)'; then \
 		printf '%s\nmissing bad-source error\n' "$$err_out"; \
 		exit 1; \
 	fi; \

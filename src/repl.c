@@ -653,26 +653,22 @@ static fr_err_t fr_repl_write_eval_response(fr_runtime_t *runtime, char *out,
 
 static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap,
                                     fr_err_t err) {
+  const char *name = fr_err_name(err);
   uint16_t used = 0;
 
   if (out == NULL) {
     return FR_ERR_INVALID;
   }
-  if (out_cap < sizeof("err 0\n")) {
-    return FR_ERR_RANGE;
+  if (name == NULL) {
+    FR_TRY(fr_repl_append(out, out_cap, &used, "err "));
+    FR_TRY(fr_repl_append_u16(out, out_cap, &used, (uint16_t)err));
+    return fr_repl_append(out, out_cap, &used, "\n");
   }
-
-  strcpy(out, "err ");
-  used = 4;
-  FR_TRY(fr_repl_write_u16(&out[used], (uint16_t)(out_cap - used),
-                           (uint16_t)err));
-  used = (uint16_t)strlen(out);
-  if ((uint32_t)used + 2 > out_cap) {
-    return FR_ERR_RANGE;
-  }
-  out[used] = '\n';
-  out[used + 1] = '\0';
-  return FR_OK;
+  FR_TRY(fr_repl_append(out, out_cap, &used, "error: "));
+  FR_TRY(fr_repl_append(out, out_cap, &used, name));
+  FR_TRY(fr_repl_append(out, out_cap, &used, " ("));
+  FR_TRY(fr_repl_append_u16(out, out_cap, &used, (uint16_t)err));
+  return fr_repl_append(out, out_cap, &used, ")\n");
 }
 
 #if FR_FEATURE_PERSISTENCE

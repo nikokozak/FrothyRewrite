@@ -172,8 +172,8 @@ func TestResponseOKUsesFinalStatusLine(t *testing.T) {
 	}{
 		{name: "plain ok", response: "ok\n", want: true},
 		{name: "echoed apply ok", response: "apply 1234\r\nok\r\n", want: true},
-		{name: "plain err", response: "err 9\n", want: false},
-		{name: "echoed apply err", response: "apply 1234\r\nerr 9\r\n", want: false},
+		{name: "plain err", response: "error: unsupported (9)\n", want: false},
+		{name: "echoed apply err", response: "apply 1234\r\nerror: unsupported (9)\r\n", want: false},
 	}
 
 	for _, test := range tests {
@@ -821,7 +821,7 @@ func TestReadDeviceStatusRetriesBareOKWithoutStatusLine(t *testing.T) {
 }
 
 func TestReadDeviceStatusDoesNotRetryDeviceError(t *testing.T) {
-	dev := &fakeDevice{responses: []string{"err 9\n", statusResponse("device")}}
+	dev := &fakeDevice{responses: []string{"error: unsupported (9)\n", statusResponse("device")}}
 
 	_, err := readDeviceStatus(dev, time.Second)
 	if err == nil {
@@ -1081,7 +1081,7 @@ func TestSerialApplyRejectDropsCompilerMirror(t *testing.T) {
 			{action: actionApply, line: "apply 0102"},
 		},
 	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "err 9\n"}}
+	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "error: unsupported (9)\n"}}
 	var out strings.Builder
 
 	err := runSerial(strings.NewReader("led is $led_builtin\n"), &out, comp, dev, time.Second)
@@ -1192,12 +1192,12 @@ func TestSerialForegroundTimeoutInterruptsAndContinues(t *testing.T) {
 	dev := &fakeDevice{
 		responses: []string{
 			statusResponse("host-required"),
-			"err ",
+			"error: interrupted (",
 			"ok\n",
 		},
 		responseErrs: []error{nil, errPromptTimeout, nil},
 		interruptResponses: []string{
-			"10\n",
+			"10)\n",
 		},
 	}
 	var out strings.Builder
@@ -1215,7 +1215,7 @@ func TestSerialForegroundTimeoutInterruptsAndContinues(t *testing.T) {
 	if got, want := strings.Join(dev.sent, "\n"), "status\nrun dead\nrun beef"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
-	if !strings.Contains(out.String(), "err 10\n") || !strings.Contains(out.String(), "ok\n") {
+	if !strings.Contains(out.String(), "error: interrupted (10)\n") || !strings.Contains(out.String(), "ok\n") {
 		t.Fatalf("output did not include recovery and next response: %q", out.String())
 	}
 }
@@ -1307,7 +1307,7 @@ func TestSerialSignalInterruptUsesTracker(t *testing.T) {
 	}
 	dev := &fakeDevice{
 		responses: []string{
-			"err 10\n",
+			"error: interrupted (10)\n",
 			"ok\n",
 		},
 		onSend: func(line string) {
@@ -1331,7 +1331,7 @@ func TestSerialSignalInterruptUsesTracker(t *testing.T) {
 	if comp.commits != 0 || comp.drops != 0 {
 		t.Fatalf("commits=%d drops=%d, want both 0", comp.commits, comp.drops)
 	}
-	if got, want := out.String(), "frothy> err 10\nfrothy> ok\nfrothy> "; got != want {
+	if got, want := out.String(), "frothy> error: interrupted (10)\nfrothy> ok\nfrothy> "; got != want {
 		t.Fatalf("output %q, want %q", got, want)
 	}
 }
@@ -1358,7 +1358,7 @@ func TestSerialSignalInterruptDuringUpdateStalesMirror(t *testing.T) {
 			}
 			dev := &fakeDevice{
 				responses: []string{
-					"err 10\n",
+					"error: interrupted (10)\n",
 				},
 				onSend: func(line string) {
 					if line == test.line {
@@ -1381,7 +1381,7 @@ func TestSerialSignalInterruptDuringUpdateStalesMirror(t *testing.T) {
 			if got, want := strings.Join(dev.sent, "\n"), test.line; got != want {
 				t.Fatalf("sent %q, want %q", got, want)
 			}
-			if got, want := out.String(), "frothy> err 10\n"; got != want {
+			if got, want := out.String(), "frothy> error: interrupted (10)\n"; got != want {
 				t.Fatalf("output %q, want %q", got, want)
 			}
 		})
@@ -1467,7 +1467,7 @@ func TestSerialUpdateTimeoutDropsMirrorAndStopsStale(t *testing.T) {
 				},
 				responseErrs: []error{nil, errPromptTimeout},
 				interruptResponses: []string{
-					"err 10\n",
+					"error: interrupted (10)\n",
 				},
 			}
 			var out strings.Builder
@@ -1499,16 +1499,16 @@ func TestPromptRecoveredAfterInterrupt(t *testing.T) {
 	if !responseSettledAfterInterrupt("o" + "k\n") {
 		t.Fatal("responseSettledAfterInterrupt did not combine partial ok")
 	}
-	if !responseSettledAfterInterrupt("noise\nerr " + "10\n") {
+	if !responseSettledAfterInterrupt("noise\nerror: interrupted (" + "10)\n") {
 		t.Fatal("responseSettledAfterInterrupt did not combine partial interrupt")
 	}
-	if !responseSettledAfterInterrupt("tick\ntick\nti" + "ck\nerr 10\n") {
+	if !responseSettledAfterInterrupt("tick\ntick\nti" + "ck\nerror: interrupted (10)\n") {
 		t.Fatal("responseSettledAfterInterrupt did not handle interrupted output before status")
 	}
-	if !promptRecoveredAfterInterrupt("tic", "err 10\n") {
+	if !promptRecoveredAfterInterrupt("tic", "error: interrupted (10)\n") {
 		t.Fatal("promptRecoveredAfterInterrupt let partial output poison recovery")
 	}
-	if !promptRecoveredAfterInterrupt("err ", "10\n") {
+	if !promptRecoveredAfterInterrupt("error: interrupted (", "10)\n") {
 		t.Fatal("promptRecoveredAfterInterrupt did not accept split status")
 	}
 }
@@ -1640,11 +1640,11 @@ func TestReplayLinesFromTranscriptKeepsOnlyAcceptedSource(t *testing.T) {
 		`{"v":1,"session":"s1","seq":2,"kind":"status","state":"idle","mirror":"none"}`,
 		`{"v":1,"session":"s1","seq":3,"kind":"send","state":"waiting","mirror":"none","source":"led is $led_builtin","line":"led is $led_builtin","action":"direct"}`,
 		`{"v":1,"session":"s1","seq":4,"kind":"response","state":"idle","mirror":"none","status":"ok","ok":true,"text":"ok\n"}`,
-		`{"v":1,"session":"s1","seq":5,"kind":"compile_error","state":"idle","mirror":"none","source":"bad is fn [ pin: ]","reason":"source","status":"err 4","text":"err 4\n"}`,
+		`{"v":1,"session":"s1","seq":5,"kind":"compile_error","state":"idle","mirror":"none","source":"bad is fn [ pin: ]","reason":"source","status":"error: bad source (8)","text":"error: bad source (8)\n"}`,
 		`{"v":1,"session":"s1","seq":6,"kind":"send","state":"waiting","mirror":"none","source":"bad:","line":"bad:","action":"direct"}`,
-		`{"v":1,"session":"s1","seq":7,"kind":"response","state":"idle","mirror":"none","status":"err 9","ok":false,"text":"err 9\n"}`,
+		`{"v":1,"session":"s1","seq":7,"kind":"response","state":"idle","mirror":"none","status":"error: unsupported (9)","ok":false,"text":"error: unsupported (9)\n"}`,
 		`{"v":1,"session":"s1","seq":8,"kind":"send","state":"waiting","mirror":"none","source":"forever [ 1 ]","line":"forever [ 1 ]","action":"direct"}`,
-		`{"v":1,"session":"s1","seq":9,"kind":"interrupt","state":"idle","mirror":"none","settled":true,"status":"err 10","text":"err 10\n"}`,
+		`{"v":1,"session":"s1","seq":9,"kind":"interrupt","state":"idle","mirror":"none","settled":true,"status":"error: interrupted (10)","text":"error: interrupted (10)\n"}`,
 		`{"v":1,"session":"s1","seq":10,"kind":"future_observation","state":"idle","mirror":"none"}`,
 		`{"v":1,"session":"s1","seq":11,"kind":"session_end","state":"closed","mirror":"none"}`,
 	}, "\n") + "\n"
@@ -1693,7 +1693,7 @@ func TestReplayLinesFromTranscriptRejectsBadRecords(t *testing.T) {
 			name: "stale terminal state",
 			transcript: strings.Join([]string{
 				`{"v":1,"session":"s1","seq":1,"kind":"session_start","state":"syncing","mirror":"none"}`,
-				`{"v":1,"session":"s1","seq":2,"kind":"interrupt","state":"stale","mirror":"stale","settled":true,"status":"err 10","text":"err 10\n"}`,
+				`{"v":1,"session":"s1","seq":2,"kind":"interrupt","state":"stale","mirror":"stale","settled":true,"status":"error: interrupted (10)","text":"error: interrupted (10)\n"}`,
 			}, "\n") + "\n",
 			wantError: "stale",
 		},
@@ -2116,7 +2116,7 @@ func TestRecordsRejectedApplyDropsMirror(t *testing.T) {
 			{action: actionApply, line: "apply 0102"},
 		},
 	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "err 9\n"}}
+	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "error: unsupported (9)\n"}}
 	var out strings.Builder
 
 	err := runRecordsTestSession(t, strings.NewReader("time is 200\n"), &out, comp, dev, time.Second, false, &interruptTracker{})
@@ -2130,7 +2130,7 @@ func TestRecordsRejectedApplyDropsMirror(t *testing.T) {
 	}
 	response := recordWithKind(records, "response")
 	if response["mirror"] != "clean" || response["mirror_action"] != "drop" ||
-		response["ok"] != false || response["status"] != "err 9" {
+		response["ok"] != false || response["status"] != "error: unsupported (9)" {
 		t.Fatalf("response record = %#v", response)
 	}
 	if comp.commits != 0 || comp.drops != 1 {
@@ -2165,7 +2165,7 @@ func TestRecordsCompileErrorDoesNotSendDeviceLine(t *testing.T) {
 	comp := &fakeCompiler{
 		target: targetProfile("1234abcd"),
 		results: []compileResult{
-			{action: actionError, line: "err 4 apply_bytes=92 required=120"},
+			{action: actionError, line: "error: capacity exceeded (4)"},
 		},
 	}
 	dev := &fakeDevice{responses: []string{statusResponse("host-required")}}
@@ -2181,7 +2181,7 @@ func TestRecordsCompileErrorDoesNotSendDeviceLine(t *testing.T) {
 		t.Fatalf("record kinds %q, want %q", got, want)
 	}
 	compileError := recordWithKind(records, "compile_error")
-	if compileError["reason"] != "budget" || compileError["status"] != "err 4 apply_bytes=92 required=120" {
+	if compileError["reason"] != "budget" || compileError["status"] != "error: capacity exceeded (4)" {
 		t.Fatalf("compile_error record = %#v", compileError)
 	}
 	if got, want := strings.Join(dev.sent, "\n"), "status"; got != want {
@@ -2214,7 +2214,7 @@ func TestRecordsUpdateTimeoutEmitsStale(t *testing.T) {
 				},
 				responseErrs: []error{nil, errPromptTimeout},
 				interruptResponses: []string{
-					"err 10\n",
+					"error: interrupted (10)\n",
 				},
 			}
 			var out strings.Builder
@@ -2234,7 +2234,7 @@ func TestRecordsUpdateTimeoutEmitsStale(t *testing.T) {
 			}
 			interrupt := recordWithKind(records, "interrupt")
 			if interrupt["state"] != "stale" || interrupt["mirror"] != "stale" ||
-				interrupt["settled"] != true || interrupt["status"] != "err 10" {
+				interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
 				t.Fatalf("interrupt record = %#v", interrupt)
 			}
 			sessionError := recordWithKind(records, "session_error")
@@ -2260,12 +2260,12 @@ func TestRecordsForegroundTimeoutInterruptsAndContinues(t *testing.T) {
 	dev := &fakeDevice{
 		responses: []string{
 			statusResponse("host-required"),
-			"err ",
+			"error: interrupted (",
 			"ok\n",
 		},
 		responseErrs: []error{nil, errPromptTimeout, nil},
 		interruptResponses: []string{
-			"10\n",
+			"10)\n",
 		},
 	}
 	var out strings.Builder
@@ -2281,7 +2281,7 @@ func TestRecordsForegroundTimeoutInterruptsAndContinues(t *testing.T) {
 	}
 	interrupt := recordWithKind(records, "interrupt")
 	if interrupt["state"] != "idle" || interrupt["mirror"] != "clean" ||
-		interrupt["settled"] != true || interrupt["status"] != "err 10" {
+		interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
 		t.Fatalf("interrupt record = %#v", interrupt)
 	}
 	if got, want := strings.Join(dev.sent, "\n"), "status\nrun dead\nrun beef"; got != want {
@@ -2300,7 +2300,7 @@ func TestRecordsSignalInterruptUsesTracker(t *testing.T) {
 	dev := &fakeDevice{
 		responses: []string{
 			statusResponse("host-required"),
-			"err 10\n",
+			"error: interrupted (10)\n",
 		},
 		onSend: func(line string) {
 			if line == "run dead" {
@@ -2321,7 +2321,7 @@ func TestRecordsSignalInterruptUsesTracker(t *testing.T) {
 	}
 	interrupt := recordWithKind(records, "interrupt")
 	if interrupt["state"] != "idle" || interrupt["mirror"] != "clean" ||
-		interrupt["settled"] != true || interrupt["status"] != "err 10" {
+		interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
 		t.Fatalf("interrupt record = %#v", interrupt)
 	}
 }
@@ -2337,7 +2337,7 @@ func TestRecordsSignalInterruptDuringApplyStalesMirror(t *testing.T) {
 	dev := &fakeDevice{
 		responses: []string{
 			statusResponse("host-required"),
-			"err 10\n",
+			"error: interrupted (10)\n",
 		},
 		onSend: func(line string) {
 			if line == "apply 0102" {
@@ -2358,7 +2358,7 @@ func TestRecordsSignalInterruptDuringApplyStalesMirror(t *testing.T) {
 	}
 	interrupt := recordWithKind(records, "interrupt")
 	if interrupt["state"] != "stale" || interrupt["mirror"] != "stale" ||
-		interrupt["settled"] != true || interrupt["status"] != "err 10" {
+		interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
 		t.Fatalf("interrupt record = %#v", interrupt)
 	}
 	sessionError := recordWithKind(records, "session_error")

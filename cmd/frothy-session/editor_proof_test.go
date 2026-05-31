@@ -131,7 +131,7 @@ func TestEditorSessionViewTracksStaleMirror(t *testing.T) {
 	dev := &fakeDevice{
 		responses: []string{
 			statusResponse("host-required"),
-			"err 10\n",
+			"error: interrupted (10)\n",
 		},
 		onSend: func(line string) {
 			if line == "apply 0102" {
@@ -161,7 +161,7 @@ func TestEditorSessionViewTracksStaleMirror(t *testing.T) {
 			}
 		case "interrupt":
 			if view.state != "stale" || view.mirror != "stale" ||
-				!view.interruptSettled || view.lastStatus != "err 10" {
+				!view.interruptSettled || view.lastStatus != "error: interrupted (10)" {
 				t.Fatalf("interrupt view = %#v", view)
 			}
 		case "session_error":
