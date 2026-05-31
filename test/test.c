@@ -3525,6 +3525,50 @@ static void test_event_register_native(void) {
             entry->generation == 1 && !entry->pending);
 }
 
+#if FR_FEATURE_COMPILER
+static void test_event_compile_on_form(void) {
+  fr_runtime_t runtime;
+  fr_compile_overlay_update_t update;
+  fr_tagged_t result = 0;
+  const fr_event_binding_t *entry = NULL;
+  fr_code_object_id_t expected_body_id = 0;
+
+  CHECK("compile on base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  expected_body_id = runtime.code.count + 1u;
+  CHECK("compile on form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ on 0 rising [ 1 ] ]", &update) == FR_OK);
+  CHECK("compile on emits two code objects",
+        update.overlay_update.code_object_count == 2);
+  CHECK("compile on apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile on runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK && fr_tagged_is_nil(result));
+  entry = &runtime.events.entries[0];
+  CHECK("compile on installed binding",
+        entry->kind == FR_EVENT_KIND_GPIO_RISING && entry->source == 0 &&
+            entry->debounce_ms == 0 && entry->body == expected_body_id &&
+            entry->generation == 1 && !entry->pending);
+
+  CHECK("compile on debounce base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compile on debounce form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ on 0 falling debounce 30 [ 1 ] ]",
+            &update) == FR_OK);
+  CHECK("compile on debounce apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile on debounce runs",
+        fr_vm_run_boot(&runtime, &result) == FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("compile on debounce binding",
+        entry->kind == FR_EVENT_KIND_GPIO_FALLING && entry->source == 0 &&
+            entry->debounce_ms == 30);
+
+}
+#endif
+
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
 static void test_event_fire_event_native(void) {
   fr_runtime_t runtime;
@@ -9245,6 +9289,9 @@ int main(void) {
   test_event_register_cancel();
   test_event_drain_dispatch();
   test_event_register_native();
+#if FR_FEATURE_COMPILER
+  test_event_compile_on_form();
+#endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   test_event_fire_event_native();
 #endif

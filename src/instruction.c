@@ -247,6 +247,19 @@ fr_err_t fr_instruction_read_object_id_operand(
   return FR_OK;
 }
 
+fr_err_t fr_instruction_read_code_id_operand(
+    const fr_instruction_stream_t *view, fr_code_offset_t ip,
+    fr_code_object_id_t *out_code_object_id) {
+  if (out_code_object_id == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_require_bytes(view, ip, FR_INSTRUCTION_PUSH_CODE_ID_SIZE));
+
+  *out_code_object_id =
+      (fr_code_object_id_t)fr_read_u16_little_endian(&view->bytes[ip + 1]);
+  return FR_OK;
+}
+
 fr_err_t fr_instruction_read_jump_operand(const fr_instruction_stream_t *view,
                                           fr_code_offset_t ip,
                                           fr_code_offset_t *out_target) {
@@ -507,6 +520,15 @@ fr_err_t fr_instruction_disassemble_at(const fr_instruction_stream_t *view,
     return fr_finish_instruction_text(
         used, out_len,
         (fr_code_offset_t)(ip + FR_INSTRUCTION_PUSH_OBJECT_ID_SIZE), next_ip);
+  }
+  case FR_OP_PUSH_CODE_ID: {
+    fr_code_object_id_t code_id = 0;
+    FR_TRY(fr_instruction_read_code_id_operand(view, ip, &code_id));
+    FR_TRY(fr_append_text(out, out_cap, &used, "PUSH_CODE_ID "));
+    FR_TRY(fr_append_u32(out, out_cap, &used, code_id));
+    return fr_finish_instruction_text(
+        used, out_len,
+        (fr_code_offset_t)(ip + FR_INSTRUCTION_PUSH_CODE_ID_SIZE), next_ip);
   }
   case FR_OP_CALL_SLOT: {
     fr_slot_id_t slot_id = 0;

@@ -131,6 +131,21 @@ static fr_err_t fr_vm_push_object_id(const fr_instruction_stream_t *view,
   return fr_vm_push(state, tagged);
 }
 
+/* The body code object id reaches the event-register native as a plain int.
+ * The operand is patched from a local code index to the runtime id at install
+ * time, the same path the text patcher uses for object refs. */
+static fr_err_t fr_vm_push_code_id(const fr_instruction_stream_t *view,
+                                   fr_vm_state_t *state) {
+  fr_code_object_id_t code_id = 0;
+  fr_tagged_t tagged = 0;
+
+  FR_TRY(fr_instruction_read_code_id_operand(view, state->ip, &code_id));
+  FR_TRY(fr_tagged_encode_int((fr_int_t)code_id, &tagged));
+
+  state->ip += FR_INSTRUCTION_PUSH_CODE_ID_SIZE;
+  return fr_vm_push(state, tagged);
+}
+
 static fr_err_t fr_vm_push_nil(fr_vm_state_t *state) {
   state->ip += 1;
   return fr_vm_push(state, fr_tagged_nil());
@@ -586,6 +601,8 @@ static fr_err_t fr_vm_step(fr_runtime_t *runtime,
     return fr_vm_push_int(view, state);
   case FR_OP_PUSH_OBJECT_ID:
     return fr_vm_push_object_id(view, state);
+  case FR_OP_PUSH_CODE_ID:
+    return fr_vm_push_code_id(view, state);
   case FR_OP_LOAD_ARG:
     return fr_vm_load_arg(view, state);
   case FR_OP_LOAD_LOCAL:

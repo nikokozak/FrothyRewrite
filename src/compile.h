@@ -23,6 +23,11 @@ typedef struct fr_compile_overlay_update_t {
   fr_image_slot_init_t slot_inits[1];
   fr_slot_name_t slot_name;
   fr_image_code_object_t code_object;
+  /* Event-body code object emitted alongside an `on` statement. The outer
+   * function gets index 0 in the overlay update; the event body, when
+   * present, gets index 1. PUSH_CODE_ID resolves through that ordering. */
+  fr_image_code_object_t event_body_object;
+  fr_image_code_object_t code_objects_storage[2];
   fr_image_cell_object_t cell_object;
   fr_image_text_object_t text_object;
   fr_image_text_object_t text_objects[FR_PARSE_MAX_BODY_EXPRS];
@@ -31,6 +36,7 @@ typedef struct fr_compile_overlay_update_t {
   fr_record_name_t record_fields[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
   fr_image_ref_t record_field_refs[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
   uint8_t instruction_bytes[FR_COMPILE_MAX_INSTRUCTION_BYTES];
+  uint8_t event_body_bytes[FR_COMPILE_MAX_INSTRUCTION_BYTES];
   char param_name_text[FR_COMPILE_MAX_PARAM_NAME_BYTES];
   uint8_t text_bytes[FR_PROFILE_MAX_TEXT_LENGTH > 0
                          ? FR_PROFILE_MAX_TEXT_LENGTH
