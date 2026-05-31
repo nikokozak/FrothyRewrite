@@ -5630,6 +5630,106 @@ static void test_compile(void) {
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
+  CHECK("compiled chained else if first arm",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ if true [ 1 ] else if true [ 2 ] else [ 3 ] ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
+  CHECK("compiled chained else if middle arm",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ if false [ 1 ] else if true [ 2 ] else [ 3 ] ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 2);
+  CHECK("compiled chained else if falls to final else",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ if false [ 1 ] else if false [ 2 ] else [ 3 ] ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 3);
+  CHECK("compiled chained else if without final else yields nil",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ if false [ 1 ] else if false [ 2 ] "
+                "else if false [ 3 ] ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged));
+  CHECK("compiled recursive else-if form still parses (backward compat)",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ if false [ 1 ] else [ if true [ 2 ] else [ 3 ] ] ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 2);
+  CHECK("compiled chained else if rejects over-capacity arms",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ if false [ 1 ] else if false [ 2 ] "
+                "else if false [ 3 ] else if false [ 4 ] "
+                "else if false [ 5 ] else if false [ 6 ] ]",
+                &update) == FR_ERR_CAPACITY);
+  CHECK("compiled here local binding yields nil",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ here x is 5 ]",
+                                      &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged));
+  CHECK("compiled here local binding reads back its value",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ here x is 5 ; x + 1 ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 6);
+  CHECK("top-level expression line carries a here binding across `;`",
+        fr_compile_expression("here x is 5 ; x + 1", &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 6);
+  CHECK("here local declared in an if body is not visible after the block",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ here x is 1 ; if true [ here y is 2 ] ; y ]",
+                &update) == FR_ERR_NOT_FOUND);
+  CHECK("here local cannot shadow a function param",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn with x [ here x is 1 ; x ]",
+                &update) == FR_ERR_INVALID);
+  CHECK("here local shadows a previous local in the same block",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ here x is 1 ; here x is 2 ; x ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 2);
+  CHECK("five here locals in one function exceed the cap",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ here a is 1 ; here b is 2 ; here c is 3 ; "
+                "here d is 4 ; here e is 5 ; a ]",
+                &update) == FR_ERR_CAPACITY);
+  CHECK("here after a closed inner block still binds a fresh slot",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ here a is 1 ; if true [ here b is 2 ] ; "
+                "here c is 3 ; a + c ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 4);
   CHECK("compiled when true runs body",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ when true [ 1 ] ]",
@@ -6527,6 +6627,24 @@ static void test_persist(void) {
             memcmp(text_bytes, binary_text, sizeof(binary_text)) == 0);
 #endif
 #endif
+  {
+    char out[32];
+
+    /* Locals ride through persistence as bytecode; the new LOAD_LOCAL /
+     * STORE_LOCAL opcodes have no text dependency, so this case stays
+     * outside the FR_FEATURE_TEXT block and exercises tiny too. */
+    CHECK("persist restores function using here local binding",
+          fr_base_image_install(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime,
+                                "to twice with n [ here x is n * 2 ; x ]",
+                                out, sizeof(out)) == FR_OK &&
+              fr_persist_save(&runtime) == FR_OK &&
+              fr_base_image_install(&runtime) == FR_OK &&
+              fr_persist_restore(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime, "twice: 7", out, sizeof(out)) ==
+                  FR_OK &&
+              strcmp(out, "14\nok\n") == 0);
+  }
 #if FR_FEATURE_CELLS
   CHECK("persist restores cells",
         fr_base_image_install(&runtime) == FR_OK &&
@@ -8055,6 +8173,69 @@ static void test_repl_see_source_form(void) {
                 FR_OK &&
             strcmp(out, "overlay code\n"
                         "to abs1 with n [ if n < 0 [ -1 * n ] else [ n ] ]\n"
+                        "ok\n") == 0);
+  /* Chained else if: a three-arm dispatch with a final else, the canonical
+   * shape from T9b. Fresh install for the overlay-name budget. */
+  CHECK("see source chained else if",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "step is fn with n [ if n < 0 [ -1 ] else if n > 0 [ 1 ] "
+                "else [ 0 ] ]",
+                out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see step", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to step with n [ if n < 0 [ -1 ] else if n > 0 [ 1 ] "
+                        "else [ 0 ] ]\n"
+                        "ok\n") == 0);
+  /* A chained arm whose body is a `;`-separated statement list. The renderer
+   * has to track bracket depth, since a top-level scan would see the inner
+   * `; ` and wrongly bracket the else clause. Fresh install for the budget. */
+  CHECK("see source chained else if with statement-list arm",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "two is fn [ if false [ -1 ] else if true [ 1 ; 2 ] "
+                "else [ 0 ] ]",
+                out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see two", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to two [ if false [ -1 ] else if true [ 1 ; 2 ] "
+                        "else [ 0 ] ]\n"
+                        "ok\n") == 0);
+  /* Old recursive form still parses, and `see` canonicalizes it to the chained
+   * spelling per the T9b render decision. Two-level only to fit the 16-node
+   * expression cap. Fresh install for the budget. */
+  CHECK("see source recursive else collapses to chained",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "pick is fn [ if false [ 1 ] else [ if true [ 2 ] "
+                "else [ 3 ] ] ]",
+                out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see pick", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to pick [ if false [ 1 ] else if true [ 2 ] "
+                        "else [ 3 ] ]\n"
+                        "ok\n") == 0);
+  /* Locals render with canonical localN names regardless of the original source
+   * names — local names are not persisted in T9b, mirroring the argN answer for
+   * restored params (T10c). Fresh install for the overlay-name budget. */
+  CHECK("see source with here local binding",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "g is fn [ here x is 5 ; x + 1 ]", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see g", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to g [ here local0 is 5 ; local0 + 1 ]\n"
                         "ok\n") == 0);
   /* Fresh install: tiny's overlay-name budget only holds two words at once. A
    * real wait loop polls external state and so can end; spin on a pin read. */

@@ -441,7 +441,8 @@ static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
          fr_parse_span_equals(name, "cells") ||
          fr_parse_span_equals(name, "record") ||
          fr_parse_span_equals(name, "set") ||
-         fr_parse_span_equals(name, "to");
+         fr_parse_span_equals(name, "to") ||
+         fr_parse_span_equals(name, "here");
 }
 
 #if FR_FEATURE_RECORDS
@@ -714,6 +715,28 @@ static fr_err_t fr_parse_set(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   return FR_ERR_INVALID;
 }
 
+static fr_err_t fr_parse_here(fr_parser_t *parser,
+                              fr_parse_expr_id_t *out_id) {
+  fr_parse_span_t name = {0};
+  fr_parse_expr_id_t value = 0;
+
+  FR_TRY(fr_parse_advance(parser));
+  if (parser->token.kind != FR_TOKEN_NAME ||
+      fr_parse_is_reserved_parameter(parser->token.span)) {
+    return FR_ERR_INVALID;
+  }
+  name = parser->token.span;
+  FR_TRY(fr_parse_advance(parser));
+  FR_TRY(fr_parse_expect_word(parser, "is"));
+  FR_TRY(fr_parse_expression(parser, &value));
+  return fr_parse_add_expr(
+      parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_LOCAL_BIND,
+                                .name = name,
+                                .child = value,
+                                .child_count = 1},
+      out_id);
+}
+
 static fr_err_t fr_parse_if(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   fr_parse_expr_t if_expr = {.kind = FR_PARSE_EXPR_IF};
 
@@ -723,11 +746,32 @@ static fr_err_t fr_parse_if(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   if_expr.child = if_expr.children[0];
   if_expr.child_count = 2;
 
-  if (parser->token.kind == FR_TOKEN_NAME &&
-      fr_parse_span_equals(parser->token.span, "else")) {
+  /* `else if` chains into the same node as alternating cond/body pairs;
+   * a plain `else [ ... ]` appends one final body. Recursive `else [ if ... ]`
+   * still parses through the inner bracket block. */
+  while (parser->token.kind == FR_TOKEN_NAME &&
+         fr_parse_span_equals(parser->token.span, "else")) {
     FR_TRY(fr_parse_advance(parser));
-    FR_TRY(fr_parse_bracket_block(parser, &if_expr.children[2]));
-    if_expr.child_count = 3;
+    if (parser->token.kind == FR_TOKEN_NAME &&
+        fr_parse_span_equals(parser->token.span, "if")) {
+      if (if_expr.child_count + 2 > FR_PARSE_MAX_BODY_EXPRS) {
+        return FR_ERR_CAPACITY;
+      }
+      FR_TRY(fr_parse_advance(parser));
+      FR_TRY(fr_parse_expression(parser,
+                                 &if_expr.children[if_expr.child_count]));
+      FR_TRY(fr_parse_bracket_block(
+          parser, &if_expr.children[if_expr.child_count + 1]));
+      if_expr.child_count = (uint8_t)(if_expr.child_count + 2);
+      continue;
+    }
+    if (if_expr.child_count + 1 > FR_PARSE_MAX_BODY_EXPRS) {
+      return FR_ERR_CAPACITY;
+    }
+    FR_TRY(fr_parse_bracket_block(parser,
+                                  &if_expr.children[if_expr.child_count]));
+    if_expr.child_count = (uint8_t)(if_expr.child_count + 1);
+    break;
   }
 
   return fr_parse_add_expr(parser, if_expr, out_id);
@@ -985,6 +1029,9 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     if (fr_parse_span_equals(parser->token.span, "set")) {
       return fr_parse_set(parser, out_id);
     }
+    if (fr_parse_span_equals(parser->token.span, "here")) {
+      return fr_parse_here(parser, out_id);
+    }
     if (fr_parse_span_equals(parser->token.span, "is")) {
       return FR_ERR_INVALID;
     }
@@ -1032,6 +1079,7 @@ static fr_err_t fr_parse_statement_list(fr_parser_t *parser,
 fr_err_t fr_parse_expression_line(const char *source, fr_parse_line_t *out,
                                   fr_parse_expr_id_t *out_expr) {
   fr_parser_t parser = {0};
+  fr_parse_expr_t list = {.kind = FR_PARSE_EXPR_LIST};
 
   if (source == NULL || out == NULL || out_expr == NULL) {
     return FR_ERR_INVALID;
@@ -1042,7 +1090,30 @@ fr_err_t fr_parse_expression_line(const char *source, fr_parse_line_t *out,
   parser.out = out;
 
   FR_TRY(fr_parse_advance(&parser));
-  FR_TRY(fr_parse_expression(&parser, out_expr));
+  FR_TRY(fr_parse_expression(&parser, &list.children[0]));
+  list.child_count = 1;
+
+  /* A semicolon followed by another expression collapses into a LIST so
+   * `here name is value; rest` works at the top level the same way it does
+   * inside a `[ ]` block. A trailing `;` with no follow-up stays a single
+   * expression — finish_line eats it. */
+  while (parser.token.kind == FR_TOKEN_SEMICOLON) {
+    FR_TRY(fr_parse_advance(&parser));
+    if (parser.token.kind == FR_TOKEN_EOF) {
+      break;
+    }
+    if (list.child_count >= FR_PARSE_MAX_BODY_EXPRS) {
+      return FR_ERR_CAPACITY;
+    }
+    FR_TRY(fr_parse_expression(&parser, &list.children[list.child_count]));
+    list.child_count = (uint8_t)(list.child_count + 1u);
+  }
+
+  if (list.child_count == 1) {
+    *out_expr = list.children[0];
+  } else {
+    FR_TRY(fr_parse_add_expr(&parser, list, out_expr));
+  }
   return fr_parse_finish_line(&parser);
 }
 
