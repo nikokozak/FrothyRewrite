@@ -489,6 +489,56 @@ static void test_persist_cross_width_header_rejection(void) {
             fr_persist_restore(&runtime) == FR_ERR_CORRUPT);
 }
 
+static void test_persist_code_id_round_trip(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t inner_id = 0;
+  fr_code_object_id_t outer_id = 0;
+  fr_code_object_id_t restored_outer_id = 0;
+  fr_code_object_id_t restored_inner_id = 0;
+  fr_tagged_t outer_tagged = 0;
+  fr_tagged_t slot_value = 0;
+  fr_tagged_t result = 0;
+  fr_int_t decoded = 0;
+  uint8_t inner_bytes[] = {0x00, FR_INSTRUCTION_MIN_HEADER_SIZE,
+                           FR_TEST_PUSH_INT(42), FR_OP_RETURN};
+  uint8_t outer_bytes[] = {0x00, FR_INSTRUCTION_MIN_HEADER_SIZE,
+                           FR_OP_PUSH_CODE_ID, 0x00, 0x00, FR_OP_RETURN};
+  const size_t outer_code_id_operand = FR_INSTRUCTION_MIN_HEADER_SIZE + 1u;
+
+  fr_platform_storage_debug_reset();
+  CHECK("code-id round-trip base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("code-id round-trip install inner",
+        fr_instruction_stream_init(&view, inner_bytes,
+                                   (uint16_t)sizeof(inner_bytes)) == FR_OK &&
+            fr_code_install(&runtime, &view, NULL, 0, &inner_id) == FR_OK);
+  write_u16_little_endian(&outer_bytes[outer_code_id_operand], inner_id);
+  CHECK("code-id round-trip install outer",
+        fr_instruction_stream_init(&view, outer_bytes,
+                                   (uint16_t)sizeof(outer_bytes)) == FR_OK &&
+            fr_code_install(&runtime, &view, NULL, 0, &outer_id) == FR_OK);
+  CHECK("code-id round-trip stage slot",
+        fr_tagged_encode_code_object_id(outer_id, &outer_tagged) == FR_OK &&
+            fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, outer_tagged) ==
+                FR_OK);
+  CHECK("code-id round-trip save", fr_persist_save(&runtime) == FR_OK);
+  CHECK("code-id round-trip restore",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK);
+  CHECK("code-id round-trip slot decode",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_code_object_id(slot_value, &restored_outer_id) ==
+                FR_OK);
+  CHECK("code-id round-trip outer pushes restored inner id",
+        fr_vm_run_code_object(&runtime, restored_outer_id, &result) == FR_OK &&
+            fr_tagged_decode_int(result, &decoded) == FR_OK);
+  restored_inner_id = (fr_code_object_id_t)decoded;
+  CHECK("code-id round-trip restored inner returns 42",
+        fr_vm_run_code_object(&runtime, restored_inner_id, &result) == FR_OK &&
+            fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 42);
+}
+
 #if FR_FEATURE_SOURCE_BASE
 /* Same restore gate, but the saved hash reflects a one-byte-different
  * base/core.frothy. A rebuild with edited source rejects the old overlay. */
@@ -9330,6 +9380,7 @@ int main(void) {
 #endif
 #if FR_FEATURE_PERSISTENCE
   test_persist();
+  test_persist_code_id_round_trip();
   test_persist_cross_width_header_rejection();
 #if FR_FEATURE_SOURCE_BASE
   test_persist_source_change_header_rejection();
