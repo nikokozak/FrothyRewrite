@@ -317,14 +317,24 @@ static fr_err_t fr_source_join_statements(fr_source_render_t *r, uint8_t base) {
 }
 
 /* When the else branch is a single if-expression, render the chained `else if`
- * spelling instead of wrapping it in another bracket pair. A top-level `; `
- * means the else body holds multiple statements, so leave that case bracketed. */
+ * spelling instead of wrapping it in another bracket pair. Only a top-level
+ * `; ` (outside every `[ ]`) means the else body holds multiple statements; a
+ * `; ` inside an arm's brackets belongs to that arm and shouldn't drop us out
+ * of the chained form. */
 static bool fr_source_else_chains(const char *text) {
+  uint8_t depth = 0;
+
   if (text[0] != 'i' || text[1] != 'f' || text[2] != ' ') {
     return false;
   }
   for (const char *p = text + 3; *p; p++) {
-    if (p[0] == ' ' && p[1] == ';' && p[2] == ' ') {
+    if (*p == '[') {
+      depth = (uint8_t)(depth + 1u);
+    } else if (*p == ']') {
+      if (depth > 0) {
+        depth = (uint8_t)(depth - 1u);
+      }
+    } else if (depth == 0 && p[0] == ' ' && p[1] == ';' && p[2] == ' ') {
       return false;
     }
   }
