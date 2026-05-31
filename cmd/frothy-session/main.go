@@ -1938,6 +1938,7 @@ func availableVerbs() []verb {
 		{name: "session", summary: "open an interactive REPL session over serial", run: runSessionMain},
 		{name: "send", summary: "compile a source file and apply or run each line", run: runSendMain},
 		{name: "flash", summary: "build the board firmware and flash it over serial", run: runFlashMain},
+		{name: "wipe", summary: "erase persisted device state on a wedged board (NVS only)", run: runWipeMain},
 		{name: "doctor", summary: "check the host's compile, flash, and serial setup", run: runDoctorMain},
 		{name: "connect", summary: "connect to a device's REPL", run: runConnectMain},
 	}
@@ -2104,6 +2105,66 @@ func runFlashCommand(args []string, stderr io.Writer,
 
 	if err := run("make", []string{"flash", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
 		fmt.Fprintf(stderr, "flash: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runWipeMain() int {
+	return runWipeCommand(os.Args[1:], os.Stderr, defaultPortLister, defaultCommandRunner)
+}
+
+func runWipeCommand(args []string, stderr io.Writer, list portLister, run commandRunner) int {
+	fs := flag.NewFlagSet("frothy wipe", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	port := fs.String("port", "", "serial port, for example /dev/cu.usbserial-0001")
+	force := fs.Bool("force", false, "required: erase persisted state on the board")
+
+	var positional []string
+	remaining := args
+	for {
+		if err := fs.Parse(remaining); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		positional = append(positional, rest[0])
+		remaining = rest[1:]
+	}
+	if len(positional) != 1 {
+		fmt.Fprintln(stderr, "wipe: expected exactly one board name")
+		return 2
+	}
+	board := positional[0]
+
+	if board != "esp32_devkit_v1" {
+		fmt.Fprintf(stderr, "wipe: unsupported board %q\n", board)
+		return 2
+	}
+
+	if !*force {
+		shown := *port
+		if shown == "" {
+			shown = "<port>"
+		}
+		fmt.Fprintln(stderr, "wipe: refusing to erase persisted device state without --force")
+		fmt.Fprintf(stderr, "      frothy wipe --force esp32_devkit_v1 --port %s\n", shown)
+		return 2
+	}
+
+	chosen, err := pickPort(*port, list)
+	if err != nil {
+		fmt.Fprintf(stderr, "wipe: %v\n", err)
+		return 2
+	}
+
+	if err := run("make", []string{"wipe-nvs", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
+		fmt.Fprintf(stderr, "wipe: %v\n", err)
 		return 1
 	}
 	return 0
