@@ -5702,6 +5702,34 @@ static void test_compile(void) {
             fr_compile_overlay_update(
                 "boot is fn [ here x is 1 ; if true [ here y is 2 ] ; y ]",
                 &update) == FR_ERR_NOT_FOUND);
+  CHECK("here local cannot shadow a function param",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn with x [ here x is 1 ; x ]",
+                &update) == FR_ERR_INVALID);
+  CHECK("here local shadows a previous local in the same block",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ here x is 1 ; here x is 2 ; x ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 2);
+  CHECK("five here locals in one function exceed the cap",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ here a is 1 ; here b is 2 ; here c is 3 ; "
+                "here d is 4 ; here e is 5 ; a ]",
+                &update) == FR_ERR_CAPACITY);
+  CHECK("here after a closed inner block still binds a fresh slot",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ here a is 1 ; if true [ here b is 2 ] ; "
+                "here c is 3 ; a + c ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 4);
   CHECK("compiled when true runs body",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ when true [ 1 ] ]",
