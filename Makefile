@@ -407,7 +407,49 @@ test-host-normal-transcript: host-normal
 	fi; \
 	printf 'host_normal transcript ok\n'
 
-test-host-normal-profile: test-host-normal test-host-normal-transcript
+host-normal-events:
+	$(MAKE) BOARD=host PROFILE=host_normal \
+		FROTHY_BINARY=build/host/frothy-host-normal-events \
+		CFLAGS=-DFR_INCLUDE_TEST_NATIVES=1 frothy
+
+# Exercises the T11a save -> reinstall-base -> restore -> fire-event
+# round-trip through the CLI. Needs FR_INCLUDE_TEST_NATIVES so
+# frothy.fire-event is reachable from the REPL.
+test-host-normal-event-transcript: host-normal-events
+	@out=$$(printf '%s\n' \
+		'counter is cells(1)' \
+		'set counter[0] to 1' \
+		'mark is fn [ set counter[0] to 42 ]' \
+		'boot is fn [ on 7 rising [ mark: ] ]' \
+		'boot:' \
+		'counter[0]' \
+		'save' \
+		'clear' \
+		'restore' \
+		'counter[0]' \
+		'frothy.fire-event: "on", 7, "rising"' \
+		'counter[0]' \
+		| build/host/frothy-host-normal-events); \
+	ok_count=$$(printf '%s\n' "$$out" | grep -c '^> ok$$'); \
+	if [ "$$ok_count" != 9 ]; then \
+		printf '%s\n' "$$out"; \
+		printf 'expected 9 command-only ok lines, got %s\n' "$$ok_count"; \
+		exit 1; \
+	fi; \
+	one_count=$$(printf '%s\n' "$$out" | grep -c '^> 1$$'); \
+	if [ "$$one_count" != 2 ]; then \
+		printf '%s\n' "$$out"; \
+		printf 'expected counter[0] to read 1 before and after restore (got %s)\n' "$$one_count"; \
+		exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$out" | grep -q '^> 42$$'; then \
+		printf '%s\n' "$$out"; \
+		printf 'expected counter[0] to read 42 after fire-event\n'; \
+		exit 1; \
+	fi; \
+	printf 'host_normal event transcript ok\n'
+
+test-host-normal-profile: test-host-normal test-host-normal-transcript test-host-normal-event-transcript
 
 esp32-plain-host:
 	$(MAKE) BOARD=esp32_devkit_v1 TARGET=host PROFILE=esp32_plain \
@@ -599,4 +641,4 @@ print-config:
 clean:
 	rm -rf build frothy test/test test/test-tiny-328 test/test-tiny-328-volatile test/test-tiny-328-tethered test/test-tiny-328-tethered-host-names test/test-tiny-328-tethered-host-names-persist test/test-host-normal
 
-.PHONY: test test-unity artifacts flash wipe-nvs test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal test-host-normal-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session install-host test-install-host test-helper-targets print-config clean
+.PHONY: test test-unity artifacts flash wipe-nvs test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session install-host test-install-host test-helper-targets print-config clean
