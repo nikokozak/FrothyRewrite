@@ -1259,6 +1259,7 @@ fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
   void *packed_arg;
   fr_err_t err;
   esp_err_t start_err;
+  esp_err_t old_stop_err;
 
   if (kind != FR_EVENT_KIND_EVERY && kind != FR_EVENT_KIND_AFTER) {
     return FR_ERR_INVALID;
@@ -1292,13 +1293,25 @@ fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
     return FR_ERR_INVALID;
   }
 
-  /* Stage the replacement: only drop the old handle once the new one is live.
+  /* Stage the replacement: the new handle is already running, but only commit
+   * the slot once the old handle is fully released. If either stop or delete
+   * fails on the old handle, roll back the new one so the slot keeps pointing
+   * at the live old handle and the runtime's prior generation stays armed.
    * Stale callbacks that fire before stop completes are filtered by generation
    * at the runtime layer. */
   old_handle = fr_esp_event_timer_handles[binding_index];
   if (old_handle != NULL) {
-    (void)esp_timer_stop(old_handle);
-    (void)esp_timer_delete(old_handle);
+    old_stop_err = esp_timer_stop(old_handle);
+    if (old_stop_err != ESP_OK && old_stop_err != ESP_ERR_INVALID_STATE) {
+      (void)esp_timer_stop(new_handle);
+      (void)esp_timer_delete(new_handle);
+      return FR_ERR_INVALID;
+    }
+    if (esp_timer_delete(old_handle) != ESP_OK) {
+      (void)esp_timer_stop(new_handle);
+      (void)esp_timer_delete(new_handle);
+      return FR_ERR_INVALID;
+    }
   }
   fr_esp_event_timer_handles[binding_index] = new_handle;
   return FR_OK;
