@@ -187,8 +187,9 @@
  * each only when its own wire format changes.
  *
  * v2 added a text-object record so function bodies can carry text literals.
- * v3 reserves the event-binding record. Frothy is pre-release: readers accept
- * v3 only, and any older payload returns the existing version-mismatch error.
+ * v3 added the event-binding record. Frothy is pre-release: readers accept the
+ * current version only, and any older payload returns the version-mismatch
+ * error.
  */
 #define FR_PROFILE_OVERLAY_UPDATE_VERSION 3
 #endif

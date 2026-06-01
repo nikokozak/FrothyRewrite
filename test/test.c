@@ -118,6 +118,12 @@ enum {
   FR_TEST_PERSIST_VALUE_OBJECT = 6,
 };
 
+#if FR_WORD_SIZE == 16
+#define FR_TEST_PERSIST_PAYLOAD_VERSION 2
+#else
+#define FR_TEST_PERSIST_PAYLOAD_VERSION 3
+#endif
+
 #if FR_FEATURE_PERSISTENCE
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
@@ -7576,7 +7582,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_BIND,
       0,
       0,
@@ -7592,7 +7598,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_CELLS,
       0,
       0,
@@ -7610,7 +7616,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_TEXT,
       0,
       0,
@@ -7626,7 +7632,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_RECORD_SHAPE,
       0,
       0,
@@ -7647,7 +7653,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_RECORD,
       0,
       0,
@@ -8126,7 +8132,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_NAME,
       0,
       0,
@@ -8141,7 +8147,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_CELLS,
       0,
       0,
@@ -8159,7 +8165,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_TEXT,
       0,
       0,
@@ -8175,7 +8181,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_RECORD_SHAPE,
       0,
       0,

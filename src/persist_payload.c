@@ -17,14 +17,14 @@
 
 enum {
   /*
-   * The 16-bit payload keeps version 0 for pre-width-change compatibility.
-   * The 32-bit payload uses version 1 because int value fields are wider.
-   * This is independent from the overlay update version in config.h.
+   * 16-bit and 32-bit each carry their own version because int value fields
+   * are wider on 32-bit. Independent from the overlay update version in
+   * config.h. Frothy is pre-release: readers accept the current version only.
    */
 #if FR_WORD_SIZE == 16
-  FR_PERSIST_PAYLOAD_VERSION = 0,
+  FR_PERSIST_PAYLOAD_VERSION = 2,
 #else
-  FR_PERSIST_PAYLOAD_VERSION = 1,
+  FR_PERSIST_PAYLOAD_VERSION = 3,
 #endif
   FR_PERSIST_RECORD_CODE = 1,
   FR_PERSIST_RECORD_BIND = 2,
@@ -33,6 +33,7 @@ enum {
   FR_PERSIST_RECORD_TEXT = 5,
   FR_PERSIST_RECORD_RECORD_SHAPE = 6,
   FR_PERSIST_RECORD_RECORD = 7,
+  FR_PERSIST_RECORD_EVENT = 8,
   FR_PERSIST_RECORD_END = 0xff,
   FR_PERSIST_VALUE_NIL = 0,
   FR_PERSIST_VALUE_FALSE = 1,
@@ -1177,6 +1178,26 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
     FR_TRY(fr_persist_writer_u8(&writer, name_length));
     FR_TRY(fr_persist_writer_bytes(&writer, (const uint8_t *)name,
                                    name_length));
+  }
+#endif
+
+#if FR_FEATURE_EVENTS
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    const fr_event_binding_t *entry = &runtime->events.entries[i];
+    uint16_t local_code_id = 0;
+
+    if (entry->kind == FR_EVENT_KIND_NONE) {
+      continue;
+    }
+    FR_TRY(fr_persist_encode_code_ref(&writer, runtime, entry->body,
+                                      runtime_code_ids, &code_count,
+                                      runtime_object_ids, object_kinds,
+                                      &object_count, &local_code_id));
+    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_EVENT));
+    FR_TRY(fr_persist_writer_u8(&writer, (uint8_t)entry->kind));
+    FR_TRY(fr_persist_writer_u16(&writer, entry->source));
+    FR_TRY(fr_persist_writer_u16(&writer, entry->debounce_ms));
+    FR_TRY(fr_persist_writer_u16(&writer, local_code_id));
   }
 #endif
 

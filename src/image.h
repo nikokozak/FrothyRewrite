@@ -60,8 +60,8 @@ typedef struct fr_image_record_object_t {
 /* Compact event-binding record carried by overlay (and persist) payloads. The
    runtime fr_event_binding_t has more fields (pending/has_fired/generation/
    registered_at_ms/last_fire_ms) but those are runtime-only — restore re-inits
-   them per T11a spec §3. body is a local code id resolved through the install
-   map at apply time. */
+   them. body is a local code id resolved through the install map at apply
+   time. */
 typedef struct fr_image_event_binding_t {
   fr_event_kind_t kind;
   uint16_t source;
