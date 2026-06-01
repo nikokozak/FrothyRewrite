@@ -571,6 +571,119 @@ static fr_err_t fr_native_i2c_close(fr_runtime_t *runtime,
   *out = fr_tagged_nil();
   return FR_OK;
 }
+
+static fr_err_t fr_native_i2c_read_reg(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  uint8_t addr = 0;
+  uint16_t reg = 0;
+  uint8_t wbytes[1];
+  uint8_t rbytes[1];
+
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_decode_i2c_handle(runtime, args, arg_count, 0,
+                                     &platform_index));
+  FR_TRY(fr_native_decode_i2c_addr(args, arg_count, 1, &addr));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 2, &reg));
+  if (reg > 0xFF) {
+    return FR_ERR_DOMAIN;
+  }
+  wbytes[0] = (uint8_t)reg;
+  FR_TRY(fr_platform_i2c_write_read(platform_index, addr, wbytes, 1, rbytes,
+                                    1));
+  return fr_tagged_encode_int((int32_t)rbytes[0], out);
+}
+
+static fr_err_t fr_native_i2c_read_reg16(fr_runtime_t *runtime,
+                                         const fr_tagged_t *args,
+                                         uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  uint8_t addr = 0;
+  uint16_t reg = 0;
+  uint8_t wbytes[1];
+  uint8_t rbytes[2];
+
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_decode_i2c_handle(runtime, args, arg_count, 0,
+                                     &platform_index));
+  FR_TRY(fr_native_decode_i2c_addr(args, arg_count, 1, &addr));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 2, &reg));
+  if (reg > 0xFF) {
+    return FR_ERR_DOMAIN;
+  }
+  wbytes[0] = (uint8_t)reg;
+  FR_TRY(fr_platform_i2c_write_read(platform_index, addr, wbytes, 1, rbytes,
+                                    2));
+  /* D3 — 16-bit register reads clock MSB first on the wire. */
+  return fr_tagged_encode_int(((int32_t)rbytes[0] << 8) | (int32_t)rbytes[1],
+                              out);
+}
+
+static fr_err_t fr_native_i2c_write_reg(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  uint8_t addr = 0;
+  uint16_t reg = 0;
+  uint16_t value = 0;
+  uint8_t wbytes[2];
+
+  if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_decode_i2c_handle(runtime, args, arg_count, 0,
+                                     &platform_index));
+  FR_TRY(fr_native_decode_i2c_addr(args, arg_count, 1, &addr));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 2, &reg));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 3, &value));
+  if (reg > 0xFF || value > 0xFF) {
+    return FR_ERR_DOMAIN;
+  }
+  wbytes[0] = (uint8_t)reg;
+  wbytes[1] = (uint8_t)value;
+  FR_TRY(fr_platform_i2c_write_read(platform_index, addr, wbytes, 2, NULL, 0));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_i2c_write_reg16(fr_runtime_t *runtime,
+                                          const fr_tagged_t *args,
+                                          uint8_t arg_count,
+                                          fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  uint8_t addr = 0;
+  uint16_t reg = 0;
+  uint16_t value = 0;
+  uint8_t wbytes[3];
+
+  if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_decode_i2c_handle(runtime, args, arg_count, 0,
+                                     &platform_index));
+  FR_TRY(fr_native_decode_i2c_addr(args, arg_count, 1, &addr));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 2, &reg));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 3, &value));
+  if (reg > 0xFF) {
+    return FR_ERR_DOMAIN;
+  }
+  wbytes[0] = (uint8_t)reg;
+  /* D3 — 16-bit register writes clock MSB first on the wire. */
+  wbytes[1] = (uint8_t)((value >> 8) & 0xFF);
+  wbytes[2] = (uint8_t)(value & 0xFF);
+  FR_TRY(fr_platform_i2c_write_read(platform_index, addr, wbytes, 3, NULL, 0));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
 #endif
 
 #if FR_FEATURE_MATH
@@ -1471,6 +1584,45 @@ static const fr_native_signature_t fr_native_i2c_close_signature = {
     .result = FR_NATIVE_VALUE_NIL,
     .help = "release an i2c bus",
 };
+
+static const fr_native_param_t fr_native_i2c_read_reg_params[] = {
+    {"bus", FR_NATIVE_VALUE_HANDLE},
+    {"addr", FR_NATIVE_VALUE_INT},
+    {"reg", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_i2c_read_reg_signature = {
+    .params = fr_native_i2c_read_reg_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "read a one-byte register from a 7-bit i2c address",
+};
+
+static const fr_native_signature_t fr_native_i2c_read_reg16_signature = {
+    .params = fr_native_i2c_read_reg_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "read a big-endian 16-bit register from a 7-bit i2c address",
+};
+
+static const fr_native_param_t fr_native_i2c_write_reg_params[] = {
+    {"bus", FR_NATIVE_VALUE_HANDLE},
+    {"addr", FR_NATIVE_VALUE_INT},
+    {"reg", FR_NATIVE_VALUE_INT},
+    {"value", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_i2c_write_reg_signature = {
+    .params = fr_native_i2c_write_reg_params,
+    .arg_count = 4,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "write a one-byte register at a 7-bit i2c address",
+};
+
+static const fr_native_signature_t fr_native_i2c_write_reg16_signature = {
+    .params = fr_native_i2c_write_reg_params,
+    .arg_count = 4,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "write a big-endian 16-bit register at a 7-bit i2c address",
+};
 #endif
 
 #if FR_FEATURE_MATH
@@ -1907,6 +2059,54 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_i2c_close_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_I2C_READ_REG,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "i2c.read-reg",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_i2c_read_reg,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_i2c_read_reg_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_I2C_READ_REG16,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "i2c.read-reg16",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_i2c_read_reg16,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_i2c_read_reg16_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_I2C_WRITE_REG,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "i2c.write-reg",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_i2c_write_reg,
+        .native_arity = 4,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_i2c_write_reg_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_I2C_WRITE_REG16,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "i2c.write-reg16",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_i2c_write_reg16,
+        .native_arity = 4,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_i2c_write_reg16_signature,
 #endif
     },
 #endif
