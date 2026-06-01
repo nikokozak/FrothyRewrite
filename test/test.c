@@ -3993,6 +3993,71 @@ static void test_event_fire_event_native(void) {
             decoded == 42);
 }
 
+/* cancel removes the binding so frothy.fire-event for the same source returns
+ * not found and never runs the body. GPIO half cancels by pin; timer half
+ * cancels by (kind, ms). A second cancel on a missing source returns not
+ * found per spec §7. */
+static void test_event_cancel_blocks_fire_event(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_tagged_t slot_value = 0;
+  fr_tagged_t zero = 0;
+  fr_int_t decoded = 0;
+  char out[64];
+  uint8_t body_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(42),
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  const size_t store_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + FR_INSTRUCTION_PUSH_INT_SIZE + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+
+  CHECK("cancel base", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("cancel encode zero", fr_tagged_encode_int(0, &zero) == FR_OK);
+  CHECK("cancel seed slot",
+        fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, zero) == FR_OK);
+  CHECK("cancel body view",
+        fr_instruction_stream_init(&view, body_bytes, sizeof(body_bytes)) ==
+            FR_OK);
+  CHECK("cancel install body",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+
+  CHECK("cancel registers on 0 rising",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+  CHECK("cancel pin 0 returns ok",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_GPIO_RISING, 0) == FR_OK);
+  CHECK("cancel pin 0 again returns not found",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_GPIO_RISING, 0) ==
+            FR_ERR_NOT_FOUND);
+  CHECK("fire-event after gpio cancel returns not found",
+        fr_repl_eval_line(&runtime,
+                          "frothy.fire-event: \"on\", 0, \"rising\"", out,
+                          sizeof(out)) == FR_ERR_NOT_FOUND);
+  CHECK("gpio body did not run",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 0);
+
+  CHECK("cancel registers every 50",
+        fr_event_register(&runtime, FR_EVENT_KIND_EVERY, 50, 0, body_id) ==
+            FR_OK);
+  CHECK("cancel every 50 returns ok",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_EVERY, 50) == FR_OK);
+  CHECK("cancel every 50 again returns not found",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_EVERY, 50) == FR_ERR_NOT_FOUND);
+  CHECK("fire-event after every cancel returns not found",
+        fr_repl_eval_line(&runtime, "frothy.fire-event: \"every\", 50, nil",
+                          out, sizeof(out)) == FR_ERR_NOT_FOUND);
+  CHECK("timer body did not run",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 0);
+}
+
 /* Acceptance #1: re-fire while a handler is mid-execution coalesces to one
  * additional dispatch. The body calls `frothy.fire-event` twice from inside
  * its own execution, so both candidates arrive after the dispatcher has
@@ -9962,6 +10027,7 @@ int main(void) {
 #endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   test_event_fire_event_native();
+  test_event_cancel_blocks_fire_event();
   test_event_mid_handler_re_fire_coalesces();
 #endif
 #if FR_FEATURE_COMPILER && FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT &&       \
