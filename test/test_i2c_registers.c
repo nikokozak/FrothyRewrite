@@ -148,7 +148,7 @@ static void test_reg_above_255_rejects(void) {
                                       out, sizeof(out)));
 }
 
-static void test_write_reg_value_above_255_rejects(void) {
+static void test_write_value_out_of_range_rejects(void) {
   char out[64];
 
   open_bus();
@@ -156,6 +156,11 @@ static void test_write_reg_value_above_255_rejects(void) {
                     fr_repl_eval_line(&s_runtime,
                                       "i2c.write-reg: bus, 0x76, 0x10, 0x100",
                                       out, sizeof(out)));
+  TEST_ASSERT_EQUAL(
+      FR_ERR_DOMAIN,
+      fr_repl_eval_line(&s_runtime,
+                        "i2c.write-reg16: bus, 0x76, 0x10, 0x10000", out,
+                        sizeof(out)));
 }
 
 #endif /* FR_FEATURE_I2C */
@@ -169,7 +174,7 @@ int main(void) {
   RUN_TEST(test_write_reg16_emits_msb_first);
   RUN_TEST(test_addr_above_127_rejects);
   RUN_TEST(test_reg_above_255_rejects);
-  RUN_TEST(test_write_reg_value_above_255_rejects);
+  RUN_TEST(test_write_value_out_of_range_rejects);
 #endif
   return UNITY_END();
 }
