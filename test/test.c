@@ -8287,6 +8287,45 @@ static void test_persist_payload_rejects_event_record(void) {
 }
 #endif
 
+#if FR_FEATURE_PERSISTENCE && FR_FEATURE_EVENTS
+static void test_persist_payload_rejects_seventeenth_event_record(void) {
+  fr_runtime_t runtime;
+  /* CODE record (local id 0, three-byte placeholder) gives every EVENT
+     record a valid body reference. Decode trips FR_ERR_CAPACITY on the
+     17th EVENT record before runtime reset or platform install. */
+  uint8_t payload[] = {
+      'F', 'R', 'P', 'O',
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      0x01, 0, 0, 3, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_END,
+  };
+
+  fr_platform_storage_debug_reset();
+  CHECK("persist payload rejects seventeenth event record",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_payload_restore(&runtime, payload,
+                                       (uint16_t)sizeof(payload)) ==
+                FR_ERR_CAPACITY);
+}
+#endif
+
 #if FR_FEATURE_PERSISTENCE && FR_FEATURE_COMPILER && FR_FEATURE_EVENTS &&     \
     FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT &&                             \
     FR_PROFILE_MAX_OVERLAY_NAMES > 0
@@ -10351,6 +10390,9 @@ int main(void) {
 #endif
 #if !FR_FEATURE_EVENTS
   test_persist_payload_rejects_event_record();
+#endif
+#if FR_FEATURE_EVENTS
+  test_persist_payload_rejects_seventeenth_event_record();
 #endif
 #if FR_FEATURE_COMPILER && FR_FEATURE_EVENTS && FR_INCLUDE_TEST_NATIVES &&    \
     FR_FEATURE_TEXT && FR_PROFILE_MAX_OVERLAY_NAMES > 0
