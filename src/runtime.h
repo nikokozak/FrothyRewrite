@@ -55,6 +55,9 @@ typedef struct fr_event_binding_t {
   /* kind == FR_EVENT_KIND_NONE marks the slot inactive. */
   fr_event_kind_t kind;
   bool pending;
+  /* has_fired gates the debounce check; last_fire_ms = 0 is a valid candidate
+   * timestamp so it cannot double as a never-fired sentinel. */
+  bool has_fired;
   uint16_t source;
   uint16_t debounce_ms;
   uint16_t generation;

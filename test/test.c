@@ -3576,8 +3576,7 @@ static void test_event_coalescing(void) {
   CHECK("coalesce pending cleared", gpio_entry->pending == false);
 }
 
-/* Acceptance #1: two fires within the debounce window only run the body once.
- * Drain accepts the first candidate, stamps last_fire_ms, and drops a second
+/* Drain accepts the first candidate, stamps last_fire_ms, and drops a second
  * arriving inside the window. A later candidate past the window fires again. */
 static void test_event_debounce_drops_within_window(void) {
   fr_runtime_t runtime;
@@ -3656,6 +3655,94 @@ static void test_event_debounce_drops_within_window(void) {
             fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
             decoded == 2);
   CHECK("debounce last_fire stamped at 85", gpio_entry->last_fire_ms == 85);
+}
+
+/* A first accepted fire at t=0 must still arm the window. Without a separate
+ * has_fired flag, last_fire_ms = 0 would read as "never fired" and let a
+ * follow-up inside the window through. */
+static void test_event_debounce_first_fire_at_zero(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *gpio_entry = NULL;
+  fr_tagged_t slot_value = 0;
+  fr_tagged_t zero = 0;
+  fr_int_t decoded = 0;
+  uint8_t body_bytes[] = {0x00, 0x00,
+                          FR_OP_LOAD_SLOT, 0x00, 0x00,
+                          FR_TEST_PUSH_INT(1),
+                          FR_OP_ADD_INT,
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  const size_t load_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + 1u;
+  const size_t store_operand_offset =
+      load_operand_offset + 2u + FR_INSTRUCTION_PUSH_INT_SIZE + 1u + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[load_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+
+  CHECK("debounce-zero runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("debounce-zero encode zero", fr_tagged_encode_int(0, &zero) == FR_OK);
+  CHECK("debounce-zero seed counter",
+        fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, zero) == FR_OK);
+  CHECK("debounce-zero view",
+        fr_instruction_stream_init(&view, body_bytes, sizeof(body_bytes)) ==
+            FR_OK);
+  CHECK("debounce-zero install body",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+  CHECK("debounce-zero register with 30ms window",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 30,
+                          body_id) == FR_OK);
+  gpio_entry = &runtime.events.entries[0];
+  CHECK("debounce-zero has_fired starts false", gpio_entry->has_fired == false);
+
+  CHECK("debounce-zero post first at t=0",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 0) ==
+            FR_OK);
+  CHECK("debounce-zero drain first", fr_event_drain(&runtime) == FR_OK);
+  CHECK("debounce-zero has_fired set after first",
+        gpio_entry->has_fired == true);
+  CHECK("debounce-zero last_fire stamped at 0",
+        gpio_entry->last_fire_ms == 0);
+  CHECK("debounce-zero dispatch first", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("debounce-zero counter is one after first",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+
+  /* t=20 sits 20ms past last_fire_ms = 0, inside the 30ms window. */
+  CHECK("debounce-zero post second at t=20 (within window)",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 20) ==
+            FR_OK);
+  CHECK("debounce-zero drain within window", fr_event_drain(&runtime) == FR_OK);
+  CHECK("debounce-zero within-window leaves pending false",
+        gpio_entry->pending == false);
+  CHECK("debounce-zero within-window leaves last_fire untouched",
+        gpio_entry->last_fire_ms == 0);
+  CHECK("debounce-zero dispatch is a no-op",
+        fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("debounce-zero counter still one",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+
+  /* t=35 is past the window; accept it. */
+  CHECK("debounce-zero post third at t=35 (past window)",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 35) ==
+            FR_OK);
+  CHECK("debounce-zero drain past window", fr_event_drain(&runtime) == FR_OK);
+  CHECK("debounce-zero past-window pends", gpio_entry->pending == true);
+  CHECK("debounce-zero dispatch second", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("debounce-zero counter is two",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 2);
+  CHECK("debounce-zero last_fire stamped at 35",
+        gpio_entry->last_fire_ms == 35);
 }
 
 static void test_event_register_native(void) {
@@ -9823,6 +9910,7 @@ int main(void) {
   test_event_drain_dispatch();
   test_event_coalescing();
   test_event_debounce_drops_within_window();
+  test_event_debounce_first_fire_at_zero();
   test_event_register_native();
 #if FR_FEATURE_COMPILER
   test_event_compile_on_form();

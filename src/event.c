@@ -99,6 +99,7 @@ fr_err_t fr_event_register(fr_runtime_t *runtime, fr_event_kind_t kind,
   entry->generation = next_generation;
   entry->registered_at_ms = fr_event_now_ms();
   entry->last_fire_ms = 0;
+  entry->has_fired = false;
   return FR_OK;
 }
 
@@ -134,6 +135,7 @@ fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
   entry->body = 0;
   entry->registered_at_ms = 0;
   entry->last_fire_ms = 0;
+  entry->has_fired = false;
   return FR_OK;
 }
 
@@ -171,14 +173,15 @@ fr_err_t fr_event_drain(fr_runtime_t *runtime) {
     if (cand->timestamp_ms < entry->registered_at_ms) {
       continue;
     }
-    /* Debounce drops without updating last_fire_ms. last_fire_ms == 0 means
-     * never fired, so the first event always passes. */
-    if (entry->debounce_ms != 0 && entry->last_fire_ms != 0 &&
+    /* Debounce drops without updating last_fire_ms. has_fired gates the window
+     * check so a first fire at t=0 cannot collide with the zero-init. */
+    if (entry->debounce_ms != 0 && entry->has_fired &&
         cand->timestamp_ms - entry->last_fire_ms < entry->debounce_ms) {
       continue;
     }
     entry->pending = true;
     entry->last_fire_ms = cand->timestamp_ms;
+    entry->has_fired = true;
   }
 
   return FR_OK;
@@ -224,6 +227,7 @@ fr_err_t fr_event_dispatch(fr_runtime_t *runtime) {
       entry->body = 0;
       entry->registered_at_ms = 0;
       entry->last_fire_ms = 0;
+      entry->has_fired = false;
     }
 
     body_err = fr_vm_run_code_object(runtime, body, &result);
