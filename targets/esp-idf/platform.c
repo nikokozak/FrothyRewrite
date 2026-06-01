@@ -1296,16 +1296,15 @@ fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
   }
 
   /* Stage the replacement: the new handle is already running. Commit the slot
-   * once the old handle is fully released. If stop or delete fails on the old
-   * handle, keep the slot pointing at old_handle so the platform matches the
-   * runtime, which leaves the previous binding installed on install failure
-   * (src/event.c:88-103). Release the new handle and check both calls:
-   * INVALID_STATE from stop is the already-expired one-shot case; any other
-   * non-OK from stop, or a non-OK from delete, leaks the new handle. The
-   * leak is unreachable from the runtime, so candidates the new handle posts
-   * are filtered by generation; surface the leak to the caller as
-   * FR_ERR_CAPACITY so a clean rollback and a leaking rollback don't return
-   * the same code. */
+   * once the old handle is released. If old stop/delete fails, try to release
+   * the new handle. INVALID_STATE from stop is the already-expired one-shot
+   * case; on clean new release the old binding stays armed (slot keeps
+   * old_handle, return FR_ERR_INVALID) and src/event.c:88-103 staging keeps
+   * the runtime side matched. If the new handle also leaks, commit new to
+   * the slot: the runtime must bump generation so the next install retry
+   * packs a fresh value that can't collide with the leaked new handle's
+   * callbacks - the old handle leaks instead with its earlier generation,
+   * which the runtime's filter drops. */
   old_handle = fr_esp_event_timer_handles[binding_index];
   if (old_handle != NULL) {
     old_stop_err = esp_timer_stop(old_handle);
@@ -1313,11 +1312,10 @@ fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
         esp_timer_delete(old_handle) != ESP_OK) {
       new_stop_err = esp_timer_stop(new_handle);
       new_delete_err = esp_timer_delete(new_handle);
-      if ((new_stop_err != ESP_OK && new_stop_err != ESP_ERR_INVALID_STATE) ||
-          new_delete_err != ESP_OK) {
-        return FR_ERR_CAPACITY;
+      if ((new_stop_err == ESP_OK || new_stop_err == ESP_ERR_INVALID_STATE) &&
+          new_delete_err == ESP_OK) {
+        return FR_ERR_INVALID;
       }
-      return FR_ERR_INVALID;
     }
   }
   fr_esp_event_timer_handles[binding_index] = new_handle;
