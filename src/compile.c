@@ -1394,8 +1394,9 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
       .natives = NULL,
       .native_count = 0,
   };
-  /* An `on` body rides in code_objects[1]; outer at [0] keeps PUSH_CODE_ID's
-   * patch-time index aligned with the slot init's REF_CODE_OBJECT index. */
+  /* The `on`/`every`/`after` body rides in code_objects[1]; outer at [0]
+   * keeps PUSH_CODE_ID's patch-time index aligned with the slot init's
+   * REF_CODE_OBJECT index. */
   if (event_body.used) {
     out->code_objects_storage[0] = out->code_object;
     out->code_objects_storage[1] = out->event_body_object;
