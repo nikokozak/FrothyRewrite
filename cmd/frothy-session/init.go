@@ -9,9 +9,6 @@ import (
 	"path/filepath"
 )
 
-// Per SPEC §Surface: `frothy init` writes a fixed skeleton. The shape is
-// load-bearing — every example library and every "first blink" walkthrough
-// starts from these exact bytes.
 const (
 	initFrothyToml = `name   = "blink"
 target = "esp32_devkit_v1"

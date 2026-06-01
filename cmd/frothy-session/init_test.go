@@ -15,10 +15,11 @@ func TestFrothyInitWritesSkeleton(t *testing.T) {
 		t.Fatalf("exit %d, want 0; stderr=%q", code, stderr.String())
 	}
 
+	// Literal bytes so a drift in the production constants fails this test.
 	want := map[string]string{
-		"frothy.toml": initFrothyToml,
-		"main.fr":     initMainFr,
-		".gitignore":  initGitignore,
+		"frothy.toml": "name   = \"blink\"\ntarget = \"esp32_devkit_v1\"\n",
+		"main.fr":     "boot is fn [ led.blink: 3, 100 ]\n",
+		".gitignore":  ".frothy/\n",
 	}
 	for name, body := range want {
 		got, err := os.ReadFile(filepath.Join(dir, name))
