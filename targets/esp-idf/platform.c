@@ -1136,6 +1136,7 @@ void fr_platform_storage_debug_reset(void) {
  * every live binding exactly once before any overflow. */
 static QueueHandle_t fr_esp_event_queue;
 static volatile uint32_t fr_esp_event_overflow;
+static portMUX_TYPE fr_esp_event_overflow_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool fr_esp_isr_service_installed;
 static esp_timer_handle_t fr_esp_event_timer_handles[FR_EVENT_BINDING_COUNT];
 
@@ -1316,30 +1317,55 @@ fr_err_t fr_platform_event_timer_remove(uint16_t binding_index) {
     return FR_OK;
   }
   /* INVALID_STATE from stop is benign for an already-expired one-shot;
-   * delete still has to run to release the slot. */
+   * delete still has to run to release the slot. Leave the slot pointing at
+   * the handle until delete confirms the underlying memory is freed, so the
+   * runtime can retry remove on failure rather than leaking the timer. */
   stop_err = esp_timer_stop(handle);
-  delete_err = esp_timer_delete(handle);
-  fr_esp_event_timer_handles[binding_index] = NULL;
   if (stop_err != ESP_OK && stop_err != ESP_ERR_INVALID_STATE) {
     return FR_ERR_INVALID;
   }
+  delete_err = esp_timer_delete(handle);
   if (delete_err != ESP_OK) {
     return FR_ERR_INVALID;
   }
+  fr_esp_event_timer_handles[binding_index] = NULL;
   return FR_OK;
 }
 
 fr_err_t fr_platform_event_drain(fr_event_candidate_t *out_events,
                                  uint8_t out_cap, uint8_t *out_count,
                                  uint32_t *overflow_delta) {
-  (void)out_events;
-  (void)out_cap;
-  if (out_count != NULL) {
+  uint8_t transferred = 0;
+
+  if (out_count == NULL || overflow_delta == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (out_events == NULL && out_cap > 0) {
+    return FR_ERR_INVALID;
+  }
+
+  if (fr_esp_event_queue == NULL) {
     *out_count = 0;
-  }
-  if (overflow_delta != NULL) {
     *overflow_delta = 0;
+    return FR_OK;
   }
+
+  /* The ISR writes to fr_esp_event_overflow with a plain ++ to stay on the
+   * allowed-call list; drain runs in task context, so the read-and-zero pair
+   * goes under the mux to keep them atomic with respect to each other. */
+  portENTER_CRITICAL(&fr_esp_event_overflow_mux);
+  *overflow_delta = fr_esp_event_overflow;
+  fr_esp_event_overflow = 0;
+  portEXIT_CRITICAL(&fr_esp_event_overflow_mux);
+
+  while (transferred < out_cap) {
+    fr_event_candidate_t candidate;
+    if (xQueueReceive(fr_esp_event_queue, &candidate, 0) != pdTRUE) {
+      break;
+    }
+    out_events[transferred++] = candidate;
+  }
+  *out_count = transferred;
   return FR_OK;
 }
 
