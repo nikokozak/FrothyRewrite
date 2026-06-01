@@ -7025,7 +7025,7 @@ static void test_compile(void) {
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
-  CHECK("compiled recursive else-if form still parses (backward compat)",
+  CHECK("compiled recursive else [ if ... ] form still parses",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update(
                 "boot is fn [ if false [ 1 ] else [ if true [ 2 ] else [ 3 ] ] ]",
