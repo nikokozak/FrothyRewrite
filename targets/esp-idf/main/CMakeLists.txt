@@ -16,6 +16,7 @@ set(FR_KERNEL_SOURCES
     ${FR_REWRITE_ROOT}/src/image.c
     ${FR_REWRITE_ROOT}/src/base_defs.c
     ${FR_REWRITE_ROOT}/src/base_image.c
+    ${FR_REWRITE_ROOT}/src/event.c
     ${FR_REWRITE_ROOT}/src/vm.c
     ${FR_REWRITE_ROOT}/src/parse.c
     ${FR_REWRITE_ROOT}/src/compile.c
