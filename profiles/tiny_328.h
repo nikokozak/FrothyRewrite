@@ -57,3 +57,8 @@
 /* Source-base words compile at boot; tiny stays on C natives. */
 #undef FR_FEATURE_SOURCE_BASE
 #define FR_FEATURE_SOURCE_BASE 0
+
+/* T11 events need ISR/timer plumbing that tiny does not carry yet; the
+ * `on`/`every`/`after`/`cancel` source forms reject at compile time. */
+#undef FR_FEATURE_EVENTS
+#define FR_FEATURE_EVENTS 0

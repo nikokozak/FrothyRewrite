@@ -58,6 +58,7 @@ typedef enum fr_compile_source_feature_t {
   FR_COMPILE_SOURCE_CELLS,
   FR_COMPILE_SOURCE_TEXT,
   FR_COMPILE_SOURCE_RECORDS,
+  FR_COMPILE_SOURCE_EVENTS,
 } fr_compile_source_feature_t;
 
 static fr_err_t
@@ -71,6 +72,8 @@ fr_compile_require_source_feature(fr_compile_source_feature_t feature) {
     return FR_FEATURE_TEXT ? FR_OK : FR_ERR_UNSUPPORTED;
   case FR_COMPILE_SOURCE_RECORDS:
     return FR_FEATURE_RECORDS ? FR_OK : FR_ERR_UNSUPPORTED;
+  case FR_COMPILE_SOURCE_EVENTS:
+    return FR_FEATURE_EVENTS ? FR_OK : FR_ERR_UNSUPPORTED;
   default:
     return FR_ERR_INVALID;
   }
@@ -794,6 +797,7 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
   if (expr == NULL) {
     return FR_ERR_INVALID;
   }
+  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_EVENTS));
   is_gpio_kind = expr->int_value >= FR_EVENT_KIND_GPIO_RISING &&
                  expr->int_value <= FR_EVENT_KIND_GPIO_CHANGES;
   is_timer_kind = expr->int_value == FR_EVENT_KIND_EVERY ||
@@ -1079,6 +1083,7 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     if (expr->child_count != 1) {
       return FR_ERR_INVALID;
     }
+    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_EVENTS));
     FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, expr->int_value));
     FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
                                 instruction_bytes, offset));

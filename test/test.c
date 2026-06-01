@@ -3853,7 +3853,7 @@ static void test_event_register_native(void) {
             entry->generation == 1 && !entry->pending);
 }
 
-#if FR_FEATURE_COMPILER
+#if FR_FEATURE_COMPILER && FR_FEATURE_EVENTS
 static void test_event_compile_on_form(void) {
   fr_runtime_t runtime;
   fr_compile_overlay_update_t update;
@@ -3959,9 +3959,8 @@ static void test_event_compile_timer_forms(void) {
 }
 
 /* Compiles `cancel 0` and `cancel every 50` from `boot`. After boot runs, the
- * earlier registration is gone — slot is empty and the kind matcher returns
- * not-found for the same source. Closes acceptance #1's user-visible cancel
- * cases (the C-level path was already covered through fr_event_cancel). */
+ * earlier registration is gone: slot is empty and the kind matcher returns
+ * not-found for the same source. */
 static void test_event_compile_cancel_form(void) {
   fr_runtime_t runtime;
   fr_compile_overlay_update_t update;
@@ -4015,6 +4014,35 @@ static void test_event_compile_cancel_form(void) {
   entry = &runtime.events.entries[0];
   CHECK("compile cancel after cleared binding",
         entry->kind == FR_EVENT_KIND_NONE);
+}
+#endif
+
+#if FR_FEATURE_COMPILER && !FR_FEATURE_EVENTS
+/* On a profile that does not carry the T11 event runtime, the four source
+ * forms must reject at compile with FR_ERR_UNSUPPORTED so the user sees
+ * `error: unsupported (9)` instead of a silently broken registration. */
+static void test_event_compile_rejects_when_disabled(void) {
+  fr_runtime_t runtime;
+  fr_compile_overlay_update_t update;
+
+  CHECK("event reject base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("event reject on form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ on 0 rising [ 1 ] ]", &update) ==
+            FR_ERR_UNSUPPORTED);
+  CHECK("event reject every form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ every 50 [ 1 ] ]", &update) ==
+            FR_ERR_UNSUPPORTED);
+  CHECK("event reject after form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ after 1000 [ 1 ] ]", &update) ==
+            FR_ERR_UNSUPPORTED);
+  CHECK("event reject cancel form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ cancel 0 ]", &update) ==
+            FR_ERR_UNSUPPORTED);
 }
 #endif
 
@@ -4125,11 +4153,11 @@ static void test_event_cancel_blocks_fire_event(void) {
             decoded == 0);
 }
 
-/* Acceptance #1: re-fire while a handler is mid-execution coalesces to one
- * additional dispatch. The body calls `frothy.fire-event` twice from inside
- * its own execution, so both candidates arrive after the dispatcher has
- * already cleared this binding's pending bit. The per-binding pending flag
- * then collapses both mid-handler arrivals into a single re-fire — without
+/* Re-fire while a handler is mid-execution coalesces to one additional
+ * dispatch. The body calls `frothy.fire-event` twice from inside its own
+ * execution, so both candidates arrive after the dispatcher has already
+ * cleared this binding's pending bit. The per-binding pending flag then
+ * collapses both mid-handler arrivals into a single re-fire: without
  * coalescing the counter would advance further than two. The guard fires
  * the re-fire body only on the initial run; the second run sees counter
  * already at two and skips the posts so the chain terminates. */
@@ -10126,10 +10154,13 @@ int main(void) {
   test_event_debounce_first_fire_at_zero();
   test_event_overflow_counter();
   test_event_register_native();
-#if FR_FEATURE_COMPILER
+#if FR_FEATURE_COMPILER && FR_FEATURE_EVENTS
   test_event_compile_on_form();
   test_event_compile_timer_forms();
   test_event_compile_cancel_form();
+#endif
+#if FR_FEATURE_COMPILER && !FR_FEATURE_EVENTS
+  test_event_compile_rejects_when_disabled();
 #endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   test_event_fire_event_native();
