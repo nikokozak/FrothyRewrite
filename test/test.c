@@ -3780,6 +3780,137 @@ static void test_event_fire_event_native(void) {
             fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
             decoded == 42);
 }
+
+/* Acceptance #1: re-fire while a handler is mid-execution coalesces to one
+ * additional dispatch. The body calls `frothy.fire-event` twice from inside
+ * its own execution, so both candidates arrive after the dispatcher has
+ * already cleared this binding's pending bit. The per-binding pending flag
+ * then collapses both mid-handler arrivals into a single re-fire — without
+ * coalescing the counter would advance further than two. The guard fires
+ * the re-fire body only on the initial run; the second run sees counter
+ * already at two and skips the posts so the chain terminates. */
+static void test_event_mid_handler_re_fire_coalesces(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *gpio_entry = NULL;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  fr_tagged_t zero = 0;
+  fr_object_id_t on_id = 0;
+  fr_object_id_t rising_id = 0;
+  uint8_t body_bytes[96];
+  uint16_t off = 0;
+  uint16_t jump_patch_off = 0;
+  uint16_t end_ip = 0;
+  static const uint8_t kOn[] = {'o', 'n'};
+  static const uint8_t kRising[] = {'r', 'i', 's', 'i', 'n', 'g'};
+
+  CHECK("mid-handler init", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("mid-handler install on text",
+        fr_text_install(&runtime, kOn, sizeof(kOn), &on_id) == FR_OK);
+  CHECK("mid-handler install rising text",
+        fr_text_install(&runtime, kRising, sizeof(kRising), &rising_id) ==
+            FR_OK);
+  CHECK("mid-handler encode zero", fr_tagged_encode_int(0, &zero) == FR_OK);
+  CHECK("mid-handler seed counter",
+        fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, zero) == FR_OK);
+
+  body_bytes[off++] = FR_INSTRUCTION_FORMAT_VERSION;
+  body_bytes[off++] = FR_INSTRUCTION_MIN_HEADER_SIZE;
+  /* counter += 1 */
+  body_bytes[off++] = FR_OP_LOAD_SLOT;
+  write_slot_operand(&body_bytes[off], FR_TEST_FIRST_USER_SLOT);
+  off = (uint16_t)(off + 2);
+  body_bytes[off++] = FR_OP_PUSH_INT;
+  for (uint8_t b = 0; b < FR_INSTRUCTION_INT_OPERAND_BYTES; b++) {
+    body_bytes[off + b] = (uint8_t)((1u >> (8u * b)) & 0xffu);
+  }
+  off = (uint16_t)(off + FR_INSTRUCTION_INT_OPERAND_BYTES);
+  body_bytes[off++] = FR_OP_ADD_INT;
+  body_bytes[off++] = FR_OP_STORE_SLOT;
+  write_slot_operand(&body_bytes[off], FR_TEST_FIRST_USER_SLOT);
+  off = (uint16_t)(off + 2);
+  /* if counter < 2 then re-post twice */
+  body_bytes[off++] = FR_OP_LOAD_SLOT;
+  write_slot_operand(&body_bytes[off], FR_TEST_FIRST_USER_SLOT);
+  off = (uint16_t)(off + 2);
+  body_bytes[off++] = FR_OP_PUSH_INT;
+  for (uint8_t b = 0; b < FR_INSTRUCTION_INT_OPERAND_BYTES; b++) {
+    body_bytes[off + b] = (uint8_t)((2u >> (8u * b)) & 0xffu);
+  }
+  off = (uint16_t)(off + FR_INSTRUCTION_INT_OPERAND_BYTES);
+  body_bytes[off++] = FR_OP_LT_INT;
+  body_bytes[off++] = FR_OP_JUMP_IF_FALSY;
+  jump_patch_off = off;
+  body_bytes[off++] = 0;
+  body_bytes[off++] = 0;
+  /* two frothy.fire-event calls posting the same `on 0 rising` candidate */
+  for (int call = 0; call < 2; call++) {
+    body_bytes[off++] = FR_OP_PUSH_OBJECT_ID;
+    body_bytes[off++] = (uint8_t)(on_id & 0xffu);
+    body_bytes[off++] = (uint8_t)((on_id >> 8) & 0xffu);
+    body_bytes[off++] = FR_OP_PUSH_INT;
+    for (uint8_t b = 0; b < FR_INSTRUCTION_INT_OPERAND_BYTES; b++) {
+      body_bytes[off + b] = 0;
+    }
+    off = (uint16_t)(off + FR_INSTRUCTION_INT_OPERAND_BYTES);
+    body_bytes[off++] = FR_OP_PUSH_OBJECT_ID;
+    body_bytes[off++] = (uint8_t)(rising_id & 0xffu);
+    body_bytes[off++] = (uint8_t)((rising_id >> 8) & 0xffu);
+    body_bytes[off++] = FR_OP_CALL_NATIVE_SLOT;
+    body_bytes[off++] = (uint8_t)(FR_SLOT_FIRE_EVENT & 0xffu);
+    body_bytes[off++] = (uint8_t)((FR_SLOT_FIRE_EVENT >> 8) & 0xffu);
+    body_bytes[off++] = FR_OP_DROP;
+  }
+  end_ip = off;
+  body_bytes[jump_patch_off] = (uint8_t)(end_ip & 0xffu);
+  body_bytes[jump_patch_off + 1] = (uint8_t)((end_ip >> 8) & 0xffu);
+  body_bytes[off++] = FR_OP_RETURN;
+
+  CHECK("mid-handler body view",
+        fr_instruction_stream_init(&view, body_bytes, off) == FR_OK);
+  CHECK("mid-handler install body",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+  CHECK("mid-handler register",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+  gpio_entry = &runtime.events.entries[0];
+
+  /* Seed one queued candidate, drain it so pending=true, then dispatch.
+   * The body's two fire-event calls run while pending=false (the dispatcher
+   * cleared it), so the candidates they post are perceived as mid-handler
+   * arrivals. The body's per-step drain inside fr_vm_run_instruction_stream
+   * is what moves them from queue to pending. */
+  CHECK("mid-handler post initial",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 50) ==
+            FR_OK);
+  CHECK("mid-handler drain initial", fr_event_drain(&runtime) == FR_OK);
+  CHECK("mid-handler pending after initial drain",
+        gpio_entry->pending == true);
+  CHECK("mid-handler dispatch fires body once",
+        fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("mid-handler counter is one after first dispatch",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+  CHECK("mid-handler pending re-armed by body's posts",
+        gpio_entry->pending == true);
+  CHECK("mid-handler second dispatch fires body once more",
+        fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("mid-handler counter is two (two mid-body posts coalesced to one)",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 2);
+  CHECK("mid-handler pending cleared after second dispatch",
+        gpio_entry->pending == false);
+  CHECK("mid-handler third dispatch is a no-op",
+        fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("mid-handler counter still two",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 2);
+}
 #endif
 
 #if FR_FEATURE_COMPILER && FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT &&       \
@@ -9616,6 +9747,7 @@ int main(void) {
 #endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   test_event_fire_event_native();
+  test_event_mid_handler_re_fire_coalesces();
 #endif
 #if FR_FEATURE_COMPILER && FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT &&       \
     FR_PROFILE_MAX_OVERLAY_NAMES > 0
