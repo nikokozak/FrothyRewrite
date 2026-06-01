@@ -3639,6 +3639,46 @@ static void test_event_compile_on_form(void) {
               body_header.arity == 0 && body_header.local_count == 1);
   }
 }
+
+static void test_event_compile_timer_forms(void) {
+  fr_runtime_t runtime;
+  fr_compile_overlay_update_t update;
+  fr_tagged_t result = 0;
+  const fr_event_binding_t *entry = NULL;
+  fr_code_object_id_t expected_body_id = 0;
+
+  CHECK("compile every base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  expected_body_id = runtime.code.count + 1u;
+  CHECK("compile every form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ every 500 [ 1 ] ]", &update) == FR_OK);
+  CHECK("compile every apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile every runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK && fr_tagged_is_nil(result));
+  entry = &runtime.events.entries[0];
+  CHECK("compile every installed binding",
+        entry->kind == FR_EVENT_KIND_EVERY && entry->source == 500 &&
+            entry->debounce_ms == 0 && entry->body == expected_body_id &&
+            entry->generation == 1 && !entry->pending);
+
+  CHECK("compile after base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  expected_body_id = runtime.code.count + 1u;
+  CHECK("compile after form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ after 1000 [ 1 ] ]", &update) == FR_OK);
+  CHECK("compile after apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile after runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("compile after installed binding",
+        entry->kind == FR_EVENT_KIND_AFTER && entry->source == 1000 &&
+            entry->debounce_ms == 0 && entry->body == expected_body_id &&
+            entry->generation == 1 && !entry->pending);
+}
 #endif
 
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
@@ -4640,6 +4680,39 @@ static void test_parse(void) {
                 FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_EVENT_REGISTER &&
             parsed.exprs[expr_id].int_value == 1);
+  CHECK("parse every",
+        fr_parse_line("boot is fn [ every 500 [ 1 ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 4 && value->child_count == 2 &&
+            parsed.exprs[value->children[0]].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[value->children[0]].int_value == 500 &&
+            (body = &parsed.exprs[value->children[1]])->kind ==
+                FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_INT);
+  CHECK("parse after",
+        fr_parse_line("boot is fn [ after 1000 [ 1 ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 5 && value->child_count == 2 &&
+            parsed.exprs[value->children[0]].int_value == 1000);
+  CHECK("parse every rejects missing body",
+        fr_parse_line("boot is fn [ every 500 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse after rejects missing body",
+        fr_parse_line("boot is fn [ after 1000 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse every top-level expression",
+        fr_parse_expression_line("every 50 [ 1 ]", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_EVENT_REGISTER &&
+            parsed.exprs[expr_id].int_value == 4);
 #if FR_TAGGED_INT_MAX >= 115200
   CHECK("parse roomier int body",
         fr_parse_line("boot is fn [ 115200 ]", &parsed) == FR_OK &&
@@ -9402,6 +9475,7 @@ int main(void) {
   test_event_register_native();
 #if FR_FEATURE_COMPILER
   test_event_compile_on_form();
+  test_event_compile_timer_forms();
 #endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   test_event_fire_event_native();

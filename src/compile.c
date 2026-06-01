@@ -772,10 +772,12 @@ static fr_err_t fr_compile_emit_while(const fr_compile_context_t *ctx,
   return fr_compile_emit_push_nil(instruction_bytes, offset);
 }
 
-/* `on <pin> <edge> [debounce <ms>] [body]` emits the body as a sibling code
- * object, then pushes (kind, source, debounce, body-code-id) and calls the
- * event-register native. The body code id is patched in at install time
- * through PUSH_CODE_ID. */
+/* `on <pin> <edge> [debounce <ms>] [body]`, `every <ms> [body]`, and
+ * `after <ms> [body]` emit the body as a sibling code object, then push
+ * (kind, source, debounce, body-code-id) and call the event-register
+ * native. Timers carry no debounce, so child_count is fixed at 2 for
+ * EVERY/AFTER. The body code id is patched in at install time through
+ * PUSH_CODE_ID. */
 static fr_err_t
 fr_compile_emit_event_register(const fr_compile_context_t *ctx,
                                const fr_parse_line_t *parsed,
@@ -785,10 +787,23 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
   fr_compile_context_t body_ctx = {0};
   fr_compile_locals_t body_locals = {0};
   uint16_t body_offset = FR_INSTRUCTION_LOCALS_HEADER_SIZE;
+  bool is_gpio_kind = false;
+  bool is_timer_kind = false;
 
-  if (expr == NULL || (expr->child_count != 2 && expr->child_count != 3) ||
-      expr->int_value < FR_EVENT_KIND_GPIO_RISING ||
-      expr->int_value > FR_EVENT_KIND_GPIO_CHANGES) {
+  if (expr == NULL) {
+    return FR_ERR_INVALID;
+  }
+  is_gpio_kind = expr->int_value >= FR_EVENT_KIND_GPIO_RISING &&
+                 expr->int_value <= FR_EVENT_KIND_GPIO_CHANGES;
+  is_timer_kind = expr->int_value == FR_EVENT_KIND_EVERY ||
+                  expr->int_value == FR_EVENT_KIND_AFTER;
+  if (!is_gpio_kind && !is_timer_kind) {
+    return FR_ERR_INVALID;
+  }
+  if (is_gpio_kind && expr->child_count != 2 && expr->child_count != 3) {
+    return FR_ERR_INVALID;
+  }
+  if (is_timer_kind && expr->child_count != 2) {
     return FR_ERR_INVALID;
   }
   if (ctx == NULL || ctx->event_body == NULL) {

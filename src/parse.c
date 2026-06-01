@@ -861,6 +861,22 @@ static fr_err_t fr_parse_forever(fr_parser_t *parser,
   return fr_parse_add_expr(parser, forever, out_id);
 }
 
+/* `every <ms-expr> [body]` and `after <ms-expr> [body]` share one shape:
+ * (ms, body) with int_value matching fr_event_kind_t — 4 for EVERY, 5
+ * for AFTER. The keyword string drives the dispatch. */
+static fr_err_t fr_parse_timer_event(fr_parser_t *parser,
+                                     fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_t reg = {.kind = FR_PARSE_EXPR_EVENT_REGISTER};
+
+  reg.int_value = fr_parse_span_equals(parser->token.span, "every") ? 4 : 5;
+  FR_TRY(fr_parse_advance(parser));
+  FR_TRY(fr_parse_expression(parser, &reg.children[0]));
+  FR_TRY(fr_parse_bracket_block(parser, &reg.children[1]));
+  reg.child = reg.children[0];
+  reg.child_count = 2;
+  return fr_parse_add_expr(parser, reg, out_id);
+}
+
 /* `on <pin-expr> <edge> [debounce <ms-expr>] [body]` — child layout is
  * (pin, body) or (pin, body, debounce); int_value carries the GPIO edge
  * as the matching fr_event_kind_t value so the compile slice can lift it
@@ -1069,6 +1085,10 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     }
     if (fr_parse_span_equals(parser->token.span, "on")) {
       return fr_parse_on(parser, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "every") ||
+        fr_parse_span_equals(parser->token.span, "after")) {
+      return fr_parse_timer_event(parser, out_id);
     }
     if (fr_parse_span_equals(parser->token.span, "cells")) {
 #if !FR_FEATURE_CELLS
