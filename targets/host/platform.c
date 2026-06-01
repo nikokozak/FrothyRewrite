@@ -56,6 +56,7 @@ static fr_err_t fr_host_pwm_entry(uint16_t platform_index,
 enum {
   FR_HOST_I2C_MAX_PORT = 1,
   FR_HOST_I2C_ADDR_MAX = 0x7F,
+  FR_HOST_I2C_RING_CAP = 64,
 };
 
 typedef struct fr_host_i2c_t {
@@ -64,6 +65,14 @@ typedef struct fr_host_i2c_t {
   uint16_t sda;
   uint16_t scl;
   uint32_t freq;
+  /* Recorded write-phase bytes for test assertion; oldest dropped on overflow. */
+  uint8_t write_ring[FR_HOST_I2C_RING_CAP];
+  uint8_t write_head;
+  uint8_t write_count;
+  /* Canned read-phase bytes pre-queued by tests. */
+  uint8_t read_queue[FR_HOST_I2C_RING_CAP];
+  uint8_t read_head;
+  uint8_t read_count;
 } fr_host_i2c_t;
 
 static fr_host_i2c_t fr_host_i2cs[FR_PROFILE_MAX_HANDLES];
@@ -574,12 +583,72 @@ fr_err_t fr_platform_i2c_write_read(uint16_t platform_index, uint8_t addr,
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_host_i2c_entry(platform_index, &i2c));
-  (void)i2c;
+
+  for (uint16_t i = 0; i < wlength; i++) {
+    i2c->write_ring[i2c->write_head] = wbytes[i];
+    i2c->write_head =
+        (uint8_t)((i2c->write_head + 1u) % FR_HOST_I2C_RING_CAP);
+    if (i2c->write_count < FR_HOST_I2C_RING_CAP) {
+      i2c->write_count += 1u;
+    }
+  }
+
   for (uint16_t i = 0; i < rlength; i++) {
-    rbytes[i] = (uint8_t)(addr + i);
+    if (i2c->read_count == 0) {
+      rbytes[i] = 0;
+      continue;
+    }
+    uint8_t oldest =
+        (uint8_t)((i2c->read_head + FR_HOST_I2C_RING_CAP - i2c->read_count) %
+                  FR_HOST_I2C_RING_CAP);
+    rbytes[i] = i2c->read_queue[oldest];
+    i2c->read_count -= 1u;
   }
   return FR_OK;
 }
+
+#ifdef FR_HOST_TEST_HELPERS
+uint16_t fr_host_i2c_drain_writes(uint16_t platform_index, uint8_t *out_bytes,
+                                  uint16_t max_length) {
+  if (platform_index >= FR_PROFILE_MAX_HANDLES ||
+      !fr_host_i2cs[platform_index].in_use || out_bytes == NULL) {
+    return 0;
+  }
+
+  fr_host_i2c_t *i2c = &fr_host_i2cs[platform_index];
+  uint16_t avail = i2c->write_count;
+  uint16_t take = avail < max_length ? avail : max_length;
+  uint8_t oldest =
+      (uint8_t)((i2c->write_head + FR_HOST_I2C_RING_CAP - i2c->write_count) %
+                FR_HOST_I2C_RING_CAP);
+
+  for (uint16_t i = 0; i < take; i++) {
+    out_bytes[i] = i2c->write_ring[oldest];
+    oldest = (uint8_t)((oldest + 1u) % FR_HOST_I2C_RING_CAP);
+  }
+  i2c->write_head = 0;
+  i2c->write_count = 0;
+  return take;
+}
+
+void fr_host_i2c_queue_read(uint16_t platform_index, const uint8_t *bytes,
+                            uint16_t length) {
+  if (platform_index >= FR_PROFILE_MAX_HANDLES ||
+      !fr_host_i2cs[platform_index].in_use || (bytes == NULL && length > 0)) {
+    return;
+  }
+
+  fr_host_i2c_t *i2c = &fr_host_i2cs[platform_index];
+  for (uint16_t i = 0; i < length; i++) {
+    i2c->read_queue[i2c->read_head] = bytes[i];
+    i2c->read_head =
+        (uint8_t)((i2c->read_head + 1u) % FR_HOST_I2C_RING_CAP);
+    if (i2c->read_count < FR_HOST_I2C_RING_CAP) {
+      i2c->read_count += 1u;
+    }
+  }
+}
+#endif
 
 fr_err_t fr_platform_i2c_close(uint16_t platform_index) {
   if (platform_index >= FR_PROFILE_MAX_HANDLES) {
