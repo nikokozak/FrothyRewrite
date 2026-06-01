@@ -205,6 +205,17 @@
    (FR_PROFILE_MAX_TEXT_LENGTH > 0 ? FR_PROFILE_MAX_TEXT_LENGTH : 1))
 #endif
 
+/* Mirrors FR_EVENT_BINDING_COUNT in runtime.h; the overlay decoder caps event
+   records at the runtime table size. config.h cannot include runtime.h, so the
+   value is repeated here and pinned by a static check in image.c. */
+#ifndef FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS
+#if FR_FEATURE_EVENTS
+#define FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS 16
+#else
+#define FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS 0
+#endif
+#endif
+
 #ifndef FR_PROFILE_REPL_LINE_BYTES
 #define FR_PROFILE_REPL_LINE_BYTES 128
 #endif

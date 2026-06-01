@@ -4,6 +4,7 @@
 #include "tagged.h"
 #include "native.h"
 #include "object.h"
+#include "platform.h"
 #include "slot.h"
 #include "types.h"
 
@@ -56,6 +57,18 @@ typedef struct fr_image_record_object_t {
   uint16_t field_count;
 } fr_image_record_object_t;
 
+/* Compact event-binding record carried by overlay (and persist) payloads. The
+   runtime fr_event_binding_t has more fields (pending/has_fired/generation/
+   registered_at_ms/last_fire_ms) but those are runtime-only — restore re-inits
+   them per T11a spec §3. body is a local code id resolved through the install
+   map at apply time. */
+typedef struct fr_image_event_binding_t {
+  fr_event_kind_t kind;
+  uint16_t source;
+  uint16_t debounce_ms;
+  fr_code_object_id_t body;
+} fr_image_event_binding_t;
+
 typedef struct fr_image_native_t {
   fr_native_fn_t fn;
   uint8_t arity;
@@ -105,6 +118,8 @@ typedef struct fr_overlay_update_t {
   uint16_t native_count;
   const fr_slot_name_t *slot_names;
   uint16_t slot_name_count;
+  const fr_image_event_binding_t *event_bindings;
+  uint16_t event_binding_count;
 } fr_overlay_update_t;
 
 typedef struct fr_overlay_update_decoded_t {
@@ -122,6 +137,10 @@ typedef struct fr_overlay_update_decoded_t {
                           ? FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES
                           : 1]
                      [FR_PROFILE_MAX_NAME_BYTES + 1];
+  fr_image_event_binding_t
+      event_bindings[FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS > 0
+                         ? FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS
+                         : 1];
   fr_overlay_update_t update;
 } fr_overlay_update_decoded_t;
 
