@@ -83,6 +83,7 @@ KERNEL_SOURCES = \
 	src/instruction.c \
 	src/code.c \
 	src/native.c \
+	src/lib_native.c \
 	src/handle.c \
 	src/pad.c \
 	src/object.c \
@@ -146,6 +147,7 @@ KERNEL_DEPS = \
 	src/instruction.h src/instruction.c \
 	src/code.h src/code.c \
 	src/native.h src/native.c \
+	src/lib_native.h src/lib_native.c \
 	src/handle.h src/handle.c \
 	src/pad.h src/pad.c \
 	src/object.h src/object.c \

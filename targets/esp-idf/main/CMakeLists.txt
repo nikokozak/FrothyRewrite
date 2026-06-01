@@ -10,6 +10,7 @@ set(FR_KERNEL_SOURCES
     ${FR_REWRITE_ROOT}/src/instruction.c
     ${FR_REWRITE_ROOT}/src/code.c
     ${FR_REWRITE_ROOT}/src/native.c
+    ${FR_REWRITE_ROOT}/src/lib_native.c
     ${FR_REWRITE_ROOT}/src/handle.c
     ${FR_REWRITE_ROOT}/src/pad.c
     ${FR_REWRITE_ROOT}/src/object.c
