@@ -94,8 +94,8 @@ static int failures = 0;
 #define FR_TEST_TEXT_SLOT_COUNT 0
 #endif
 
-#define FR_TEST_EVENT_REGISTER_WORDS " frothy.event-register"
-#define FR_TEST_EVENT_REGISTER_SLOT_COUNT 1
+#define FR_TEST_EVENT_REGISTER_WORDS " frothy.event-register frothy.event-cancel"
+#define FR_TEST_EVENT_REGISTER_SLOT_COUNT 2
 
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
 #define FR_TEST_EVENT_TEST_WORDS " frothy.fire-event"
@@ -318,24 +318,32 @@ static void test_base_def_contract(void) {
   CHECK("event register slot follows text ids",
         FR_SLOT_EVENT_REGISTER == FR_SLOT_TEXT_FROM_INT + 1);
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
-  CHECK("fire-event slot follows event register slot",
-        FR_SLOT_FIRE_EVENT == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("event cancel slot follows event register slot",
+        FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("fire-event slot follows event cancel slot",
+        FR_SLOT_FIRE_EVENT == FR_SLOT_EVENT_CANCEL + 1);
   CHECK("board local slot ids follow fire-event slot",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_FIRE_EVENT + 1);
 #else
-  CHECK("board local slot ids follow event register slot",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("event cancel slot follows event register slot",
+        FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("board local slot ids follow event cancel slot",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_CANCEL + 1);
 #endif
 #elif FR_FEATURE_PAD
   CHECK("event register slot follows pad ids",
         FR_SLOT_EVENT_REGISTER == FR_TEST_PAD_LAST_SLOT + 1);
-  CHECK("board local slot ids follow event register slot",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("event cancel slot follows event register slot",
+        FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("board local slot ids follow event cancel slot",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_CANCEL + 1);
 #else
   CHECK("event register slot follows math block",
         FR_SLOT_EVENT_REGISTER == FR_SLOT_AFTER_MATH);
-  CHECK("board local slot ids follow event register slot",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("event cancel slot follows event register slot",
+        FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("board local slot ids follow event cancel slot",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_CANCEL + 1);
 #endif
 
   for (uint16_t layer_index = 0; layer_index < fr_base_def_layer_count();
@@ -3949,6 +3957,65 @@ static void test_event_compile_timer_forms(void) {
             entry->debounce_ms == 0 && entry->body == expected_body_id &&
             entry->generation == 1 && !entry->pending);
 }
+
+/* Compiles `cancel 0` and `cancel every 50` from `boot`. After boot runs, the
+ * earlier registration is gone — slot is empty and the kind matcher returns
+ * not-found for the same source. Closes acceptance #1's user-visible cancel
+ * cases (the C-level path was already covered through fr_event_cancel). */
+static void test_event_compile_cancel_form(void) {
+  fr_runtime_t runtime;
+  fr_compile_overlay_update_t update;
+  fr_tagged_t result = 0;
+  const fr_event_binding_t *entry = NULL;
+
+  CHECK("compile cancel pin base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compile cancel pin seed registration",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, 1) ==
+            FR_OK);
+  CHECK("compile cancel pin form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ cancel 0 ]", &update) == FR_OK);
+  CHECK("compile cancel pin apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile cancel pin runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK && fr_tagged_is_nil(result));
+  entry = &runtime.events.entries[0];
+  CHECK("compile cancel pin cleared binding",
+        entry->kind == FR_EVENT_KIND_NONE);
+  CHECK("compile cancel pin second run returns not found",
+        fr_vm_run_boot(&runtime, &result) == FR_ERR_NOT_FOUND);
+
+  CHECK("compile cancel every base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compile cancel every seed registration",
+        fr_event_register(&runtime, FR_EVENT_KIND_EVERY, 50, 0, 1) == FR_OK);
+  CHECK("compile cancel every form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ cancel every 50 ]", &update) == FR_OK);
+  CHECK("compile cancel every apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile cancel every runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("compile cancel every cleared binding",
+        entry->kind == FR_EVENT_KIND_NONE);
+
+  CHECK("compile cancel after base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compile cancel after seed registration",
+        fr_event_register(&runtime, FR_EVENT_KIND_AFTER, 1000, 0, 1) == FR_OK);
+  CHECK("compile cancel after form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ cancel after 1000 ]", &update) == FR_OK);
+  CHECK("compile cancel after apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile cancel after runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("compile cancel after cleared binding",
+        entry->kind == FR_EVENT_KIND_NONE);
+}
 #endif
 
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
@@ -5257,6 +5324,44 @@ static void test_parse(void) {
                 FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_EVENT_REGISTER &&
             parsed.exprs[expr_id].int_value == 4);
+  CHECK("parse cancel pin",
+        fr_parse_line("boot is fn [ cancel 0 ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_CANCEL &&
+            value->int_value == FR_EVENT_KIND_GPIO_CHANGES &&
+            value->child_count == 1 &&
+            parsed.exprs[value->children[0]].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[value->children[0]].int_value == 0);
+  CHECK("parse cancel every",
+        fr_parse_line("boot is fn [ cancel every 50 ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_CANCEL &&
+            value->int_value == FR_EVENT_KIND_EVERY &&
+            value->child_count == 1 &&
+            parsed.exprs[value->children[0]].int_value == 50);
+  CHECK("parse cancel after",
+        fr_parse_line("boot is fn [ cancel after 1000 ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_CANCEL &&
+            value->int_value == FR_EVENT_KIND_AFTER &&
+            value->child_count == 1 &&
+            parsed.exprs[value->children[0]].int_value == 1000);
+  CHECK("parse cancel top-level expression",
+        fr_parse_expression_line("cancel 0", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_EVENT_CANCEL &&
+            parsed.exprs[expr_id].int_value == FR_EVENT_KIND_GPIO_CHANGES);
+  CHECK("parse cancel rejects missing source",
+        fr_parse_line("boot is fn [ cancel ]", &parsed) == FR_ERR_INVALID);
 #if FR_TAGGED_INT_MAX >= 115200
   CHECK("parse roomier int body",
         fr_parse_line("boot is fn [ 115200 ]", &parsed) == FR_OK &&
@@ -10024,6 +10129,7 @@ int main(void) {
 #if FR_FEATURE_COMPILER
   test_event_compile_on_form();
   test_event_compile_timer_forms();
+  test_event_compile_cancel_form();
 #endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   test_event_fire_event_native();

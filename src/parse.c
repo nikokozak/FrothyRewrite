@@ -916,6 +916,33 @@ static fr_err_t fr_parse_on(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   return fr_parse_add_expr(parser, reg, out_id);
 }
 
+/* `cancel <pin-expr>` removes a GPIO binding by pin; `cancel every <ms-expr>`
+ * and `cancel after <ms-expr>` remove timer bindings by (kind, ms). int_value
+ * carries the matching fr_event_kind_t. The runtime matcher checks only "is
+ * GPIO + same source" for GPIO cancels, so any GPIO kind works as the
+ * sentinel; FR_EVENT_KIND_GPIO_CHANGES reads as "any edge on this pin." */
+static fr_err_t fr_parse_cancel(fr_parser_t *parser,
+                                fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_t reg = {.kind = FR_PARSE_EXPR_EVENT_CANCEL};
+
+  FR_TRY(fr_parse_advance(parser));
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "every")) {
+    reg.int_value = FR_EVENT_KIND_EVERY;
+    FR_TRY(fr_parse_advance(parser));
+  } else if (parser->token.kind == FR_TOKEN_NAME &&
+             fr_parse_span_equals(parser->token.span, "after")) {
+    reg.int_value = FR_EVENT_KIND_AFTER;
+    FR_TRY(fr_parse_advance(parser));
+  } else {
+    reg.int_value = FR_EVENT_KIND_GPIO_CHANGES;
+  }
+  FR_TRY(fr_parse_expression(parser, &reg.children[0]));
+  reg.child = reg.children[0];
+  reg.child_count = 1;
+  return fr_parse_add_expr(parser, reg, out_id);
+}
+
 static bool fr_parse_compare_token_kind(fr_token_kind_t kind,
                                         fr_parse_expr_kind_t *out_expr_kind) {
   switch (kind) {
@@ -1092,6 +1119,9 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     if (fr_parse_span_equals(parser->token.span, "every") ||
         fr_parse_span_equals(parser->token.span, "after")) {
       return fr_parse_timer_event(parser, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "cancel")) {
+      return fr_parse_cancel(parser, out_id);
     }
     if (fr_parse_span_equals(parser->token.span, "cells")) {
 #if !FR_FEATURE_CELLS

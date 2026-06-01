@@ -1075,6 +1075,16 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_EVENT_REGISTER:
     return fr_compile_emit_event_register(ctx, parsed, expr, instruction_bytes,
                                           offset);
+  case FR_PARSE_EXPR_EVENT_CANCEL:
+    if (expr->child_count != 1) {
+      return FR_ERR_INVALID;
+    }
+    FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, expr->int_value));
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
+                                instruction_bytes, offset));
+    return fr_compile_emit_slot_op(instruction_bytes, offset,
+                                   FR_OP_CALL_NATIVE_SLOT,
+                                   FR_SLOT_EVENT_CANCEL);
   default:
     return FR_ERR_UNSUPPORTED;
   }

@@ -1010,6 +1010,25 @@ static fr_err_t fr_native_event_register(fr_runtime_t *runtime,
   return FR_OK;
 }
 
+static fr_err_t fr_native_event_cancel(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  fr_int_t kind_int = 0;
+  uint16_t source = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 0, &kind_int));
+  if (kind_int < FR_EVENT_KIND_GPIO_RISING || kind_int > FR_EVENT_KIND_AFTER) {
+    return FR_ERR_DOMAIN;
+  }
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &source));
+  FR_TRY(fr_event_cancel(runtime, (fr_event_kind_t)kind_int, source));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
 static fr_err_t fr_native_fire_event_view_text(const fr_runtime_t *runtime,
                                                fr_tagged_t arg,
@@ -1241,6 +1260,17 @@ static const fr_native_signature_t fr_native_event_register_signature = {
     .arg_count = 4,
     .result = FR_NATIVE_VALUE_NIL,
     .help = "register an event binding from compiled on/every/after",
+};
+
+static const fr_native_param_t fr_native_event_cancel_params[] = {
+    {"kind", FR_NATIVE_VALUE_INT},
+    {"source", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_event_cancel_signature = {
+    .params = fr_native_event_cancel_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "cancel an event binding from compiled cancel",
 };
 
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
@@ -2102,6 +2132,18 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 4,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_event_register_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_EVENT_CANCEL,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "frothy.event-cancel",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_event_cancel,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_event_cancel_signature,
 #endif
     },
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
