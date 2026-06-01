@@ -1137,6 +1137,7 @@ void fr_platform_storage_debug_reset(void) {
 static QueueHandle_t fr_esp_event_queue;
 static volatile uint32_t fr_esp_event_overflow;
 static bool fr_esp_isr_service_installed;
+static esp_timer_handle_t fr_esp_event_timer_handles[FR_EVENT_BINDING_COUNT];
 
 static uint32_t fr_esp_event_millis_now(void) {
   return (uint32_t)((esp_timer_get_time() / 1000) % FR_ESP_MILLIS_WRAP);
@@ -1177,6 +1178,21 @@ static void fr_esp_event_gpio_isr(void *arg) {
     fr_esp_event_overflow++;
   }
   portYIELD_FROM_ISR(woken);
+}
+
+/* esp_timer dispatches this on the timer task, not in ISR context, so the
+ * non-FromISR queue send is correct. Same small-shape contract as the GPIO
+ * ISR: no allocation, no logging, no Frothy code. */
+static void fr_esp_event_timer_callback(void *arg) {
+  uintptr_t packed = (uintptr_t)arg;
+  fr_event_candidate_t candidate = {
+      .binding_index = (uint16_t)(packed & 0xFFFFu),
+      .generation = (uint16_t)((packed >> 16) & 0xFFFFu),
+      .timestamp_ms = fr_esp_event_millis_now(),
+  };
+  if (xQueueSend(fr_esp_event_queue, &candidate, 0) != pdTRUE) {
+    fr_esp_event_overflow++;
+  }
 }
 
 fr_err_t fr_platform_event_gpio_install(fr_event_kind_t kind, uint16_t pin,
@@ -1223,24 +1239,94 @@ fr_err_t fr_platform_event_gpio_install(fr_event_kind_t kind, uint16_t pin,
 }
 
 fr_err_t fr_platform_event_gpio_remove(uint16_t pin) {
-  (void)gpio_set_intr_type((gpio_num_t)pin, GPIO_INTR_DISABLE);
-  (void)gpio_isr_handler_remove((gpio_num_t)pin);
+  /* Report the first failure so the runtime sees a pin that may stay armed
+   * or keep a stale handler rather than a clean clear. */
+  esp_err_t disable_err = gpio_set_intr_type((gpio_num_t)pin, GPIO_INTR_DISABLE);
+  esp_err_t remove_err = gpio_isr_handler_remove((gpio_num_t)pin);
+  if (disable_err != ESP_OK || remove_err != ESP_OK) {
+    return FR_ERR_INVALID;
+  }
   return FR_OK;
 }
 
 fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
                                          uint16_t binding_index,
                                          uint16_t generation) {
-  (void)kind;
-  (void)ms;
-  (void)binding_index;
-  (void)generation;
-  return FR_ERR_UNSUPPORTED;
+  esp_timer_create_args_t args;
+  esp_timer_handle_t new_handle;
+  esp_timer_handle_t old_handle;
+  void *packed_arg;
+  fr_err_t err;
+  esp_err_t start_err;
+
+  if (kind != FR_EVENT_KIND_EVERY && kind != FR_EVENT_KIND_AFTER) {
+    return FR_ERR_INVALID;
+  }
+  if (binding_index >= FR_EVENT_BINDING_COUNT) {
+    return FR_ERR_INVALID;
+  }
+
+  err = fr_esp_event_queue_ensure();
+  if (err != FR_OK) {
+    return err;
+  }
+
+  packed_arg = (void *)(((uintptr_t)generation << 16) |
+                        (uintptr_t)binding_index);
+  args.callback = fr_esp_event_timer_callback;
+  args.arg = packed_arg;
+  args.dispatch_method = ESP_TIMER_TASK;
+  args.name = "frothy.event";
+  args.skip_unhandled_events = false;
+  if (esp_timer_create(&args, &new_handle) != ESP_OK) {
+    return FR_ERR_CAPACITY;
+  }
+  if (kind == FR_EVENT_KIND_EVERY) {
+    start_err = esp_timer_start_periodic(new_handle, (uint64_t)ms * 1000u);
+  } else {
+    start_err = esp_timer_start_once(new_handle, (uint64_t)ms * 1000u);
+  }
+  if (start_err != ESP_OK) {
+    (void)esp_timer_delete(new_handle);
+    return FR_ERR_INVALID;
+  }
+
+  /* Stage the replacement: only drop the old handle once the new one is live.
+   * Stale callbacks that fire before stop completes are filtered by generation
+   * at the runtime layer. */
+  old_handle = fr_esp_event_timer_handles[binding_index];
+  if (old_handle != NULL) {
+    (void)esp_timer_stop(old_handle);
+    (void)esp_timer_delete(old_handle);
+  }
+  fr_esp_event_timer_handles[binding_index] = new_handle;
+  return FR_OK;
 }
 
 fr_err_t fr_platform_event_timer_remove(uint16_t binding_index) {
-  (void)binding_index;
-  return FR_ERR_UNSUPPORTED;
+  esp_timer_handle_t handle;
+  esp_err_t stop_err;
+  esp_err_t delete_err;
+
+  if (binding_index >= FR_EVENT_BINDING_COUNT) {
+    return FR_ERR_INVALID;
+  }
+  handle = fr_esp_event_timer_handles[binding_index];
+  if (handle == NULL) {
+    return FR_OK;
+  }
+  /* INVALID_STATE from stop is benign for an already-expired one-shot;
+   * delete still has to run to release the slot. */
+  stop_err = esp_timer_stop(handle);
+  delete_err = esp_timer_delete(handle);
+  fr_esp_event_timer_handles[binding_index] = NULL;
+  if (stop_err != ESP_OK && stop_err != ESP_ERR_INVALID_STATE) {
+    return FR_ERR_INVALID;
+  }
+  if (delete_err != ESP_OK) {
+    return FR_ERR_INVALID;
+  }
+  return FR_OK;
 }
 
 fr_err_t fr_platform_event_drain(fr_event_candidate_t *out_events,
