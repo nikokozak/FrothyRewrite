@@ -3684,6 +3684,45 @@ static void test_event_fire_event_native(void) {
 }
 #endif
 
+#if FR_FEATURE_COMPILER && FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT &&       \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+static void test_event_compiled_body_fires(void) {
+  fr_runtime_t runtime;
+  fr_tagged_t boot_result = 0;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  fr_slot_id_t counter_slot = 0;
+  char out[64];
+
+  CHECK("compiled body fires base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compiled body fires defines counter",
+        fr_repl_eval_line(&runtime, "counter is 0", out, sizeof(out)) ==
+            FR_OK);
+  CHECK("compiled body fires defines boot",
+        fr_repl_eval_line(
+            &runtime,
+            "boot is fn [ on 0 rising [ set counter to counter + 1 ] ]",
+            out, sizeof(out)) == FR_OK);
+  CHECK("compiled body fires resolves counter slot",
+        fr_slot_id_for_name(&runtime, "counter", &counter_slot) == FR_OK);
+  CHECK("compiled body fires runs boot",
+        fr_vm_run_boot(&runtime, &boot_result) == FR_OK);
+  CHECK("compiled body fires counter starts at zero",
+        fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 0);
+  CHECK("compiled body fires the event",
+        fr_repl_eval_line(&runtime,
+                          "frothy.fire-event: \"on\", 0, \"rising\"", out,
+                          sizeof(out)) == FR_OK);
+  CHECK("compiled body fires incremented counter",
+        fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+}
+#endif
+
 static void test_code(void) {
   fr_runtime_t runtime;
   fr_instruction_stream_t view;
@@ -9366,6 +9405,10 @@ int main(void) {
 #endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   test_event_fire_event_native();
+#endif
+#if FR_FEATURE_COMPILER && FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT &&       \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  test_event_compiled_body_fires();
 #endif
   test_code();
   test_image();
