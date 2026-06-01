@@ -1260,6 +1260,8 @@ fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
   fr_err_t err;
   esp_err_t start_err;
   esp_err_t old_stop_err;
+  esp_err_t new_stop_err;
+  esp_err_t new_delete_err;
 
   if (kind != FR_EVENT_KIND_EVERY && kind != FR_EVENT_KIND_AFTER) {
     return FR_ERR_INVALID;
@@ -1297,16 +1299,24 @@ fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
    * once the old handle is fully released. If stop or delete fails on the old
    * handle, keep the slot pointing at old_handle so the platform matches the
    * runtime, which leaves the previous binding installed on install failure
-   * (src/event.c:88-103). Release the new handle best-effort; if that leaks,
-   * stale callbacks the leaked timer posts are filtered by generation at the
-   * runtime layer. */
+   * (src/event.c:88-103). Release the new handle and check both calls:
+   * INVALID_STATE from stop is the already-expired one-shot case; any other
+   * non-OK from stop, or a non-OK from delete, leaks the new handle. The
+   * leak is unreachable from the runtime, so candidates the new handle posts
+   * are filtered by generation; surface the leak to the caller as
+   * FR_ERR_CAPACITY so a clean rollback and a leaking rollback don't return
+   * the same code. */
   old_handle = fr_esp_event_timer_handles[binding_index];
   if (old_handle != NULL) {
     old_stop_err = esp_timer_stop(old_handle);
     if ((old_stop_err != ESP_OK && old_stop_err != ESP_ERR_INVALID_STATE) ||
         esp_timer_delete(old_handle) != ESP_OK) {
-      (void)esp_timer_stop(new_handle);
-      (void)esp_timer_delete(new_handle);
+      new_stop_err = esp_timer_stop(new_handle);
+      new_delete_err = esp_timer_delete(new_handle);
+      if ((new_stop_err != ESP_OK && new_stop_err != ESP_ERR_INVALID_STATE) ||
+          new_delete_err != ESP_OK) {
+        return FR_ERR_CAPACITY;
+      }
       return FR_ERR_INVALID;
     }
   }
