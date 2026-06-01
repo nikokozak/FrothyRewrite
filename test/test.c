@@ -1,5 +1,6 @@
 #include "froth.h"
 #include "crc.h"
+#include "event.h"
 #if FR_FEATURE_PERSISTENCE
 #include "persist_payload.h"
 #endif
@@ -93,6 +94,17 @@ static int failures = 0;
 #define FR_TEST_TEXT_SLOT_COUNT 0
 #endif
 
+#define FR_TEST_EVENT_REGISTER_WORDS " frothy.event-register frothy.event-cancel"
+#define FR_TEST_EVENT_REGISTER_SLOT_COUNT 2
+
+#if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
+#define FR_TEST_EVENT_TEST_WORDS " frothy.fire-event"
+#define FR_TEST_EVENT_TEST_SLOT_COUNT 1
+#else
+#define FR_TEST_EVENT_TEST_WORDS ""
+#define FR_TEST_EVENT_TEST_SLOT_COUNT 0
+#endif
+
 enum {
   FR_TEST_PERSIST_RECORD_BIND = 2,
   FR_TEST_PERSIST_RECORD_NAME = 3,
@@ -111,43 +123,57 @@ enum {
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
   "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS "\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
   "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
   "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led myblink\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (13 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
-   FR_TEST_TEXT_SLOT_COUNT)
+   FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
+   FR_TEST_EVENT_TEST_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS "\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_SOURCE_WORDS " led myblink\nok\n"
+          FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (10 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
-   FR_TEST_TEXT_SLOT_COUNT)
+   FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
+   FR_TEST_EVENT_TEST_SLOT_COUNT)
 #endif
 
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
@@ -270,7 +296,8 @@ static void test_base_def_contract(void) {
       (FR_FEATURE_PERSISTENCE ? 10 : 7) + (FR_FEATURE_UART ? 6 : 0) +
       (FR_FEATURE_RANDOM ? 3 : 0) + (FR_FEATURE_PWM ? 3 : 0) +
       (FR_FEATURE_I2C ? 4 : 0) + (FR_FEATURE_MATH ? 6 : 0) +
-      FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT;
+      FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT +
+      FR_TEST_EVENT_REGISTER_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT;
   uint16_t global_index = 0;
   uint16_t native_count = 0;
   fr_slot_id_t highest_slot_id = 0;
@@ -288,14 +315,35 @@ static void test_base_def_contract(void) {
 #if FR_FEATURE_TEXT
   CHECK("text slot ids follow pad block",
         FR_SLOT_TEXT_LENGTH == FR_SLOT_AFTER_PAD);
-  CHECK("board local slot ids follow text ids",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_TEXT_FROM_INT + 1);
-#elif FR_FEATURE_PAD
-  CHECK("board local slot ids follow pad ids",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_TEST_PAD_LAST_SLOT + 1);
+  CHECK("event register slot follows text ids",
+        FR_SLOT_EVENT_REGISTER == FR_SLOT_TEXT_FROM_INT + 1);
+#if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
+  CHECK("event cancel slot follows event register slot",
+        FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("fire-event slot follows event cancel slot",
+        FR_SLOT_FIRE_EVENT == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board local slot ids follow fire-event slot",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_FIRE_EVENT + 1);
 #else
-  CHECK("board local slot ids follow math block",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_AFTER_MATH);
+  CHECK("event cancel slot follows event register slot",
+        FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("board local slot ids follow event cancel slot",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_CANCEL + 1);
+#endif
+#elif FR_FEATURE_PAD
+  CHECK("event register slot follows pad ids",
+        FR_SLOT_EVENT_REGISTER == FR_TEST_PAD_LAST_SLOT + 1);
+  CHECK("event cancel slot follows event register slot",
+        FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("board local slot ids follow event cancel slot",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_CANCEL + 1);
+#else
+  CHECK("event register slot follows math block",
+        FR_SLOT_EVENT_REGISTER == FR_SLOT_AFTER_MATH);
+  CHECK("event cancel slot follows event register slot",
+        FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
+  CHECK("board local slot ids follow event cancel slot",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_CANCEL + 1);
 #endif
 
   for (uint16_t layer_index = 0; layer_index < fr_base_def_layer_count();
@@ -447,6 +495,56 @@ static void test_persist_cross_width_header_rejection(void) {
   CHECK("restore rejects header with opposite-width profile hash",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_ERR_CORRUPT);
+}
+
+static void test_persist_code_id_round_trip(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t inner_id = 0;
+  fr_code_object_id_t outer_id = 0;
+  fr_code_object_id_t restored_outer_id = 0;
+  fr_code_object_id_t restored_inner_id = 0;
+  fr_tagged_t outer_tagged = 0;
+  fr_tagged_t slot_value = 0;
+  fr_tagged_t result = 0;
+  fr_int_t decoded = 0;
+  uint8_t inner_bytes[] = {0x00, FR_INSTRUCTION_MIN_HEADER_SIZE,
+                           FR_TEST_PUSH_INT(42), FR_OP_RETURN};
+  uint8_t outer_bytes[] = {0x00, FR_INSTRUCTION_MIN_HEADER_SIZE,
+                           FR_OP_PUSH_CODE_ID, 0x00, 0x00, FR_OP_RETURN};
+  const size_t outer_code_id_operand = FR_INSTRUCTION_MIN_HEADER_SIZE + 1u;
+
+  fr_platform_storage_debug_reset();
+  CHECK("code-id round-trip base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("code-id round-trip install inner",
+        fr_instruction_stream_init(&view, inner_bytes,
+                                   (uint16_t)sizeof(inner_bytes)) == FR_OK &&
+            fr_code_install(&runtime, &view, NULL, 0, &inner_id) == FR_OK);
+  write_u16_little_endian(&outer_bytes[outer_code_id_operand], inner_id);
+  CHECK("code-id round-trip install outer",
+        fr_instruction_stream_init(&view, outer_bytes,
+                                   (uint16_t)sizeof(outer_bytes)) == FR_OK &&
+            fr_code_install(&runtime, &view, NULL, 0, &outer_id) == FR_OK);
+  CHECK("code-id round-trip stage slot",
+        fr_tagged_encode_code_object_id(outer_id, &outer_tagged) == FR_OK &&
+            fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, outer_tagged) ==
+                FR_OK);
+  CHECK("code-id round-trip save", fr_persist_save(&runtime) == FR_OK);
+  CHECK("code-id round-trip restore",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK);
+  CHECK("code-id round-trip slot decode",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_code_object_id(slot_value, &restored_outer_id) ==
+                FR_OK);
+  CHECK("code-id round-trip outer pushes restored inner id",
+        fr_vm_run_code_object(&runtime, restored_outer_id, &result) == FR_OK &&
+            fr_tagged_decode_int(result, &decoded) == FR_OK);
+  restored_inner_id = (fr_code_object_id_t)decoded;
+  CHECK("code-id round-trip restored inner returns 42",
+        fr_vm_run_code_object(&runtime, restored_inner_id, &result) == FR_OK &&
+            fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 42);
 }
 
 #if FR_FEATURE_SOURCE_BASE
@@ -3211,6 +3309,1099 @@ static void test_natives(void) {
             FR_ERR_INVALID);
 }
 
+static void test_event_table(void) {
+  fr_runtime_t runtime;
+  fr_event_binding_t *slot;
+
+  CHECK("runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("event capacity is sixteen", FR_EVENT_BINDING_COUNT == 16);
+  CHECK("overflow starts at zero", runtime.events.overflow_count == 0);
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    CHECK("entry kind starts none",
+          runtime.events.entries[i].kind == FR_EVENT_KIND_NONE);
+    CHECK("entry generation starts zero",
+          runtime.events.entries[i].generation == 0);
+    CHECK("entry pending starts false",
+          runtime.events.entries[i].pending == false);
+    CHECK("entry timestamps start zero",
+          runtime.events.entries[i].registered_at_ms == 0 &&
+              runtime.events.entries[i].last_fire_ms == 0);
+  }
+
+  slot = &runtime.events.entries[3];
+  slot->kind = FR_EVENT_KIND_GPIO_RISING;
+  slot->source = 5;
+  slot->debounce_ms = 30;
+  slot->generation = 42;
+  slot->body = 7;
+  slot->pending = true;
+  slot->registered_at_ms = 12345;
+  slot->last_fire_ms = 1000;
+  runtime.events.overflow_count = 11;
+
+  CHECK("entry round-trips fields",
+        slot->kind == FR_EVENT_KIND_GPIO_RISING && slot->source == 5 &&
+            slot->debounce_ms == 30 && slot->generation == 42 &&
+            slot->body == 7 && slot->pending == true &&
+            slot->registered_at_ms == 12345 && slot->last_fire_ms == 1000);
+  CHECK("overflow round-trips", runtime.events.overflow_count == 11);
+
+  CHECK("clear project clears bindings",
+        fr_runtime_clear_project(&runtime) == FR_OK);
+  CHECK("entry kind cleared", slot->kind == FR_EVENT_KIND_NONE);
+  CHECK("entry source cleared", slot->source == 0);
+  CHECK("entry debounce cleared", slot->debounce_ms == 0);
+  CHECK("entry generation cleared", slot->generation == 0);
+  CHECK("entry body cleared", slot->body == 0);
+  CHECK("entry pending cleared", slot->pending == false);
+  CHECK("entry timestamps cleared",
+        slot->registered_at_ms == 0 && slot->last_fire_ms == 0);
+  CHECK("overflow cleared", runtime.events.overflow_count == 0);
+}
+
+static void test_event_register_cancel(void) {
+  fr_runtime_t runtime;
+  fr_event_binding_t *entry;
+
+  CHECK("event runtime init", fr_runtime_init(&runtime) == FR_OK);
+
+  CHECK("register gpio rising",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 5, 30, 7) ==
+            FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("register fills kind", entry->kind == FR_EVENT_KIND_GPIO_RISING);
+  CHECK("register fills source", entry->source == 5);
+  CHECK("register fills debounce", entry->debounce_ms == 30);
+  CHECK("register fills body", entry->body == 7);
+  CHECK("register starts generation at one", entry->generation == 1);
+  CHECK("register pending false", entry->pending == false);
+  CHECK("register last fire zero", entry->last_fire_ms == 0);
+
+  CHECK("re-register same pin different edge",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_FALLING, 5, 0, 9) ==
+            FR_OK);
+  CHECK("re-register reuses slot zero",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_GPIO_FALLING);
+  CHECK("re-register bumps generation",
+        runtime.events.entries[0].generation == 2);
+  CHECK("re-register replaces body", runtime.events.entries[0].body == 9);
+  CHECK("re-register replaces debounce",
+        runtime.events.entries[0].debounce_ms == 0);
+
+  CHECK("register every takes next slot",
+        fr_event_register(&runtime, FR_EVENT_KIND_EVERY, 100, 0, 11) == FR_OK);
+  CHECK("every lands at slot one",
+        runtime.events.entries[1].kind == FR_EVENT_KIND_EVERY &&
+            runtime.events.entries[1].source == 100);
+
+  CHECK("register after same source as every",
+        fr_event_register(&runtime, FR_EVENT_KIND_AFTER, 100, 0, 13) == FR_OK);
+  CHECK("after takes a separate slot",
+        runtime.events.entries[2].kind == FR_EVENT_KIND_AFTER &&
+            runtime.events.entries[2].source == 100);
+  CHECK("every survives after registration",
+        runtime.events.entries[1].kind == FR_EVENT_KIND_EVERY);
+
+  CHECK("cancel gpio matches any edge on the pin",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_GPIO_CHANGES, 5) == FR_OK);
+  CHECK("cancel clears kind",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_NONE);
+  CHECK("cancel bumps generation",
+        runtime.events.entries[0].generation == 3);
+  CHECK("cancel clears source", runtime.events.entries[0].source == 0);
+  CHECK("cancel clears body", runtime.events.entries[0].body == 0);
+
+  CHECK("second cancel returns not found",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_GPIO_RISING, 5) ==
+            FR_ERR_NOT_FOUND);
+
+  CHECK("cancel every by exact kind",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_EVERY, 100) == FR_OK);
+  CHECK("every slot cleared",
+        runtime.events.entries[1].kind == FR_EVENT_KIND_NONE);
+  CHECK("after slot still present",
+        runtime.events.entries[2].kind == FR_EVENT_KIND_AFTER);
+
+  CHECK("cancel after by exact kind",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_AFTER, 100) == FR_OK);
+  CHECK("after slot cleared",
+        runtime.events.entries[2].kind == FR_EVENT_KIND_NONE);
+
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    CHECK("fill all sixteen slots",
+          fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING,
+                            (uint16_t)(20 + i), 0, 1) == FR_OK);
+  }
+  CHECK("seventeenth distinct source returns capacity",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 99, 0, 1) ==
+            FR_ERR_CAPACITY);
+  CHECK("re-registration under capacity still succeeds",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_FALLING, 20, 0, 1) ==
+            FR_OK);
+
+  CHECK("clear project at capacity",
+        fr_runtime_clear_project(&runtime) == FR_OK);
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    CHECK("clear leaves no live binding",
+          runtime.events.entries[i].kind == FR_EVENT_KIND_NONE);
+  }
+}
+
+static void test_event_drain_dispatch(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *gpio_entry = NULL;
+  fr_event_binding_t *after_entry = NULL;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  /* Body: push 42, store to FR_TEST_FIRST_USER_SLOT, return. The slot
+   * operand sits one byte after the FR_OP_STORE_SLOT op, at offset
+   * header + push_int_size + 1. */
+  uint8_t body_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(42),
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  const size_t store_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + FR_INSTRUCTION_PUSH_INT_SIZE + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+
+  CHECK("dispatch runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("dispatch view",
+        fr_instruction_stream_init(&view, body_bytes, sizeof(body_bytes)) ==
+            FR_OK);
+  CHECK("install body code",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+
+  CHECK("register gpio rising",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+  gpio_entry = &runtime.events.entries[0];
+
+  /* Stale generation drops without running the body. */
+  CHECK("post stale generation",
+        fr_platform_event_post_test_candidate(0, 0, 50) == FR_OK);
+  CHECK("drain stale", fr_event_drain(&runtime) == FR_OK);
+  CHECK("dispatch stale", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("stale leaves last fire zero", gpio_entry->last_fire_ms == 0);
+  CHECK("stale leaves slot unset",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) != FR_OK);
+
+  /* Fresh candidate fires the body. */
+  CHECK("post fresh candidate",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 50) ==
+            FR_OK);
+  CHECK("drain fresh", fr_event_drain(&runtime) == FR_OK);
+  CHECK("dispatch fresh", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("body wrote slot",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 42);
+  CHECK("last fire stamped", gpio_entry->last_fire_ms == 50);
+  CHECK("pending cleared after run", gpio_entry->pending == false);
+  CHECK("binding still registered after fire",
+        gpio_entry->kind == FR_EVENT_KIND_GPIO_RISING);
+
+  /* AFTER binding is removed before its body runs. */
+  CHECK("register after",
+        fr_event_register(&runtime, FR_EVENT_KIND_AFTER, 1000, 0, body_id) ==
+            FR_OK);
+  after_entry = &runtime.events.entries[1];
+  CHECK("after lands at slot one",
+        after_entry->kind == FR_EVENT_KIND_AFTER &&
+            after_entry->generation == 1);
+  CHECK("post after candidate",
+        fr_platform_event_post_test_candidate(1, after_entry->generation,
+                                              200) == FR_OK);
+  CHECK("drain after", fr_event_drain(&runtime) == FR_OK);
+  CHECK("dispatch after", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("after binding cleared on fire",
+        after_entry->kind == FR_EVENT_KIND_NONE);
+  CHECK("after generation bumped on fire", after_entry->generation == 2);
+  CHECK("after slot reverted", after_entry->source == 0 &&
+                                   after_entry->body == 0 &&
+                                   after_entry->last_fire_ms == 0);
+}
+
+static void test_event_coalescing(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *gpio_entry = NULL;
+  fr_tagged_t slot_value = 0;
+  fr_tagged_t zero = 0;
+  fr_int_t decoded = 0;
+  /* Body: LOAD_SLOT counter, PUSH_INT 1, ADD_INT, STORE_SLOT counter, RETURN.
+   * Each slot operand sits one byte after its op. */
+  uint8_t body_bytes[] = {0x00, 0x00,
+                          FR_OP_LOAD_SLOT, 0x00, 0x00,
+                          FR_TEST_PUSH_INT(1),
+                          FR_OP_ADD_INT,
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  const size_t load_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + 1u;
+  const size_t store_operand_offset =
+      load_operand_offset + 2u + FR_INSTRUCTION_PUSH_INT_SIZE + 1u + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[load_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+
+  CHECK("coalesce runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("coalesce encode zero", fr_tagged_encode_int(0, &zero) == FR_OK);
+  CHECK("coalesce seed counter",
+        fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, zero) == FR_OK);
+  CHECK("coalesce view",
+        fr_instruction_stream_init(&view, body_bytes, sizeof(body_bytes)) ==
+            FR_OK);
+  CHECK("coalesce install body",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+  CHECK("coalesce register",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+  gpio_entry = &runtime.events.entries[0];
+
+  /* Two queued candidates collapse to one pending bit and one body run. */
+  CHECK("coalesce post first",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 50) ==
+            FR_OK);
+  CHECK("coalesce post second",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 60) ==
+            FR_OK);
+  CHECK("coalesce drain", fr_event_drain(&runtime) == FR_OK);
+  CHECK("coalesce pending after drain", gpio_entry->pending == true);
+  CHECK("coalesce dispatch", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("coalesce counter is one",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+  CHECK("coalesce pending cleared", gpio_entry->pending == false);
+}
+
+/* Drain accepts the first candidate, stamps last_fire_ms, and drops a second
+ * arriving inside the window. A later candidate past the window fires again. */
+static void test_event_debounce_drops_within_window(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *gpio_entry = NULL;
+  fr_tagged_t slot_value = 0;
+  fr_tagged_t zero = 0;
+  fr_int_t decoded = 0;
+  uint8_t body_bytes[] = {0x00, 0x00,
+                          FR_OP_LOAD_SLOT, 0x00, 0x00,
+                          FR_TEST_PUSH_INT(1),
+                          FR_OP_ADD_INT,
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  const size_t load_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + 1u;
+  const size_t store_operand_offset =
+      load_operand_offset + 2u + FR_INSTRUCTION_PUSH_INT_SIZE + 1u + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[load_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+
+  CHECK("debounce runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("debounce encode zero", fr_tagged_encode_int(0, &zero) == FR_OK);
+  CHECK("debounce seed counter",
+        fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, zero) == FR_OK);
+  CHECK("debounce view",
+        fr_instruction_stream_init(&view, body_bytes, sizeof(body_bytes)) ==
+            FR_OK);
+  CHECK("debounce install body",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+  CHECK("debounce register with 30ms window",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 30,
+                          body_id) == FR_OK);
+  gpio_entry = &runtime.events.entries[0];
+
+  CHECK("debounce post first at t=50",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 50) ==
+            FR_OK);
+  CHECK("debounce drain first", fr_event_drain(&runtime) == FR_OK);
+  CHECK("debounce dispatch first", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("debounce counter is one after first",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+  CHECK("debounce last_fire stamped at 50", gpio_entry->last_fire_ms == 50);
+
+  /* 20ms after the first fire sits inside the 30ms window; drop it. */
+  CHECK("debounce post second at t=70 (within window)",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 70) ==
+            FR_OK);
+  CHECK("debounce drain within window", fr_event_drain(&runtime) == FR_OK);
+  CHECK("debounce within-window leaves pending false",
+        gpio_entry->pending == false);
+  CHECK("debounce within-window leaves last_fire untouched",
+        gpio_entry->last_fire_ms == 50);
+  CHECK("debounce dispatch is a no-op", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("debounce counter still one",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+
+  /* 35ms after the first fire sits past the window; accept it. */
+  CHECK("debounce post third at t=85 (past window)",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 85) ==
+            FR_OK);
+  CHECK("debounce drain past window", fr_event_drain(&runtime) == FR_OK);
+  CHECK("debounce past-window pends", gpio_entry->pending == true);
+  CHECK("debounce dispatch second", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("debounce counter is two",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 2);
+  CHECK("debounce last_fire stamped at 85", gpio_entry->last_fire_ms == 85);
+}
+
+/* A first accepted fire at t=0 must still arm the window. Without a separate
+ * has_fired flag, last_fire_ms = 0 would read as "never fired" and let a
+ * follow-up inside the window through. */
+static void test_event_debounce_first_fire_at_zero(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *gpio_entry = NULL;
+  fr_tagged_t slot_value = 0;
+  fr_tagged_t zero = 0;
+  fr_int_t decoded = 0;
+  uint8_t body_bytes[] = {0x00, 0x00,
+                          FR_OP_LOAD_SLOT, 0x00, 0x00,
+                          FR_TEST_PUSH_INT(1),
+                          FR_OP_ADD_INT,
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  const size_t load_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + 1u;
+  const size_t store_operand_offset =
+      load_operand_offset + 2u + FR_INSTRUCTION_PUSH_INT_SIZE + 1u + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[load_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+
+  CHECK("debounce-zero runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("debounce-zero encode zero", fr_tagged_encode_int(0, &zero) == FR_OK);
+  CHECK("debounce-zero seed counter",
+        fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, zero) == FR_OK);
+  CHECK("debounce-zero view",
+        fr_instruction_stream_init(&view, body_bytes, sizeof(body_bytes)) ==
+            FR_OK);
+  CHECK("debounce-zero install body",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+  CHECK("debounce-zero register with 30ms window",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 30,
+                          body_id) == FR_OK);
+  gpio_entry = &runtime.events.entries[0];
+  CHECK("debounce-zero has_fired starts false", gpio_entry->has_fired == false);
+
+  CHECK("debounce-zero post first at t=0",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 0) ==
+            FR_OK);
+  CHECK("debounce-zero drain first", fr_event_drain(&runtime) == FR_OK);
+  CHECK("debounce-zero has_fired set after first",
+        gpio_entry->has_fired == true);
+  CHECK("debounce-zero last_fire stamped at 0",
+        gpio_entry->last_fire_ms == 0);
+  CHECK("debounce-zero dispatch first", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("debounce-zero counter is one after first",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+
+  /* t=20 sits 20ms past last_fire_ms = 0, inside the 30ms window. */
+  CHECK("debounce-zero post second at t=20 (within window)",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 20) ==
+            FR_OK);
+  CHECK("debounce-zero drain within window", fr_event_drain(&runtime) == FR_OK);
+  CHECK("debounce-zero within-window leaves pending false",
+        gpio_entry->pending == false);
+  CHECK("debounce-zero within-window leaves last_fire untouched",
+        gpio_entry->last_fire_ms == 0);
+  CHECK("debounce-zero dispatch is a no-op",
+        fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("debounce-zero counter still one",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+
+  /* t=35 is past the window; accept it. */
+  CHECK("debounce-zero post third at t=35 (past window)",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 35) ==
+            FR_OK);
+  CHECK("debounce-zero drain past window", fr_event_drain(&runtime) == FR_OK);
+  CHECK("debounce-zero past-window pends", gpio_entry->pending == true);
+  CHECK("debounce-zero dispatch second", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("debounce-zero counter is two",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 2);
+  CHECK("debounce-zero last_fire stamped at 35",
+        gpio_entry->last_fire_ms == 35);
+}
+
+/* Posting past the host queue cap drops the candidate and bumps the platform
+ * overflow counter; the next drain rolls the delta into the runtime field and
+ * resets the platform side. Two overflowed posts accumulate as delta two. */
+static void test_event_overflow_counter(void) {
+  fr_runtime_t runtime;
+  fr_event_binding_t *gpio_entry = NULL;
+
+  CHECK("overflow runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("overflow register",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, 1) ==
+            FR_OK);
+  gpio_entry = &runtime.events.entries[0];
+  CHECK("overflow starts zero", runtime.events.overflow_count == 0);
+
+  /* Host queue capacity matches FR_EVENT_BINDING_COUNT; sixteen posts fit. */
+  for (uint8_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    CHECK("overflow post fits",
+          fr_platform_event_post_test_candidate(
+              0, gpio_entry->generation, (uint32_t)i) == FR_OK);
+  }
+  CHECK("overflow seventeenth rejects",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 99) ==
+            FR_ERR_CAPACITY);
+  CHECK("overflow eighteenth rejects",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 100) ==
+            FR_ERR_CAPACITY);
+
+  CHECK("overflow drain", fr_event_drain(&runtime) == FR_OK);
+  CHECK("overflow delta lands in runtime",
+        runtime.events.overflow_count == 2);
+  CHECK("overflow drained candidates set pending",
+        gpio_entry->pending == true);
+
+  /* Platform side reset: a fresh post fits and the next drain adds no delta. */
+  gpio_entry->pending = false;
+  CHECK("overflow fresh post fits",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 200) ==
+            FR_OK);
+  CHECK("overflow second drain", fr_event_drain(&runtime) == FR_OK);
+  CHECK("overflow stays at two",
+        runtime.events.overflow_count == 2);
+}
+
+static void test_event_register_native(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t body_view;
+  fr_instruction_stream_t call_view;
+  fr_code_object_id_t body_id = 0;
+  fr_tagged_t result = 0;
+  const fr_event_binding_t *entry = NULL;
+  uint8_t body_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(42),
+                          FR_OP_STORE_SLOT, 0x00, 0x00, FR_OP_RETURN};
+  uint8_t register_bytes[] = {
+      0x00, 0x00,
+      FR_TEST_PUSH_INT(1),    /* kind = GPIO_RISING */
+      FR_TEST_PUSH_INT(0),    /* source = pin 0 */
+      FR_TEST_PUSH_INT(0),    /* debounce = 0 */
+      FR_TEST_PUSH_INT(0),    /* body = code id, patched after install */
+      FR_OP_CALL_NATIVE_SLOT, 0x00, 0x00,
+      FR_OP_RETURN};
+  const size_t store_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + FR_INSTRUCTION_PUSH_INT_SIZE + 1u;
+  const size_t body_int_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + FR_INSTRUCTION_PUSH_INT_SIZE * 3u + 1u;
+  const size_t call_slot_offset =
+      body_int_offset + FR_INSTRUCTION_INT_OPERAND_BYTES + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+  write_instruction_header(register_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+
+  CHECK("event register native base install",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("event register native body view",
+        fr_instruction_stream_init(&body_view, body_bytes,
+                                   sizeof(body_bytes)) == FR_OK);
+  CHECK("event register native body installs",
+        fr_code_install(&runtime, &body_view, NULL, 0, &body_id) == FR_OK);
+
+  /* Low 16 bits carry the code id; higher operand bytes (on 32-bit profiles)
+     stay zero from the FR_TEST_PUSH_INT(0) placeholder. */
+  write_u16_little_endian(&register_bytes[body_int_offset], (uint16_t)body_id);
+  write_u16_little_endian(&register_bytes[call_slot_offset],
+                          FR_SLOT_EVENT_REGISTER);
+
+  CHECK("event register native runs",
+        fr_instruction_stream_init(&call_view, register_bytes,
+                                   sizeof(register_bytes)) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &call_view, &result) ==
+                FR_OK &&
+            fr_tagged_is_nil(result));
+
+  entry = &runtime.events.entries[0];
+  CHECK("event register native installed binding",
+        entry->kind == FR_EVENT_KIND_GPIO_RISING && entry->source == 0 &&
+            entry->debounce_ms == 0 && entry->body == body_id &&
+            entry->generation == 1 && !entry->pending);
+}
+
+#if FR_FEATURE_COMPILER && FR_FEATURE_EVENTS
+static void test_event_compile_on_form(void) {
+  fr_runtime_t runtime;
+  fr_compile_overlay_update_t update;
+  fr_tagged_t result = 0;
+  const fr_event_binding_t *entry = NULL;
+  fr_code_object_id_t expected_body_id = 0;
+
+  CHECK("compile on base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  expected_body_id = runtime.code.count + 1u;
+  CHECK("compile on form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ on 0 rising [ 1 ] ]", &update) == FR_OK);
+  CHECK("compile on emits two code objects",
+        update.overlay_update.code_object_count == 2);
+  CHECK("compile on apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile on runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK && fr_tagged_is_nil(result));
+  entry = &runtime.events.entries[0];
+  CHECK("compile on installed binding",
+        entry->kind == FR_EVENT_KIND_GPIO_RISING && entry->source == 0 &&
+            entry->debounce_ms == 0 && entry->body == expected_body_id &&
+            entry->generation == 1 && !entry->pending);
+
+  CHECK("compile on debounce base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compile on debounce form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ on 0 falling debounce 30 [ 1 ] ]",
+            &update) == FR_OK);
+  CHECK("compile on debounce apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile on debounce runs",
+        fr_vm_run_boot(&runtime, &result) == FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("compile on debounce binding",
+        entry->kind == FR_EVENT_KIND_GPIO_FALLING && entry->source == 0 &&
+            entry->debounce_ms == 30);
+
+  {
+    fr_instruction_stream_t body_view = {NULL, 0};
+    fr_instruction_header_t body_header = {0};
+
+    CHECK("compile on with here base image",
+          fr_base_image_install(&runtime) == FR_OK);
+    CHECK("compile on with here form",
+          fr_compile_overlay_update_for_runtime(
+              &runtime, "boot is fn [ on 0 rising [ here y is 7 ; y ] ]",
+              &update) == FR_OK);
+    CHECK("compile on with here apply",
+          fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+    CHECK("compile on with here runs",
+          fr_vm_run_boot(&runtime, &result) == FR_OK);
+    entry = &runtime.events.entries[0];
+    CHECK("compile on with here body view",
+          fr_code_get_instructions(&runtime, entry->body, &body_view) == FR_OK);
+    CHECK("compile on with here body header",
+          fr_instruction_read_header(&body_view, &body_header) == FR_OK &&
+              body_header.header_size == FR_INSTRUCTION_LOCALS_HEADER_SIZE &&
+              body_header.arity == 0 && body_header.local_count == 1);
+  }
+}
+
+static void test_event_compile_timer_forms(void) {
+  fr_runtime_t runtime;
+  fr_compile_overlay_update_t update;
+  fr_tagged_t result = 0;
+  const fr_event_binding_t *entry = NULL;
+  fr_code_object_id_t expected_body_id = 0;
+
+  CHECK("compile every base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  expected_body_id = runtime.code.count + 1u;
+  CHECK("compile every form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ every 500 [ 1 ] ]", &update) == FR_OK);
+  CHECK("compile every apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile every runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK && fr_tagged_is_nil(result));
+  entry = &runtime.events.entries[0];
+  CHECK("compile every installed binding",
+        entry->kind == FR_EVENT_KIND_EVERY && entry->source == 500 &&
+            entry->debounce_ms == 0 && entry->body == expected_body_id &&
+            entry->generation == 1 && !entry->pending);
+
+  CHECK("compile after base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  expected_body_id = runtime.code.count + 1u;
+  CHECK("compile after form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ after 1000 [ 1 ] ]", &update) == FR_OK);
+  CHECK("compile after apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile after runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("compile after installed binding",
+        entry->kind == FR_EVENT_KIND_AFTER && entry->source == 1000 &&
+            entry->debounce_ms == 0 && entry->body == expected_body_id &&
+            entry->generation == 1 && !entry->pending);
+}
+
+/* Compiles `cancel 0` and `cancel every 50` from `boot`. After boot runs, the
+ * earlier registration is gone: slot is empty and the kind matcher returns
+ * not-found for the same source. */
+static void test_event_compile_cancel_form(void) {
+  fr_runtime_t runtime;
+  fr_compile_overlay_update_t update;
+  fr_tagged_t result = 0;
+  const fr_event_binding_t *entry = NULL;
+
+  CHECK("compile cancel pin base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compile cancel pin seed registration",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, 1) ==
+            FR_OK);
+  CHECK("compile cancel pin form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ cancel 0 ]", &update) == FR_OK);
+  CHECK("compile cancel pin apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile cancel pin runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK && fr_tagged_is_nil(result));
+  entry = &runtime.events.entries[0];
+  CHECK("compile cancel pin cleared binding",
+        entry->kind == FR_EVENT_KIND_NONE);
+  CHECK("compile cancel pin second run returns not found",
+        fr_vm_run_boot(&runtime, &result) == FR_ERR_NOT_FOUND);
+
+  CHECK("compile cancel every base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compile cancel every seed registration",
+        fr_event_register(&runtime, FR_EVENT_KIND_EVERY, 50, 0, 1) == FR_OK);
+  CHECK("compile cancel every form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ cancel every 50 ]", &update) == FR_OK);
+  CHECK("compile cancel every apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile cancel every runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("compile cancel every cleared binding",
+        entry->kind == FR_EVENT_KIND_NONE);
+
+  CHECK("compile cancel after base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compile cancel after seed registration",
+        fr_event_register(&runtime, FR_EVENT_KIND_AFTER, 1000, 0, 1) == FR_OK);
+  CHECK("compile cancel after form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ cancel after 1000 ]", &update) == FR_OK);
+  CHECK("compile cancel after apply",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  CHECK("compile cancel after runs boot",
+        fr_vm_run_boot(&runtime, &result) == FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("compile cancel after cleared binding",
+        entry->kind == FR_EVENT_KIND_NONE);
+}
+#endif
+
+#if FR_FEATURE_COMPILER && !FR_FEATURE_EVENTS
+/* On a profile that does not carry the T11 event runtime, the four source
+ * forms must reject at compile with FR_ERR_UNSUPPORTED so the user sees
+ * `error: unsupported (9)` instead of a silently broken registration. */
+static void test_event_compile_rejects_when_disabled(void) {
+  fr_runtime_t runtime;
+  fr_compile_overlay_update_t update;
+
+  CHECK("event reject base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("event reject on form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ on 0 rising [ 1 ] ]", &update) ==
+            FR_ERR_UNSUPPORTED);
+  CHECK("event reject every form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ every 50 [ 1 ] ]", &update) ==
+            FR_ERR_UNSUPPORTED);
+  CHECK("event reject after form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ after 1000 [ 1 ] ]", &update) ==
+            FR_ERR_UNSUPPORTED);
+  CHECK("event reject cancel form",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "boot is fn [ cancel 0 ]", &update) ==
+            FR_ERR_UNSUPPORTED);
+}
+#endif
+
+#if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
+static void test_event_fire_event_native(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  char out[64];
+  uint8_t body_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(42),
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  const size_t store_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + FR_INSTRUCTION_PUSH_INT_SIZE + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+
+  CHECK("fire-event installs base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("fire-event view",
+        fr_instruction_stream_init(&view, body_bytes, sizeof(body_bytes)) ==
+            FR_OK);
+  CHECK("fire-event installs body",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+  CHECK("fire-event registers gpio rising binding",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+
+  CHECK("fire-event wrong edge returns not found",
+        fr_repl_eval_line(&runtime,
+                          "frothy.fire-event: \"on\", 0, \"falling\"", out,
+                          sizeof(out)) == FR_ERR_NOT_FOUND);
+  CHECK("fire-event rising fires the body",
+        fr_repl_eval_line(&runtime, "frothy.fire-event: \"on\", 0, \"rising\"",
+                          out, sizeof(out)) == FR_OK);
+  CHECK("fire-event body wrote the slot",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 42);
+}
+
+/* cancel removes the binding so frothy.fire-event for the same source returns
+ * not found and never runs the body. GPIO half cancels by pin; timer half
+ * cancels by (kind, ms). A second cancel on a missing source returns not
+ * found per spec §7. */
+static void test_event_cancel_blocks_fire_event(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_tagged_t slot_value = 0;
+  fr_tagged_t zero = 0;
+  fr_int_t decoded = 0;
+  char out[64];
+  uint8_t body_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(42),
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  const size_t store_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + FR_INSTRUCTION_PUSH_INT_SIZE + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+
+  CHECK("cancel base", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("cancel encode zero", fr_tagged_encode_int(0, &zero) == FR_OK);
+  CHECK("cancel seed slot",
+        fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, zero) == FR_OK);
+  CHECK("cancel body view",
+        fr_instruction_stream_init(&view, body_bytes, sizeof(body_bytes)) ==
+            FR_OK);
+  CHECK("cancel install body",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+
+  CHECK("cancel registers on 0 rising",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+  CHECK("cancel pin 0 returns ok",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_GPIO_RISING, 0) == FR_OK);
+  CHECK("cancel pin 0 again returns not found",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_GPIO_RISING, 0) ==
+            FR_ERR_NOT_FOUND);
+  CHECK("fire-event after gpio cancel returns not found",
+        fr_repl_eval_line(&runtime,
+                          "frothy.fire-event: \"on\", 0, \"rising\"", out,
+                          sizeof(out)) == FR_ERR_NOT_FOUND);
+  CHECK("gpio body did not run",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 0);
+
+  CHECK("cancel registers every 50",
+        fr_event_register(&runtime, FR_EVENT_KIND_EVERY, 50, 0, body_id) ==
+            FR_OK);
+  CHECK("cancel every 50 returns ok",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_EVERY, 50) == FR_OK);
+  CHECK("cancel every 50 again returns not found",
+        fr_event_cancel(&runtime, FR_EVENT_KIND_EVERY, 50) == FR_ERR_NOT_FOUND);
+  CHECK("fire-event after every cancel returns not found",
+        fr_repl_eval_line(&runtime, "frothy.fire-event: \"every\", 50, nil",
+                          out, sizeof(out)) == FR_ERR_NOT_FOUND);
+  CHECK("timer body did not run",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 0);
+}
+
+/* Re-fire while a handler is mid-execution coalesces to one additional
+ * dispatch. The body calls `frothy.fire-event` twice from inside its own
+ * execution, so both candidates arrive after the dispatcher has already
+ * cleared this binding's pending bit. The per-binding pending flag then
+ * collapses both mid-handler arrivals into a single re-fire: without
+ * coalescing the counter would advance further than two. The guard fires
+ * the re-fire body only on the initial run; the second run sees counter
+ * already at two and skips the posts so the chain terminates. */
+static void test_event_mid_handler_re_fire_coalesces(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *gpio_entry = NULL;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  fr_tagged_t zero = 0;
+  fr_object_id_t on_id = 0;
+  fr_object_id_t rising_id = 0;
+  uint8_t body_bytes[96];
+  uint16_t off = 0;
+  uint16_t jump_patch_off = 0;
+  uint16_t end_ip = 0;
+  static const uint8_t kOn[] = {'o', 'n'};
+  static const uint8_t kRising[] = {'r', 'i', 's', 'i', 'n', 'g'};
+
+  CHECK("mid-handler init", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("mid-handler install on text",
+        fr_text_install(&runtime, kOn, sizeof(kOn), &on_id) == FR_OK);
+  CHECK("mid-handler install rising text",
+        fr_text_install(&runtime, kRising, sizeof(kRising), &rising_id) ==
+            FR_OK);
+  CHECK("mid-handler encode zero", fr_tagged_encode_int(0, &zero) == FR_OK);
+  CHECK("mid-handler seed counter",
+        fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, zero) == FR_OK);
+
+  body_bytes[off++] = FR_INSTRUCTION_FORMAT_VERSION;
+  body_bytes[off++] = FR_INSTRUCTION_MIN_HEADER_SIZE;
+  /* counter += 1 */
+  body_bytes[off++] = FR_OP_LOAD_SLOT;
+  write_slot_operand(&body_bytes[off], FR_TEST_FIRST_USER_SLOT);
+  off = (uint16_t)(off + 2);
+  body_bytes[off++] = FR_OP_PUSH_INT;
+  for (uint8_t b = 0; b < FR_INSTRUCTION_INT_OPERAND_BYTES; b++) {
+    body_bytes[off + b] = (uint8_t)((1u >> (8u * b)) & 0xffu);
+  }
+  off = (uint16_t)(off + FR_INSTRUCTION_INT_OPERAND_BYTES);
+  body_bytes[off++] = FR_OP_ADD_INT;
+  body_bytes[off++] = FR_OP_STORE_SLOT;
+  write_slot_operand(&body_bytes[off], FR_TEST_FIRST_USER_SLOT);
+  off = (uint16_t)(off + 2);
+  /* if counter < 2 then re-post twice */
+  body_bytes[off++] = FR_OP_LOAD_SLOT;
+  write_slot_operand(&body_bytes[off], FR_TEST_FIRST_USER_SLOT);
+  off = (uint16_t)(off + 2);
+  body_bytes[off++] = FR_OP_PUSH_INT;
+  for (uint8_t b = 0; b < FR_INSTRUCTION_INT_OPERAND_BYTES; b++) {
+    body_bytes[off + b] = (uint8_t)((2u >> (8u * b)) & 0xffu);
+  }
+  off = (uint16_t)(off + FR_INSTRUCTION_INT_OPERAND_BYTES);
+  body_bytes[off++] = FR_OP_LT_INT;
+  body_bytes[off++] = FR_OP_JUMP_IF_FALSY;
+  jump_patch_off = off;
+  body_bytes[off++] = 0;
+  body_bytes[off++] = 0;
+  /* two frothy.fire-event calls posting the same `on 0 rising` candidate */
+  for (int call = 0; call < 2; call++) {
+    body_bytes[off++] = FR_OP_PUSH_OBJECT_ID;
+    body_bytes[off++] = (uint8_t)(on_id & 0xffu);
+    body_bytes[off++] = (uint8_t)((on_id >> 8) & 0xffu);
+    body_bytes[off++] = FR_OP_PUSH_INT;
+    for (uint8_t b = 0; b < FR_INSTRUCTION_INT_OPERAND_BYTES; b++) {
+      body_bytes[off + b] = 0;
+    }
+    off = (uint16_t)(off + FR_INSTRUCTION_INT_OPERAND_BYTES);
+    body_bytes[off++] = FR_OP_PUSH_OBJECT_ID;
+    body_bytes[off++] = (uint8_t)(rising_id & 0xffu);
+    body_bytes[off++] = (uint8_t)((rising_id >> 8) & 0xffu);
+    body_bytes[off++] = FR_OP_CALL_NATIVE_SLOT;
+    body_bytes[off++] = (uint8_t)(FR_SLOT_FIRE_EVENT & 0xffu);
+    body_bytes[off++] = (uint8_t)((FR_SLOT_FIRE_EVENT >> 8) & 0xffu);
+    body_bytes[off++] = FR_OP_DROP;
+  }
+  end_ip = off;
+  body_bytes[jump_patch_off] = (uint8_t)(end_ip & 0xffu);
+  body_bytes[jump_patch_off + 1] = (uint8_t)((end_ip >> 8) & 0xffu);
+  body_bytes[off++] = FR_OP_RETURN;
+
+  CHECK("mid-handler body view",
+        fr_instruction_stream_init(&view, body_bytes, off) == FR_OK);
+  CHECK("mid-handler install body",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+  CHECK("mid-handler register",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+  gpio_entry = &runtime.events.entries[0];
+
+  /* Seed one queued candidate, drain it so pending=true, then dispatch.
+   * The body's two fire-event calls run while pending=false (the dispatcher
+   * cleared it), so the candidates they post are perceived as mid-handler
+   * arrivals. The body's per-step drain inside fr_vm_run_instruction_stream
+   * is what moves them from queue to pending. */
+  CHECK("mid-handler post initial",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 50) ==
+            FR_OK);
+  CHECK("mid-handler drain initial", fr_event_drain(&runtime) == FR_OK);
+  CHECK("mid-handler pending after initial drain",
+        gpio_entry->pending == true);
+  CHECK("mid-handler dispatch fires body once",
+        fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("mid-handler counter is one after first dispatch",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+  CHECK("mid-handler pending re-armed by body's posts",
+        gpio_entry->pending == true);
+  CHECK("mid-handler second dispatch fires body once more",
+        fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("mid-handler counter is two (two mid-body posts coalesced to one)",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 2);
+  CHECK("mid-handler pending cleared after second dispatch",
+        gpio_entry->pending == false);
+  CHECK("mid-handler third dispatch is a no-op",
+        fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("mid-handler counter still two",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 2);
+}
+#endif
+
+#if FR_FEATURE_COMPILER && FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT &&       \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+static void test_event_compiled_body_fires(void) {
+  fr_runtime_t runtime;
+  fr_tagged_t boot_result = 0;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  fr_slot_id_t counter_slot = 0;
+  char out[64];
+
+  CHECK("compiled body fires base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compiled body fires defines counter",
+        fr_repl_eval_line(&runtime, "counter is 0", out, sizeof(out)) ==
+            FR_OK);
+  CHECK("compiled body fires defines boot",
+        fr_repl_eval_line(
+            &runtime,
+            "boot is fn [ on 0 rising [ set counter to counter + 1 ] ]",
+            out, sizeof(out)) == FR_OK);
+  CHECK("compiled body fires resolves counter slot",
+        fr_slot_id_for_name(&runtime, "counter", &counter_slot) == FR_OK);
+  CHECK("compiled body fires runs boot",
+        fr_vm_run_boot(&runtime, &boot_result) == FR_OK);
+  CHECK("compiled body fires counter starts at zero",
+        fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 0);
+  CHECK("compiled body fires the event",
+        fr_repl_eval_line(&runtime,
+                          "frothy.fire-event: \"on\", 0, \"rising\"", out,
+                          sizeof(out)) == FR_OK);
+  CHECK("compiled body fires incremented counter",
+        fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+}
+
+static void test_event_compiled_every_body_fires(void) {
+  fr_runtime_t runtime;
+  fr_tagged_t boot_result = 0;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  fr_slot_id_t counter_slot = 0;
+  char out[64];
+
+  CHECK("compiled every base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compiled every defines counter",
+        fr_repl_eval_line(&runtime, "counter is 0", out, sizeof(out)) ==
+            FR_OK);
+  CHECK("compiled every defines boot",
+        fr_repl_eval_line(
+            &runtime,
+            "boot is fn [ every 50 [ set counter to counter + 1 ] ]",
+            out, sizeof(out)) == FR_OK);
+  CHECK("compiled every resolves counter slot",
+        fr_slot_id_for_name(&runtime, "counter", &counter_slot) == FR_OK);
+  CHECK("compiled every runs boot",
+        fr_vm_run_boot(&runtime, &boot_result) == FR_OK);
+  CHECK("compiled every fires once",
+        fr_repl_eval_line(&runtime, "frothy.fire-event: \"every\", 50, nil",
+                          out, sizeof(out)) == FR_OK);
+  CHECK("compiled every counter is one",
+        fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+  CHECK("compiled every fires again (periodic stays registered)",
+        fr_repl_eval_line(&runtime, "frothy.fire-event: \"every\", 50, nil",
+                          out, sizeof(out)) == FR_OK);
+  CHECK("compiled every counter is two",
+        fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 2);
+}
+
+static void test_event_compiled_changes_body_fires(void) {
+  fr_runtime_t runtime;
+  fr_tagged_t boot_result = 0;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  fr_slot_id_t counter_slot = 0;
+  char out[64];
+
+  CHECK("compiled changes base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("compiled changes defines counter",
+        fr_repl_eval_line(&runtime, "counter is 0", out, sizeof(out)) ==
+            FR_OK);
+  CHECK("compiled changes defines boot",
+        fr_repl_eval_line(
+            &runtime,
+            "boot is fn [ on 0 changes [ set counter to counter + 1 ] ]",
+            out, sizeof(out)) == FR_OK);
+  CHECK("compiled changes resolves counter slot",
+        fr_slot_id_for_name(&runtime, "counter", &counter_slot) == FR_OK);
+  CHECK("compiled changes runs boot",
+        fr_vm_run_boot(&runtime, &boot_result) == FR_OK);
+  CHECK("compiled changes fires on rising",
+        fr_repl_eval_line(&runtime,
+                          "frothy.fire-event: \"on\", 0, \"rising\"", out,
+                          sizeof(out)) == FR_OK);
+  CHECK("compiled changes counter is one",
+        fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+  CHECK("compiled changes fires on falling",
+        fr_repl_eval_line(&runtime,
+                          "frothy.fire-event: \"on\", 0, \"falling\"", out,
+                          sizeof(out)) == FR_OK);
+  CHECK("compiled changes counter is two",
+        fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 2);
+}
+#endif
+
 static void test_code(void) {
   fr_runtime_t runtime;
   fr_instruction_stream_t view;
@@ -4028,6 +5219,177 @@ static void test_parse(void) {
         fr_parse_line("to true [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse false rejects as to-definition name",
         fr_parse_line("to false [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse on rejects as parameter",
+        fr_parse_line("to f with on [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse every rejects as parameter",
+        fr_parse_line("to f with every [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse after rejects as parameter",
+        fr_parse_line("to f with after [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse cancel rejects as parameter",
+        fr_parse_line("to f with cancel [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rising rejects as parameter",
+        fr_parse_line("to f with rising [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse falling rejects as parameter",
+        fr_parse_line("to f with falling [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse changes rejects as parameter",
+        fr_parse_line("to f with changes [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse debounce rejects as parameter",
+        fr_parse_line("to f with debounce [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse on rejects as is-definition name",
+        fr_parse_line("on is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse every rejects as is-definition name",
+        fr_parse_line("every is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse after rejects as is-definition name",
+        fr_parse_line("after is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse cancel rejects as is-definition name",
+        fr_parse_line("cancel is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rising rejects as is-definition name",
+        fr_parse_line("rising is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse falling rejects as is-definition name",
+        fr_parse_line("falling is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse changes rejects as is-definition name",
+        fr_parse_line("changes is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse debounce rejects as is-definition name",
+        fr_parse_line("debounce is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse on rejects as to-definition name",
+        fr_parse_line("to on [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse every rejects as to-definition name",
+        fr_parse_line("to every [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse after rejects as to-definition name",
+        fr_parse_line("to after [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse cancel rejects as to-definition name",
+        fr_parse_line("to cancel [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rising rejects as to-definition name",
+        fr_parse_line("to rising [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse falling rejects as to-definition name",
+        fr_parse_line("to falling [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse changes rejects as to-definition name",
+        fr_parse_line("to changes [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse debounce rejects as to-definition name",
+        fr_parse_line("to debounce [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse on rising",
+        fr_parse_line("boot is fn [ on 0 rising [ 1 ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 1 && value->child_count == 2 &&
+            parsed.exprs[value->children[0]].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[value->children[0]].int_value == 0 &&
+            (body = &parsed.exprs[value->children[1]])->kind ==
+                FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_INT);
+  CHECK("parse on falling",
+        fr_parse_line("boot is fn [ on 0 falling [ 1 ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 2 && value->child_count == 2);
+  CHECK("parse on changes",
+        fr_parse_line("boot is fn [ on 0 changes [ 1 ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 3 && value->child_count == 2);
+  CHECK("parse on debounce",
+        fr_parse_line("boot is fn [ on 0 rising debounce 30 [ 1 ] ]",
+                      &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 1 && value->child_count == 3 &&
+            parsed.exprs[value->children[2]].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[value->children[2]].int_value == 30);
+  CHECK("parse on rejects unknown edge",
+        fr_parse_line("boot is fn [ on 0 sideways [ 1 ] ]", &parsed) ==
+            FR_ERR_INVALID);
+  CHECK("parse on rejects missing body",
+        fr_parse_line("boot is fn [ on 0 rising ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse on top-level expression",
+        fr_parse_expression_line("on 0 rising [ 1 ]", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_EVENT_REGISTER &&
+            parsed.exprs[expr_id].int_value == 1);
+  CHECK("parse every",
+        fr_parse_line("boot is fn [ every 500 [ 1 ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 4 && value->child_count == 2 &&
+            parsed.exprs[value->children[0]].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[value->children[0]].int_value == 500 &&
+            (body = &parsed.exprs[value->children[1]])->kind ==
+                FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_INT);
+  CHECK("parse after",
+        fr_parse_line("boot is fn [ after 1000 [ 1 ] ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_REGISTER &&
+            value->int_value == 5 && value->child_count == 2 &&
+            parsed.exprs[value->children[0]].int_value == 1000);
+  CHECK("parse every rejects missing body",
+        fr_parse_line("boot is fn [ every 500 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse after rejects missing body",
+        fr_parse_line("boot is fn [ after 1000 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse every top-level expression",
+        fr_parse_expression_line("every 50 [ 1 ]", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_EVENT_REGISTER &&
+            parsed.exprs[expr_id].int_value == 4);
+  CHECK("parse cancel pin",
+        fr_parse_line("boot is fn [ cancel 0 ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_CANCEL &&
+            value->int_value == FR_EVENT_KIND_GPIO_CHANGES &&
+            value->child_count == 1 &&
+            parsed.exprs[value->children[0]].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[value->children[0]].int_value == 0);
+  CHECK("parse cancel every",
+        fr_parse_line("boot is fn [ cancel every 50 ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_CANCEL &&
+            value->int_value == FR_EVENT_KIND_EVERY &&
+            value->child_count == 1 &&
+            parsed.exprs[value->children[0]].int_value == 50);
+  CHECK("parse cancel after",
+        fr_parse_line("boot is fn [ cancel after 1000 ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_EVENT_CANCEL &&
+            value->int_value == FR_EVENT_KIND_AFTER &&
+            value->child_count == 1 &&
+            parsed.exprs[value->children[0]].int_value == 1000);
+  CHECK("parse cancel top-level expression",
+        fr_parse_expression_line("cancel 0", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_EVENT_CANCEL &&
+            parsed.exprs[expr_id].int_value == FR_EVENT_KIND_GPIO_CHANGES);
+  CHECK("parse cancel rejects missing source",
+        fr_parse_line("boot is fn [ cancel ]", &parsed) == FR_ERR_INVALID);
 #if FR_TAGGED_INT_MAX >= 115200
   CHECK("parse roomier int body",
         fr_parse_line("boot is fn [ 115200 ]", &parsed) == FR_OK &&
@@ -8784,6 +10146,33 @@ int main(void) {
   test_records();
 #endif
   test_natives();
+  test_event_table();
+  test_event_register_cancel();
+  test_event_drain_dispatch();
+  test_event_coalescing();
+  test_event_debounce_drops_within_window();
+  test_event_debounce_first_fire_at_zero();
+  test_event_overflow_counter();
+  test_event_register_native();
+#if FR_FEATURE_COMPILER && FR_FEATURE_EVENTS
+  test_event_compile_on_form();
+  test_event_compile_timer_forms();
+  test_event_compile_cancel_form();
+#endif
+#if FR_FEATURE_COMPILER && !FR_FEATURE_EVENTS
+  test_event_compile_rejects_when_disabled();
+#endif
+#if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
+  test_event_fire_event_native();
+  test_event_cancel_blocks_fire_event();
+  test_event_mid_handler_re_fire_coalesces();
+#endif
+#if FR_FEATURE_COMPILER && FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT &&       \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  test_event_compiled_body_fires();
+  test_event_compiled_every_body_fires();
+  test_event_compiled_changes_body_fires();
+#endif
   test_code();
   test_image();
   test_public_surface();
@@ -8797,6 +10186,7 @@ int main(void) {
 #endif
 #if FR_FEATURE_PERSISTENCE
   test_persist();
+  test_persist_code_id_round_trip();
   test_persist_cross_width_header_rejection();
 #if FR_FEATURE_SOURCE_BASE
   test_persist_source_change_header_rejection();

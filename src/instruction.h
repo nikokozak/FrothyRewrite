@@ -13,6 +13,8 @@ enum {
   FR_INSTRUCTION_OBJECT_ID_OPERAND_BYTES = 2u,
   FR_INSTRUCTION_PUSH_OBJECT_ID_SIZE =
       1u + FR_INSTRUCTION_OBJECT_ID_OPERAND_BYTES,
+  FR_INSTRUCTION_CODE_ID_OPERAND_BYTES = 2u,
+  FR_INSTRUCTION_PUSH_CODE_ID_SIZE = 1u + FR_INSTRUCTION_CODE_ID_OPERAND_BYTES,
 };
 
 typedef struct fr_instruction_stream_t {
@@ -61,6 +63,7 @@ typedef enum fr_opcode_t {
   FR_OP_PUSH_OBJECT_ID = 0x1E,
   FR_OP_LOAD_LOCAL = 0x1F,
   FR_OP_STORE_LOCAL = 0x20,
+  FR_OP_PUSH_CODE_ID = 0x21,
 } fr_opcode_t;
 
 fr_err_t fr_instruction_stream_init(fr_instruction_stream_t *view,
@@ -76,6 +79,9 @@ fr_err_t fr_instruction_read_int_operand(const fr_instruction_stream_t *view,
 fr_err_t fr_instruction_read_object_id_operand(
     const fr_instruction_stream_t *view, fr_code_offset_t ip,
     fr_object_id_t *out_object_id);
+fr_err_t fr_instruction_read_code_id_operand(
+    const fr_instruction_stream_t *view, fr_code_offset_t ip,
+    fr_code_object_id_t *out_code_object_id);
 fr_err_t fr_instruction_read_jump_operand(const fr_instruction_stream_t *view,
                                           fr_code_offset_t ip,
                                           fr_code_offset_t *out_target);

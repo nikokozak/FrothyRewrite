@@ -99,6 +99,10 @@
 #define FR_FEATURE_PAD 0
 #endif
 
+#ifndef FR_FEATURE_EVENTS
+#define FR_FEATURE_EVENTS 1
+#endif
+
 #define FR_FEATURE_OBJECTS                                                   \
   (FR_FEATURE_CELLS || FR_FEATURE_TEXT || FR_FEATURE_RECORDS)
 

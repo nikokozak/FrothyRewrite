@@ -21,6 +21,40 @@ fr_err_t fr_platform_poll_interrupt(fr_runtime_t *runtime);
 fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
                                   uint16_t platform_index);
 
+typedef uint8_t fr_event_kind_t;
+
+enum {
+  FR_EVENT_KIND_NONE = 0,
+  FR_EVENT_KIND_GPIO_RISING = 1,
+  FR_EVENT_KIND_GPIO_FALLING = 2,
+  FR_EVENT_KIND_GPIO_CHANGES = 3,
+  FR_EVENT_KIND_EVERY = 4,
+  FR_EVENT_KIND_AFTER = 5,
+};
+
+typedef struct fr_event_candidate_t {
+  uint16_t binding_index;
+  uint16_t generation;
+  uint32_t timestamp_ms;
+} fr_event_candidate_t;
+
+fr_err_t fr_platform_event_gpio_install(fr_event_kind_t kind, uint16_t pin,
+                                        uint16_t binding_index,
+                                        uint16_t generation);
+fr_err_t fr_platform_event_gpio_remove(uint16_t pin);
+fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
+                                         uint16_t binding_index,
+                                         uint16_t generation);
+fr_err_t fr_platform_event_timer_remove(uint16_t binding_index);
+fr_err_t fr_platform_event_drain(fr_event_candidate_t *out_events,
+                                 uint8_t out_cap, uint8_t *out_count,
+                                 uint32_t *overflow_delta);
+/* Test-only injection. Host backs it with the same queue drain reads from;
+ * other targets stub. Returns FR_ERR_CAPACITY when the test queue is full. */
+fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
+                                               uint16_t generation,
+                                               uint32_t timestamp_ms);
+
 #if FR_FEATURE_UART
 fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
                                uint16_t *out_platform_index);

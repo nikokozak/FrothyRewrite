@@ -641,3 +641,91 @@ void fr_platform_storage_debug_reset(void) {
   }
 }
 #endif
+
+fr_err_t fr_platform_event_gpio_install(fr_event_kind_t kind, uint16_t pin,
+                                        uint16_t binding_index,
+                                        uint16_t generation) {
+  (void)kind;
+  (void)pin;
+  (void)binding_index;
+  (void)generation;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_event_gpio_remove(uint16_t pin) {
+  (void)pin;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
+                                         uint16_t binding_index,
+                                         uint16_t generation) {
+  (void)kind;
+  (void)ms;
+  (void)binding_index;
+  (void)generation;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_event_timer_remove(uint16_t binding_index) {
+  (void)binding_index;
+  return FR_OK;
+}
+
+/* Host event queue: ring of pending candidates the test native pushes and the
+ * shared drain reads. Sized to match the runtime binding capacity so the
+ * worst-case single-drain transfer fits. */
+enum {
+  FR_HOST_EVENT_QUEUE_CAP = 16,
+};
+
+static fr_event_candidate_t fr_host_event_queue[FR_HOST_EVENT_QUEUE_CAP];
+static uint8_t fr_host_event_queue_head;
+static uint8_t fr_host_event_queue_count;
+static uint32_t fr_host_event_overflow;
+
+fr_err_t fr_platform_event_drain(fr_event_candidate_t *out_events,
+                                 uint8_t out_cap, uint8_t *out_count,
+                                 uint32_t *overflow_delta) {
+  uint8_t transfer = fr_host_event_queue_count;
+
+  if (out_count == NULL || overflow_delta == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (out_events == NULL && out_cap > 0) {
+    return FR_ERR_INVALID;
+  }
+  if (transfer > out_cap) {
+    transfer = out_cap;
+  }
+  for (uint8_t i = 0; i < transfer; i++) {
+    out_events[i] = fr_host_event_queue[fr_host_event_queue_head];
+    fr_host_event_queue_head =
+        (uint8_t)((fr_host_event_queue_head + 1u) % FR_HOST_EVENT_QUEUE_CAP);
+  }
+  fr_host_event_queue_count = (uint8_t)(fr_host_event_queue_count - transfer);
+  *out_count = transfer;
+  *overflow_delta = fr_host_event_overflow;
+  fr_host_event_overflow = 0;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
+                                               uint16_t generation,
+                                               uint32_t timestamp_ms) {
+  uint8_t tail;
+
+  if (fr_host_event_queue_count == FR_HOST_EVENT_QUEUE_CAP) {
+    fr_host_event_overflow++;
+    return FR_ERR_CAPACITY;
+  }
+  tail = (uint8_t)((fr_host_event_queue_head + fr_host_event_queue_count) %
+                   FR_HOST_EVENT_QUEUE_CAP);
+  fr_host_event_queue[tail] = (fr_event_candidate_t){
+      .binding_index = binding_index,
+      .generation = generation,
+      .timestamp_ms = timestamp_ms,
+  };
+  fr_host_event_queue_count = (uint8_t)(fr_host_event_queue_count + 1u);
+  return FR_OK;
+}

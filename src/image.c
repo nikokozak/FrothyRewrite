@@ -852,6 +852,47 @@ static fr_err_t fr_image_patch_code_text_refs(
 }
 #endif
 
+/* PUSH_CODE_ID carries an overlay-local code index at compile time. We rewrite
+ * it to the runtime code id before fr_code_install copies the bytes, mirroring
+ * the text patch path. */
+static fr_err_t fr_image_patch_code_id_refs(uint8_t *bytes, uint16_t length,
+                                            const fr_code_object_id_t code_ids[],
+                                            uint16_t code_object_count) {
+  fr_instruction_stream_t view;
+  fr_instruction_header_t header = {0};
+  fr_code_offset_t ip = 0;
+  char scratch[64];
+
+  if (bytes == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_instruction_stream_init(&view, bytes, length));
+  FR_TRY(fr_instruction_read_header(&view, &header));
+  ip = (fr_code_offset_t)header.header_size;
+  while (ip < view.length) {
+    fr_code_offset_t next_ip = 0;
+
+    if ((fr_opcode_t)bytes[ip] == FR_OP_PUSH_CODE_ID) {
+      fr_code_object_id_t local_index = 0;
+
+      FR_TRY(fr_instruction_read_code_id_operand(&view, ip, &local_index));
+      if (local_index >= code_object_count) {
+        return FR_ERR_CORRUPT;
+      }
+      bytes[ip + 1] = (uint8_t)(code_ids[local_index] & 0xffu);
+      bytes[ip + 2] = (uint8_t)(code_ids[local_index] >> 8);
+    }
+    FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
+                                         (uint16_t)sizeof(scratch), NULL,
+                                         &next_ip));
+    if (next_ip <= ip) {
+      return FR_ERR_CORRUPT;
+    }
+    ip = next_ip;
+  }
+  return FR_OK;
+}
+
 static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
                                           const fr_image_records_t *records,
                                           fr_image_apply_mode_t mode) {
@@ -883,11 +924,29 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
 #else
   (void)text_ids;
 #endif
+  /* fr_code_install assigns ids sequentially from runtime->code.count, so we
+   * can pre-compute the ids and patch PUSH_CODE_ID operands before install
+   * copies the bytes. */
   for (uint16_t i = 0; i < records->code_object_count; i++) {
+    code_ids[i] = (fr_code_object_id_t)(runtime->code.count + i);
+  }
+  if (records->code_object_count > 1) {
+    for (uint16_t i = 0; i < records->code_object_count; i++) {
+      uint8_t *writable = (uint8_t *)records->code_objects[i].instructions.bytes;
+      FR_TRY(fr_image_patch_code_id_refs(
+          writable, records->code_objects[i].instructions.length, code_ids,
+          records->code_object_count));
+    }
+  }
+  for (uint16_t i = 0; i < records->code_object_count; i++) {
+    fr_code_object_id_t installed_id = 0;
     FR_TRY(fr_code_install(runtime, &records->code_objects[i].instructions,
                            records->code_objects[i].param_names,
                            records->code_objects[i].param_names_length,
-                           &code_ids[i]));
+                           &installed_id));
+    if (installed_id != code_ids[i]) {
+      return FR_ERR_CORRUPT;
+    }
   }
 #if FR_FEATURE_RECORDS
   for (uint16_t i = 0; i < records->record_shape_object_count; i++) {

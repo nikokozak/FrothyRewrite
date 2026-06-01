@@ -1,9 +1,12 @@
 #include "runtime.h"
 
+#include "event.h"
 #include "handle.h"
 #include "object.h"
 #include "pad.h"
 #include "tagged.h"
+
+#include <string.h>
 
 fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
   if (runtime == NULL) {
@@ -31,16 +34,24 @@ fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
 #if FR_FEATURE_PAD
   FR_TRY(fr_pad_reset(runtime));
 #endif
+  memset(&runtime->events, 0, sizeof(runtime->events));
   runtime->interrupted = false;
+  runtime->dispatching_event = false;
   return FR_OK;
 }
 
 fr_err_t fr_runtime_clear_project(fr_runtime_t *runtime) {
+  fr_err_t event_err = FR_OK;
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
 
   fr_handle_close_all(runtime);
+  /* Spec §5: unregister platform resources before code/slots clear so a late
+     edge cannot fire against a body that is about to disappear. A failed
+     platform-remove leaks an armed resource, so report it; finish the rest
+     of the clear so the runtime is at least consistent. */
+  event_err = fr_event_clear_table(runtime);
   for (fr_slot_id_t slot_id = 0; slot_id < FR_PROFILE_MAX_SLOTS; slot_id++) {
     runtime->slots.current[slot_id] = runtime->slots.base[slot_id];
     runtime->slots.overlay[slot_id] = false;
@@ -60,7 +71,7 @@ fr_err_t fr_runtime_clear_project(fr_runtime_t *runtime) {
   FR_TRY(fr_pad_reset(runtime));
 #endif
   runtime->interrupted = false;
-  return FR_OK;
+  return event_err;
 }
 
 fr_err_t fr_runtime_reset(fr_runtime_t *runtime) {

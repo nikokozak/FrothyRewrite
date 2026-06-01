@@ -5,6 +5,7 @@
 #include "native.h"
 #include "object.h"
 #include "pad.h"
+#include "platform.h"
 #include "tagged.h"
 #include "types.h"
 
@@ -45,6 +46,31 @@ typedef struct fr_slot_table_t {
   uint16_t count;
 } fr_slot_table_t;
 
+/* T11 fixes the live-binding capacity at 16 (spec §10). Matches the
+ * platform queue depth so a full drain can land without losing
+ * candidates inside the runtime. */
+#define FR_EVENT_BINDING_COUNT 16
+
+typedef struct fr_event_binding_t {
+  /* kind == FR_EVENT_KIND_NONE marks the slot inactive. */
+  fr_event_kind_t kind;
+  bool pending;
+  /* has_fired gates the debounce check; last_fire_ms = 0 is a valid candidate
+   * timestamp so it cannot double as a never-fired sentinel. */
+  bool has_fired;
+  uint16_t source;
+  uint16_t debounce_ms;
+  uint16_t generation;
+  fr_code_object_id_t body;
+  uint32_t registered_at_ms;
+  uint32_t last_fire_ms;
+} fr_event_binding_t;
+
+typedef struct fr_event_table_t {
+  fr_event_binding_t entries[FR_EVENT_BINDING_COUNT];
+  uint32_t overflow_count;
+} fr_event_table_t;
+
 struct fr_runtime_t {
   fr_slot_table_t slots;
   fr_code_table_t code;
@@ -56,7 +82,11 @@ struct fr_runtime_t {
 #if FR_FEATURE_PAD
   fr_pad_t pad;
 #endif
+  fr_event_table_t events;
   bool interrupted;
+  /* Set while fr_event_dispatch is running a body so the VM step loop does
+     not re-enter dispatch from inside a handler (spec §5: no preemption). */
+  bool dispatching_event;
 };
 
 fr_err_t fr_runtime_init(fr_runtime_t *runtime);

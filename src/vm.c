@@ -8,6 +8,7 @@
 
 #include "base_image.h"
 #include "code.h"
+#include "event.h"
 #include "native.h"
 #include "object.h"
 #include "platform.h"
@@ -127,6 +128,21 @@ static fr_err_t fr_vm_push_object_id(const fr_instruction_stream_t *view,
   FR_TRY(fr_tagged_encode_object_id(object_id, &tagged));
 
   state->ip += FR_INSTRUCTION_PUSH_OBJECT_ID_SIZE;
+  return fr_vm_push(state, tagged);
+}
+
+/* The body code object id reaches the event-register native as a plain int.
+ * The operand is patched from a local code index to the runtime id at install
+ * time, the same path the text patcher uses for object refs. */
+static fr_err_t fr_vm_push_code_id(const fr_instruction_stream_t *view,
+                                   fr_vm_state_t *state) {
+  fr_code_object_id_t code_id = 0;
+  fr_tagged_t tagged = 0;
+
+  FR_TRY(fr_instruction_read_code_id_operand(view, state->ip, &code_id));
+  FR_TRY(fr_tagged_encode_int((fr_int_t)code_id, &tagged));
+
+  state->ip += FR_INSTRUCTION_PUSH_CODE_ID_SIZE;
   return fr_vm_push(state, tagged);
 }
 
@@ -585,6 +601,8 @@ static fr_err_t fr_vm_step(fr_runtime_t *runtime,
     return fr_vm_push_int(view, state);
   case FR_OP_PUSH_OBJECT_ID:
     return fr_vm_push_object_id(view, state);
+  case FR_OP_PUSH_CODE_ID:
+    return fr_vm_push_code_id(view, state);
   case FR_OP_LOAD_ARG:
     return fr_vm_load_arg(view, state);
   case FR_OP_LOAD_LOCAL:
@@ -683,11 +701,20 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
   state.local_count = header.local_count;
   state.ip = header.header_size;
   while (state.ip < view->length && !state.returned) {
+    fr_opcode_t op;
     FR_TRY(fr_platform_poll_interrupt(runtime));
     if (fr_runtime_is_interrupted(runtime)) {
       return FR_ERR_INTERRUPTED;
     }
+    FR_TRY(fr_event_drain(runtime));
+    op = (fr_opcode_t)view->bytes[state.ip];
     FR_TRY(fr_vm_step(runtime, view, &state));
+    /* Spec §9 safe points: statement boundary (DROP) and end of any body
+       (RETURN). Loop back-edges in repeat/while/forever emit DROP before
+       the jump, so DROP also covers each loop iteration. */
+    if (op == FR_OP_DROP || op == FR_OP_RETURN) {
+      FR_TRY(fr_event_dispatch(runtime));
+    }
   }
 
   if (state.depth == 0) {

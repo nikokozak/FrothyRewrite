@@ -1,5 +1,6 @@
 #include "parse.h"
 
+#include "platform.h"
 #include "tagged.h"
 
 #include <stdbool.h>
@@ -424,6 +425,17 @@ static bool fr_parse_span_same(fr_parse_span_t lhs, fr_parse_span_t rhs) {
   return true;
 }
 
+static bool fr_parse_is_event_keyword(fr_parse_span_t name) {
+  return fr_parse_span_equals(name, "on") ||
+         fr_parse_span_equals(name, "every") ||
+         fr_parse_span_equals(name, "after") ||
+         fr_parse_span_equals(name, "cancel") ||
+         fr_parse_span_equals(name, "rising") ||
+         fr_parse_span_equals(name, "falling") ||
+         fr_parse_span_equals(name, "changes") ||
+         fr_parse_span_equals(name, "debounce");
+}
+
 static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
   return fr_parse_span_equals(name, "nil") ||
          fr_parse_span_equals(name, "true") ||
@@ -442,7 +454,8 @@ static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
          fr_parse_span_equals(name, "record") ||
          fr_parse_span_equals(name, "set") ||
          fr_parse_span_equals(name, "to") ||
-         fr_parse_span_equals(name, "here");
+         fr_parse_span_equals(name, "here") ||
+         fr_parse_is_event_keyword(name);
 }
 
 #if FR_FEATURE_RECORDS
@@ -849,6 +862,87 @@ static fr_err_t fr_parse_forever(fr_parser_t *parser,
   return fr_parse_add_expr(parser, forever, out_id);
 }
 
+/* `every <ms-expr> [body]` and `after <ms-expr> [body]` share one shape:
+ * (ms, body) with int_value carrying the matching fr_event_kind_t value.
+ * The keyword string drives the dispatch. */
+static fr_err_t fr_parse_timer_event(fr_parser_t *parser,
+                                     fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_t reg = {.kind = FR_PARSE_EXPR_EVENT_REGISTER};
+
+  reg.int_value = fr_parse_span_equals(parser->token.span, "every")
+                      ? FR_EVENT_KIND_EVERY
+                      : FR_EVENT_KIND_AFTER;
+  FR_TRY(fr_parse_advance(parser));
+  FR_TRY(fr_parse_expression(parser, &reg.children[0]));
+  FR_TRY(fr_parse_bracket_block(parser, &reg.children[1]));
+  reg.child = reg.children[0];
+  reg.child_count = 2;
+  return fr_parse_add_expr(parser, reg, out_id);
+}
+
+/* `on <pin-expr> <edge> [debounce <ms-expr>] [body]` — child layout is
+ * (pin, body) or (pin, body, debounce); int_value carries the GPIO edge
+ * as the matching fr_event_kind_t value so the compile slice can lift it
+ * straight into the registration call. */
+static fr_err_t fr_parse_on(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_t reg = {.kind = FR_PARSE_EXPR_EVENT_REGISTER};
+  fr_int_t edge = 0;
+
+  FR_TRY(fr_parse_advance(parser));
+  FR_TRY(fr_parse_expression(parser, &reg.children[0]));
+  if (parser->token.kind != FR_TOKEN_NAME) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_parse_span_equals(parser->token.span, "rising")) {
+    edge = FR_EVENT_KIND_GPIO_RISING;
+  } else if (fr_parse_span_equals(parser->token.span, "falling")) {
+    edge = FR_EVENT_KIND_GPIO_FALLING;
+  } else if (fr_parse_span_equals(parser->token.span, "changes")) {
+    edge = FR_EVENT_KIND_GPIO_CHANGES;
+  } else {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_parse_advance(parser));
+  reg.int_value = edge;
+  reg.child_count = 2;
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "debounce")) {
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_expression(parser, &reg.children[2]));
+    reg.child_count = 3;
+  }
+  FR_TRY(fr_parse_bracket_block(parser, &reg.children[1]));
+  reg.child = reg.children[0];
+  return fr_parse_add_expr(parser, reg, out_id);
+}
+
+/* `cancel <pin-expr>` removes a GPIO binding by pin; `cancel every <ms-expr>`
+ * and `cancel after <ms-expr>` remove timer bindings by (kind, ms). int_value
+ * carries the matching fr_event_kind_t. The runtime matcher checks only "is
+ * GPIO + same source" for GPIO cancels, so any GPIO kind works as the
+ * sentinel; FR_EVENT_KIND_GPIO_CHANGES reads as "any edge on this pin." */
+static fr_err_t fr_parse_cancel(fr_parser_t *parser,
+                                fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_t reg = {.kind = FR_PARSE_EXPR_EVENT_CANCEL};
+
+  FR_TRY(fr_parse_advance(parser));
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "every")) {
+    reg.int_value = FR_EVENT_KIND_EVERY;
+    FR_TRY(fr_parse_advance(parser));
+  } else if (parser->token.kind == FR_TOKEN_NAME &&
+             fr_parse_span_equals(parser->token.span, "after")) {
+    reg.int_value = FR_EVENT_KIND_AFTER;
+    FR_TRY(fr_parse_advance(parser));
+  } else {
+    reg.int_value = FR_EVENT_KIND_GPIO_CHANGES;
+  }
+  FR_TRY(fr_parse_expression(parser, &reg.children[0]));
+  reg.child = reg.children[0];
+  reg.child_count = 1;
+  return fr_parse_add_expr(parser, reg, out_id);
+}
+
 static bool fr_parse_compare_token_kind(fr_token_kind_t kind,
                                         fr_parse_expr_kind_t *out_expr_kind) {
   switch (kind) {
@@ -1019,6 +1113,16 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     if (fr_parse_span_equals(parser->token.span, "forever")) {
       return fr_parse_forever(parser, out_id);
     }
+    if (fr_parse_span_equals(parser->token.span, "on")) {
+      return fr_parse_on(parser, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "every") ||
+        fr_parse_span_equals(parser->token.span, "after")) {
+      return fr_parse_timer_event(parser, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "cancel")) {
+      return fr_parse_cancel(parser, out_id);
+    }
     if (fr_parse_span_equals(parser->token.span, "cells")) {
 #if !FR_FEATURE_CELLS
       return FR_ERR_UNSUPPORTED;
@@ -1181,7 +1285,8 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
         fr_parse_span_equals(parser.token.span, "to") ||
         fr_parse_span_equals(parser.token.span, "with") ||
         fr_parse_span_equals(parser.token.span, "true") ||
-        fr_parse_span_equals(parser.token.span, "false")) {
+        fr_parse_span_equals(parser.token.span, "false") ||
+        fr_parse_is_event_keyword(parser.token.span)) {
       return FR_ERR_INVALID;
     }
     out->definition.name = parser.token.span;
@@ -1192,7 +1297,8 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
   if (parser.token.kind != FR_TOKEN_NAME ||
       fr_parse_span_equals(parser.token.span, "is") ||
       fr_parse_span_equals(parser.token.span, "true") ||
-      fr_parse_span_equals(parser.token.span, "false")) {
+      fr_parse_span_equals(parser.token.span, "false") ||
+      fr_parse_is_event_keyword(parser.token.span)) {
     return FR_ERR_INVALID;
   }
   out->definition.name = parser.token.span;

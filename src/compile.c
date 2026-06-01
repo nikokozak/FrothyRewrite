@@ -2,9 +2,11 @@
 
 #include "base_defs.h"
 #include "code.h"
+#include "instruction.h"
 #include "native.h"
 #include "object.h"
 #include "parse.h"
+#include "platform.h"
 #include "slot.h"
 
 #include <stdint.h>
@@ -32,12 +34,23 @@ typedef struct fr_compile_locals_t {
   uint8_t next_index;
 } fr_compile_locals_t;
 
+/* An `on`/`every`/`after` statement stashes its body here as a separate code
+ * object. The outer function's bytecode references it through PUSH_CODE_ID.
+ * One body per overlay update for now; a second event form returns
+ * FR_ERR_CAPACITY. */
+typedef struct fr_compile_event_body_t {
+  fr_image_code_object_t *object;
+  uint8_t *bytes;
+  bool used;
+} fr_compile_event_body_t;
+
 typedef struct fr_compile_context_t {
   fr_runtime_t *runtime;
   const fr_parse_span_t *params;
   uint8_t param_count;
   fr_compile_body_texts_t *body_texts;
   fr_compile_locals_t *locals;
+  fr_compile_event_body_t *event_body;
 } fr_compile_context_t;
 
 typedef enum fr_compile_source_feature_t {
@@ -45,6 +58,7 @@ typedef enum fr_compile_source_feature_t {
   FR_COMPILE_SOURCE_CELLS,
   FR_COMPILE_SOURCE_TEXT,
   FR_COMPILE_SOURCE_RECORDS,
+  FR_COMPILE_SOURCE_EVENTS,
 } fr_compile_source_feature_t;
 
 static fr_err_t
@@ -58,6 +72,8 @@ fr_compile_require_source_feature(fr_compile_source_feature_t feature) {
     return FR_FEATURE_TEXT ? FR_OK : FR_ERR_UNSUPPORTED;
   case FR_COMPILE_SOURCE_RECORDS:
     return FR_FEATURE_RECORDS ? FR_OK : FR_ERR_UNSUPPORTED;
+  case FR_COMPILE_SOURCE_EVENTS:
+    return FR_FEATURE_EVENTS ? FR_OK : FR_ERR_UNSUPPORTED;
   default:
     return FR_ERR_INVALID;
   }
@@ -390,6 +406,14 @@ static fr_err_t fr_compile_emit_push_int(uint8_t instruction_bytes[],
   }
   FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_PUSH_INT));
   return fr_compile_write_int_operand(instruction_bytes, offset, value);
+}
+
+static fr_err_t fr_compile_emit_push_code_id(uint8_t instruction_bytes[],
+                                             uint16_t *offset,
+                                             uint16_t local_code_index) {
+  FR_TRY(
+      fr_compile_write_byte(instruction_bytes, offset, FR_OP_PUSH_CODE_ID));
+  return fr_compile_write_u16(instruction_bytes, offset, local_code_index);
 }
 
 #if FR_FEATURE_TEXT
@@ -752,6 +776,84 @@ static fr_err_t fr_compile_emit_while(const fr_compile_context_t *ctx,
   return fr_compile_emit_push_nil(instruction_bytes, offset);
 }
 
+/* `on <pin> <edge> [debounce <ms>] [body]`, `every <ms> [body]`, and
+ * `after <ms> [body]` emit the body as a sibling code object, then push
+ * (kind, source, debounce, body-code-id) and call the event-register
+ * native. Timers carry no debounce, so child_count is fixed at 2 for
+ * EVERY/AFTER. The body code id is patched in at install time through
+ * PUSH_CODE_ID. */
+static fr_err_t
+fr_compile_emit_event_register(const fr_compile_context_t *ctx,
+                               const fr_parse_line_t *parsed,
+                               const fr_parse_expr_t *expr,
+                               uint8_t instruction_bytes[], uint16_t *offset) {
+  fr_compile_event_body_t *body = NULL;
+  fr_compile_context_t body_ctx = {0};
+  fr_compile_locals_t body_locals = {0};
+  uint16_t body_offset = FR_INSTRUCTION_LOCALS_HEADER_SIZE;
+  bool is_gpio_kind = false;
+  bool is_timer_kind = false;
+
+  if (expr == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_EVENTS));
+  is_gpio_kind = expr->int_value >= FR_EVENT_KIND_GPIO_RISING &&
+                 expr->int_value <= FR_EVENT_KIND_GPIO_CHANGES;
+  is_timer_kind = expr->int_value == FR_EVENT_KIND_EVERY ||
+                  expr->int_value == FR_EVENT_KIND_AFTER;
+  if (!is_gpio_kind && !is_timer_kind) {
+    return FR_ERR_INVALID;
+  }
+  if (is_gpio_kind && expr->child_count != 2 && expr->child_count != 3) {
+    return FR_ERR_INVALID;
+  }
+  if (is_timer_kind && expr->child_count != 2) {
+    return FR_ERR_INVALID;
+  }
+  if (ctx == NULL || ctx->event_body == NULL) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  body = ctx->event_body;
+  if (body->used) {
+    return FR_ERR_CAPACITY;
+  }
+
+  /* Reserve the full locals header so a body that uses `here` runs with a
+   * matching local_count. The byte at offset 3 is patched after emit. */
+  body->bytes[0] = FR_INSTRUCTION_FORMAT_VERSION;
+  body->bytes[1] = FR_INSTRUCTION_LOCALS_HEADER_SIZE;
+  body->bytes[2] = 0;
+  body->bytes[3] = 0;
+  body_ctx.runtime = ctx->runtime;
+  body_ctx.body_texts = ctx->body_texts;
+  body_ctx.locals = &body_locals;
+  FR_TRY(fr_compile_emit_expr(&body_ctx, parsed, expr->children[1], body->bytes,
+                              &body_offset));
+  FR_TRY(fr_compile_write_byte(body->bytes, &body_offset, FR_OP_RETURN));
+  /* next_index is the high-water-mark; LIST emit restores `count` on close
+   * so the body needs to size locals to what was ever assigned. */
+  body->bytes[3] = body_locals.next_index;
+  body->object->instructions =
+      (fr_instruction_stream_t){.bytes = body->bytes, .length = body_offset};
+  body->object->param_names = NULL;
+  body->object->param_names_length = 0;
+  body->used = true;
+
+  FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, expr->int_value));
+  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0], instruction_bytes,
+                              offset));
+  if (expr->child_count == 3) {
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[2],
+                                instruction_bytes, offset));
+  } else {
+    FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, 0));
+  }
+  FR_TRY(fr_compile_emit_push_code_id(instruction_bytes, offset, 1));
+  return fr_compile_emit_slot_op(instruction_bytes, offset,
+                                 FR_OP_CALL_NATIVE_SLOT, FR_SLOT_EVENT_REGISTER);
+}
+
 static fr_err_t fr_compile_emit_forever(const fr_compile_context_t *ctx,
                                         const fr_parse_line_t *parsed,
                                         const fr_parse_expr_t *expr,
@@ -974,6 +1076,20 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_FOREVER:
     return fr_compile_emit_forever(ctx, parsed, expr, instruction_bytes,
                                    offset);
+  case FR_PARSE_EXPR_EVENT_REGISTER:
+    return fr_compile_emit_event_register(ctx, parsed, expr, instruction_bytes,
+                                          offset);
+  case FR_PARSE_EXPR_EVENT_CANCEL:
+    if (expr->child_count != 1) {
+      return FR_ERR_INVALID;
+    }
+    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_EVENTS));
+    FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, expr->int_value));
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
+                                instruction_bytes, offset));
+    return fr_compile_emit_slot_op(instruction_bytes, offset,
+                                   FR_OP_CALL_NATIVE_SLOT,
+                                   FR_SLOT_EVENT_CANCEL);
   default:
     return FR_ERR_UNSUPPORTED;
   }
@@ -1213,6 +1329,11 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
       .count = 0,
   };
   fr_compile_locals_t locals = {0};
+  fr_compile_event_body_t event_body = {
+      .object = &out->event_body_object,
+      .bytes = out->event_body_bytes,
+      .used = false,
+  };
   uint8_t arity = 0;
   uint8_t local_count = 0;
   uint8_t header_size = FR_INSTRUCTION_MIN_HEADER_SIZE;
@@ -1249,6 +1370,7 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
   body_ctx.param_count = arity;
   body_ctx.body_texts = &body_texts;
   body_ctx.locals = &locals;
+  body_ctx.event_body = &event_body;
 
   out->instruction_bytes[0] = FR_INSTRUCTION_FORMAT_VERSION;
   out->instruction_bytes[1] = header_size;
@@ -1287,6 +1409,15 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
       .natives = NULL,
       .native_count = 0,
   };
+  /* The `on`/`every`/`after` body rides in code_objects[1]; outer at [0]
+   * keeps PUSH_CODE_ID's patch-time index aligned with the slot init's
+   * REF_CODE_OBJECT index. */
+  if (event_body.used) {
+    out->code_objects_storage[0] = out->code_object;
+    out->code_objects_storage[1] = out->event_body_object;
+    out->overlay_update.code_objects = out->code_objects_storage;
+    out->overlay_update.code_object_count = 2;
+  }
   return FR_OK;
 }
 

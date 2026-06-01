@@ -89,6 +89,7 @@ KERNEL_SOURCES = \
 	src/image.c \
 	src/base_defs.c \
 	src/base_image.c \
+	src/event.c \
 	src/vm.c \
 	$(SOURCE_BASE_C) \
 	$(COMPILER_SOURCES) \
@@ -144,6 +145,7 @@ KERNEL_DEPS = \
 	src/image.h src/image.c \
 	src/base_defs.h src/base_defs.c \
 	src/base_image.h src/base_image.c \
+	src/event.h src/event.c \
 	src/platform.h \
 	src/persist.h src/persist.c \
 	src/persist_payload.h src/persist_payload.c \
@@ -564,11 +566,11 @@ test-helper-tiny-blink: frothy-session host-overlay-compiler-tiny-host-names
 	printf 'tiny helper blink transcript ok\n'
 
 $(TEST_BINARY): $(TEST_DEPS)
-	$(FR_CC) $(FR_CFLAGS) $(TEST_SOURCES) $(FR_LDFLAGS) -o $@
+	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 $(TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
 $(UNITY_TEST_BINARY): $(UNITY_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) \
 		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
-	$(FR_CC) $(FR_CFLAGS) $(UNITY_TEST_SOURCES) $(FR_LDFLAGS) -o $@
+	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 $(UNITY_TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
 $(OVERLAY_COMPILER): tools/frothy-compile-overlay.c $(FROTHY_DEPS) | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) tools/frothy-compile-overlay.c $(KERNEL_SOURCES) $(PLATFORM_SOURCES) $(PERSISTENCE_SOURCES) $(FR_LDFLAGS) -o $@
