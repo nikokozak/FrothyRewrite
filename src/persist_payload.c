@@ -6,6 +6,8 @@
 
 #include "base_defs.h"
 #include "code.h"
+#include "event.h"
+#include "image.h"
 #include "instruction.h"
 #include "object.h"
 #include "slot.h"
@@ -129,6 +131,7 @@ typedef struct fr_persist_decoded_payload_t {
   fr_persist_name_record_t name_records[FR_PROFILE_MAX_OVERLAY_NAMES > 0
                                              ? FR_PROFILE_MAX_OVERLAY_NAMES
                                              : 1];
+  fr_image_event_binding_t event_records[FR_EVENT_BINDING_COUNT];
   uint16_t code_count;
   uint16_t text_count;
   uint16_t shape_count;
@@ -140,6 +143,7 @@ typedef struct fr_persist_decoded_payload_t {
   uint16_t object_count;
   uint16_t bind_count;
   uint16_t name_count;
+  uint16_t event_count;
 } fr_persist_decoded_payload_t;
 
 static void
@@ -1656,6 +1660,38 @@ static fr_err_t fr_persist_decode_payload(
       }
       FR_TRY(fr_persist_decode_value(&reader, bind));
       *out_bind_count = (uint16_t)(*out_bind_count + 1);
+    } else if (record == FR_PERSIST_RECORD_EVENT) {
+#if !FR_FEATURE_EVENTS
+      return FR_ERR_UNSUPPORTED;
+#else
+      fr_image_event_binding_t *binding = NULL;
+      uint8_t kind = 0;
+      uint16_t source = 0;
+      uint16_t debounce_ms = 0;
+      uint16_t body = 0;
+
+      if (decoded->event_count >= FR_EVENT_BINDING_COUNT) {
+        return FR_ERR_CAPACITY;
+      }
+      FR_TRY(fr_persist_reader_u8(&reader, &kind));
+      if (kind == FR_EVENT_KIND_NONE || kind > FR_EVENT_KIND_AFTER) {
+        return FR_ERR_CORRUPT;
+      }
+      FR_TRY(fr_persist_reader_u16(&reader, &source));
+      FR_TRY(fr_persist_reader_u16(&reader, &debounce_ms));
+      FR_TRY(fr_persist_reader_u16(&reader, &body));
+      /* Save writes the body's CODE record before this EVENT record via
+       * fr_persist_encode_code_ref, so the local id has been seen by decode. */
+      if (body >= *out_code_count) {
+        return FR_ERR_CORRUPT;
+      }
+      binding = &decoded->event_records[decoded->event_count];
+      binding->kind = (fr_event_kind_t)kind;
+      binding->source = source;
+      binding->debounce_ms = debounce_ms;
+      binding->body = body;
+      decoded->event_count = (uint16_t)(decoded->event_count + 1);
+#endif
     }
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
     else if (record == FR_PERSIST_RECORD_NAME) {
@@ -2229,6 +2265,17 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
   for (uint16_t i = 0; i < name_count; i++) {
     FR_TRY(fr_slot_bind_project_name(runtime, name_records[i].name,
                                      name_records[i].slot_id));
+  }
+#endif
+#if FR_FEATURE_EVENTS
+  /* fr_runtime_reset cleared the binding table; re-register each decoded
+   * record in payload order. fr_event_register stages platform install before
+   * writing the table (event.c:88-103), so a failed install leaves the slot
+   * empty and the restore aborts. */
+  for (uint16_t i = 0; i < decoded.event_count; i++) {
+    const fr_image_event_binding_t *binding = &decoded.event_records[i];
+    FR_TRY(fr_event_register(runtime, binding->kind, binding->source,
+                             binding->debounce_ms, code_map[binding->body]));
   }
 #endif
 

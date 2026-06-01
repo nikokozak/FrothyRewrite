@@ -7577,7 +7577,7 @@ static void test_persist(void) {
       FR_TEST_PERSIST_RECORD_END,
   };
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_WORD_SIZE == 16
-  uint8_t old_name_free_payload[] = {
+  uint8_t name_free_payload[] = {
       'F',
       'R',
       'P',
@@ -7667,9 +7667,9 @@ static void test_persist(void) {
   (void)expression;
 #endif
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_WORD_SIZE == 16
-  write_u16_little_endian(&old_name_free_payload[6],
+  write_u16_little_endian(&name_free_payload[6],
                           FR_TEST_FIRST_USER_SLOT);
-  write_u16_little_endian(&old_name_free_payload[9], (uint16_t)(int16_t)13);
+  write_u16_little_endian(&name_free_payload[9], (uint16_t)(int16_t)13);
 #endif
 #if !FR_FEATURE_CELLS
   write_u16_little_endian(&cell_payload[8], 1);
@@ -7687,10 +7687,10 @@ static void test_persist(void) {
                 &runtime, wrong_version_payload,
                 (uint16_t)sizeof(wrong_version_payload)) == FR_ERR_CORRUPT);
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_WORD_SIZE == 16
-  CHECK("persist restores old name-free payload",
+  CHECK("persist restores payload without name records",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_persist_payload_restore(&runtime, old_name_free_payload,
-                                       (uint16_t)sizeof(old_name_free_payload)) ==
+            fr_persist_payload_restore(&runtime, name_free_payload,
+                                       (uint16_t)sizeof(name_free_payload)) ==
                 FR_OK &&
             fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &tagged) ==
                 FR_OK &&
