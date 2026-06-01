@@ -96,7 +96,22 @@ fr_err_t fr_platform_i2c_write(uint16_t platform_index, uint8_t addr,
                                const uint8_t *bytes, uint16_t length);
 fr_err_t fr_platform_i2c_read(uint16_t platform_index, uint8_t addr,
                               uint8_t *bytes, uint16_t length);
+/* Combined write-then-read with a repeated-start between phases. Either
+ * length may be zero. Devices that latch on a register pointer require the
+ * bus not to be released between the two phases. */
+fr_err_t fr_platform_i2c_write_read(uint16_t platform_index, uint8_t addr,
+                                    const uint8_t *wbytes, uint16_t wlength,
+                                    uint8_t *rbytes, uint16_t rlength);
 fr_err_t fr_platform_i2c_close(uint16_t platform_index);
+#ifdef FR_HOST_TEST_HELPERS
+/* Host test fixtures. drain returns recorded write-phase bytes in FIFO order
+ * and empties the ring; queue appends canned bytes that subsequent
+ * fr_platform_i2c_write_read read phases consume. */
+uint16_t fr_host_i2c_drain_writes(uint16_t platform_index, uint8_t *out_bytes,
+                                  uint16_t max_length);
+void fr_host_i2c_queue_read(uint16_t platform_index, const uint8_t *bytes,
+                            uint16_t length);
+#endif
 #endif
 
 #if FR_FEATURE_PERSISTENCE
