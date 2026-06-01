@@ -96,6 +96,12 @@ fr_err_t fr_platform_i2c_write(uint16_t platform_index, uint8_t addr,
                                const uint8_t *bytes, uint16_t length);
 fr_err_t fr_platform_i2c_read(uint16_t platform_index, uint8_t addr,
                               uint8_t *bytes, uint16_t length);
+/* Combined write-then-read with a repeated-start between phases. Either
+ * length may be zero. Devices that latch on a register pointer require the
+ * bus not to be released between the two phases. */
+fr_err_t fr_platform_i2c_write_read(uint16_t platform_index, uint8_t addr,
+                                    const uint8_t *wbytes, uint16_t wlength,
+                                    uint8_t *rbytes, uint16_t rlength);
 fr_err_t fr_platform_i2c_close(uint16_t platform_index);
 #endif
 

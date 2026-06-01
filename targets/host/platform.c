@@ -562,6 +562,25 @@ fr_err_t fr_platform_i2c_read(uint16_t platform_index, uint8_t addr,
   return FR_OK;
 }
 
+fr_err_t fr_platform_i2c_write_read(uint16_t platform_index, uint8_t addr,
+                                    const uint8_t *wbytes, uint16_t wlength,
+                                    uint8_t *rbytes, uint16_t rlength) {
+  fr_host_i2c_t *i2c = NULL;
+
+  if (addr > FR_HOST_I2C_ADDR_MAX) {
+    return FR_ERR_DOMAIN;
+  }
+  if ((wbytes == NULL && wlength > 0) || (rbytes == NULL && rlength > 0)) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_i2c_entry(platform_index, &i2c));
+  (void)i2c;
+  for (uint16_t i = 0; i < rlength; i++) {
+    rbytes[i] = (uint8_t)(addr + i);
+  }
+  return FR_OK;
+}
+
 fr_err_t fr_platform_i2c_close(uint16_t platform_index) {
   if (platform_index >= FR_PROFILE_MAX_HANDLES) {
     return FR_OK;

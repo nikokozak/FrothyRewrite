@@ -983,6 +983,30 @@ fr_err_t fr_platform_i2c_read(uint16_t platform_index, uint8_t addr,
   return err;
 }
 
+fr_err_t fr_platform_i2c_write_read(uint16_t platform_index, uint8_t addr,
+                                    const uint8_t *wbytes, uint16_t wlength,
+                                    uint8_t *rbytes, uint16_t rlength) {
+  fr_esp_i2c_t *i2c = NULL;
+  i2c_master_dev_handle_t dev = NULL;
+  fr_err_t err = FR_OK;
+
+  if (addr > FR_ESP_I2C_ADDR_MAX) {
+    return FR_ERR_DOMAIN;
+  }
+  if ((wbytes == NULL && wlength > 0) || (rbytes == NULL && rlength > 0)) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_i2c_entry(platform_index, &i2c));
+  if (wlength == 0 && rlength == 0) {
+    return FR_OK;
+  }
+  FR_TRY(fr_esp_i2c_dev(i2c, addr, &dev));
+  err = fr_esp_err(
+      i2c_master_transmit_receive(dev, wbytes, wlength, rbytes, rlength, -1));
+  (void)i2c_master_bus_rm_device(dev);
+  return err;
+}
+
 fr_err_t fr_platform_i2c_close(uint16_t platform_index) {
   fr_esp_i2c_t *i2c = NULL;
 
