@@ -3518,6 +3518,64 @@ static void test_event_drain_dispatch(void) {
                                    after_entry->last_fire_ms == 0);
 }
 
+static void test_event_coalescing(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *gpio_entry = NULL;
+  fr_tagged_t slot_value = 0;
+  fr_tagged_t zero = 0;
+  fr_int_t decoded = 0;
+  /* Body: LOAD_SLOT counter, PUSH_INT 1, ADD_INT, STORE_SLOT counter, RETURN.
+   * Each slot operand sits one byte after its op. */
+  uint8_t body_bytes[] = {0x00, 0x00,
+                          FR_OP_LOAD_SLOT, 0x00, 0x00,
+                          FR_TEST_PUSH_INT(1),
+                          FR_OP_ADD_INT,
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  const size_t load_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + 1u;
+  const size_t store_operand_offset =
+      load_operand_offset + 2u + FR_INSTRUCTION_PUSH_INT_SIZE + 1u + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[load_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+
+  CHECK("coalesce runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("coalesce encode zero", fr_tagged_encode_int(0, &zero) == FR_OK);
+  CHECK("coalesce seed counter",
+        fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, zero) == FR_OK);
+  CHECK("coalesce view",
+        fr_instruction_stream_init(&view, body_bytes, sizeof(body_bytes)) ==
+            FR_OK);
+  CHECK("coalesce install body",
+        fr_code_install(&runtime, &view, NULL, 0, &body_id) == FR_OK);
+  CHECK("coalesce register",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+  gpio_entry = &runtime.events.entries[0];
+
+  /* Two queued candidates collapse to one pending bit and one body run. */
+  CHECK("coalesce post first",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 50) ==
+            FR_OK);
+  CHECK("coalesce post second",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 60) ==
+            FR_OK);
+  CHECK("coalesce drain", fr_event_drain(&runtime) == FR_OK);
+  CHECK("coalesce pending after drain", gpio_entry->pending == true);
+  CHECK("coalesce dispatch", fr_event_dispatch(&runtime) == FR_OK);
+  CHECK("coalesce counter is one",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+  CHECK("coalesce pending cleared", gpio_entry->pending == false);
+}
+
 static void test_event_register_native(void) {
   fr_runtime_t runtime;
   fr_instruction_stream_t body_view;
@@ -9550,6 +9608,7 @@ int main(void) {
   test_event_table();
   test_event_register_cancel();
   test_event_drain_dispatch();
+  test_event_coalescing();
   test_event_register_native();
 #if FR_FEATURE_COMPILER
   test_event_compile_on_form();
