@@ -1260,6 +1260,8 @@ fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
   fr_err_t err;
   esp_err_t start_err;
   esp_err_t old_stop_err;
+  esp_err_t new_stop_err;
+  esp_err_t new_delete_err;
 
   if (kind != FR_EVENT_KIND_EVERY && kind != FR_EVENT_KIND_AFTER) {
     return FR_ERR_INVALID;
@@ -1293,23 +1295,24 @@ fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
     return FR_ERR_INVALID;
   }
 
-  /* Stage the replacement: the new handle is already running, but only commit
-   * the slot once the old handle is fully released. If either stop or delete
-   * fails on the old handle, roll back the new one so the slot keeps pointing
-   * at the live old handle and the runtime's prior generation stays armed.
-   * Stale callbacks that fire before stop completes are filtered by generation
-   * at the runtime layer. */
+  /* Stage the replacement: the new handle is already running. Commit the slot
+   * once the old handle is fully released. If stop or delete fails on the old
+   * handle, roll back the new one. If the rollback can't release the new
+   * handle either, take ownership of it in the slot so a later remove can
+   * retry; the old handle leaks but is unreachable, and stale callbacks that
+   * fire before stop completes are filtered by generation at the runtime
+   * layer. */
   old_handle = fr_esp_event_timer_handles[binding_index];
   if (old_handle != NULL) {
     old_stop_err = esp_timer_stop(old_handle);
-    if (old_stop_err != ESP_OK && old_stop_err != ESP_ERR_INVALID_STATE) {
-      (void)esp_timer_stop(new_handle);
-      (void)esp_timer_delete(new_handle);
-      return FR_ERR_INVALID;
-    }
-    if (esp_timer_delete(old_handle) != ESP_OK) {
-      (void)esp_timer_stop(new_handle);
-      (void)esp_timer_delete(new_handle);
+    if ((old_stop_err != ESP_OK && old_stop_err != ESP_ERR_INVALID_STATE) ||
+        esp_timer_delete(old_handle) != ESP_OK) {
+      new_stop_err = esp_timer_stop(new_handle);
+      new_delete_err = esp_timer_delete(new_handle);
+      if ((new_stop_err != ESP_OK && new_stop_err != ESP_ERR_INVALID_STATE) ||
+          new_delete_err != ESP_OK) {
+        fr_esp_event_timer_handles[binding_index] = new_handle;
+      }
       return FR_ERR_INVALID;
     }
   }
