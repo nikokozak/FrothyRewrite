@@ -1,5 +1,6 @@
 #include "parse.h"
 
+#include "platform.h"
 #include "tagged.h"
 
 #include <stdbool.h>
@@ -862,13 +863,15 @@ static fr_err_t fr_parse_forever(fr_parser_t *parser,
 }
 
 /* `every <ms-expr> [body]` and `after <ms-expr> [body]` share one shape:
- * (ms, body) with int_value matching fr_event_kind_t — 4 for EVERY, 5
- * for AFTER. The keyword string drives the dispatch. */
+ * (ms, body) with int_value carrying the matching fr_event_kind_t value.
+ * The keyword string drives the dispatch. */
 static fr_err_t fr_parse_timer_event(fr_parser_t *parser,
                                      fr_parse_expr_id_t *out_id) {
   fr_parse_expr_t reg = {.kind = FR_PARSE_EXPR_EVENT_REGISTER};
 
-  reg.int_value = fr_parse_span_equals(parser->token.span, "every") ? 4 : 5;
+  reg.int_value = fr_parse_span_equals(parser->token.span, "every")
+                      ? FR_EVENT_KIND_EVERY
+                      : FR_EVENT_KIND_AFTER;
   FR_TRY(fr_parse_advance(parser));
   FR_TRY(fr_parse_expression(parser, &reg.children[0]));
   FR_TRY(fr_parse_bracket_block(parser, &reg.children[1]));
@@ -891,11 +894,11 @@ static fr_err_t fr_parse_on(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
     return FR_ERR_INVALID;
   }
   if (fr_parse_span_equals(parser->token.span, "rising")) {
-    edge = 1;
+    edge = FR_EVENT_KIND_GPIO_RISING;
   } else if (fr_parse_span_equals(parser->token.span, "falling")) {
-    edge = 2;
+    edge = FR_EVENT_KIND_GPIO_FALLING;
   } else if (fr_parse_span_equals(parser->token.span, "changes")) {
-    edge = 3;
+    edge = FR_EVENT_KIND_GPIO_CHANGES;
   } else {
     return FR_ERR_INVALID;
   }

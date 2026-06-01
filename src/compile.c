@@ -34,9 +34,10 @@ typedef struct fr_compile_locals_t {
   uint8_t next_index;
 } fr_compile_locals_t;
 
-/* An `on` statement stashes its body here as a separate code object. The outer
- * function's bytecode references it through PUSH_CODE_ID. One body per overlay
- * update for now; a second `on` returns FR_ERR_CAPACITY. */
+/* An `on`/`every`/`after` statement stashes its body here as a separate code
+ * object. The outer function's bytecode references it through PUSH_CODE_ID.
+ * One body per overlay update for now; a second event form returns
+ * FR_ERR_CAPACITY. */
 typedef struct fr_compile_event_body_t {
   fr_image_code_object_t *object;
   uint8_t *bytes;
