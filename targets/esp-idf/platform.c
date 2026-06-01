@@ -16,6 +16,7 @@
 #include "esp_err.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -1131,19 +1132,100 @@ void fr_platform_storage_debug_reset(void) {
 }
 #endif
 
+/* Queue depth 16 matches FR_EVENT_BINDING_COUNT: one full drain transfers
+ * every live binding exactly once before any overflow. */
+static QueueHandle_t fr_esp_event_queue;
+static volatile uint32_t fr_esp_event_overflow;
+static bool fr_esp_isr_service_installed;
+
+static uint32_t fr_esp_event_millis_now(void) {
+  return (uint32_t)((esp_timer_get_time() / 1000) % FR_ESP_MILLIS_WRAP);
+}
+
+static fr_err_t fr_esp_event_queue_ensure(void) {
+  if (fr_esp_event_queue == NULL) {
+    fr_esp_event_queue = xQueueCreate(16, sizeof(fr_event_candidate_t));
+    if (fr_esp_event_queue == NULL) {
+      return FR_ERR_CAPACITY;
+    }
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_esp_event_isr_service_ensure(void) {
+  esp_err_t e;
+  if (fr_esp_isr_service_installed) {
+    return FR_OK;
+  }
+  e = gpio_install_isr_service(0);
+  if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {
+    return FR_ERR_CAPACITY;
+  }
+  fr_esp_isr_service_installed = true;
+  return FR_OK;
+}
+
+static void fr_esp_event_gpio_isr(void *arg) {
+  uintptr_t packed = (uintptr_t)arg;
+  fr_event_candidate_t candidate = {
+      .binding_index = (uint16_t)(packed & 0xFFFFu),
+      .generation = (uint16_t)((packed >> 16) & 0xFFFFu),
+      .timestamp_ms = fr_esp_event_millis_now(),
+  };
+  BaseType_t woken = pdFALSE;
+  if (xQueueSendFromISR(fr_esp_event_queue, &candidate, &woken) != pdTRUE) {
+    fr_esp_event_overflow++;
+  }
+  portYIELD_FROM_ISR(woken);
+}
+
 fr_err_t fr_platform_event_gpio_install(fr_event_kind_t kind, uint16_t pin,
                                         uint16_t binding_index,
                                         uint16_t generation) {
-  (void)kind;
-  (void)pin;
-  (void)binding_index;
-  (void)generation;
-  return FR_ERR_UNSUPPORTED;
+  gpio_int_type_t intr;
+  void *packed_arg;
+  fr_err_t err;
+
+  switch (kind) {
+  case FR_EVENT_KIND_GPIO_RISING:
+    intr = GPIO_INTR_POSEDGE;
+    break;
+  case FR_EVENT_KIND_GPIO_FALLING:
+    intr = GPIO_INTR_NEGEDGE;
+    break;
+  case FR_EVENT_KIND_GPIO_CHANGES:
+    intr = GPIO_INTR_ANYEDGE;
+    break;
+  default:
+    return FR_ERR_INVALID;
+  }
+
+  err = fr_esp_event_queue_ensure();
+  if (err != FR_OK) {
+    return err;
+  }
+  err = fr_esp_event_isr_service_ensure();
+  if (err != FR_OK) {
+    return err;
+  }
+
+  packed_arg = (void *)(((uintptr_t)generation << 16) |
+                        (uintptr_t)binding_index);
+  if (gpio_isr_handler_add((gpio_num_t)pin, fr_esp_event_gpio_isr,
+                           packed_arg) != ESP_OK) {
+    return FR_ERR_CAPACITY;
+  }
+  if (gpio_set_intr_type((gpio_num_t)pin, intr) != ESP_OK) {
+    (void)gpio_isr_handler_remove((gpio_num_t)pin);
+    return FR_ERR_INVALID;
+  }
+  return FR_OK;
 }
 
 fr_err_t fr_platform_event_gpio_remove(uint16_t pin) {
-  (void)pin;
-  return FR_ERR_UNSUPPORTED;
+  (void)gpio_set_intr_type((gpio_num_t)pin, GPIO_INTR_DISABLE);
+  (void)gpio_isr_handler_remove((gpio_num_t)pin);
+  return FR_OK;
 }
 
 fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
