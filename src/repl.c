@@ -41,6 +41,7 @@ typedef enum fr_repl_command_kind_t {
   FR_REPL_COMMAND_BLANK,
   FR_REPL_COMMAND_STATUS,
   FR_REPL_COMMAND_WORDS,
+  FR_REPL_COMMAND_EVENTS,
   FR_REPL_COMMAND_SEE,
   FR_REPL_COMMAND_CLEAR,
   FR_REPL_COMMAND_APPLY,
@@ -125,6 +126,12 @@ static fr_err_t fr_repl_parse_recognized_command(
   if (fr_repl_span_equals(start, token_len, "words")) {
     if (arg == end) {
       out->kind = FR_REPL_COMMAND_WORDS;
+    }
+    return FR_OK;
+  }
+  if (fr_repl_span_equals(start, token_len, "events")) {
+    if (arg == end) {
+      out->kind = FR_REPL_COMMAND_EVENTS;
     }
     return FR_OK;
   }
@@ -777,6 +784,83 @@ static fr_err_t fr_repl_write_words(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_EVENTS
+static const char *fr_repl_event_kind_name(fr_event_kind_t kind) {
+  /* `on falling` / `on rising` / `on changes` / `every` / `after` —
+   * matches the source spellings the parser accepts so a user can
+   * round-trip what `events` prints back into source if needed. */
+  switch (kind) {
+  case FR_EVENT_KIND_GPIO_RISING:  return "on rising";
+  case FR_EVENT_KIND_GPIO_FALLING: return "on falling";
+  case FR_EVENT_KIND_GPIO_CHANGES: return "on changes";
+  case FR_EVENT_KIND_EVERY:        return "every";
+  case FR_EVENT_KIND_AFTER:        return "after";
+  default:                         return NULL;
+  }
+}
+
+/* Format: one line per active binding, then optional overflow line,
+ * then `ok\n`. Empty binding table prints just `ok\n` — zero is a
+ * valid count, so callers parse "lines before ok" as the table.
+ *
+ * Per-binding line: `<kind-name> <source>[ debounce <ms>]\n`
+ *   - kind-name: source spelling (`on rising`, `every`, ...) so the
+ *     line round-trips back to parseable source if needed
+ *   - source: pin number for GPIO, ms interval for timers (uint16
+ *     each — source is uint16_t in the binding struct)
+ *
+ * Overflow line emits a distinct keyword when truncated so any
+ * parser can tell saturation from a real count:
+ *   - `overflow N\n` when the count fits in uint16
+ *   - `overflow_saturated 65535\n` when the count exceeds uint16
+ * The split keyword keeps the value field a clean integer either way. */
+static fr_err_t fr_repl_write_events(fr_runtime_t *runtime,
+                                     const fr_repl_writer_t *writer) {
+  char number[12];
+
+  if (runtime == NULL || writer == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    const fr_event_binding_t *entry = &runtime->events.entries[i];
+    const char *kind_name = NULL;
+
+    if (entry->kind == FR_EVENT_KIND_NONE) {
+      continue;
+    }
+    kind_name = fr_repl_event_kind_name(entry->kind);
+    if (kind_name == NULL) {
+      return FR_ERR_INVALID;
+    }
+    FR_TRY(fr_repl_writer_write(writer, kind_name));
+    FR_TRY(fr_repl_writer_write(writer, " "));
+    FR_TRY(fr_repl_write_u16(number, (uint16_t)sizeof(number),
+                             entry->source));
+    FR_TRY(fr_repl_writer_write(writer, number));
+    if (entry->debounce_ms > 0) {
+      FR_TRY(fr_repl_writer_write(writer, " debounce "));
+      FR_TRY(fr_repl_write_u16(number, (uint16_t)sizeof(number),
+                               entry->debounce_ms));
+      FR_TRY(fr_repl_writer_write(writer, number));
+    }
+    FR_TRY(fr_repl_writer_write(writer, "\n"));
+  }
+  if (runtime->events.overflow_count > 0) {
+    uint32_t raw = runtime->events.overflow_count;
+    bool saturated = raw > UINT16_MAX;
+    uint16_t shown = saturated ? UINT16_MAX : (uint16_t)raw;
+
+    FR_TRY(fr_repl_writer_write(
+        writer, saturated ? "overflow_saturated " : "overflow "));
+    FR_TRY(fr_repl_write_u16(number, (uint16_t)sizeof(number), shown));
+    FR_TRY(fr_repl_writer_write(writer, number));
+    FR_TRY(fr_repl_writer_write(writer, "\n"));
+  }
+  return fr_repl_writer_write(writer, "ok\n");
+}
+#endif
+
 #if FR_FEATURE_INTROSPECTION || FR_FEATURE_NUMERIC_SLOT_CALLS
 static fr_err_t fr_repl_parse_slot_id(const char *start, uint16_t length,
                                       fr_slot_id_t *out_slot_id) {
@@ -1330,6 +1414,14 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
   if (command.kind == FR_REPL_COMMAND_WORDS) {
 #if FR_FEATURE_INTROSPECTION
     return fr_repl_write_words(runtime, writer);
+#else
+    return FR_ERR_UNSUPPORTED;
+#endif
+  }
+
+  if (command.kind == FR_REPL_COMMAND_EVENTS) {
+#if FR_FEATURE_EVENTS
+    return fr_repl_write_events(runtime, writer);
 #else
     return FR_ERR_UNSUPPORTED;
 #endif
