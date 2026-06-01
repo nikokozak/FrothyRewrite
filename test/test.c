@@ -3745,6 +3745,49 @@ static void test_event_debounce_first_fire_at_zero(void) {
         gpio_entry->last_fire_ms == 35);
 }
 
+/* Posting past the host queue cap drops the candidate and bumps the platform
+ * overflow counter; the next drain rolls the delta into the runtime field and
+ * resets the platform side. Two overflowed posts accumulate as delta two. */
+static void test_event_overflow_counter(void) {
+  fr_runtime_t runtime;
+  fr_event_binding_t *gpio_entry = NULL;
+
+  CHECK("overflow runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("overflow register",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, 1) ==
+            FR_OK);
+  gpio_entry = &runtime.events.entries[0];
+  CHECK("overflow starts zero", runtime.events.overflow_count == 0);
+
+  /* Host queue capacity matches FR_EVENT_BINDING_COUNT; sixteen posts fit. */
+  for (uint8_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    CHECK("overflow post fits",
+          fr_platform_event_post_test_candidate(
+              0, gpio_entry->generation, (uint32_t)i) == FR_OK);
+  }
+  CHECK("overflow seventeenth rejects",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 99) ==
+            FR_ERR_CAPACITY);
+  CHECK("overflow eighteenth rejects",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 100) ==
+            FR_ERR_CAPACITY);
+
+  CHECK("overflow drain", fr_event_drain(&runtime) == FR_OK);
+  CHECK("overflow delta lands in runtime",
+        runtime.events.overflow_count == 2);
+  CHECK("overflow drained candidates set pending",
+        gpio_entry->pending == true);
+
+  /* Platform side reset: a fresh post fits and the next drain adds no delta. */
+  gpio_entry->pending = false;
+  CHECK("overflow fresh post fits",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 200) ==
+            FR_OK);
+  CHECK("overflow second drain", fr_event_drain(&runtime) == FR_OK);
+  CHECK("overflow stays at two",
+        runtime.events.overflow_count == 2);
+}
+
 static void test_event_register_native(void) {
   fr_runtime_t runtime;
   fr_instruction_stream_t body_view;
@@ -9911,6 +9954,7 @@ int main(void) {
   test_event_coalescing();
   test_event_debounce_drops_within_window();
   test_event_debounce_first_fire_at_zero();
+  test_event_overflow_counter();
   test_event_register_native();
 #if FR_FEATURE_COMPILER
   test_event_compile_on_form();
