@@ -112,11 +112,18 @@ enum {
   FR_TEST_PERSIST_RECORD_TEXT = 5,
   FR_TEST_PERSIST_RECORD_RECORD_SHAPE = 6,
   FR_TEST_PERSIST_RECORD_RECORD = 7,
+  FR_TEST_PERSIST_RECORD_EVENT = 8,
   FR_TEST_PERSIST_RECORD_END = 0xff,
   FR_TEST_PERSIST_VALUE_NIL = 0,
   FR_TEST_PERSIST_VALUE_INT = 3,
   FR_TEST_PERSIST_VALUE_OBJECT = 6,
 };
+
+#if FR_WORD_SIZE == 16
+#define FR_TEST_PERSIST_PAYLOAD_VERSION 2
+#else
+#define FR_TEST_PERSIST_PAYLOAD_VERSION 3
+#endif
 
 #if FR_FEATURE_PERSISTENCE
 #define FR_TEST_WORDS                                                        \
@@ -7571,12 +7578,12 @@ static void test_persist(void) {
       FR_TEST_PERSIST_RECORD_END,
   };
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_WORD_SIZE == 16
-  uint8_t old_name_free_payload[] = {
+  uint8_t name_free_payload[] = {
       'F',
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_BIND,
       0,
       0,
@@ -7592,7 +7599,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_CELLS,
       0,
       0,
@@ -7610,7 +7617,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_TEXT,
       0,
       0,
@@ -7626,7 +7633,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_RECORD_SHAPE,
       0,
       0,
@@ -7647,7 +7654,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_RECORD,
       0,
       0,
@@ -7661,9 +7668,9 @@ static void test_persist(void) {
   (void)expression;
 #endif
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_WORD_SIZE == 16
-  write_u16_little_endian(&old_name_free_payload[6],
+  write_u16_little_endian(&name_free_payload[6],
                           FR_TEST_FIRST_USER_SLOT);
-  write_u16_little_endian(&old_name_free_payload[9], (uint16_t)(int16_t)13);
+  write_u16_little_endian(&name_free_payload[9], (uint16_t)(int16_t)13);
 #endif
 #if !FR_FEATURE_CELLS
   write_u16_little_endian(&cell_payload[8], 1);
@@ -7681,10 +7688,10 @@ static void test_persist(void) {
                 &runtime, wrong_version_payload,
                 (uint16_t)sizeof(wrong_version_payload)) == FR_ERR_CORRUPT);
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_WORD_SIZE == 16
-  CHECK("persist restores old name-free payload",
+  CHECK("persist restores payload without name records",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_persist_payload_restore(&runtime, old_name_free_payload,
-                                       (uint16_t)sizeof(old_name_free_payload)) ==
+            fr_persist_payload_restore(&runtime, name_free_payload,
+                                       (uint16_t)sizeof(name_free_payload)) ==
                 FR_OK &&
             fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &tagged) ==
                 FR_OK &&
@@ -8126,7 +8133,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_NAME,
       0,
       0,
@@ -8141,7 +8148,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_CELLS,
       0,
       0,
@@ -8159,7 +8166,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_TEXT,
       0,
       0,
@@ -8175,7 +8182,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      0,
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_RECORD_SHAPE,
       0,
       0,
@@ -8251,6 +8258,196 @@ static void test_persist(void) {
   CHECK("persist wipe without compiler",
         fr_persist_wipe(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_ERR_NOT_FOUND);
+}
+#endif
+
+#if FR_FEATURE_PERSISTENCE && !FR_FEATURE_EVENTS
+static void test_persist_payload_rejects_event_record(void) {
+  fr_runtime_t runtime;
+  uint8_t event_payload[] = {
+      'F',
+      'R',
+      'P',
+      'O',
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_TEST_PERSIST_RECORD_EVENT,
+      FR_EVENT_KIND_GPIO_RISING,
+      0, 0,
+      0, 0,
+      0, 0,
+      FR_TEST_PERSIST_RECORD_END,
+  };
+
+  fr_platform_storage_debug_reset();
+  CHECK("persist payload rejects compiled-out event records",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_payload_restore(&runtime, event_payload,
+                                       (uint16_t)sizeof(event_payload)) ==
+                FR_ERR_UNSUPPORTED);
+}
+#endif
+
+#if FR_FEATURE_PERSISTENCE && FR_FEATURE_EVENTS
+static void test_persist_payload_rejects_seventeenth_event_record(void) {
+  fr_runtime_t runtime;
+  /* CODE record (local id 0, three-byte placeholder) gives every EVENT
+     record a valid body reference. Decode trips FR_ERR_CAPACITY on the
+     17th EVENT record before runtime reset or platform install. */
+  uint8_t payload[] = {
+      'F', 'R', 'P', 'O',
+      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      0x01, 0, 0, 3, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
+      FR_TEST_PERSIST_RECORD_END,
+  };
+
+  fr_platform_storage_debug_reset();
+  CHECK("persist payload rejects seventeenth event record",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_payload_restore(&runtime, payload,
+                                       (uint16_t)sizeof(payload)) ==
+                FR_ERR_CAPACITY);
+}
+#endif
+
+#if FR_FEATURE_PERSISTENCE && FR_FEATURE_COMPILER && FR_FEATURE_EVENTS &&     \
+    FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT &&                             \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+static void test_persist_events_round_trip(void) {
+  fr_runtime_t runtime;
+  fr_tagged_t boot_result = 0;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  fr_slot_id_t counter_slot = 0;
+  char out[64];
+
+  fr_platform_storage_debug_reset();
+
+  /* on 0 rising: register at boot, save, reinstall base, restore, fire. */
+  CHECK("persist on rising base", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("persist on rising defines counter",
+        fr_repl_eval_line(&runtime, "counter is 0", out, sizeof(out)) == FR_OK);
+  CHECK("persist on rising defines boot",
+        fr_repl_eval_line(
+            &runtime,
+            "boot is fn [ on 0 rising [ set counter to counter + 1 ] ]",
+            out, sizeof(out)) == FR_OK);
+  CHECK("persist on rising runs boot",
+        fr_vm_run_boot(&runtime, &boot_result) == FR_OK);
+  CHECK("persist on rising binding present after boot",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_GPIO_RISING &&
+            runtime.events.entries[0].source == 0);
+  CHECK("persist on rising saves", fr_persist_save(&runtime) == FR_OK);
+  CHECK("persist on rising restores",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK);
+  CHECK("persist on rising binding present after restore",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_GPIO_RISING &&
+            runtime.events.entries[0].source == 0);
+  CHECK("persist on rising resolves counter slot",
+        fr_slot_id_for_name(&runtime, "counter", &counter_slot) == FR_OK);
+  CHECK("persist on rising counter starts at zero",
+        fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 0);
+  CHECK("persist on rising fires",
+        fr_repl_eval_line(&runtime,
+                          "frothy.fire-event: \"on\", 0, \"rising\"", out,
+                          sizeof(out)) == FR_OK);
+  CHECK("persist on rising body ran",
+        fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+
+  /* every 50: same shape. */
+  CHECK("persist every base", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("persist every defines counter",
+        fr_repl_eval_line(&runtime, "counter is 0", out, sizeof(out)) == FR_OK);
+  CHECK("persist every defines boot",
+        fr_repl_eval_line(
+            &runtime,
+            "boot is fn [ every 50 [ set counter to counter + 1 ] ]",
+            out, sizeof(out)) == FR_OK);
+  CHECK("persist every runs boot",
+        fr_vm_run_boot(&runtime, &boot_result) == FR_OK);
+  CHECK("persist every saves", fr_persist_save(&runtime) == FR_OK);
+  CHECK("persist every restores",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK);
+  CHECK("persist every binding present after restore",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_EVERY &&
+            runtime.events.entries[0].source == 50);
+  CHECK("persist every fires",
+        fr_repl_eval_line(&runtime, "frothy.fire-event: \"every\", 50, nil",
+                          out, sizeof(out)) == FR_OK);
+  CHECK("persist every body ran",
+        fr_slot_id_for_name(&runtime, "counter", &counter_slot) == FR_OK &&
+            fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 1);
+
+  /* after 1000 saved BEFORE fire: binding restores as a re-armed one-shot. */
+  CHECK("persist after before fire base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("persist after before fire defines counter",
+        fr_repl_eval_line(&runtime, "counter is 0", out, sizeof(out)) == FR_OK);
+  CHECK("persist after before fire defines boot",
+        fr_repl_eval_line(
+            &runtime,
+            "boot is fn [ after 1000 [ set counter to counter + 1 ] ]",
+            out, sizeof(out)) == FR_OK);
+  CHECK("persist after before fire runs boot",
+        fr_vm_run_boot(&runtime, &boot_result) == FR_OK);
+  CHECK("persist after before fire binding present after boot",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_AFTER &&
+            runtime.events.entries[0].source == 1000);
+  CHECK("persist after before fire saves", fr_persist_save(&runtime) == FR_OK);
+  CHECK("persist after before fire restores",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK);
+  CHECK("persist after before fire binding present after restore",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_AFTER &&
+            runtime.events.entries[0].source == 1000);
+
+  /* after 1000 saved AFTER fire: self-cancel cleared the slot before save. */
+  CHECK("persist after after fire base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("persist after after fire defines counter",
+        fr_repl_eval_line(&runtime, "counter is 0", out, sizeof(out)) == FR_OK);
+  CHECK("persist after after fire defines boot",
+        fr_repl_eval_line(
+            &runtime,
+            "boot is fn [ after 1000 [ set counter to counter + 1 ] ]",
+            out, sizeof(out)) == FR_OK);
+  CHECK("persist after after fire runs boot",
+        fr_vm_run_boot(&runtime, &boot_result) == FR_OK);
+  CHECK("persist after after fire fires",
+        fr_repl_eval_line(&runtime, "frothy.fire-event: \"after\", 1000, nil",
+                          out, sizeof(out)) == FR_OK);
+  CHECK("persist after after fire binding cleared at runtime",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_NONE);
+  CHECK("persist after after fire saves", fr_persist_save(&runtime) == FR_OK);
+  CHECK("persist after after fire restores",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK);
+  CHECK("persist after after fire binding absent after restore",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_NONE);
 }
 #endif
 
@@ -10190,6 +10387,16 @@ int main(void) {
   test_persist_cross_width_header_rejection();
 #if FR_FEATURE_SOURCE_BASE
   test_persist_source_change_header_rejection();
+#endif
+#if !FR_FEATURE_EVENTS
+  test_persist_payload_rejects_event_record();
+#endif
+#if FR_FEATURE_EVENTS
+  test_persist_payload_rejects_seventeenth_event_record();
+#endif
+#if FR_FEATURE_COMPILER && FR_FEATURE_EVENTS && FR_INCLUDE_TEST_NATIVES &&    \
+    FR_FEATURE_TEXT && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  test_persist_events_round_trip();
 #endif
 #endif
   test_vm();

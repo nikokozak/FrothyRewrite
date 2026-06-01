@@ -187,8 +187,11 @@
  * each only when its own wire format changes.
  *
  * v2 added a text-object record so function bodies can carry text literals.
+ * v3 added the event-binding record. Frothy is pre-release: readers accept the
+ * current version only, and any older payload returns the version-mismatch
+ * error.
  */
-#define FR_PROFILE_OVERLAY_UPDATE_VERSION 2
+#define FR_PROFILE_OVERLAY_UPDATE_VERSION 3
 #endif
 
 /* Must equal FR_PARSE_MAX_BODY_EXPRS; static-asserted in compile.h. The literal
@@ -201,6 +204,17 @@
 #define FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_BYTES                              \
   (FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS *                                \
    (FR_PROFILE_MAX_TEXT_LENGTH > 0 ? FR_PROFILE_MAX_TEXT_LENGTH : 1))
+#endif
+
+/* Mirrors FR_EVENT_BINDING_COUNT in runtime.h; the overlay decoder caps event
+   records at the runtime table size. config.h cannot include runtime.h, so the
+   value is repeated here and pinned by a static check in image.c. */
+#ifndef FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS
+#if FR_FEATURE_EVENTS
+#define FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS 16
+#else
+#define FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS 0
+#endif
 #endif
 
 #ifndef FR_PROFILE_REPL_LINE_BYTES

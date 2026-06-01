@@ -7,6 +7,7 @@
 
 #include "code.h"
 #include "crc.h"
+#include "event.h"
 #include "handle.h"
 #include "object.h"
 #include "runtime.h"
@@ -14,12 +15,22 @@
 
 #include <string.h>
 
+/* config.h cannot include runtime.h, so pin the overlay event-record cap to the
+   runtime binding-table size here. */
+typedef char fr_event_overlay_cap_matches_runtime
+    [FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS == 0 ||
+             FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS ==
+                 FR_EVENT_BINDING_COUNT
+         ? 1
+         : -1];
+
 enum {
   FR_OVERLAY_UPDATE_VERSION = FR_PROFILE_OVERLAY_UPDATE_VERSION,
   FR_OVERLAY_UPDATE_RECORD_CODE = 1,
   FR_OVERLAY_UPDATE_RECORD_BIND = 2,
   FR_OVERLAY_UPDATE_RECORD_NAME = 3,
   FR_OVERLAY_UPDATE_RECORD_TEXT = 4,
+  FR_OVERLAY_UPDATE_RECORD_EVENT = 5,
   FR_OVERLAY_UPDATE_RECORD_END = 0xff,
   FR_OVERLAY_UPDATE_VALUE_NIL = 0,
   FR_OVERLAY_UPDATE_VALUE_FALSE = 1,
@@ -53,6 +64,8 @@ typedef struct fr_image_records_t {
   uint16_t native_count;
   const fr_slot_name_t *slot_names;
   uint16_t slot_name_count;
+  const fr_image_event_binding_t *event_bindings;
+  uint16_t event_binding_count;
 } fr_image_records_t;
 
 typedef struct fr_overlay_update_writer_t {
@@ -263,6 +276,8 @@ fr_image_records_from_overlay(const fr_overlay_update_t *update) {
       .native_count = update->native_count,
       .slot_names = update->slot_names,
       .slot_name_count = update->slot_name_count,
+      .event_bindings = update->event_bindings,
+      .event_binding_count = update->event_binding_count,
   };
 }
 
@@ -300,6 +315,18 @@ static fr_err_t fr_image_check_tables(const fr_image_records_t *records) {
   if (records->record_shape_object_count > 0 ||
       records->record_object_count > 0) {
     return FR_ERR_UNSUPPORTED;
+  }
+#endif
+  if (records->event_bindings == NULL && records->event_binding_count > 0) {
+    return FR_ERR_INVALID;
+  }
+#if !FR_FEATURE_EVENTS
+  if (records->event_binding_count > 0) {
+    return FR_ERR_UNSUPPORTED;
+  }
+#else
+  if (records->event_binding_count > FR_EVENT_BINDING_COUNT) {
+    return FR_ERR_CAPACITY;
   }
 #endif
   if (records->natives == NULL && records->native_count > 0) {
@@ -754,6 +781,18 @@ static fr_err_t fr_image_check_apply(const fr_runtime_t *runtime,
         slot_count_after_writes));
   }
 
+#if FR_FEATURE_EVENTS
+  for (uint16_t i = 0; i < records->event_binding_count; i++) {
+    const fr_image_event_binding_t *binding = &records->event_bindings[i];
+    if (binding->kind == FR_EVENT_KIND_NONE) {
+      return FR_ERR_INVALID;
+    }
+    if (binding->body >= records->code_object_count) {
+      return FR_ERR_INVALID;
+    }
+  }
+#endif
+
   return FR_OK;
 }
 
@@ -1021,6 +1060,18 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
     }
   }
 
+#if FR_FEATURE_EVENTS
+  /* Body is a local code id on the wire; map through the install-time code id
+     table before calling fr_event_register, which stages the platform install
+     before writing the binding table. fr_image_check_apply has already proven
+     body < code_object_count, so the lookup is in range. */
+  for (uint16_t i = 0; i < records->event_binding_count; i++) {
+    const fr_image_event_binding_t *binding = &records->event_bindings[i];
+    FR_TRY(fr_event_register(runtime, binding->kind, binding->source,
+                             binding->debounce_ms, code_ids[binding->body]));
+  }
+#endif
+
   return FR_OK;
 }
 
@@ -1193,7 +1244,9 @@ fr_err_t fr_overlay_update_encode(const fr_overlay_update_t *update,
   if (records.slot_init_count > FR_PROFILE_MAX_OVERLAY_UPDATE_SLOT_INITS ||
       records.code_object_count > FR_PROFILE_MAX_OVERLAY_UPDATE_CODE_OBJECTS ||
       records.text_object_count > FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS ||
-      records.slot_name_count > FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES) {
+      records.slot_name_count > FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES ||
+      records.event_binding_count >
+          FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS) {
     return FR_ERR_CAPACITY;
   }
 
@@ -1257,6 +1310,26 @@ fr_err_t fr_overlay_update_encode(const fr_overlay_update_t *update,
     FR_TRY(fr_overlay_update_writer_u16(&writer, records.slot_inits[i].slot_id));
     FR_TRY(fr_overlay_update_encode_ref(&writer, records.slot_inits[i].ref));
   }
+
+#if FR_FEATURE_EVENTS
+  for (uint16_t i = 0; i < records.event_binding_count; i++) {
+    const fr_image_event_binding_t *binding = &records.event_bindings[i];
+
+    if (binding->kind == FR_EVENT_KIND_NONE ||
+        binding->kind > FR_EVENT_KIND_AFTER) {
+      return FR_ERR_INVALID;
+    }
+    if (binding->body >= records.code_object_count) {
+      return FR_ERR_INVALID;
+    }
+    FR_TRY(fr_overlay_update_writer_u8(&writer,
+                                       FR_OVERLAY_UPDATE_RECORD_EVENT));
+    FR_TRY(fr_overlay_update_writer_u8(&writer, binding->kind));
+    FR_TRY(fr_overlay_update_writer_u16(&writer, binding->source));
+    FR_TRY(fr_overlay_update_writer_u16(&writer, binding->debounce_ms));
+    FR_TRY(fr_overlay_update_writer_u16(&writer, binding->body));
+  }
+#endif
 
   for (uint16_t i = 0; i < records.slot_name_count; i++) {
     uint16_t name_len = 0;
@@ -1451,6 +1524,46 @@ fr_overlay_update_decode_text(fr_overlay_update_reader_t *reader,
 }
 #endif
 
+#if FR_FEATURE_EVENTS
+static fr_err_t
+fr_overlay_update_decode_event(fr_overlay_update_reader_t *reader,
+                               fr_overlay_update_decoded_t *out) {
+  fr_image_event_binding_t *binding = NULL;
+  uint8_t kind = 0;
+  uint16_t source = 0;
+  uint16_t debounce_ms = 0;
+  uint16_t body = 0;
+
+  if (reader == NULL || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (out->update.event_binding_count >=
+      FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS) {
+    return FR_ERR_CAPACITY;
+  }
+
+  FR_TRY(fr_overlay_update_reader_u8(reader, &kind));
+  if (kind == FR_EVENT_KIND_NONE || kind > FR_EVENT_KIND_AFTER) {
+    return FR_ERR_CORRUPT;
+  }
+  FR_TRY(fr_overlay_update_reader_u16(reader, &source));
+  FR_TRY(fr_overlay_update_reader_u16(reader, &debounce_ms));
+  FR_TRY(fr_overlay_update_reader_u16(reader, &body));
+  if (body >= out->update.code_object_count) {
+    return FR_ERR_CORRUPT;
+  }
+
+  binding = &out->event_bindings[out->update.event_binding_count];
+  binding->kind = (fr_event_kind_t)kind;
+  binding->source = source;
+  binding->debounce_ms = debounce_ms;
+  binding->body = body;
+  out->update.event_binding_count =
+      (uint16_t)(out->update.event_binding_count + 1);
+  return FR_OK;
+}
+#endif
+
 fr_err_t fr_overlay_update_decode(const uint8_t *bytes, uint16_t length,
                                   fr_overlay_update_decoded_t *out) {
   fr_overlay_update_reader_t reader = {bytes, length, 0};
@@ -1482,6 +1595,9 @@ fr_err_t fr_overlay_update_decode(const uint8_t *bytes, uint16_t length,
   out->update.text_objects = out->text_objects;
 #endif
   out->update.slot_names = out->slot_names;
+#if FR_PROFILE_MAX_OVERLAY_UPDATE_EVENT_BINDINGS > 0
+  out->update.event_bindings = out->event_bindings;
+#endif
 
   FR_TRY(fr_overlay_update_reader_bytes(
       &reader, (uint16_t)sizeof(fr_overlay_update_magic), &magic));
@@ -1509,6 +1625,12 @@ fr_err_t fr_overlay_update_decode(const uint8_t *bytes, uint16_t length,
 #if FR_FEATURE_TEXT
     } else if (record == FR_OVERLAY_UPDATE_RECORD_TEXT) {
       FR_TRY(fr_overlay_update_decode_text(&reader, out, &text_bytes_used));
+#endif
+    } else if (record == FR_OVERLAY_UPDATE_RECORD_EVENT) {
+#if FR_FEATURE_EVENTS
+      FR_TRY(fr_overlay_update_decode_event(&reader, out));
+#else
+      return FR_ERR_UNSUPPORTED;
 #endif
     } else {
       return FR_ERR_CORRUPT;
