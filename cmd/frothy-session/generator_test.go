@@ -133,6 +133,7 @@ func TestGeneratedLibNativesCRejectsBadInput(t *testing.T) {
 		{"slash in name", libraryNative{name: "bad/name", arity: 0, cFunction: "fr_x"}},
 		{"non-ascii in name", libraryNative{name: "näme", arity: 0, cFunction: "fr_x"}},
 		{"leading digit in name", libraryNative{name: "1.show", arity: 0, cFunction: "fr_x"}},
+		{"leading hyphen in name", libraryNative{name: "-show", arity: 0, cFunction: "fr_x"}},
 		{"c_function with dot", libraryNative{name: "x.y", arity: 0, cFunction: "fr.x"}},
 		{"c_function starts with digit", libraryNative{name: "x.y", arity: 0, cFunction: "1fr"}},
 	}
@@ -154,6 +155,7 @@ func TestValidNativeName(t *testing.T) {
 		"uart.write-byte": true,
 		"with_underscore": true,
 		"1leading":        false,
+		"-leading":        false,
 		"bad name":        false,
 		"bad\nname":       false,
 		"bad\"name":       false,

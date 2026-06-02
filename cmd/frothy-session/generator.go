@@ -128,7 +128,9 @@ func validateNative(n libraryNative) error {
 // what the parser accepts, chosen to (a) cover every existing native
 // (gpio.read, uart.write-byte, neopixel.show) and (b) shut out anything
 // that would distort the generated C string: control bytes, quotes,
-// backslashes, whitespace, parser-terminator punctuation.
+// backslashes, whitespace, parser-terminator punctuation. Leading `-`
+// is refused because parse.c:302-315 consumes it as FR_TOKEN_MINUS, so
+// a name starting with `-` would never tokenize back to one name.
 func validNativeName(s string) bool {
 	if s == "" {
 		return false
@@ -137,7 +139,8 @@ func validNativeName(s string) bool {
 		switch {
 		case r >= 'a' && r <= 'z':
 		case r >= 'A' && r <= 'Z':
-		case r == '.' || r == '_' || r == '-':
+		case r == '.' || r == '_':
+		case i > 0 && r == '-':
 		case i > 0 && r >= '0' && r <= '9':
 		default:
 			return false
