@@ -1,0 +1,6 @@
+# T12L acceptance #3: mixed library. Frothy word wraps an extension
+# native that returns a known constant. The kernel sees test-mixed.echo
+# as a registered native; this Frothy word lets callers invoke it
+# under a higher-level name.
+
+to test-mixed.report [ test-mixed.echo: ]

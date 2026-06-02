@@ -1,0 +1,5 @@
+name   = "mixed-demo"
+target = "esp32_devkit_v1"
+
+[deps]
+test-mixed = { path = "../../test-mixed" }
