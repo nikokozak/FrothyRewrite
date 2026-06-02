@@ -5,6 +5,7 @@
 #include "slot.h"
 
 #include "base_defs.h"
+#include "lib_native.h"
 
 #include <string.h>
 
@@ -49,6 +50,17 @@ fr_slot_id_t fr_slot_first_project_id(void) {
     }
   }
 #endif
+
+  for (uint16_t i = 0; i < fr_lib_native_record_count(); i++) {
+    fr_slot_id_t lib_slot = 0;
+
+    if (fr_lib_native_record_slot_id_at(i, &lib_slot) != FR_OK) {
+      continue;
+    }
+    if (lib_slot >= next) {
+      next = (fr_slot_id_t)(lib_slot + 1);
+    }
+  }
 
   return next;
 }
@@ -162,6 +174,9 @@ fr_err_t fr_slot_id_for_name(const fr_runtime_t *runtime, const char *name,
   if (fr_base_slot_id_for_name(name, out_slot_id) == FR_OK) {
     return FR_OK;
   }
+  if (fr_lib_native_slot_id_for_name(name, out_slot_id) == FR_OK) {
+    return FR_OK;
+  }
 
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   for (uint16_t i = 0; i < runtime->slots.overlay_name_count; i++) {
@@ -180,6 +195,13 @@ const char *fr_slot_name(const fr_runtime_t *runtime, fr_slot_id_t slot_id) {
 
   if (base_name != NULL) {
     return base_name;
+  }
+
+  {
+    const char *lib_name = fr_lib_native_slot_name(slot_id);
+    if (lib_name != NULL) {
+      return lib_name;
+    }
   }
 
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0

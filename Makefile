@@ -129,6 +129,13 @@ UNITY_I2C_TEST_SOURCES = \
 	$(PLATFORM_SOURCES) \
 	$(PERSISTENCE_KERNEL_SOURCES)
 
+UNITY_LIB_NATIVES_TEST_SOURCES = \
+	test/test_lib_natives.c \
+	test/unity/unity.c \
+	$(KERNEL_SOURCES) \
+	$(PLATFORM_SOURCES) \
+	$(PERSISTENCE_KERNEL_SOURCES)
+
 FROTHY_SOURCES = \
 	$(TARGET_MAIN_SOURCE) \
 	$(KERNEL_SOURCES) \
@@ -191,6 +198,7 @@ FROTHY_DEPS = \
 TEST_BINARY ?= test/test
 UNITY_TEST_BINARY ?= $(BUILD_DIR)/test-unity
 UNITY_I2C_TEST_BINARY ?= $(BUILD_DIR)/test-unity-i2c
+UNITY_LIB_NATIVES_TEST_BINARY ?= $(BUILD_DIR)/test-unity-lib-natives
 FROTHY_BINARY ?= frothy
 # Helper basename must match compilerProgramName in cmd/frothy-session.
 OVERLAY_COMPILER ?= $(BUILD_DIR)/frothy-compile-overlay
@@ -214,17 +222,20 @@ TARGET_FLASH_DEPS ?= $(ARTIFACT_HEX)
 test: $(TEST_BINARY)
 	./$(TEST_BINARY)
 
-test-unity: $(UNITY_TEST_BINARY) $(UNITY_I2C_TEST_BINARY)
+test-unity: $(UNITY_TEST_BINARY) $(UNITY_I2C_TEST_BINARY) $(UNITY_LIB_NATIVES_TEST_BINARY)
 	./$(UNITY_TEST_BINARY)
 	./$(UNITY_I2C_TEST_BINARY)
+	./$(UNITY_LIB_NATIVES_TEST_BINARY)
 	$(MAKE) BOARD=host PROFILE=host_normal \
 		UNITY_TEST_BINARY=build/host/test-unity-host-normal \
 		UNITY_I2C_TEST_BINARY=build/host/test-unity-i2c-host-normal \
+		UNITY_LIB_NATIVES_TEST_BINARY=build/host/test-unity-lib-natives-host-normal \
 		_test-unity-run
 
-_test-unity-run: $(UNITY_TEST_BINARY) $(UNITY_I2C_TEST_BINARY)
+_test-unity-run: $(UNITY_TEST_BINARY) $(UNITY_I2C_TEST_BINARY) $(UNITY_LIB_NATIVES_TEST_BINARY)
 	./$(UNITY_TEST_BINARY)
 	./$(UNITY_I2C_TEST_BINARY)
+	./$(UNITY_LIB_NATIVES_TEST_BINARY)
 
 ifneq ($(FROTHY_BINARY),frothy)
 frothy: $(FROTHY_BINARY)
@@ -631,6 +642,10 @@ $(UNITY_TEST_BINARY): $(UNITY_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) \
 $(UNITY_I2C_TEST_BINARY): $(UNITY_I2C_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) \
 		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 -DFR_HOST_TEST_HELPERS=1 $(UNITY_I2C_TEST_SOURCES) $(FR_LDFLAGS) -o $@
+
+$(UNITY_LIB_NATIVES_TEST_BINARY): $(UNITY_LIB_NATIVES_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) \
+		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
+	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 $(UNITY_LIB_NATIVES_TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
 $(OVERLAY_COMPILER): tools/frothy-compile-overlay.c $(FROTHY_DEPS) | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) tools/frothy-compile-overlay.c $(KERNEL_SOURCES) $(PLATFORM_SOURCES) $(PERSISTENCE_SOURCES) $(FR_LDFLAGS) -o $@
