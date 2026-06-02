@@ -1166,8 +1166,9 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
 
     FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_BIND));
     FR_TRY(fr_persist_writer_u16(&writer, slot_id));
-    /* No runtime tier source yet (slice B introduces it); save under L2 so
-     * existing user state is preserved across the format extension. */
+    /* Every bind persists as user tier — the runtime has no per-slot tier
+     * source, so save under L2 preserves prior user state across the format
+     * extension. */
     FR_TRY(fr_persist_writer_u8(&writer, (uint8_t)FR_PERSIST_TIER_USER));
     FR_TRY(fr_persist_encode_value(&writer, runtime,
                                    runtime->slots.current[slot_id],
