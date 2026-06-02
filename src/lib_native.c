@@ -74,11 +74,12 @@ fr_err_t fr_lib_native_record_slot_id_at(uint16_t index,
   return FR_OK;
 }
 
+void fr_lib_native_records_reset(void) { fr_lib_native_record_count_n = 0; }
+
 fr_err_t fr_lib_natives_install(fr_runtime_t *runtime) {
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
-  fr_lib_native_record_count_n = 0;
   for (uint16_t i = 0; i < fr_lib_natives_count; i++) {
     const fr_lib_native_def_t *def = &fr_lib_natives[i];
     fr_native_id_t native_id = 0;

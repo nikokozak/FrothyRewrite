@@ -174,6 +174,7 @@ fr_err_t fr_base_image_install(fr_runtime_t *runtime) {
 #if FR_FEATURE_SOURCE_BASE
   fr_base_source_record_reset();
 #endif
+  fr_lib_native_records_reset();
   FR_TRY(fr_runtime_init(&next));
   for (uint16_t layer = 0; layer < fr_base_def_layer_count(); layer++) {
     fr_base_def_layer_t def_layer = {0};

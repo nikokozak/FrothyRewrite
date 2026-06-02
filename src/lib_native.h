@@ -19,6 +19,11 @@ extern const uint16_t fr_lib_natives_count;
 /* Boot hook called once after fr_base_image_install. Empty table is a no-op. */
 fr_err_t fr_lib_natives_install(fr_runtime_t *runtime);
 
+/* Drop all entries from the name table. fr_base_image_install calls this
+   before source-base compilation so the project-slot allocator doesn't see
+   stale entries from a prior install. */
+void fr_lib_native_records_reset(void);
+
 /* Name table for the slots fr_lib_natives_install bound. Lives outside the
    runtime so reset/restore can't drop it — the slot value is base, the name
    must be too. slot.c consults these alongside the static base names. */

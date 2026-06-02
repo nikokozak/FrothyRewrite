@@ -62,9 +62,29 @@ static void test_names_survive_runtime_reset(void) {
   TEST_ASSERT_EQUAL_STRING("libtest.one", fr_slot_name(&s_runtime, after));
 }
 
+/* R8 review: a second fr_base_image_install in the same process must allocate
+   the same lib-native slot as the first. Without the records-reset-before-
+   source-base fix, source-base words on the second install see stale lib
+   records and land past them, drifting "libtest.one"'s slot. */
+static void test_repeated_install_same_slot(void) {
+  fr_slot_id_t first = 0;
+  fr_slot_id_t second = 0;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "libtest.one", &first));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "libtest.one", &second));
+
+  TEST_ASSERT_EQUAL(first, second);
+}
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_name_resolves_after_install);
   RUN_TEST(test_names_survive_runtime_reset);
+  RUN_TEST(test_repeated_install_same_slot);
   return UNITY_END();
 }
