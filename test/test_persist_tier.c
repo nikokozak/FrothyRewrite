@@ -180,6 +180,27 @@ static void test_legacy_payload_decodes_without_tier_byte(void) {
   TEST_ASSERT_EQUAL(13, decoded);
 }
 
+/* The encoder must emit the tier byte for every overlay slot. With one
+ * int-bound slot and no objects, the encoded payload is byte-identical to a
+ * single current-version BIND with tier USER: dropping the writer at
+ * src/persist_payload.c:1172 shortens encoded_len by one and shifts value_kind
+ * into the tier position, so both assertions fail. */
+static void test_encoder_emits_tier_byte_for_overlay_bind(void) {
+  uint8_t source[FR_TEST_TIER_PAYLOAD_LEN];
+  uint8_t encoded[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t encoded_len = 0;
+
+  build_current_bind(source, FR_TEST_TIER_USER, 17);
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_restore(&s_runtime, source,
+                                                      FR_TEST_TIER_PAYLOAD_LEN));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_encode(&s_runtime, encoded,
+                                                     (uint16_t)sizeof(encoded),
+                                                     &encoded_len));
+  TEST_ASSERT_EQUAL(FR_TEST_TIER_PAYLOAD_LEN, encoded_len);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(source, encoded, FR_TEST_TIER_PAYLOAD_LEN);
+}
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_current_payload_accepts_user_tier);
@@ -188,5 +209,6 @@ int main(void) {
   RUN_TEST(test_current_payload_rejects_out_of_range_tier);
   RUN_TEST(test_current_payload_rejects_missing_tier);
   RUN_TEST(test_legacy_payload_decodes_without_tier_byte);
+  RUN_TEST(test_encoder_emits_tier_byte_for_overlay_bind);
   return UNITY_END();
 }
