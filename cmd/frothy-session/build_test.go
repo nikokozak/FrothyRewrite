@@ -53,11 +53,8 @@ servo = { path = "libs/servo" }
 	if !strings.Contains(string(program), "servo.attach") {
 		t.Errorf("program.fr missing library word")
 	}
-	if !strings.Contains(string(program), "library: servo") {
-		t.Errorf("program.fr missing library marker")
-	}
-	if !strings.Contains(string(program), "main") {
-		t.Errorf("program.fr missing main marker")
+	if !strings.Contains(string(program), "servo.attach: 5") {
+		t.Errorf("program.fr missing main.fr content")
 	}
 }
 
@@ -150,13 +147,13 @@ servo = { path = "../servo" }
 	if err := runBuild(buildOptions{projectDir: dir, skipMake: true}, &stdout, &stderr); err != nil {
 		t.Fatalf("runBuild: %v\nstderr: %s", err, stderr.String())
 	}
-	// program.fr should have servo before stage (D6: dependency before
-	// dependent).
+	// program.fr should have servo's words before stage's (D6:
+	// dependency before dependent). Look for the body of each.
 	program, _ := os.ReadFile(filepath.Join(dir, ".frothy", "build", "host", "program.fr"))
-	svIdx := strings.Index(string(program), "library: servo")
-	stIdx := strings.Index(string(program), "library: stage")
+	svIdx := strings.Index(string(program), "servo.attach")
+	stIdx := strings.Index(string(program), "stage.go")
 	if svIdx < 0 || stIdx < 0 {
-		t.Fatalf("missing library markers in program.fr")
+		t.Fatalf("missing library words in program.fr: %s", program)
 	}
 	if svIdx >= stIdx {
 		t.Fatalf("servo should appear before stage; got svIdx=%d stIdx=%d", svIdx, stIdx)

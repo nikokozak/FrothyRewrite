@@ -1,10 +1,5 @@
 include "helpers.fr"
 
-# T12L acceptance #1: pure-modules library. Two words exposed,
-# `test-pure.greet` returns 42 and `test-pure.shout` doubles its
-# input. Together they exercise basic word definition + a library-
-# internal include of helpers.fr.
-
 to test-pure.greet [ 42 ]
 
 to test-pure.shout with n [ doubled: n ]

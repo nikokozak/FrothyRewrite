@@ -1943,6 +1943,7 @@ func availableVerbs() []verb {
 		{name: "connect", summary: "connect to a device's REPL", run: runConnectMain},
 		{name: "init", summary: "scaffold a new Frothy project in the current directory", run: runInitMain},
 		{name: "build", summary: "resolve libraries and build the project's firmware", run: runBuildMain},
+		{name: "fetch", summary: "resolve git deps into the local cache (stub; not yet wired)", run: runFetchMain},
 	}
 }
 

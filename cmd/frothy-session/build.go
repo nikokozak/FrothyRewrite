@@ -121,6 +121,11 @@ func emitGeneratedFiles(projectDir, target string, libs []resolvedLibrary) error
 // then the project's main.fr, with includes preprocessed throughout.
 // The result lives at .frothy/build/<target>/program.fr and is what
 // frothy-compile-overlay turns into bytecode in a future step.
+//
+// No separator markers between sections: Frothy has no comment token,
+// so any `# ---` header would fail to parse. Sections separate with
+// a blank line — the compiler tolerates blanks, debuggers can use
+// `see <word>` to find a word's source.
 func emitOverlaySource(projectDir, target string, libs []resolvedLibrary) error {
 	loader := func(path string) (string, error) {
 		bytes, err := os.ReadFile(path)
@@ -135,7 +140,9 @@ func emitOverlaySource(projectDir, target string, libs []resolvedLibrary) error 
 		if err != nil {
 			return fmt.Errorf("library %s: %w", lib.name, err)
 		}
-		merged = append(merged, []byte("\n# --- library: "+lib.name+" ---\n")...)
+		if len(merged) > 0 {
+			merged = append(merged, '\n')
+		}
 		merged = append(merged, []byte(src)...)
 	}
 	mainFr := filepath.Join(projectDir, "main.fr")
@@ -144,7 +151,9 @@ func emitOverlaySource(projectDir, target string, libs []resolvedLibrary) error 
 		if err != nil {
 			return fmt.Errorf("main.fr: %w", err)
 		}
-		merged = append(merged, []byte("\n# --- main ---\n")...)
+		if len(merged) > 0 {
+			merged = append(merged, '\n')
+		}
 		merged = append(merged, []byte(src)...)
 	}
 	outPath := filepath.Join(buildOutputDir(projectDir, target), "program.fr")
