@@ -125,6 +125,14 @@ func TestGeneratedLibNativesCRejectsBadInput(t *testing.T) {
 		{"empty c_function", libraryNative{name: "x.y", arity: 0, cFunction: ""}},
 		{"quote in name", libraryNative{name: "bad\"name", arity: 0, cFunction: "fr_x"}},
 		{"backslash in name", libraryNative{name: "bad\\name", arity: 0, cFunction: "fr_x"}},
+		{"newline in name", libraryNative{name: "bad\nname", arity: 0, cFunction: "fr_x"}},
+		{"tab in name", libraryNative{name: "bad\tname", arity: 0, cFunction: "fr_x"}},
+		{"null in name", libraryNative{name: "bad\x00name", arity: 0, cFunction: "fr_x"}},
+		{"del in name", libraryNative{name: "bad\x7fname", arity: 0, cFunction: "fr_x"}},
+		{"space in name", libraryNative{name: "bad name", arity: 0, cFunction: "fr_x"}},
+		{"slash in name", libraryNative{name: "bad/name", arity: 0, cFunction: "fr_x"}},
+		{"non-ascii in name", libraryNative{name: "näme", arity: 0, cFunction: "fr_x"}},
+		{"leading digit in name", libraryNative{name: "1.show", arity: 0, cFunction: "fr_x"}},
 		{"c_function with dot", libraryNative{name: "x.y", arity: 0, cFunction: "fr.x"}},
 		{"c_function starts with digit", libraryNative{name: "x.y", arity: 0, cFunction: "1fr"}},
 	}
@@ -135,6 +143,29 @@ func TestGeneratedLibNativesCRejectsBadInput(t *testing.T) {
 				t.Fatalf("expected error for %s, got none", c.desc)
 			}
 		})
+	}
+}
+
+func TestValidNativeName(t *testing.T) {
+	cases := map[string]bool{
+		"":                false,
+		"x":               true,
+		"neopixel.show":   true,
+		"uart.write-byte": true,
+		"with_underscore": true,
+		"1leading":        false,
+		"bad name":        false,
+		"bad\nname":       false,
+		"bad\"name":       false,
+		"bad\\name":       false,
+		"bad/name":        false,
+		"bad+name":        false,
+		"bad:name":        false,
+	}
+	for input, want := range cases {
+		if got := validNativeName(input); got != want {
+			t.Errorf("validNativeName(%q) = %v, want %v", input, got, want)
+		}
 	}
 }
 

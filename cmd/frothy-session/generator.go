@@ -114,13 +114,36 @@ func validateNative(n libraryNative) error {
 	if n.cFunction == "" {
 		return fmt.Errorf("native %s has empty c_function", n.name)
 	}
-	if strings.ContainsAny(n.name, "\"\\") {
-		return fmt.Errorf("native name %q contains quote or backslash", n.name)
+	if !validNativeName(n.name) {
+		return fmt.Errorf("native name %q is not a source word", n.name)
 	}
 	if !validCIdentifier(n.cFunction) {
 		return fmt.Errorf("native %s c_function %q is not a C identifier", n.name, n.cFunction)
 	}
 	return nil
+}
+
+// D4: native names look like <libname>.<word> — the kernel parser
+// tokenizes them as a single FR_TOKEN_NAME. This is a strict subset of
+// what the parser accepts, chosen to (a) cover every existing native
+// (gpio.read, uart.write-byte, neopixel.show) and (b) shut out anything
+// that would distort the generated C string: control bytes, quotes,
+// backslashes, whitespace, parser-terminator punctuation.
+func validNativeName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r == '.' || r == '_' || r == '-':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func validCIdentifier(s string) bool {
