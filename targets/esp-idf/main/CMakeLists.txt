@@ -1,5 +1,23 @@
 set(FR_GEN_DIR ${FR_REWRITE_ROOT}/build/${FR_REWRITE_BOARD}/gen)
 
+# T12L: frothy build sets FROTHY_LIBS_CMAKE and FROTHY_LIB_NATIVES_C via
+# idf.py -D flags. When set, include the generator's libs.cmake (which
+# defines FROTHY_LIB_EXT_SOURCES + FROTHY_LIB_EXT_INCLUDE_DIRS) and add
+# the generated lib_natives.c as a strong override of src/lib_native.c's
+# weak fr_lib_natives defaults. When unset, no libraries — kernel uses
+# the weak defaults.
+set(FR_LIB_EXT_SOURCES)
+set(FR_LIB_EXT_INCLUDE_DIRS)
+set(FR_LIB_NATIVES_GEN_SOURCES)
+if(FROTHY_LIBS_CMAKE AND EXISTS "${FROTHY_LIBS_CMAKE}")
+    include("${FROTHY_LIBS_CMAKE}")
+    set(FR_LIB_EXT_SOURCES ${FROTHY_LIB_EXT_SOURCES})
+    set(FR_LIB_EXT_INCLUDE_DIRS ${FROTHY_LIB_EXT_INCLUDE_DIRS})
+endif()
+if(FROTHY_LIB_NATIVES_C AND EXISTS "${FROTHY_LIB_NATIVES_C}")
+    set(FR_LIB_NATIVES_GEN_SOURCES ${FROTHY_LIB_NATIVES_C})
+endif()
+
 set(FR_KERNEL_SOURCES
     ${FR_REWRITE_ROOT}/src/tagged.c
     ${FR_REWRITE_ROOT}/src/types.c
@@ -10,6 +28,7 @@ set(FR_KERNEL_SOURCES
     ${FR_REWRITE_ROOT}/src/instruction.c
     ${FR_REWRITE_ROOT}/src/code.c
     ${FR_REWRITE_ROOT}/src/native.c
+    ${FR_REWRITE_ROOT}/src/lib_native.c
     ${FR_REWRITE_ROOT}/src/handle.c
     ${FR_REWRITE_ROOT}/src/pad.c
     ${FR_REWRITE_ROOT}/src/object.c
@@ -30,6 +49,8 @@ idf_component_register(
     SRCS
         main.c
         ${FR_KERNEL_SOURCES}
+        ${FR_LIB_NATIVES_GEN_SOURCES}
+        ${FR_LIB_EXT_SOURCES}
         ${FR_REWRITE_ROOT}/targets/common/target_defs.c
         ${FR_REWRITE_ROOT}/targets/esp-idf/platform.c
         ${FR_REWRITE_ROOT}/boards/${FR_REWRITE_BOARD}/board_defs.c
@@ -39,6 +60,7 @@ idf_component_register(
         ${FR_REWRITE_ROOT}/targets/esp-idf
         ${FR_REWRITE_ROOT}/boards/${FR_REWRITE_BOARD}
         ${FR_GEN_DIR}
+        ${FR_LIB_EXT_INCLUDE_DIRS}
     REQUIRES
         driver
         esp_adc
@@ -48,6 +70,12 @@ idf_component_register(
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     FR_PROFILE_HEADER="${FR_REWRITE_PROFILE}.h"
     FR_PROFILE_NAME="${FR_REWRITE_PROFILE}")
+
+# T12L: suppress lib_native.c's empty defaults when the generator emitted
+# strong overrides (see src/lib_native.c FR_LIB_NATIVES_PROVIDED comment).
+if(FR_LIB_NATIVES_GEN_SOURCES)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE FR_LIB_NATIVES_PROVIDED)
+endif()
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -std=gnu17

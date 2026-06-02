@@ -1,5 +1,6 @@
 #include "base_image.h"
 
+#include "lib_native.h"
 #include "native.h"
 #include "runtime.h"
 #include "slot.h"
@@ -173,6 +174,7 @@ fr_err_t fr_base_image_install(fr_runtime_t *runtime) {
 #if FR_FEATURE_SOURCE_BASE
   fr_base_source_record_reset();
 #endif
+  fr_lib_native_records_reset();
   FR_TRY(fr_runtime_init(&next));
   for (uint16_t layer = 0; layer < fr_base_def_layer_count(); layer++) {
     fr_base_def_layer_t def_layer = {0};
@@ -190,6 +192,8 @@ fr_err_t fr_base_image_install(fr_runtime_t *runtime) {
   FR_TRY(fr_base_compile_source(&next, fr_source_base_bytes,
                                 fr_source_base_bytes_len));
 #endif
+
+  FR_TRY(fr_lib_natives_install(&next));
 
   fr_code_mark_base(&next);
   fr_native_mark_base(&next);
