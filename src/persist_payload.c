@@ -21,12 +21,16 @@ enum {
   /*
    * 16-bit and 32-bit each carry their own version because int value fields
    * are wider on 32-bit. Independent from the overlay update version in
-   * config.h. Frothy is pre-release: readers accept the current version only.
+   * config.h. The decoder also accepts FR_PERSIST_PAYLOAD_VERSION_LEGACY:
+   * pre-T12L-7 payloads omit the per-bind tier byte, and absent-tier means
+   * user tier (D7 in T12L-7 SPEC).
    */
 #if FR_WORD_SIZE == 16
-  FR_PERSIST_PAYLOAD_VERSION = 2,
-#else
   FR_PERSIST_PAYLOAD_VERSION = 3,
+  FR_PERSIST_PAYLOAD_VERSION_LEGACY = 2,
+#else
+  FR_PERSIST_PAYLOAD_VERSION = 4,
+  FR_PERSIST_PAYLOAD_VERSION_LEGACY = 3,
 #endif
   FR_PERSIST_RECORD_CODE = 1,
   FR_PERSIST_RECORD_BIND = 2,
@@ -44,6 +48,8 @@ enum {
   FR_PERSIST_VALUE_CODE = 4,
   FR_PERSIST_VALUE_NATIVE = 5,
   FR_PERSIST_VALUE_OBJECT = 6,
+  FR_PERSIST_TIER_LIBRARY = 1,
+  FR_PERSIST_TIER_USER = 2,
 };
 
 typedef enum fr_persist_object_record_kind_t {
@@ -80,6 +86,8 @@ typedef struct fr_persist_code_record_t {
 
 typedef struct fr_persist_bind_record_t {
   fr_slot_id_t slot_id;
+  /* FR_PERSIST_TIER_USER for legacy payloads; the BIND wire byte for current. */
+  uint8_t tier;
   /* value_kind selects int_value for ints and value_word for compact refs. */
   uint8_t value_kind;
   fr_int_t int_value;
@@ -1158,6 +1166,9 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
 
     FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_BIND));
     FR_TRY(fr_persist_writer_u16(&writer, slot_id));
+    /* No runtime tier source yet (slice B introduces it); save under L2 so
+     * existing user state is preserved across the format extension. */
+    FR_TRY(fr_persist_writer_u8(&writer, (uint8_t)FR_PERSIST_TIER_USER));
     FR_TRY(fr_persist_encode_value(&writer, runtime,
                                    runtime->slots.current[slot_id],
                                    runtime_code_ids, &code_count,
@@ -1469,7 +1480,8 @@ static fr_err_t fr_persist_decode_payload(
     return FR_ERR_CORRUPT;
   }
   FR_TRY(fr_persist_reader_u8(&reader, &version));
-  if (version != FR_PERSIST_PAYLOAD_VERSION) {
+  if (version != FR_PERSIST_PAYLOAD_VERSION &&
+      version != FR_PERSIST_PAYLOAD_VERSION_LEGACY) {
     return FR_ERR_CORRUPT;
   }
 
@@ -1657,6 +1669,15 @@ static fr_err_t fr_persist_decode_payload(
       FR_TRY(fr_persist_reader_u16(&reader, &bind->slot_id));
       if (bind->slot_id >= FR_PROFILE_MAX_SLOTS) {
         return FR_ERR_CORRUPT;
+      }
+      if (version == FR_PERSIST_PAYLOAD_VERSION) {
+        FR_TRY(fr_persist_reader_u8(&reader, &bind->tier));
+        if (bind->tier != FR_PERSIST_TIER_LIBRARY &&
+            bind->tier != FR_PERSIST_TIER_USER) {
+          return FR_ERR_CORRUPT;
+        }
+      } else {
+        bind->tier = (uint8_t)FR_PERSIST_TIER_USER;
       }
       FR_TRY(fr_persist_decode_value(&reader, bind));
       *out_bind_count = (uint16_t)(*out_bind_count + 1);
