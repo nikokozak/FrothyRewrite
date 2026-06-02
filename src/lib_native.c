@@ -7,10 +7,16 @@
 #include <string.h>
 
 /* Empty defaults so kernel-only builds (no frothy.toml driving the generator)
-   link cleanly. The generator emits strong overrides at
-   .frothy/build/<target>/lib_natives.c when libraries are resolved. */
-__attribute__((weak)) const fr_lib_native_def_t fr_lib_natives[1] = {{0}};
-__attribute__((weak)) const uint16_t fr_lib_natives_count = 0;
+   link cleanly. The build defines FR_LIB_NATIVES_PROVIDED when the generator
+   emits a strong override at .frothy/build/<target>/lib_natives.c; without
+   that define, this file provides the strong empty defaults instead. Switched
+   from __attribute__((weak)) because weak-in-archive lost to non-weak-in-other-
+   archive-object at link time on ESP-IDF (the weak def satisfied the
+   reference before the linker pulled the strong override's .obj). */
+#ifndef FR_LIB_NATIVES_PROVIDED
+const fr_lib_native_def_t fr_lib_natives[1] = {{0}};
+const uint16_t fr_lib_natives_count = 0;
+#endif
 
 /* Name records for the slots the install loop bound. Static lifetime mirrors
    the base name table so reset/restore can't drop them. def->name points to

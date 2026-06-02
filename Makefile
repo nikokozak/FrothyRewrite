@@ -111,6 +111,17 @@ COMMON_TEST_SOURCES = \
 
 PERSISTENCE_SOURCES ?= $(PERSISTENCE_KERNEL_SOURCES)
 
+# T12L: `frothy build` may pass FROTHY_LIB_NATIVES_C pointing at a generated
+# strong override of fr_lib_natives. When set, suppress the empty defaults
+# in src/lib_native.c via FR_LIB_NATIVES_PROVIDED so the override is the only
+# definition. When unset, src/lib_native.c's empty defaults supply the
+# symbols and no library natives are registered.
+FROTHY_LIB_NATIVES_C ?=
+ifneq ($(FROTHY_LIB_NATIVES_C),)
+KERNEL_SOURCES += $(FROTHY_LIB_NATIVES_C)
+FR_CFLAGS += -DFR_LIB_NATIVES_PROVIDED
+endif
+
 TEST_SOURCES = \
 	$(COMMON_TEST_SOURCES) \
 	$(PERSISTENCE_SOURCES)
@@ -645,7 +656,7 @@ $(UNITY_I2C_TEST_BINARY): $(UNITY_I2C_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS)
 
 $(UNITY_LIB_NATIVES_TEST_BINARY): $(UNITY_LIB_NATIVES_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) \
 		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
-	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 $(UNITY_LIB_NATIVES_TEST_SOURCES) $(FR_LDFLAGS) -o $@
+	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 -DFR_LIB_NATIVES_PROVIDED=1 $(UNITY_LIB_NATIVES_TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
 $(OVERLAY_COMPILER): tools/frothy-compile-overlay.c $(FROTHY_DEPS) | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) tools/frothy-compile-overlay.c $(KERNEL_SOURCES) $(PLATFORM_SOURCES) $(PERSISTENCE_SOURCES) $(FR_LDFLAGS) -o $@
