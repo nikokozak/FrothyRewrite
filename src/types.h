@@ -49,6 +49,12 @@ typedef struct fr_handle_ref_t {
   fr_handle_generation_t generation;
 } fr_handle_ref_t;
 
+/* Wire-byte values match the persist record tier tag (D7). */
+typedef enum fr_install_tier_t {
+  FR_INSTALL_TIER_LIBRARY = 1,
+  FR_INSTALL_TIER_USER = 2,
+} fr_install_tier_t;
+
 #define FR_TRY(expr)                                                           \
   do {                                                                         \
     fr_err_t fr_try_err = (expr);                                              \

@@ -1,12 +1,16 @@
 /*
- * Unity narrow proof for T12L-7 D7: BIND records carry a tier byte at the
- * current payload version, reject out-of-range tier bytes, and decode under
- * the legacy payload version with the tier defaulting to user.
+ * Unity narrow proof for the T12L-7 tier system:
  *
- * The encoder writes the byte at fr_persist_payload_encode; the decoder at
+ * D7 (persist record format): BIND records carry a tier byte at the current
+ * payload version, reject out-of-range tier bytes, and decode under the
+ * legacy payload version with the tier defaulting to user. The encoder
+ * writes the byte at fr_persist_payload_encode; the decoder at
  * fr_persist_decode_payload reads it under the current version and falls
- * back to user tier under legacy. This file walks both paths through the
- * public fr_persist_payload_restore surface.
+ * back to user tier under legacy.
+ *
+ * D3 (REPL install tier): install-library and install-user are outside-
+ * parser tokens that flip runtime->install_tier and reply with ok\n;
+ * fr_repl_run resets the field to USER on entry per the session-scope rule.
  */
 
 #include "base_image.h"
@@ -14,13 +18,16 @@
 #include "config.h"
 #include "persist_payload.h"
 #include "platform.h"
+#include "repl.h"
 #include "runtime.h"
 #include "slot.h"
 #include "tagged.h"
 
 #include "unity/unity.h"
 
+#include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 /* Mirror persist_payload.c's enum so a public test can shape the bytes. */
 #if FR_WORD_SIZE == 16
@@ -201,6 +208,66 @@ static void test_encoder_emits_tier_byte_for_overlay_bind(void) {
   TEST_ASSERT_EQUAL_UINT8_ARRAY(source, encoded, FR_TEST_TIER_PAYLOAD_LEN);
 }
 
+static void test_repl_install_library_flips_install_tier(void) {
+  char out[FR_REPL_OUTPUT_BYTES];
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_INSTALL_TIER_USER, s_runtime.install_tier);
+  TEST_ASSERT_EQUAL(FR_OK, fr_repl_eval_line(&s_runtime, "install-library", out,
+                                             (uint16_t)sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", out);
+  TEST_ASSERT_EQUAL(FR_INSTALL_TIER_LIBRARY, s_runtime.install_tier);
+}
+
+static void test_repl_install_user_flips_install_tier(void) {
+  char out[FR_REPL_OUTPUT_BYTES];
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  s_runtime.install_tier = FR_INSTALL_TIER_LIBRARY;
+  TEST_ASSERT_EQUAL(FR_OK, fr_repl_eval_line(&s_runtime, "install-user", out,
+                                             (uint16_t)sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", out);
+  TEST_ASSERT_EQUAL(FR_INSTALL_TIER_USER, s_runtime.install_tier);
+}
+
+/* Trailing whitespace must not change recognition; argument-bearing forms
+ * must fall through to the compiler path (no install-library <word> shape). */
+static void test_repl_install_library_with_argument_does_not_flip(void) {
+  char out[FR_REPL_OUTPUT_BYTES];
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_INSTALL_TIER_USER, s_runtime.install_tier);
+  (void)fr_repl_eval_line(&s_runtime, "install-library foo", out,
+                          (uint16_t)sizeof(out));
+  TEST_ASSERT_EQUAL(FR_INSTALL_TIER_USER, s_runtime.install_tier);
+}
+
+static fr_err_t mock_read_line_eof(char *line, uint16_t cap, bool *out_eof) {
+  (void)line;
+  (void)cap;
+  if (out_eof != NULL) {
+    *out_eof = true;
+  }
+  return FR_OK;
+}
+
+static fr_err_t mock_write_text_noop(const char *text) {
+  (void)text;
+  return FR_OK;
+}
+
+static void test_repl_run_resets_install_tier_on_entry(void) {
+  const fr_repl_io_t io = {
+      .read_line = mock_read_line_eof,
+      .write_text = mock_write_text_noop,
+  };
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  s_runtime.install_tier = FR_INSTALL_TIER_LIBRARY;
+  TEST_ASSERT_EQUAL(FR_OK, fr_repl_run(&s_runtime, &io));
+  TEST_ASSERT_EQUAL(FR_INSTALL_TIER_USER, s_runtime.install_tier);
+}
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_current_payload_accepts_user_tier);
@@ -210,5 +277,9 @@ int main(void) {
   RUN_TEST(test_current_payload_rejects_missing_tier);
   RUN_TEST(test_legacy_payload_decodes_without_tier_byte);
   RUN_TEST(test_encoder_emits_tier_byte_for_overlay_bind);
+  RUN_TEST(test_repl_install_library_flips_install_tier);
+  RUN_TEST(test_repl_install_user_flips_install_tier);
+  RUN_TEST(test_repl_install_library_with_argument_does_not_flip);
+  RUN_TEST(test_repl_run_resets_install_tier_on_entry);
   return UNITY_END();
 }
