@@ -102,9 +102,20 @@ static void build_legacy_bind(uint8_t *out, fr_int_t value) {
   *p++ = FR_TEST_TIER_RECORD_END;
 }
 
+/* Defined in persist_payload.c. setUp resets to user so encode-side tests
+ * read a known starting tier; the new install-token tests then flip it. */
+extern void fr_persist_session_install_tier_set_library(void);
+extern void fr_persist_session_install_tier_set_user(void);
+
+/* magic 4 + version 1 + BIND 1 + slot 2 = 8; the tier byte sits here. */
+#define FR_TEST_TIER_BYTE_OFFSET 8
+
 static fr_runtime_t s_runtime;
 
-void setUp(void) { fr_platform_storage_debug_reset(); }
+void setUp(void) {
+  fr_platform_storage_debug_reset();
+  fr_persist_session_install_tier_set_user();
+}
 void tearDown(void) {}
 
 static void test_current_payload_accepts_user_tier(void) {
@@ -209,6 +220,57 @@ static void test_encoder_emits_tier_byte_for_overlay_bind(void) {
   TEST_ASSERT_EQUAL_UINT8_ARRAY(source, encoded, FR_TEST_TIER_PAYLOAD_LEN);
 }
 
+/* install-library flips the session install tier; the next encode stamps
+ * the BIND record with the library wire byte. With one int-bound overlay
+ * slot, the tier sits at FR_TEST_TIER_BYTE_OFFSET in the encoded payload. */
+static void test_repl_install_library_flips_encoded_bind_tier(void) {
+  uint8_t source[FR_TEST_TIER_PAYLOAD_LEN];
+  uint8_t encoded[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t encoded_len = 0;
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+
+  build_current_bind(source, FR_TEST_TIER_USER, 21);
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_restore(&s_runtime, source,
+                                                      FR_TEST_TIER_PAYLOAD_LEN));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_encode(&s_runtime, encoded,
+                                                     (uint16_t)sizeof(encoded),
+                                                     &encoded_len));
+  TEST_ASSERT_EQUAL(FR_TEST_TIER_PAYLOAD_LEN, encoded_len);
+  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_LIBRARY, encoded[FR_TEST_TIER_BYTE_OFFSET]);
+}
+
+/* install-user after install-library returns the session tier to the default
+ * so the next encode stamps the BIND record with the user wire byte. */
+static void test_repl_install_user_resets_encoded_bind_tier(void) {
+  uint8_t source[FR_TEST_TIER_PAYLOAD_LEN];
+  uint8_t encoded[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t encoded_len = 0;
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+
+  build_current_bind(source, FR_TEST_TIER_USER, 22);
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_restore(&s_runtime, source,
+                                                      FR_TEST_TIER_PAYLOAD_LEN));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_encode(&s_runtime, encoded,
+                                                     (uint16_t)sizeof(encoded),
+                                                     &encoded_len));
+  TEST_ASSERT_EQUAL(FR_TEST_TIER_PAYLOAD_LEN, encoded_len);
+  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_USER, encoded[FR_TEST_TIER_BYTE_OFFSET]);
+}
+
 static void test_repl_install_library_replies_ok(void) {
   char out[FR_REPL_OUTPUT_BYTES];
 
@@ -238,5 +300,7 @@ int main(void) {
   RUN_TEST(test_encoder_emits_tier_byte_for_overlay_bind);
   RUN_TEST(test_repl_install_library_replies_ok);
   RUN_TEST(test_repl_install_user_replies_ok);
+  RUN_TEST(test_repl_install_library_flips_encoded_bind_tier);
+  RUN_TEST(test_repl_install_user_resets_encoded_bind_tier);
   return UNITY_END();
 }

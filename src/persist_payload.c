@@ -62,6 +62,19 @@ typedef enum fr_persist_object_record_kind_t {
 
 static const uint8_t fr_persist_payload_magic[4] = {'F', 'R', 'P', 'O'};
 
+/* Session install tier the encoder stamps on BIND records. Repl.c's
+ * install-library / install-user handlers flip this; default is user so a
+ * fresh boot persists under L2 per D3 ("default install tier is L2"). */
+static uint8_t fr_persist_session_install_tier = (uint8_t)FR_PERSIST_TIER_USER;
+
+void fr_persist_session_install_tier_set_library(void) {
+  fr_persist_session_install_tier = (uint8_t)FR_PERSIST_TIER_LIBRARY;
+}
+
+void fr_persist_session_install_tier_set_user(void) {
+  fr_persist_session_install_tier = (uint8_t)FR_PERSIST_TIER_USER;
+}
+
 /* Writer/reader cursors stay uint16_t; this asserts the payload buffer fits. */
 typedef char fr_persist_payload_bytes_must_fit_uint16[
     (FR_PROFILE_PERSISTENCE_BYTES <= UINT16_MAX) ? 1 : -1];
@@ -1166,10 +1179,10 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
 
     FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_BIND));
     FR_TRY(fr_persist_writer_u16(&writer, slot_id));
-    /* Every bind persists as user tier — the runtime has no per-slot tier
-     * source, so save under L2 preserves prior user state across the format
-     * extension. */
-    FR_TRY(fr_persist_writer_u8(&writer, (uint8_t)FR_PERSIST_TIER_USER));
+    /* All overlay slots take the current session install tier — per-slot
+     * tier tracking lands later; this round closes #3 for the install-time
+     * encode path. */
+    FR_TRY(fr_persist_writer_u8(&writer, fr_persist_session_install_tier));
     FR_TRY(fr_persist_encode_value(&writer, runtime,
                                    runtime->slots.current[slot_id],
                                    runtime_code_ids, &code_count,

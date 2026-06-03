@@ -25,6 +25,14 @@
 
 #include <string.h>
 
+#if FR_FEATURE_PERSISTENCE
+/* Defined in persist_payload.c. The install-tier constants are file-local to
+ * that translation unit; the two named setters keep the wire byte out of
+ * repl.c. */
+extern void fr_persist_session_install_tier_set_library(void);
+extern void fr_persist_session_install_tier_set_user(void);
+#endif
+
 typedef struct fr_repl_writer_t {
   void *ctx;
   fr_err_t (*write)(void *ctx, const char *text);
@@ -1426,10 +1434,16 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
   }
 
   if (command.kind == FR_REPL_COMMAND_INSTALL_LIBRARY) {
+#if FR_FEATURE_PERSISTENCE
+    fr_persist_session_install_tier_set_library();
+#endif
     return fr_repl_writer_write(writer, "ok\n");
   }
 
   if (command.kind == FR_REPL_COMMAND_INSTALL_USER) {
+#if FR_FEATURE_PERSISTENCE
+    fr_persist_session_install_tier_set_user();
+#endif
     return fr_repl_writer_write(writer, "ok\n");
   }
 
