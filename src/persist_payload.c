@@ -69,17 +69,24 @@ static const uint8_t fr_persist_payload_magic[4] = {'F', 'R', 'P', 'O'};
  * (runtime->install_tier) per SPEC D3. */
 static uint8_t fr_persist_slot_tier[FR_PROFILE_MAX_SLOTS];
 
+void fr_persist_session_install_tier_stamp_slot(const fr_runtime_t *runtime,
+                                                 fr_slot_id_t slot_id) {
+  if (runtime == NULL) {
+    return;
+  }
+  if (slot_id < FR_PROFILE_MAX_SLOTS) {
+    fr_persist_slot_tier[slot_id] = (uint8_t)runtime->install_tier;
+  }
+}
+
 void fr_persist_session_install_tier_stamp_overlay(
     const fr_runtime_t *runtime, const fr_overlay_update_t *update) {
   if (runtime == NULL || update == NULL) {
     return;
   }
   for (uint16_t i = 0; i < update->slot_init_count; i++) {
-    fr_slot_id_t slot_id = update->slot_inits[i].slot_id;
-
-    if (slot_id < FR_PROFILE_MAX_SLOTS) {
-      fr_persist_slot_tier[slot_id] = (uint8_t)runtime->install_tier;
-    }
+    fr_persist_session_install_tier_stamp_slot(runtime,
+                                                update->slot_inits[i].slot_id);
   }
 }
 

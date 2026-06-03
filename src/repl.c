@@ -26,13 +26,17 @@
 #include <string.h>
 
 #if FR_FEATURE_PERSISTENCE
-/* Defined in persist_payload.c. stamp_overlay tags the slots in an overlay
- * update with the runtime's current install tier so subsequent encodes emit
- * the right BIND tier byte without rewriting pre-existing slots. The session
- * tier itself lives on runtime->install_tier (T12L-7 D3); the install-library
- * and install-user REPL commands set it directly. */
+/* Defined in persist_payload.c. Both helpers tag slot(s) with the runtime's
+ * current install tier so subsequent encodes emit the right BIND tier byte
+ * without rewriting pre-existing slots. stamp_overlay covers the overlay-apply
+ * path (literal definitions); stamp_slot covers the runtime value-binding path
+ * (`foo is <call>`), which writes one slot at a time without producing an
+ * overlay update. The session tier itself lives on runtime->install_tier
+ * (T12L-7 D3); the install-library and install-user REPL commands set it. */
 extern void fr_persist_session_install_tier_stamp_overlay(
     const fr_runtime_t *runtime, const fr_overlay_update_t *update);
+extern void fr_persist_session_install_tier_stamp_slot(
+    const fr_runtime_t *runtime, fr_slot_id_t slot_id);
 #endif
 
 typedef struct fr_repl_writer_t {
@@ -1506,6 +1510,9 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
 
       if (bind_err == FR_OK) {
         FR_TRY(fr_repl_eval_value_binding(runtime, &binding, &result));
+#if FR_FEATURE_PERSISTENCE
+        fr_persist_session_install_tier_stamp_slot(runtime, binding.slot_id);
+#endif
         return fr_repl_writer_write(writer, "ok\n");
       }
       if (bind_err != FR_ERR_UNSUPPORTED) {

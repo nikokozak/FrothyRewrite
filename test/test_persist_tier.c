@@ -39,9 +39,17 @@
 #define FR_TEST_TIER_PAYLOAD_VERSION_LEGACY 3
 #endif
 
+#define FR_TEST_TIER_RECORD_CODE 1
 #define FR_TEST_TIER_RECORD_BIND 2
+#define FR_TEST_TIER_RECORD_NAME 3
 #define FR_TEST_TIER_RECORD_END 0xff
+#define FR_TEST_TIER_VALUE_NIL 0
+#define FR_TEST_TIER_VALUE_FALSE 1
+#define FR_TEST_TIER_VALUE_TRUE 2
 #define FR_TEST_TIER_VALUE_INT 3
+#define FR_TEST_TIER_VALUE_CODE 4
+#define FR_TEST_TIER_VALUE_NATIVE 5
+#define FR_TEST_TIER_VALUE_OBJECT 6
 #define FR_TEST_TIER_LIBRARY 1
 #define FR_TEST_TIER_USER 2
 
@@ -311,6 +319,107 @@ static void test_install_user_after_library_keeps_library_slot(void) {
   TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_USER, encoded[usr_bind + 3]);
 }
 
+/* Walk the encoded payload past CODE records and through BIND records to find
+ * the tier byte for a specific slot. Returns -1 if the slot has no BIND or the
+ * payload is malformed for any of CODE/BIND/NAME. NAME records mark the end of
+ * the BIND section in fr_persist_payload_encode. */
+static int find_bind_tier_for_slot(const uint8_t *encoded, uint16_t len,
+                                   fr_slot_id_t target_slot) {
+  uint16_t i = 5;
+  while (i < len) {
+    uint8_t tag = encoded[i];
+
+    if (tag == FR_TEST_TIER_RECORD_END) {
+      return -1;
+    }
+    if (tag == FR_TEST_TIER_RECORD_CODE) {
+      uint16_t length = 0;
+
+      if ((uint16_t)(i + 5) > len) {
+        return -1;
+      }
+      length = (uint16_t)encoded[i + 3] | ((uint16_t)encoded[i + 4] << 8);
+      i = (uint16_t)(i + 5 + length);
+      continue;
+    }
+    if (tag == FR_TEST_TIER_RECORD_BIND) {
+      uint16_t slot = 0;
+      uint8_t tier = 0;
+      uint8_t value_kind = 0;
+
+      if ((uint16_t)(i + 5) > len) {
+        return -1;
+      }
+      slot = (uint16_t)encoded[i + 1] | ((uint16_t)encoded[i + 2] << 8);
+      tier = encoded[i + 3];
+      value_kind = encoded[i + 4];
+      if (slot == target_slot) {
+        return (int)tier;
+      }
+      i = (uint16_t)(i + 5);
+      switch (value_kind) {
+      case FR_TEST_TIER_VALUE_NIL:
+      case FR_TEST_TIER_VALUE_FALSE:
+      case FR_TEST_TIER_VALUE_TRUE:
+        break;
+      case FR_TEST_TIER_VALUE_INT:
+        i = (uint16_t)(i + FR_TEST_TIER_INT_BYTES);
+        break;
+      case FR_TEST_TIER_VALUE_CODE:
+      case FR_TEST_TIER_VALUE_NATIVE:
+      case FR_TEST_TIER_VALUE_OBJECT:
+        i = (uint16_t)(i + 2);
+        break;
+      default:
+        return -1;
+      }
+      continue;
+    }
+    return -1;
+  }
+  return -1;
+}
+
+/* `lib_word is helper:` routes through fr_compile_value_binding_for_runtime +
+ * fr_repl_eval_value_binding (the RHS is a CALL), not the overlay-apply path.
+ * Without the stamp_slot call in that branch, the encoder would default the
+ * lib_word tier byte to USER; the LIBRARY assertion here fails. helper itself
+ * comes from the overlay-apply path, which already stamps. */
+static void test_install_library_stamps_value_binding_slot(void) {
+  uint8_t encoded[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t encoded_len = 0;
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+  fr_slot_id_t helper_slot = 0;
+  fr_slot_id_t lib_word_slot = 0;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "helper is fn [ 99 ]",
+                                      repl_out, (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_word is helper:",
+                                      repl_out, (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "helper", &helper_slot));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "lib_word", &lib_word_slot));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_encode(&s_runtime, encoded,
+                                                     (uint16_t)sizeof(encoded),
+                                                     &encoded_len));
+  TEST_ASSERT_EQUAL_INT(FR_TEST_TIER_LIBRARY,
+                        find_bind_tier_for_slot(encoded, encoded_len,
+                                                helper_slot));
+  TEST_ASSERT_EQUAL_INT(FR_TEST_TIER_LIBRARY,
+                        find_bind_tier_for_slot(encoded, encoded_len,
+                                                lib_word_slot));
+}
+
 static void test_repl_install_library_replies_ok(void) {
   char out[FR_REPL_OUTPUT_BYTES];
 
@@ -341,6 +450,7 @@ int main(void) {
   RUN_TEST(test_install_library_does_not_relabel_existing_user_slot);
   RUN_TEST(test_install_library_stamps_new_overlay_slot);
   RUN_TEST(test_install_user_after_library_keeps_library_slot);
+  RUN_TEST(test_install_library_stamps_value_binding_slot);
   RUN_TEST(test_repl_install_library_replies_ok);
   RUN_TEST(test_repl_install_user_replies_ok);
   return UNITY_END();
