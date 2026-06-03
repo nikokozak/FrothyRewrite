@@ -235,6 +235,19 @@ fr_err_t fr_persist_wipe(fr_runtime_t *runtime) {
   return fr_runtime_reset(runtime);
 }
 
+/* Defined in persist_payload.c. Drops every user-tier overlay binding from
+ * the runtime; library-tier slots stay. The encoder reads runtime->slots so
+ * the fr_persist_save below writes only the surviving library binds. */
+extern void fr_persist_session_wipe_user_tier(fr_runtime_t *runtime);
+
+fr_err_t fr_persist_wipe_user(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+  fr_persist_session_wipe_user_tier(runtime);
+  return fr_persist_save(runtime);
+}
+
 uint16_t fr_persist_debug_last_payload_bytes(void) {
   return fr_persist_last_payload_bytes;
 }

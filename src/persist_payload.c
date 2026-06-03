@@ -90,6 +90,51 @@ void fr_persist_session_install_tier_stamp_overlay(
   }
 }
 
+/* Drop every user-tier overlay binding from the runtime; library-tier
+ * stamps stay. A slot with no stamp (default 0) encodes as USER, so the
+ * non-library check covers both explicitly-USER and unstamped slots. The
+ * encoder reads runtime->slots, so a subsequent fr_persist_save writes
+ * only the library binds. Overlay-name entries that point at a no-longer-
+ * overlaid slot get compacted out so `words` and fr_slot_id_for_name no
+ * longer surface the wiped names. */
+void fr_persist_session_wipe_user_tier(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return;
+  }
+  for (fr_slot_id_t slot_id = 0; slot_id < runtime->slots.count; slot_id++) {
+    if (!fr_slot_is_overlay(runtime, slot_id)) {
+      continue;
+    }
+    if (fr_persist_slot_tier[slot_id] == FR_PERSIST_TIER_LIBRARY) {
+      continue;
+    }
+    (void)fr_slot_restore(runtime, slot_id);
+  }
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  {
+    uint16_t dst = 0;
+    for (uint16_t src = 0; src < runtime->slots.overlay_name_count; src++) {
+      fr_slot_id_t s = runtime->slots.overlay_name_slots[src];
+
+      if (fr_slot_is_overlay(runtime, s)) {
+        if (dst != src) {
+          memcpy(runtime->slots.overlay_names[dst],
+                 runtime->slots.overlay_names[src],
+                 (size_t)FR_PROFILE_MAX_NAME_BYTES + 1);
+          runtime->slots.overlay_name_slots[dst] = s;
+        }
+        dst = (uint16_t)(dst + 1);
+      }
+    }
+    for (uint16_t i = dst; i < runtime->slots.overlay_name_count; i++) {
+      runtime->slots.overlay_names[i][0] = '\0';
+      runtime->slots.overlay_name_slots[i] = 0;
+    }
+    runtime->slots.overlay_name_count = dst;
+  }
+#endif
+}
+
 /* Writer/reader cursors stay uint16_t; this asserts the payload buffer fits. */
 typedef char fr_persist_payload_bytes_must_fit_uint16[
     (FR_PROFILE_PERSISTENCE_BYTES <= UINT16_MAX) ? 1 : -1];

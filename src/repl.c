@@ -62,6 +62,7 @@ typedef enum fr_repl_command_kind_t {
   FR_REPL_COMMAND_RUN,
   FR_REPL_COMMAND_INSTALL_LIBRARY,
   FR_REPL_COMMAND_INSTALL_USER,
+  FR_REPL_COMMAND_WIPE_USER,
 } fr_repl_command_kind_t;
 
 typedef struct fr_repl_command_t {
@@ -206,6 +207,12 @@ static fr_err_t fr_repl_parse_recognized_command(
   if (fr_repl_span_equals(start, token_len, "install-user")) {
     if (arg == end) {
       out->kind = FR_REPL_COMMAND_INSTALL_USER;
+    }
+    return FR_OK;
+  }
+  if (fr_repl_span_equals(start, token_len, "wipe-user")) {
+    if (arg == end) {
+      out->kind = FR_REPL_COMMAND_WIPE_USER;
     }
     return FR_OK;
   }
@@ -1451,6 +1458,15 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
   if (command.kind == FR_REPL_COMMAND_INSTALL_USER) {
     runtime->install_tier = FR_INSTALL_TIER_USER;
     return fr_repl_writer_write(writer, "ok\n");
+  }
+
+  if (command.kind == FR_REPL_COMMAND_WIPE_USER) {
+#if FR_FEATURE_PERSISTENCE
+    FR_TRY(fr_persist_wipe_user(runtime));
+    return fr_repl_writer_write(writer, "ok\n");
+#else
+    return FR_ERR_UNSUPPORTED;
+#endif
   }
 
   if (command.kind == FR_REPL_COMMAND_WORDS) {
