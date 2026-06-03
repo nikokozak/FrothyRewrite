@@ -1939,6 +1939,7 @@ func availableVerbs() []verb {
 		{name: "send", summary: "compile a source file and apply or run each line", run: runSendMain},
 		{name: "flash", summary: "build the board firmware and flash it over serial", run: runFlashMain},
 		{name: "wipe", summary: "erase persisted device state on a wedged board (NVS only)", run: runWipeMain},
+		{name: "wipe-user", summary: "clear user-tier definitions on a running device; library tier survives", run: runWipeUserMain},
 		{name: "doctor", summary: "check the host's compile, flash, and serial setup", run: runDoctorMain},
 		{name: "connect", summary: "connect to a device's REPL", run: runConnectMain},
 		{name: "init", summary: "scaffold a new Frothy project in the current directory", run: runInitMain},
