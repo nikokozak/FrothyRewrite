@@ -13,7 +13,6 @@ enum {
 fr_err_t fr_persist_save(const fr_runtime_t *runtime);
 fr_err_t fr_persist_restore(fr_runtime_t *runtime);
 fr_err_t fr_persist_wipe(fr_runtime_t *runtime);
-fr_err_t fr_persist_wipe_user(fr_runtime_t *runtime);
 
 uint16_t fr_persist_debug_last_payload_bytes(void);
 /* Debug observability for tests and size checks; not a user protocol field. */
