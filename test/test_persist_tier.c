@@ -1,17 +1,17 @@
 /*
  * Unity narrow proof for the T12L-7 tier system:
  *
- * D7 (persist record format): BIND records carry a tier byte at the current
- * payload version, reject out-of-range tier bytes, and decode under the
- * legacy payload version with the tier defaulting to user. The encoder
- * writes the byte at fr_persist_payload_encode; the decoder at
- * fr_persist_decode_payload reads it under the current version and falls
- * back to user tier under legacy.
+ * D7 (persist record format): BIND records carry a tier byte at the
+ * current payload version. The encoder always writes the byte; the
+ * decoder always reads it and rejects out-of-range or missing values.
+ * Pre-T12L-7 (legacy) payloads are rejected outright per the
+ * project-wide no-backwards-compat stance.
  *
- * D3 (REPL install tier): install-library and install-user are outside-
- * parser tokens that reply with ok\n. The session tier itself is not a
- * public runtime query (SPEC non-goal); the persisted record tag is the
- * downstream proof and lands when the install path is connected.
+ * D3 (REPL install tier): install-library and install-user are
+ * outside-parser tokens that reply with ok\n and set
+ * runtime->install_tier (the per-runtime session tier). The session
+ * tier is not a public runtime query (SPEC non-goal); the persisted
+ * record tag is the downstream proof.
  */
 
 #include "base_image.h"
