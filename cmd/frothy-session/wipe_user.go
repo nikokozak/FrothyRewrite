@@ -11,6 +11,12 @@ import (
 
 type wipeUserDeviceFactory func(port string, baud int) (sessionDevice, func(), error)
 
+const (
+	wipeUserBaud    = 115200
+	wipeUserTimeout = 3 * time.Second
+	wipeUserSettle  = 2 * time.Second
+)
+
 func defaultWipeUserDeviceFactory(port string, baud int) (sessionDevice, func(), error) {
 	dev, err := openSerial(port, baud)
 	if err != nil {
@@ -20,16 +26,15 @@ func defaultWipeUserDeviceFactory(port string, baud int) (sessionDevice, func(),
 }
 
 func runWipeUserMain() int {
-	return runWipeUserCommand(os.Args[1:], os.Stderr, defaultPortLister, defaultWipeUserDeviceFactory)
+	return runWipeUserCommand(os.Args[1:], os.Stderr, defaultPortLister, defaultWipeUserDeviceFactory,
+		wipeUserBaud, wipeUserTimeout, wipeUserSettle)
 }
 
-func runWipeUserCommand(args []string, stderr io.Writer, list portLister, openDev wipeUserDeviceFactory) int {
+func runWipeUserCommand(args []string, stderr io.Writer, list portLister, openDev wipeUserDeviceFactory,
+	baud int, timeout time.Duration, settle time.Duration) int {
 	fs := flag.NewFlagSet("frothy wipe-user", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.String("port", "", "serial port, for example /dev/cu.usbserial-0001")
-	baud := fs.Int("baud", 115200, "serial baud rate")
-	timeout := fs.Duration("timeout", 3*time.Second, "serial prompt timeout")
-	settle := fs.Duration("settle", 2*time.Second, "delay after opening serial")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -48,23 +53,23 @@ func runWipeUserCommand(args []string, stderr io.Writer, list portLister, openDe
 		return 2
 	}
 
-	dev, closeDev, err := openDev(chosen, *baud)
+	dev, closeDev, err := openDev(chosen, baud)
 	if err != nil {
 		fmt.Fprintf(stderr, "wipe-user: cannot open %s: %v\n", chosen, err)
 		return 1
 	}
 	defer closeDev()
 
-	if *settle > 0 {
-		time.Sleep(*settle)
+	if settle > 0 {
+		time.Sleep(settle)
 	}
 
-	if err := dev.syncPrompt(*timeout); err != nil {
+	if err := dev.syncPrompt(timeout); err != nil {
 		fmt.Fprintf(stderr, "wipe-user: %v\n", err)
 		return 1
 	}
 
-	response, err := dev.sendLine("wipe-user", *timeout, nil)
+	response, err := dev.sendLine("wipe-user", timeout, nil)
 	if err != nil {
 		fmt.Fprintf(stderr, "wipe-user: %v\n", err)
 		return 1

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func fakeWipeUserFactory(dev *fakeDevice) wipeUserDeviceFactory {
@@ -24,8 +25,9 @@ func TestRunWipeUserSendsCommandAndExitsZero(t *testing.T) {
 	var stderr bytes.Buffer
 
 	code := runWipeUserCommand(
-		[]string{"--port", "/dev/cu.usbserial-0001", "--settle", "0", "--timeout", "1s"},
+		[]string{"--port", "/dev/cu.usbserial-0001"},
 		&stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeWipeUserFactory(dev),
+		115200, time.Second, 0,
 	)
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d (stderr=%q)", code, stderr.String())
@@ -43,8 +45,9 @@ func TestRunWipeUserSurfacesDeviceErrorLine(t *testing.T) {
 	var stderr bytes.Buffer
 
 	code := runWipeUserCommand(
-		[]string{"--port", "/dev/cu.usbserial-0001", "--settle", "0", "--timeout", "1s"},
+		[]string{"--port", "/dev/cu.usbserial-0001"},
 		&stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeWipeUserFactory(dev),
+		115200, time.Second, 0,
 	)
 	if code == 0 {
 		t.Fatalf("expected non-zero exit, got 0 (stderr=%q)", stderr.String())
@@ -61,6 +64,7 @@ func TestRunWipeUserRejectsPositionalArgs(t *testing.T) {
 	code := runWipeUserCommand(
 		[]string{"esp32_devkit_v1", "--port", "/dev/cu.usbserial-0001"},
 		&stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeWipeUserFactory(dev),
+		115200, time.Second, 0,
 	)
 	if code != 2 {
 		t.Fatalf("expected exit 2 for positional args, got %d", code)
@@ -78,8 +82,9 @@ func TestRunWipeUserReportsOpenFailure(t *testing.T) {
 	var stderr bytes.Buffer
 
 	code := runWipeUserCommand(
-		[]string{"--port", "/dev/cu.usbserial-0001", "--settle", "0"},
+		[]string{"--port", "/dev/cu.usbserial-0001"},
 		&stderr, singlePortLister("/dev/cu.usbserial-0001"), factory,
+		115200, time.Second, 0,
 	)
 	if code != 1 {
 		t.Fatalf("expected exit 1, got %d", code)
