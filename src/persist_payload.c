@@ -2348,18 +2348,26 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
                             cell_install_values,
                             &object_map[cell_records[i].local_id]));
   }
-  /* Re-seat per-slot tier only for slots this payload covers. Stamps for
-   * slots outside this payload survive: D6 boots an L1 restore before an L2
-   * restore, and the L2 pass must not erase the L1 stamps. */
-  for (uint16_t i = 0; i < bind_count; i++) {
-    fr_tagged_t tagged = 0;
+  /* D6: install library (L1) bindings before user (L2) so user definitions
+   * boot into a runtime where any library slot they reference is already
+   * in place. Within a tier the loop preserves payload order. Per-slot
+   * stamp writes only touch slots whose BIND records appear here, so
+   * stamps for slots outside this payload survive both passes. */
+  for (uint8_t pass_tier = FR_PERSIST_TIER_LIBRARY;
+       pass_tier <= FR_PERSIST_TIER_USER; pass_tier++) {
+    for (uint16_t i = 0; i < bind_count; i++) {
+      fr_tagged_t tagged = 0;
 
-    FR_TRY(fr_persist_bind_value(runtime, &bind_records[i], code_map,
-                                 code_count, object_map, object_count,
-                                 &tagged));
-    FR_TRY(fr_slot_write(runtime, bind_records[i].slot_id, tagged));
-    if (bind_records[i].slot_id < FR_PROFILE_MAX_SLOTS) {
-      fr_persist_slot_tier[bind_records[i].slot_id] = bind_records[i].tier;
+      if (bind_records[i].tier != pass_tier) {
+        continue;
+      }
+      FR_TRY(fr_persist_bind_value(runtime, &bind_records[i], code_map,
+                                   code_count, object_map, object_count,
+                                   &tagged));
+      FR_TRY(fr_slot_write(runtime, bind_records[i].slot_id, tagged));
+      if (bind_records[i].slot_id < FR_PROFILE_MAX_SLOTS) {
+        fr_persist_slot_tier[bind_records[i].slot_id] = bind_records[i].tier;
+      }
     }
   }
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0

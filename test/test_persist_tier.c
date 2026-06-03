@@ -537,6 +537,52 @@ static void test_save_restore_round_trip_preserves_both_tiers(void) {
                                                 usr_slot));
 }
 
+/* D6 boot restore order: when a single payload carries BINDs in both tiers,
+ * the L1 pass must run before the L2 pass so user code wakes up with the
+ * library it references already installed. The wire payload encodes two
+ * BINDs against the same slot in [tier=USER value=99, tier=LIBRARY value=11]
+ * order; only an L1-before-L2 restore leaves the L2 value (99) winning. The
+ * pre-D6 single-pass loop walks payload order and would leave the slot at
+ * the L1 value (11). */
+static void test_boot_restore_applies_library_before_user(void) {
+  /* magic 4 + version 1 + BIND header bytes (5) + int payload (N) per
+   * record, two BINDs, then END 1. */
+  uint8_t payload[(uint16_t)(4 + 1 + 2 * (5 + FR_TEST_TIER_INT_BYTES) + 1)];
+  uint8_t *p = payload;
+  fr_tagged_t tagged = 0;
+  fr_int_t decoded = 0;
+
+  *p++ = 'F';
+  *p++ = 'R';
+  *p++ = 'P';
+  *p++ = 'O';
+  *p++ = FR_TEST_TIER_PAYLOAD_VERSION;
+  *p++ = FR_TEST_TIER_RECORD_BIND;
+  write_u16_le(p, FR_TEST_TIER_SLOT);
+  p += 2;
+  *p++ = FR_TEST_TIER_USER;
+  *p++ = FR_TEST_TIER_VALUE_INT;
+  write_int_le(p, 99);
+  p += FR_TEST_TIER_INT_BYTES;
+  *p++ = FR_TEST_TIER_RECORD_BIND;
+  write_u16_le(p, FR_TEST_TIER_SLOT);
+  p += 2;
+  *p++ = FR_TEST_TIER_LIBRARY;
+  *p++ = FR_TEST_TIER_VALUE_INT;
+  write_int_le(p, 11);
+  p += FR_TEST_TIER_INT_BYTES;
+  *p++ = FR_TEST_TIER_RECORD_END;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_persist_payload_restore(&s_runtime, payload,
+                                               (uint16_t)sizeof(payload)));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_read(&s_runtime, FR_TEST_TIER_SLOT, &tagged));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &decoded));
+  TEST_ASSERT_EQUAL(99, decoded);
+}
+
 static void test_repl_install_library_replies_ok(void) {
   char out[FR_REPL_OUTPUT_BYTES];
 
@@ -570,6 +616,7 @@ int main(void) {
   RUN_TEST(test_install_library_stamps_value_binding_slot);
   RUN_TEST(test_wipe_user_preserves_library_word);
   RUN_TEST(test_save_restore_round_trip_preserves_both_tiers);
+  RUN_TEST(test_boot_restore_applies_library_before_user);
   RUN_TEST(test_repl_install_library_replies_ok);
   RUN_TEST(test_repl_install_user_replies_ok);
   return UNITY_END();
