@@ -38,23 +38,33 @@ servo = { path = "libs/servo" }
 	}
 	// generator outputs present
 	out := filepath.Join(dir, ".frothy", "build", "host")
-	for _, f := range []string{"libs.cmake", "lib_natives.c", "program.fr"} {
+	for _, f := range []string{"libs.cmake", "lib_natives.c", "library.fr", "main.fr"} {
 		if _, err := os.Stat(filepath.Join(out, f)); err != nil {
 			t.Errorf("missing output %s: %v", f, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(out, "program.fr")); err == nil {
+		t.Errorf("program.fr should no longer be emitted")
 	}
 	// pure-modules library should leave lib_natives.c with the no-natives marker
 	content, _ := os.ReadFile(filepath.Join(out, "lib_natives.c"))
 	if !strings.Contains(string(content), "No library natives.") {
 		t.Errorf("expected no-natives marker in lib_natives.c; got: %s", content)
 	}
-	// program.fr should contain both library and main source
-	program, _ := os.ReadFile(filepath.Join(out, "program.fr"))
-	if !strings.Contains(string(program), "servo.attach") {
-		t.Errorf("program.fr missing library word")
+	// library.fr carries lib.fr content; main.fr carries main.fr content
+	library, _ := os.ReadFile(filepath.Join(out, "library.fr"))
+	if !strings.Contains(string(library), "to servo.attach with pin") {
+		t.Errorf("library.fr missing library word: %s", library)
 	}
-	if !strings.Contains(string(program), "servo.attach: 5") {
-		t.Errorf("program.fr missing main.fr content")
+	if strings.Contains(string(library), "servo.attach: 5") {
+		t.Errorf("library.fr should not carry main.fr content: %s", library)
+	}
+	mainOut, _ := os.ReadFile(filepath.Join(out, "main.fr"))
+	if !strings.Contains(string(mainOut), "servo.attach: 5") {
+		t.Errorf("main.fr missing main.fr content: %s", mainOut)
+	}
+	if strings.Contains(string(mainOut), "to servo.attach with pin") {
+		t.Errorf("main.fr should not carry library word: %s", mainOut)
 	}
 }
 
@@ -147,13 +157,13 @@ servo = { path = "../servo" }
 	if err := runBuild(buildOptions{projectDir: dir, skipMake: true}, &stdout, &stderr); err != nil {
 		t.Fatalf("runBuild: %v\nstderr: %s", err, stderr.String())
 	}
-	// program.fr should have servo's words before stage's (D6:
-	// dependency before dependent). Look for the body of each.
-	program, _ := os.ReadFile(filepath.Join(dir, ".frothy", "build", "host", "program.fr"))
-	svIdx := strings.Index(string(program), "servo.attach")
-	stIdx := strings.Index(string(program), "stage.go")
+	// library.fr should have servo's words before stage's: dependency
+	// before dependent. Look for the body of each.
+	library, _ := os.ReadFile(filepath.Join(dir, ".frothy", "build", "host", "library.fr"))
+	svIdx := strings.Index(string(library), "servo.attach")
+	stIdx := strings.Index(string(library), "stage.go")
 	if svIdx < 0 || stIdx < 0 {
-		t.Fatalf("missing library words in program.fr: %s", program)
+		t.Fatalf("missing library words in library.fr: %s", library)
 	}
 	if svIdx >= stIdx {
 		t.Fatalf("servo should appear before stage; got svIdx=%d stIdx=%d", svIdx, stIdx)
@@ -174,9 +184,9 @@ math = { path = "libs/math" }
 	if err := runBuild(buildOptions{projectDir: dir, skipMake: true}, &stdout, &stderr); err != nil {
 		t.Fatalf("runBuild: %v\nstderr: %s", err, stderr.String())
 	}
-	program, _ := os.ReadFile(filepath.Join(dir, ".frothy", "build", "host", "program.fr"))
-	if !strings.Contains(string(program), "math.double with n") {
-		t.Errorf("include not preprocessed; program.fr: %s", program)
+	library, _ := os.ReadFile(filepath.Join(dir, ".frothy", "build", "host", "library.fr"))
+	if !strings.Contains(string(library), "math.double with n") {
+		t.Errorf("include not preprocessed; library.fr: %s", library)
 	}
 }
 
