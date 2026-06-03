@@ -38,8 +38,7 @@ extern void fr_persist_session_install_tier_stamp_overlay(
 extern void fr_persist_session_install_tier_stamp_slot(
     const fr_runtime_t *runtime, fr_slot_id_t slot_id);
 /* Defined in persist.c. Drops every L2 overlay binding from the runtime and
- * saves so NVS only retains L1 records. Declared here to keep persist.h
- * outside the T12L-7 in-scope set per the ETHOS files-in-scope list. */
+ * saves so NVS only retains L1 records. */
 extern fr_err_t fr_persist_wipe_user(fr_runtime_t *runtime);
 #endif
 

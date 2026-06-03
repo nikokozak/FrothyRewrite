@@ -17,6 +17,7 @@
 #include "base_image.h"
 #include "base_defs.h"
 #include "config.h"
+#include "persist.h"
 #include "persist_payload.h"
 #include "platform.h"
 #include "repl.h"
@@ -476,6 +477,66 @@ static void test_wipe_user_preserves_library_word(void) {
                                                 usr_slot));
 }
 
+/* Acceptance #10: a library word and a user word both round-trip through
+ * fr_persist_save + base-image reset + fr_persist_restore. Without the per-slot
+ * tier stamping in the restore path's bind loop, lib_word would come back
+ * tagged USER; without save persisting the overlay, both names would miss. */
+static void test_save_restore_round_trip_preserves_both_tiers(void) {
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+  fr_slot_id_t lib_slot = 0;
+  fr_slot_id_t usr_slot = 0;
+  uint8_t encoded[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t encoded_len = 0;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_word is 5", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word is 7", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                    fr_slot_id_for_name(&s_runtime, "lib_word", &lib_slot));
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                    fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "lib_word", &lib_slot));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_word", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_encode(&s_runtime, encoded,
+                                                     (uint16_t)sizeof(encoded),
+                                                     &encoded_len));
+  TEST_ASSERT_EQUAL_INT(FR_TEST_TIER_LIBRARY,
+                        find_bind_tier_for_slot(encoded, encoded_len,
+                                                lib_slot));
+  TEST_ASSERT_EQUAL_INT(FR_TEST_TIER_USER,
+                        find_bind_tier_for_slot(encoded, encoded_len,
+                                                usr_slot));
+}
+
 static void test_repl_install_library_replies_ok(void) {
   char out[FR_REPL_OUTPUT_BYTES];
 
@@ -508,6 +569,7 @@ int main(void) {
   RUN_TEST(test_install_user_after_library_keeps_library_slot);
   RUN_TEST(test_install_library_stamps_value_binding_slot);
   RUN_TEST(test_wipe_user_preserves_library_word);
+  RUN_TEST(test_save_restore_round_trip_preserves_both_tiers);
   RUN_TEST(test_repl_install_library_replies_ok);
   RUN_TEST(test_repl_install_user_replies_ok);
   return UNITY_END();
