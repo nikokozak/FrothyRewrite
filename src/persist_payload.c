@@ -2296,10 +2296,9 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
                             cell_install_values,
                             &object_map[cell_records[i].local_id]));
   }
-  /* Restore re-seats per-slot tier from the payload so a save right after a
-   * restore re-emits the same tier bytes. Slots absent from the payload reset
-   * to zero, which the encoder reads as user (D7 default). */
-  memset(fr_persist_slot_tier, 0, sizeof(fr_persist_slot_tier));
+  /* Re-seat per-slot tier only for slots this payload covers. Stamps for
+   * slots outside this payload survive: D6 boots an L1 restore before an L2
+   * restore, and the L2 pass must not erase the L1 stamps. */
   for (uint16_t i = 0; i < bind_count; i++) {
     fr_tagged_t tagged = 0;
 
