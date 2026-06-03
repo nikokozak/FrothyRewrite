@@ -96,9 +96,10 @@ func TestRunInstallReportsMissingLibraryFr(t *testing.T) {
 func TestRunInstallSurfacesDeviceErrorMidPipe(t *testing.T) {
 	projectDir := t.TempDir()
 	writeFrothyToml(t, projectDir, "esp32_devkit_v1")
-	writeLibraryFr(t, projectDir, "esp32_devkit_v1", "lib_word is fn [ 42 ]\n")
+	writeLibraryFr(t, projectDir, "esp32_devkit_v1",
+		"lib_one is fn [ 1 ]\nlib_two is fn [ 2 ]\n")
 
-	dev := &fakeDevice{responses: []string{"ok\n", "error: unsupported (9)\n"}}
+	dev := &fakeDevice{responses: []string{"ok\n", "error: unsupported (9)\n", "ok\n"}}
 	var stderr bytes.Buffer
 
 	code := runInstallCommand(
@@ -112,8 +113,14 @@ func TestRunInstallSurfacesDeviceErrorMidPipe(t *testing.T) {
 	if !strings.Contains(stderr.String(), "error: device returned error: unsupported (9)") {
 		t.Fatalf("expected surfaced device error, got %q", stderr.String())
 	}
-	if len(dev.sent) != 2 || dev.sent[0] != "install-library" {
-		t.Fatalf("expected install-library then the failing line, got %v", dev.sent)
+	wantSent := []string{"install-library", "lib_one is fn [ 1 ]"}
+	if len(dev.sent) != len(wantSent) {
+		t.Fatalf("sent %v, want %v (no further writes after device error)", dev.sent, wantSent)
+	}
+	for i, line := range wantSent {
+		if dev.sent[i] != line {
+			t.Fatalf("sent[%d]=%q, want %q (full=%v)", i, dev.sent[i], line, dev.sent)
+		}
 	}
 }
 
