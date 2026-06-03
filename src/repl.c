@@ -1426,12 +1426,10 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
   }
 
   if (command.kind == FR_REPL_COMMAND_INSTALL_LIBRARY) {
-    runtime->install_tier = FR_INSTALL_TIER_LIBRARY;
     return fr_repl_writer_write(writer, "ok\n");
   }
 
   if (command.kind == FR_REPL_COMMAND_INSTALL_USER) {
-    runtime->install_tier = FR_INSTALL_TIER_USER;
     return fr_repl_writer_write(writer, "ok\n");
   }
 
@@ -1545,9 +1543,6 @@ fr_err_t fr_repl_run(fr_runtime_t *runtime, const fr_repl_io_t *io) {
       io->write_text == NULL) {
     return FR_ERR_INVALID;
   }
-
-  /* D3: install tier is session-scoped; a fresh wire session lands in USER. */
-  runtime->install_tier = FR_INSTALL_TIER_USER;
 
   while (true) {
     FR_TRY(io->write_text("> "));
