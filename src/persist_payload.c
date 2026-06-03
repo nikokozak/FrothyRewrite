@@ -21,16 +21,14 @@ enum {
   /*
    * 16-bit and 32-bit each carry their own version because int value fields
    * are wider on 32-bit. Independent from the overlay update version in
-   * config.h. The decoder also accepts FR_PERSIST_PAYLOAD_VERSION_LEGACY:
-   * pre-T12L-7 payloads omit the per-bind tier byte, and absent-tier means
-   * user tier (D7 in T12L-7 SPEC).
+   * config.h. Project policy is no backwards compatibility (D7 in T12L-7);
+   * the decoder only accepts the current version. Older payloads are
+   * invalid and the recovery path is dangerous.wipe + re-install.
    */
 #if FR_WORD_SIZE == 16
   FR_PERSIST_PAYLOAD_VERSION = 3,
-  FR_PERSIST_PAYLOAD_VERSION_LEGACY = 2,
 #else
   FR_PERSIST_PAYLOAD_VERSION = 4,
-  FR_PERSIST_PAYLOAD_VERSION_LEGACY = 3,
 #endif
   FR_PERSIST_RECORD_CODE = 1,
   FR_PERSIST_RECORD_BIND = 2,
@@ -62,17 +60,27 @@ typedef enum fr_persist_object_record_kind_t {
 
 static const uint8_t fr_persist_payload_magic[4] = {'F', 'R', 'P', 'O'};
 
-/* Session install tier the encoder stamps on BIND records. Repl.c's
- * install-library / install-user handlers flip this; default is user so a
- * fresh boot persists under L2 per D3 ("default install tier is L2"). */
-static uint8_t fr_persist_session_install_tier = (uint8_t)FR_PERSIST_TIER_USER;
+/* fr_persist_slot_tier holds the per-slot stamp the encoder emits on BIND
+ * records. install-library by itself does not rewrite this table; only
+ * stamp_overlay (called from the REPL overlay-apply path) writes new entries
+ * with the current session install_tier, so flipping the tier mid-session
+ * never relabels previously-installed slots. Per-slot stamping stays
+ * file-static for the prototype; the session tier itself is per-runtime
+ * (runtime->install_tier) per SPEC D3. */
+static uint8_t fr_persist_slot_tier[FR_PROFILE_MAX_SLOTS];
 
-void fr_persist_session_install_tier_set_library(void) {
-  fr_persist_session_install_tier = (uint8_t)FR_PERSIST_TIER_LIBRARY;
-}
+void fr_persist_session_install_tier_stamp_overlay(
+    const fr_runtime_t *runtime, const fr_overlay_update_t *update) {
+  if (runtime == NULL || update == NULL) {
+    return;
+  }
+  for (uint16_t i = 0; i < update->slot_init_count; i++) {
+    fr_slot_id_t slot_id = update->slot_inits[i].slot_id;
 
-void fr_persist_session_install_tier_set_user(void) {
-  fr_persist_session_install_tier = (uint8_t)FR_PERSIST_TIER_USER;
+    if (slot_id < FR_PROFILE_MAX_SLOTS) {
+      fr_persist_slot_tier[slot_id] = (uint8_t)runtime->install_tier;
+    }
+  }
 }
 
 /* Writer/reader cursors stay uint16_t; this asserts the payload buffer fits. */
@@ -99,7 +107,8 @@ typedef struct fr_persist_code_record_t {
 
 typedef struct fr_persist_bind_record_t {
   fr_slot_id_t slot_id;
-  /* FR_PERSIST_TIER_USER for legacy payloads; the BIND wire byte for current. */
+  /* Tier byte from the BIND wire record. FR_PERSIST_TIER_LIBRARY or
+     FR_PERSIST_TIER_USER; any other value is a corrupt-record reject. */
   uint8_t tier;
   /* value_kind selects int_value for ints and value_word for compact refs. */
   uint8_t value_kind;
@@ -1179,10 +1188,14 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
 
     FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_BIND));
     FR_TRY(fr_persist_writer_u16(&writer, slot_id));
-    /* All overlay slots take the current session install tier — per-slot
-     * tier tracking lands later; this round closes #3 for the install-time
-     * encode path. */
-    FR_TRY(fr_persist_writer_u8(&writer, fr_persist_session_install_tier));
+    {
+      uint8_t tier = fr_persist_slot_tier[slot_id];
+
+      if (tier != FR_PERSIST_TIER_LIBRARY && tier != FR_PERSIST_TIER_USER) {
+        tier = (uint8_t)FR_PERSIST_TIER_USER;
+      }
+      FR_TRY(fr_persist_writer_u8(&writer, tier));
+    }
     FR_TRY(fr_persist_encode_value(&writer, runtime,
                                    runtime->slots.current[slot_id],
                                    runtime_code_ids, &code_count,
@@ -1494,8 +1507,7 @@ static fr_err_t fr_persist_decode_payload(
     return FR_ERR_CORRUPT;
   }
   FR_TRY(fr_persist_reader_u8(&reader, &version));
-  if (version != FR_PERSIST_PAYLOAD_VERSION &&
-      version != FR_PERSIST_PAYLOAD_VERSION_LEGACY) {
+  if (version != FR_PERSIST_PAYLOAD_VERSION) {
     return FR_ERR_CORRUPT;
   }
 
@@ -1684,14 +1696,10 @@ static fr_err_t fr_persist_decode_payload(
       if (bind->slot_id >= FR_PROFILE_MAX_SLOTS) {
         return FR_ERR_CORRUPT;
       }
-      if (version == FR_PERSIST_PAYLOAD_VERSION) {
-        FR_TRY(fr_persist_reader_u8(&reader, &bind->tier));
-        if (bind->tier != FR_PERSIST_TIER_LIBRARY &&
-            bind->tier != FR_PERSIST_TIER_USER) {
-          return FR_ERR_CORRUPT;
-        }
-      } else {
-        bind->tier = (uint8_t)FR_PERSIST_TIER_USER;
+      FR_TRY(fr_persist_reader_u8(&reader, &bind->tier));
+      if (bind->tier != FR_PERSIST_TIER_LIBRARY &&
+          bind->tier != FR_PERSIST_TIER_USER) {
+        return FR_ERR_CORRUPT;
       }
       FR_TRY(fr_persist_decode_value(&reader, bind));
       *out_bind_count = (uint16_t)(*out_bind_count + 1);
@@ -2288,6 +2296,10 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
                             cell_install_values,
                             &object_map[cell_records[i].local_id]));
   }
+  /* Restore re-seats per-slot tier from the payload so a save right after a
+   * restore re-emits the same tier bytes. Slots absent from the payload reset
+   * to zero, which the encoder reads as user (D7 default). */
+  memset(fr_persist_slot_tier, 0, sizeof(fr_persist_slot_tier));
   for (uint16_t i = 0; i < bind_count; i++) {
     fr_tagged_t tagged = 0;
 
@@ -2295,6 +2307,9 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
                                  code_count, object_map, object_count,
                                  &tagged));
     FR_TRY(fr_slot_write(runtime, bind_records[i].slot_id, tagged));
+    if (bind_records[i].slot_id < FR_PROFILE_MAX_SLOTS) {
+      fr_persist_slot_tier[bind_records[i].slot_id] = bind_records[i].tier;
+    }
   }
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   for (uint16_t i = 0; i < name_count; i++) {

@@ -102,11 +102,6 @@ static void build_legacy_bind(uint8_t *out, fr_int_t value) {
   *p++ = FR_TEST_TIER_RECORD_END;
 }
 
-/* Defined in persist_payload.c. setUp resets to user so encode-side tests
- * read a known starting tier; the new install-token tests then flip it. */
-extern void fr_persist_session_install_tier_set_library(void);
-extern void fr_persist_session_install_tier_set_user(void);
-
 /* magic 4 + version 1 + BIND 1 + slot 2 = 8; the tier byte sits here. */
 #define FR_TEST_TIER_BYTE_OFFSET 8
 
@@ -114,7 +109,10 @@ static fr_runtime_t s_runtime;
 
 void setUp(void) {
   fr_platform_storage_debug_reset();
-  fr_persist_session_install_tier_set_user();
+  /* T12L-7 D3: install tier is per-runtime. setUp resets to user so
+     encode-side tests read a known starting tier; install-* tests flip
+     it via fr_repl_eval_line. */
+  s_runtime.install_tier = FR_INSTALL_TIER_USER;
 }
 void tearDown(void) {}
 
@@ -185,18 +183,18 @@ static void test_current_payload_rejects_missing_tier(void) {
                                                (uint16_t)sizeof(payload)));
 }
 
-static void test_legacy_payload_decodes_without_tier_byte(void) {
+/* T12L-7 D7: project policy is no backwards compatibility. A pre-T12L-7
+   payload (version byte FR_TEST_TIER_PAYLOAD_VERSION_LEGACY) is rejected
+   by the version check at fr_persist_payload_restore — there is no
+   "untagged defaults to user" fallback. */
+static void test_legacy_payload_rejected(void) {
   uint8_t payload[FR_TEST_TIER_LEGACY_LEN];
-  fr_tagged_t tagged = 0;
-  fr_int_t decoded = 0;
 
   build_legacy_bind(payload, 13);
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
-  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_restore(&s_runtime, payload,
-                                                      FR_TEST_TIER_LEGACY_LEN));
-  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, FR_TEST_TIER_SLOT, &tagged));
-  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &decoded));
-  TEST_ASSERT_EQUAL(13, decoded);
+  TEST_ASSERT_EQUAL(FR_ERR_CORRUPT,
+                    fr_persist_payload_restore(&s_runtime, payload,
+                                               FR_TEST_TIER_LEGACY_LEN));
 }
 
 /* The encoder must emit the tier byte for every overlay slot. With one
@@ -220,10 +218,10 @@ static void test_encoder_emits_tier_byte_for_overlay_bind(void) {
   TEST_ASSERT_EQUAL_UINT8_ARRAY(source, encoded, FR_TEST_TIER_PAYLOAD_LEN);
 }
 
-/* install-library flips the session install tier; the next encode stamps
- * the BIND record with the library wire byte. With one int-bound overlay
- * slot, the tier sits at FR_TEST_TIER_BYTE_OFFSET in the encoded payload. */
-static void test_repl_install_library_flips_encoded_bind_tier(void) {
+/* install-library only marks slots installed under it; a pre-existing user
+ * slot keeps its tier across the flip. Without the per-slot table this
+ * test fails because the encoder reads back the new global tier. */
+static void test_install_library_does_not_relabel_existing_user_slot(void) {
   uint8_t source[FR_TEST_TIER_PAYLOAD_LEN];
   uint8_t encoded[FR_PROFILE_PERSISTENCE_BYTES];
   uint16_t encoded_len = 0;
@@ -241,34 +239,76 @@ static void test_repl_install_library_flips_encoded_bind_tier(void) {
                                                      (uint16_t)sizeof(encoded),
                                                      &encoded_len));
   TEST_ASSERT_EQUAL(FR_TEST_TIER_PAYLOAD_LEN, encoded_len);
-  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_LIBRARY, encoded[FR_TEST_TIER_BYTE_OFFSET]);
+  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_USER, encoded[FR_TEST_TIER_BYTE_OFFSET]);
 }
 
-/* install-user after install-library returns the session tier to the default
- * so the next encode stamps the BIND record with the user wire byte. */
-static void test_repl_install_user_resets_encoded_bind_tier(void) {
-  uint8_t source[FR_TEST_TIER_PAYLOAD_LEN];
+/* `lib_word is 5` is a literal definition; compile.c emits one slot_init and
+ * no code objects, so the encoder writes magic + version + one BIND for the
+ * new slot. The BIND tag sits at offset 5 and the tier byte at offset 8. The
+ * REPL stamp at fr_overlay_apply must have written FR_TEST_TIER_LIBRARY into
+ * the per-slot table for the new slot. */
+static void test_install_library_stamps_new_overlay_slot(void) {
   uint8_t encoded[FR_PROFILE_PERSISTENCE_BYTES];
   uint16_t encoded_len = 0;
   char repl_out[FR_REPL_OUTPUT_BYTES];
 
-  build_current_bind(source, FR_TEST_TIER_USER, 22);
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
-  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_restore(&s_runtime, source,
-                                                      FR_TEST_TIER_PAYLOAD_LEN));
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_word is 5", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_encode(&s_runtime, encoded,
+                                                     (uint16_t)sizeof(encoded),
+                                                     &encoded_len));
+  TEST_ASSERT_GREATER_THAN(FR_TEST_TIER_BYTE_OFFSET, encoded_len);
+  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_RECORD_BIND, encoded[5]);
+  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_LIBRARY, encoded[FR_TEST_TIER_BYTE_OFFSET]);
+}
+
+/* Two definitions across an install-library / install-user split. Slot ids
+ * allocate in source order, so the encoder's slot loop writes lib_word's BIND
+ * first at offset 5; usr_word's BIND follows immediately. value_kind = INT
+ * gives the int-bytes value width. The per-slot table must keep lib_word's
+ * LIBRARY tier intact after install-user flips the current tier back. */
+static void test_install_user_after_library_keeps_library_slot(void) {
+  uint8_t encoded[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t encoded_len = 0;
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+  uint16_t lib_bind = 5;
+  uint16_t usr_bind = 0;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_word is 5", repl_out,
                                       (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime, "install-user", repl_out,
                                       (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word is 7", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_encode(&s_runtime, encoded,
                                                      (uint16_t)sizeof(encoded),
                                                      &encoded_len));
-  TEST_ASSERT_EQUAL(FR_TEST_TIER_PAYLOAD_LEN, encoded_len);
-  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_USER, encoded[FR_TEST_TIER_BYTE_OFFSET]);
+
+  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_RECORD_BIND, encoded[lib_bind]);
+  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_LIBRARY, encoded[lib_bind + 3]);
+  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_VALUE_INT, encoded[lib_bind + 4]);
+  usr_bind = (uint16_t)(lib_bind + 5 + FR_TEST_TIER_INT_BYTES);
+  TEST_ASSERT_GREATER_THAN(usr_bind + 4, encoded_len);
+  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_RECORD_BIND, encoded[usr_bind]);
+  TEST_ASSERT_EQUAL_UINT8(FR_TEST_TIER_USER, encoded[usr_bind + 3]);
 }
 
 static void test_repl_install_library_replies_ok(void) {
@@ -296,11 +336,12 @@ int main(void) {
   RUN_TEST(test_current_payload_rejects_tier_zero);
   RUN_TEST(test_current_payload_rejects_out_of_range_tier);
   RUN_TEST(test_current_payload_rejects_missing_tier);
-  RUN_TEST(test_legacy_payload_decodes_without_tier_byte);
+  RUN_TEST(test_legacy_payload_rejected);
   RUN_TEST(test_encoder_emits_tier_byte_for_overlay_bind);
+  RUN_TEST(test_install_library_does_not_relabel_existing_user_slot);
+  RUN_TEST(test_install_library_stamps_new_overlay_slot);
+  RUN_TEST(test_install_user_after_library_keeps_library_slot);
   RUN_TEST(test_repl_install_library_replies_ok);
   RUN_TEST(test_repl_install_user_replies_ok);
-  RUN_TEST(test_repl_install_library_flips_encoded_bind_tier);
-  RUN_TEST(test_repl_install_user_resets_encoded_bind_tier);
   return UNITY_END();
 }

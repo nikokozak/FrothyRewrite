@@ -26,11 +26,13 @@
 #include <string.h>
 
 #if FR_FEATURE_PERSISTENCE
-/* Defined in persist_payload.c. The install-tier constants are file-local to
- * that translation unit; the two named setters keep the wire byte out of
- * repl.c. */
-extern void fr_persist_session_install_tier_set_library(void);
-extern void fr_persist_session_install_tier_set_user(void);
+/* Defined in persist_payload.c. stamp_overlay tags the slots in an overlay
+ * update with the runtime's current install tier so subsequent encodes emit
+ * the right BIND tier byte without rewriting pre-existing slots. The session
+ * tier itself lives on runtime->install_tier (T12L-7 D3); the install-library
+ * and install-user REPL commands set it directly. */
+extern void fr_persist_session_install_tier_stamp_overlay(
+    const fr_runtime_t *runtime, const fr_overlay_update_t *update);
 #endif
 
 typedef struct fr_repl_writer_t {
@@ -1203,6 +1205,10 @@ static fr_err_t fr_repl_eval_apply_arg(fr_runtime_t *runtime, const char *arg,
   FR_TRY(fr_overlay_update_decode(fr_repl_wire_bytes, byte_count,
                                   &fr_repl_apply_decoded));
   FR_TRY(fr_overlay_apply(runtime, &fr_repl_apply_decoded.update));
+#if FR_FEATURE_PERSISTENCE
+  fr_persist_session_install_tier_stamp_overlay(runtime,
+                                                &fr_repl_apply_decoded.update);
+#endif
   return fr_repl_writer_write(writer, "ok\n");
 }
 
@@ -1434,16 +1440,12 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
   }
 
   if (command.kind == FR_REPL_COMMAND_INSTALL_LIBRARY) {
-#if FR_FEATURE_PERSISTENCE
-    fr_persist_session_install_tier_set_library();
-#endif
+    runtime->install_tier = FR_INSTALL_TIER_LIBRARY;
     return fr_repl_writer_write(writer, "ok\n");
   }
 
   if (command.kind == FR_REPL_COMMAND_INSTALL_USER) {
-#if FR_FEATURE_PERSISTENCE
-    fr_persist_session_install_tier_set_user();
-#endif
+    runtime->install_tier = FR_INSTALL_TIER_USER;
     return fr_repl_writer_write(writer, "ok\n");
   }
 
@@ -1491,6 +1493,10 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
 
     if (err == FR_OK) {
       FR_TRY(fr_overlay_apply(runtime, &compiled.overlay_update));
+#if FR_FEATURE_PERSISTENCE
+      fr_persist_session_install_tier_stamp_overlay(runtime,
+                                                    &compiled.overlay_update);
+#endif
       return fr_repl_writer_write(writer, "ok\n");
     }
     if (err == FR_ERR_UNSUPPORTED) {
@@ -1557,6 +1563,9 @@ fr_err_t fr_repl_run(fr_runtime_t *runtime, const fr_repl_io_t *io) {
       io->write_text == NULL) {
     return FR_ERR_INVALID;
   }
+
+  /* T12L-7 D3: each fresh REPL session starts in user-install mode. */
+  runtime->install_tier = FR_INSTALL_TIER_USER;
 
   while (true) {
     FR_TRY(io->write_text("> "));

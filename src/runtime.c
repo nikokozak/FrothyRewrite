@@ -37,6 +37,7 @@ fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
   memset(&runtime->events, 0, sizeof(runtime->events));
   runtime->interrupted = false;
   runtime->dispatching_event = false;
+  runtime->install_tier = FR_INSTALL_TIER_USER;
   return FR_OK;
 }
 
