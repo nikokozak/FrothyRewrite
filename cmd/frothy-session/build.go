@@ -153,8 +153,17 @@ func emitMainSource(projectDir, target string) error {
 		}
 		content = []byte(src)
 	}
-	outPath := filepath.Join(buildOutputDir(projectDir, target), "main.fr")
-	return os.WriteFile(outPath, content, 0o644)
+	outDir := buildOutputDir(projectDir, target)
+	outPath := filepath.Join(outDir, "main.fr")
+	if err := os.WriteFile(outPath, content, 0o644); err != nil {
+		return err
+	}
+	// D9 retired program.fr; drop any copy left behind by a pre-split build
+	// so `frothy install` and `frothy send` never see the obsolete artifact.
+	if err := os.Remove(filepath.Join(outDir, "program.fr")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func runMake(projectDir, target string, stdout io.Writer, stderr io.Writer) error {

@@ -190,6 +190,30 @@ math = { path = "libs/math" }
 	}
 }
 
+func TestRunBuild_DropsStaleProgramFr(t *testing.T) {
+	dir := makeTempProject(t, `name = "blink"
+target = "host"
+
+[deps]
+servo = { path = "libs/servo" }
+`, "servo.attach: 5\n", map[string]string{
+		"libs/servo/lib.fr": "to servo.attach with pin [ pin ]\n",
+	})
+	out := filepath.Join(dir, ".frothy", "build", "host")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stale := filepath.Join(out, "program.fr")
+	writeFile(t, stale, "stale pre-D9 artifact\n")
+	var stdout, stderr bytes.Buffer
+	if err := runBuild(buildOptions{projectDir: dir, skipMake: true}, &stdout, &stderr); err != nil {
+		t.Fatalf("runBuild: %v\nstderr: %s", err, stderr.String())
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("expected stale program.fr to be removed; stat err=%v", err)
+	}
+}
+
 func TestRunBuildCommand_MissingManifest(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
