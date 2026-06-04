@@ -158,39 +158,6 @@ static void seed_nvs_slot_from_runtime(fr_runtime_t *runtime, uint8_t slot,
                                                      payload, payload_length));
 }
 
-/* Returns the slot whose header carries the highest generation. Tests with
- * multiple save_full / save calls cannot hard-code a slot index because
- * fr_persist_pick_inactive rotates them; this helper mirrors the dispatch
- * logic by reading both headers, validating the "FRPH" magic, comparing the
- * little-endian u32 generation at offset 12, and returning the winner. The
- * caller asserts at least one slot is valid by virtue of the index check. */
-static uint8_t read_active_slot(void) {
-  uint8_t header[FR_PERSIST_STORAGE_SLOT_COUNT][FR_PERSIST_HEADER_BYTES];
-  uint32_t generation[FR_PERSIST_STORAGE_SLOT_COUNT] = {0};
-  bool valid[FR_PERSIST_STORAGE_SLOT_COUNT] = {false, false};
-  uint8_t i = 0;
-
-  for (i = 0; i < (uint8_t)FR_PERSIST_STORAGE_SLOT_COUNT; i++) {
-    if (fr_platform_storage_read(i, 0, header[i], FR_PERSIST_HEADER_BYTES) !=
-        FR_OK) {
-      continue;
-    }
-    if (memcmp(header[i], "FRPH", 4) != 0) {
-      continue;
-    }
-    valid[i] = true;
-    generation[i] = (uint32_t)header[i][12] |
-                    ((uint32_t)header[i][13] << 8) |
-                    ((uint32_t)header[i][14] << 16) |
-                    ((uint32_t)header[i][15] << 24);
-  }
-  TEST_ASSERT_TRUE(valid[0] || valid[1]);
-  if (valid[0] && valid[1]) {
-    return generation[1] > generation[0] ? (uint8_t)1 : (uint8_t)0;
-  }
-  return valid[0] ? (uint8_t)0 : (uint8_t)1;
-}
-
 static fr_runtime_t s_runtime;
 
 void setUp(void) {
@@ -456,88 +423,6 @@ static int find_bind_tier_for_slot(const uint8_t *encoded, uint16_t len,
     return -1;
   }
   return -1;
-}
-
-/* Walks BIND records the same way find_bind_tier_for_slot does and writes
- * the encoded VALUE_INT for the BIND whose slot matches target through the
- * out pointer. Returns FR_OK on hit, FR_ERR_NOT_FOUND on miss, FR_ERR_CORRUPT
- * on malformed records. The reshaped round-trip test uses this to confirm
- * save committed the runtime's L2 mutation. */
-static fr_err_t find_bind_int_value_for_slot(const uint8_t *encoded,
-                                             uint16_t len,
-                                             fr_slot_id_t target_slot,
-                                             fr_int_t *out_value) {
-  uint16_t i = 5;
-  while (i < len) {
-    uint8_t tag = encoded[i];
-
-    if (tag == FR_TEST_TIER_RECORD_END) {
-      return FR_ERR_NOT_FOUND;
-    }
-    if (tag == FR_TEST_TIER_RECORD_CODE) {
-      uint16_t length = 0;
-
-      if ((uint16_t)(i + 5) > len) {
-        return FR_ERR_CORRUPT;
-      }
-      length = (uint16_t)encoded[i + 3] | ((uint16_t)encoded[i + 4] << 8);
-      i = (uint16_t)(i + 5 + length);
-      continue;
-    }
-    if (tag == FR_TEST_TIER_RECORD_BIND) {
-      uint16_t slot = 0;
-      uint8_t value_kind = 0;
-
-      if ((uint16_t)(i + 5) > len) {
-        return FR_ERR_CORRUPT;
-      }
-      slot = (uint16_t)encoded[i + 1] | ((uint16_t)encoded[i + 2] << 8);
-      value_kind = encoded[i + 4];
-      i = (uint16_t)(i + 5);
-      if (value_kind == FR_TEST_TIER_VALUE_INT) {
-        if (slot == target_slot) {
-#if FR_WORD_SIZE == 16
-          *out_value = (fr_int_t)(int16_t)((uint16_t)encoded[i] |
-                                           ((uint16_t)encoded[i + 1] << 8));
-#else
-          *out_value = (fr_int_t)(int32_t)((uint32_t)encoded[i] |
-                                           ((uint32_t)encoded[i + 1] << 8) |
-                                           ((uint32_t)encoded[i + 2] << 16) |
-                                           ((uint32_t)encoded[i + 3] << 24));
-#endif
-          return FR_OK;
-        }
-        i = (uint16_t)(i + FR_TEST_TIER_INT_BYTES);
-        continue;
-      }
-      switch (value_kind) {
-      case FR_TEST_TIER_VALUE_NIL:
-      case FR_TEST_TIER_VALUE_FALSE:
-      case FR_TEST_TIER_VALUE_TRUE:
-        break;
-      case FR_TEST_TIER_VALUE_CODE:
-      case FR_TEST_TIER_VALUE_NATIVE:
-      case FR_TEST_TIER_VALUE_OBJECT:
-        i = (uint16_t)(i + 2);
-        break;
-      default:
-        return FR_ERR_CORRUPT;
-      }
-      continue;
-    }
-    if (tag == FR_TEST_TIER_RECORD_NAME) {
-      uint8_t name_length = 0;
-
-      if ((uint16_t)(i + 4) > len) {
-        return FR_ERR_CORRUPT;
-      }
-      name_length = encoded[i + 3];
-      i = (uint16_t)(i + 4 + name_length);
-      continue;
-    }
-    return FR_ERR_CORRUPT;
-  }
-  return FR_ERR_NOT_FOUND;
 }
 
 /* `lib_word is helper:` routes through fr_compile_value_binding_for_runtime +
@@ -843,51 +728,43 @@ static void test_save_preserves_library_text_in_code_from_nvs(void) {
 }
 #endif
 
-/* Acceptance #10: the full save/restore round-trip integrates D5's tier
- * separation across a single device session — install through restore,
- * with runtime mutations between the persisted operations to prove which
- * tier the implementation actually owns.
+/* Acceptance #10: SPEC's save + reset + restore round-trip. Install a
+ * library word, install a user word, save the user tier, fully reset the
+ * runtime to model a power cycle, restore via the boot L1 pass plus the
+ * public L2-only restore word, and assert both names resolve and call
+ * through fr_repl_eval_line.
  *
- *   1. install-library + `lib_word is 5`. R54's auto-save commits the
- *      L1-only payload to NVS; this is the "L1 bytes in NVS" baseline the
- *      rest of the test compares against. install-user + `usr_word is 7`
- *      adds runtime L2 (no NVS write — L2 mode skips auto-save).
- *      First explicit save merges the existing NVS L1 prefix with the
- *      runtime's L2; the new payload's L1 region byte-equals the install
- *      baseline (D5: save preserves L1 bytes from NVS).
- *   2. Mutate runtime: lib_word := 99, usr_word := 13. Save again.
- *      D5: save's L1 prefix still comes from NVS, NOT from runtime — so
- *      the new payload's L1 region still byte-equals the install baseline
- *      even though runtime L1 disagrees. L2 in the new payload encodes
- *      usr_word := 13 (runtime's mutation flows through L2 into NVS).
- *   3. Mutate runtime again: lib_word := 77. Public restore.
- *      D5: restore brings only L2 back from NVS. Runtime L1 keeps the 77
- *      (the latest mutation, never written to NVS); runtime L2 reads 13
- *      (the value the previous save committed to NVS).
+ * SPEC #10 names the mixed-demo fixture (test-mixed.report at L1, demo at
+ * L2); test_persist_tier.c runs at the kernel layer where the host fixture
+ * pipeline is not in play. lib_word / usr_word stand in for the fixture
+ * words with the same install + persist shape the fixture would compile
+ * into. The contract under test is "library word survives save + reset +
+ * restore", not the fixture names per se.
  *
  * Regressions this catches:
- *   - Pre-R42 save (full re-encode from runtime): step 2's L1-bytes-
- *     unchanged assertion fails because save would emit lib_word := 99.
- *   - Pre-R50 restore (FULL path: reset + replay both tiers): step 3's
- *     runtime lib_word == 77 assertion fails because restore would drop
- *     L1 to NVS's lib_word == 5.
- *   - Pre-R54 install-library / L1-mode compile (no auto-save): step 1's
- *     install-baseline payload would carry no L1 records, so the byte
- *     comparison would degenerate. */
+ *   - install-library does not auto-save (pre-R54): the L1 image never
+ *     reaches NVS, so the L1 pass after reset cannot install lib_word.
+ *   - save erases L1 bytes from NVS (pre-R42 full re-encode where runtime
+ *     L1 is empty): the L1 pass after reset finds no library records.
+ *   - save skips L2: usr_word does not return after public restore.
+ *   - boot L1 pass binds slots but does not install L1 names (the R39
+ *     finding before R40 fixed it): lib_word has a slot yet
+ *     fr_slot_id_for_name returns FR_ERR_NOT_FOUND.
+ *   - public restore does not install L2 names: usr_word has a slot yet
+ *     fr_slot_id_for_name returns FR_ERR_NOT_FOUND. */
 static void test_save_restore_round_trip_preserves_both_tiers(void) {
   char repl_out[FR_REPL_OUTPUT_BYTES];
-  uint8_t install_header[FR_PERSIST_HEADER_BYTES];
-  uint8_t install_payload[FR_PROFILE_PERSISTENCE_BYTES];
-  uint16_t install_length = 0;
-  uint16_t l1_region_length = 0;
-  uint8_t slot = 0;
   fr_slot_id_t lib_slot = 0;
   fr_slot_id_t usr_slot = 0;
+  fr_slot_id_t resolved = 0;
   fr_tagged_t tagged = 0;
   fr_int_t value = 0;
-  fr_tagged_t mutated = 0;
 
+  fr_platform_storage_debug_reset();
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+
+  /* Install a library word; R54's auto-save during install-library + the
+   * L1-mode compile path commits the L1 image to NVS as it is typed. */
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime, "install-library", repl_out,
                                       (uint16_t)sizeof(repl_out)));
@@ -896,21 +773,10 @@ static void test_save_restore_round_trip_preserves_both_tiers(void) {
                     fr_repl_eval_line(&s_runtime, "lib_word is 5", repl_out,
                                       (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
-
-  /* Snapshot post-install NVS: L1-only payload that the next save must
-   * preserve byte-for-byte. */
-  slot = read_active_slot();
-  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_read(slot, 0, install_header,
-                                                    FR_PERSIST_HEADER_BYTES));
-  install_length = (uint16_t)install_header[16] |
-                   ((uint16_t)install_header[17] << 8);
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_platform_storage_read(slot, FR_PERSIST_HEADER_BYTES,
-                                             install_payload, install_length));
-  /* L1 region = payload minus magic+version (5) and END (1). */
-  TEST_ASSERT_GREATER_OR_EQUAL(7, install_length);
-  l1_region_length = (uint16_t)(install_length - 6);
+                    fr_slot_id_for_name(&s_runtime, "lib_word", &lib_slot));
 
+  /* Install a user word; explicit save below commits L2 to NVS. */
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime, "install-user", repl_out,
                                       (uint16_t)sizeof(repl_out)));
@@ -920,86 +786,52 @@ static void test_save_restore_round_trip_preserves_both_tiers(void) {
                                       (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_slot_id_for_name(&s_runtime, "lib_word", &lib_slot));
-  TEST_ASSERT_EQUAL(FR_OK,
                     fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
-
-  /* Step 1: first save. New payload's L1 region byte-equals the baseline. */
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
-  {
-    uint8_t save_header[FR_PERSIST_HEADER_BYTES];
-    uint8_t save_payload[FR_PROFILE_PERSISTENCE_BYTES];
-    uint16_t save_length = 0;
 
-    slot = read_active_slot();
-    TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_read(slot, 0, save_header,
-                                                      FR_PERSIST_HEADER_BYTES));
-    save_length = (uint16_t)save_header[16] |
-                  ((uint16_t)save_header[17] << 8);
-    TEST_ASSERT_EQUAL(FR_OK,
-                      fr_platform_storage_read(slot, FR_PERSIST_HEADER_BYTES,
-                                               save_payload, save_length));
-    TEST_ASSERT_GREATER_THAN((uint16_t)(5 + l1_region_length), save_length);
-    TEST_ASSERT_EQUAL_UINT8_ARRAY(&install_payload[5], &save_payload[5],
-                                  l1_region_length);
-    {
-      fr_int_t encoded_value = 0;
-      TEST_ASSERT_EQUAL(FR_OK,
-                        find_bind_int_value_for_slot(save_payload, save_length,
-                                                     usr_slot, &encoded_value));
-      TEST_ASSERT_EQUAL(7, encoded_value);
-    }
-  }
+  /* Reset: model a power cycle. fr_base_image_install drops the whole
+   * overlay + name table by replacing the runtime with a freshly-initialised
+   * one, so neither installed name resolves until restore brings it back. */
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                    fr_slot_id_for_name(&s_runtime, "lib_word", &resolved));
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                    fr_slot_id_for_name(&s_runtime, "usr_word", &resolved));
 
-  /* Step 2: mutate runtime L1 and L2, save again. NVS L1 stays the install
-   * baseline; NVS L2 picks up the runtime mutation. */
-  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(99, &mutated));
-  TEST_ASSERT_EQUAL(FR_OK, fr_slot_write(&s_runtime, lib_slot, mutated));
-  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(13, &mutated));
-  TEST_ASSERT_EQUAL(FR_OK, fr_slot_write(&s_runtime, usr_slot, mutated));
-  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
-  {
-    uint8_t save_header[FR_PERSIST_HEADER_BYTES];
-    uint8_t save_payload[FR_PROFILE_PERSISTENCE_BYTES];
-    uint16_t save_length = 0;
+  /* Boot L1 pass — SPEC D6 step 4. Library Frothy returns before user
+   * Frothy; lib_word becomes resolvable, usr_word does not yet. */
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "lib_word", &resolved));
+  TEST_ASSERT_EQUAL(lib_slot, resolved);
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                    fr_slot_id_for_name(&s_runtime, "usr_word", &resolved));
 
-    slot = read_active_slot();
-    TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_read(slot, 0, save_header,
-                                                      FR_PERSIST_HEADER_BYTES));
-    save_length = (uint16_t)save_header[16] |
-                  ((uint16_t)save_header[17] << 8);
-    TEST_ASSERT_EQUAL(FR_OK,
-                      fr_platform_storage_read(slot, FR_PERSIST_HEADER_BYTES,
-                                               save_payload, save_length));
-    TEST_ASSERT_GREATER_THAN((uint16_t)(5 + l1_region_length), save_length);
-    /* L1 bytes in NVS: still the install baseline. Runtime L1 mutation
-     * did NOT leak through save (D5). */
-    TEST_ASSERT_EQUAL_UINT8_ARRAY(&install_payload[5], &save_payload[5],
-                                  l1_region_length);
-    /* L2 BIND value: 13, the runtime's mutation (D5: save writes L2). */
-    {
-      fr_int_t encoded_value = 0;
-      TEST_ASSERT_EQUAL(FR_OK,
-                        find_bind_int_value_for_slot(save_payload, save_length,
-                                                     usr_slot, &encoded_value));
-      TEST_ASSERT_EQUAL(13, encoded_value);
-    }
-  }
-
-  /* Step 3: mutate L1 to a third value never persisted, then restore.
-   * Public restore is L2-only — runtime L1 keeps the 77, runtime L2 picks
-   * up the 13 saved in step 2. */
-  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(77, &mutated));
-  TEST_ASSERT_EQUAL(FR_OK, fr_slot_write(&s_runtime, lib_slot, mutated));
+  /* Public restore — SPEC D5: brings L2 back from NVS, L1 in runtime stays
+   * the L1 pass installed it just above. */
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "lib_word", &resolved));
+  TEST_ASSERT_EQUAL(lib_slot, resolved);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "usr_word", &resolved));
+  TEST_ASSERT_EQUAL(usr_slot, resolved);
 
+  /* SPEC #10: calling each via fr_repl_eval_line succeeds. */
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_word", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+
+  /* The values survive the round-trip with their original bindings. */
   TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, lib_slot, &tagged));
   TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
-  TEST_ASSERT_EQUAL(77, value);
-
+  TEST_ASSERT_EQUAL(5, value);
   TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, usr_slot, &tagged));
   TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
-  TEST_ASSERT_EQUAL(13, value);
+  TEST_ASSERT_EQUAL(7, value);
 }
 
 /* SPEC D5 / acceptance #6: the public `restore` word applies only L2
