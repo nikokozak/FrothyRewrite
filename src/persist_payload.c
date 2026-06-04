@@ -1355,12 +1355,160 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
                                         out_length);
 }
 
+/* Skip a tagged value body inside a BIND record. Mirrors the decoder's
+ * fr_persist_decode_value byte layout (kind byte plus a kind-dependent body)
+ * without rebuilding the value — the extract walker only needs the byte
+ * span, not the runtime tagged_t. */
+static fr_err_t
+fr_persist_payload_skip_value(fr_persist_reader_t *reader) {
+  uint8_t value_kind = 0;
+  fr_int_t scratch_int = 0;
+  uint16_t scratch_u16 = 0;
+
+  FR_TRY(fr_persist_reader_u8(reader, &value_kind));
+  switch (value_kind) {
+  case FR_PERSIST_VALUE_NIL:
+  case FR_PERSIST_VALUE_FALSE:
+  case FR_PERSIST_VALUE_TRUE:
+    return FR_OK;
+  case FR_PERSIST_VALUE_INT:
+    return fr_persist_reader_int(reader, &scratch_int);
+  case FR_PERSIST_VALUE_NATIVE:
+  case FR_PERSIST_VALUE_CODE:
+  case FR_PERSIST_VALUE_OBJECT:
+    return fr_persist_reader_u16(reader, &scratch_u16);
+  default:
+    return FR_ERR_CORRUPT;
+  }
+}
+
+#if FR_FEATURE_RECORDS
+/* Skip a record_name (u16 length + bytes) used inside RECORD_SHAPE bodies. */
+static fr_err_t
+fr_persist_payload_skip_record_name(fr_persist_reader_t *reader) {
+  uint16_t length = 0;
+  const uint8_t *bytes = NULL;
+
+  FR_TRY(fr_persist_reader_u16(reader, &length));
+  if (length == 0 || length > FR_PROFILE_MAX_NAME_BYTES) {
+    return FR_ERR_CORRUPT;
+  }
+  return fr_persist_reader_bytes(reader, length, &bytes);
+}
+#endif
+
+/* Advance the reader past one whole record. Returns the tag and the lookup
+ * key the extract walker needs (local_id for resource records; slot_id for
+ * BIND / NAME; zero for END / EVENT). count_prefix_records and the source-
+ * order extract walker both use this so they parse the wire format the same
+ * way and a record that one understands the other does too. */
+static fr_err_t fr_persist_payload_advance_record(
+    fr_persist_reader_t *reader, uint8_t *out_tag, uint16_t *out_key) {
+  uint8_t tag = 0;
+  uint16_t local_id = 0;
+  uint16_t length = 0;
+  uint16_t slot_id = 0;
+  uint8_t tier = 0;
+  uint8_t name_length = 0;
+  const uint8_t *bytes = NULL;
+
+  if (reader == NULL || out_tag == NULL || out_key == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_key = 0;
+
+  FR_TRY(fr_persist_reader_u8(reader, &tag));
+  *out_tag = tag;
+
+  if (tag == FR_PERSIST_RECORD_END) {
+    return FR_OK;
+  }
+  if (tag == FR_PERSIST_RECORD_CODE || tag == FR_PERSIST_RECORD_TEXT) {
+    FR_TRY(fr_persist_reader_u16(reader, &local_id));
+    FR_TRY(fr_persist_reader_u16(reader, &length));
+    FR_TRY(fr_persist_reader_bytes(reader, length, &bytes));
+    *out_key = local_id;
+    return FR_OK;
+  }
+  if (tag == FR_PERSIST_RECORD_BIND) {
+    FR_TRY(fr_persist_reader_u16(reader, &slot_id));
+    FR_TRY(fr_persist_reader_u8(reader, &tier));
+    if (tier != FR_PERSIST_TIER_LIBRARY && tier != FR_PERSIST_TIER_USER) {
+      return FR_ERR_CORRUPT;
+    }
+    FR_TRY(fr_persist_payload_skip_value(reader));
+    *out_key = slot_id;
+    return FR_OK;
+  }
+  if (tag == FR_PERSIST_RECORD_NAME) {
+    FR_TRY(fr_persist_reader_u16(reader, &slot_id));
+    FR_TRY(fr_persist_reader_u8(reader, &name_length));
+    if (name_length == 0 || name_length > FR_PROFILE_MAX_NAME_BYTES) {
+      return FR_ERR_CORRUPT;
+    }
+    FR_TRY(fr_persist_reader_bytes(reader, name_length, &bytes));
+    *out_key = slot_id;
+    return FR_OK;
+  }
+#if FR_FEATURE_RECORDS
+  if (tag == FR_PERSIST_RECORD_RECORD_SHAPE) {
+    uint16_t field_count = 0;
+
+    FR_TRY(fr_persist_reader_u16(reader, &local_id));
+    FR_TRY(fr_persist_payload_skip_record_name(reader));
+    FR_TRY(fr_persist_reader_u16(reader, &field_count));
+    for (uint16_t i = 0; i < field_count; i++) {
+      FR_TRY(fr_persist_payload_skip_record_name(reader));
+    }
+    *out_key = local_id;
+    return FR_OK;
+  }
+  if (tag == FR_PERSIST_RECORD_RECORD) {
+    uint16_t shape_local_id = 0;
+    uint16_t field_count = 0;
+
+    FR_TRY(fr_persist_reader_u16(reader, &local_id));
+    FR_TRY(fr_persist_reader_u16(reader, &shape_local_id));
+    FR_TRY(fr_persist_reader_u16(reader, &field_count));
+    for (uint16_t i = 0; i < field_count; i++) {
+      FR_TRY(fr_persist_payload_skip_value(reader));
+    }
+    *out_key = local_id;
+    return FR_OK;
+  }
+#endif
+#if FR_FEATURE_CELLS
+  if (tag == FR_PERSIST_RECORD_CELLS) {
+    FR_TRY(fr_persist_reader_u16(reader, &local_id));
+    FR_TRY(fr_persist_reader_u16(reader, &length));
+    for (uint16_t i = 0; i < length; i++) {
+      FR_TRY(fr_persist_payload_skip_value(reader));
+    }
+    *out_key = local_id;
+    return FR_OK;
+  }
+#endif
+#if FR_FEATURE_EVENTS
+  if (tag == FR_PERSIST_RECORD_EVENT) {
+    uint8_t kind = 0;
+    uint16_t scratch = 0;
+
+    FR_TRY(fr_persist_reader_u8(reader, &kind));
+    FR_TRY(fr_persist_reader_u16(reader, &scratch));
+    FR_TRY(fr_persist_reader_u16(reader, &scratch));
+    FR_TRY(fr_persist_reader_u16(reader, &scratch));
+    return FR_OK;
+  }
+#endif
+  return FR_ERR_CORRUPT;
+}
+
 /* Walk a prefix span (a slice of an encoded payload, starting at the first
  * record byte after magic+version) and count CODE and OBJECT records so the
  * downstream L2 encode pass can continue local-id numbering from where the
- * prefix left off. The prefix must contain only well-formed records; an END
- * tag short-circuits because save's extract never writes END into the
- * prefix. */
+ * prefix left off. TEXT / RECORD_SHAPE / RECORD / CELLS all live in the
+ * shared object-id namespace; EVENT never appears in a prefix because save
+ * emits events only into its own L2 tail. */
 static fr_err_t fr_persist_payload_count_prefix_records(
     const uint8_t *prefix, uint16_t prefix_length, uint16_t *out_code_count,
     uint16_t *out_object_count) {
@@ -1377,51 +1525,27 @@ static fr_err_t fr_persist_payload_count_prefix_records(
 
   while (reader.offset < reader.used) {
     uint8_t tag = 0;
-    uint16_t scratch_u16 = 0;
-    uint8_t scratch_u8 = 0;
-    const uint8_t *scratch_bytes = NULL;
+    uint16_t key = 0;
 
-    FR_TRY(fr_persist_reader_u8(&reader, &tag));
+    FR_TRY(fr_persist_payload_advance_record(&reader, &tag, &key));
+    if (tag == FR_PERSIST_RECORD_END) {
+      return FR_ERR_CORRUPT;
+    }
     if (tag == FR_PERSIST_RECORD_CODE) {
-      uint16_t length = 0;
-      FR_TRY(fr_persist_reader_u16(&reader, &scratch_u16));
-      FR_TRY(fr_persist_reader_u16(&reader, &length));
-      FR_TRY(fr_persist_reader_bytes(&reader, length, &scratch_bytes));
       *out_code_count = (uint16_t)(*out_code_count + 1);
-    } else if (tag == FR_PERSIST_RECORD_TEXT) {
-      uint16_t length = 0;
-      FR_TRY(fr_persist_reader_u16(&reader, &scratch_u16));
-      FR_TRY(fr_persist_reader_u16(&reader, &length));
-      FR_TRY(fr_persist_reader_bytes(&reader, length, &scratch_bytes));
+    } else if (tag == FR_PERSIST_RECORD_TEXT
+#if FR_FEATURE_RECORDS
+               || tag == FR_PERSIST_RECORD_RECORD_SHAPE ||
+               tag == FR_PERSIST_RECORD_RECORD
+#endif
+#if FR_FEATURE_CELLS
+               || tag == FR_PERSIST_RECORD_CELLS
+#endif
+    ) {
       *out_object_count = (uint16_t)(*out_object_count + 1);
-    } else if (tag == FR_PERSIST_RECORD_BIND) {
-      uint8_t value_kind = 0;
-      FR_TRY(fr_persist_reader_u16(&reader, &scratch_u16));
-      FR_TRY(fr_persist_reader_u8(&reader, &scratch_u8));
-      FR_TRY(fr_persist_reader_u8(&reader, &value_kind));
-      switch (value_kind) {
-      case FR_PERSIST_VALUE_NIL:
-      case FR_PERSIST_VALUE_FALSE:
-      case FR_PERSIST_VALUE_TRUE:
-        break;
-      case FR_PERSIST_VALUE_INT: {
-        fr_int_t ignored = 0;
-        FR_TRY(fr_persist_reader_int(&reader, &ignored));
-        break;
-      }
-      case FR_PERSIST_VALUE_CODE:
-      case FR_PERSIST_VALUE_NATIVE:
-      case FR_PERSIST_VALUE_OBJECT:
-        FR_TRY(fr_persist_reader_u16(&reader, &scratch_u16));
-        break;
-      default:
-        return FR_ERR_CORRUPT;
-      }
-    } else if (tag == FR_PERSIST_RECORD_NAME) {
-      uint8_t name_length = 0;
-      FR_TRY(fr_persist_reader_u16(&reader, &scratch_u16));
-      FR_TRY(fr_persist_reader_u8(&reader, &name_length));
-      FR_TRY(fr_persist_reader_bytes(&reader, name_length, &scratch_bytes));
+    } else if (tag == FR_PERSIST_RECORD_BIND ||
+               tag == FR_PERSIST_RECORD_NAME) {
+      /* no count change */
     } else {
       return FR_ERR_CORRUPT;
     }
@@ -2723,42 +2847,49 @@ fr_err_t fr_persist_payload_restore_library(fr_runtime_t *runtime,
   return FR_OK;
 }
 
-/* Save's L1 preservation step (D5). Decodes the existing NVS payload and
- * walks it twice to compute the L1 closure: every CODE / TEXT record an L1
- * BIND references plus every CODE / TEXT record that those L1 CODE bodies
- * reference transitively (PUSH_CODE_ID / PUSH_OBJECT_ID operands). Re-emits
- * the closure in decoded order (CODE by local id, then TEXT by local id),
- * followed by L1 BIND records and L1 NAME records. dst gets just the
- * records; the caller wraps them into a fresh payload via
- * fr_persist_payload_save_encode's library_prefix arg, which paste them in
- * verbatim between magic+version and the L2 records.
+/* Save's L1 preservation step (D5). Decodes the existing NVS payload to work
+ * out which records belong to the L1 closure (every CODE / object / BIND /
+ * NAME the L1 tier reaches), then walks the source bytes a second time and
+ * memcpys each L1-qualifying record into dst in its original on-wire order.
  *
- * The decoded record arrays preserve source byte content (decoded.code_records[i].bytes
- * points into src), so re-emission with the decoder's stored local ids yields
- * bytes byte-identical to the source for every closure record. The pre-R44
- * implementation rejected VALUE_CODE / VALUE_OBJECT L1 BINDs with
- * FR_ERR_UNSUPPORTED, which made `save` fail for any library word with a
- * function body — the case acceptance #5 actually needs.
+ * Source-order verbatim emission is the contract: D5 says "L1 bytes in NVS
+ * are preserved unchanged across save." The install path emits a TEXT
+ * referenced by a CODE body before the CODE that pushes it, and nested CODE
+ * before its parent — re-emitting CODE-then-TEXT (or any other category
+ * sort) would change those bytes. Walking source order keeps the prefix
+ * byte-identical to the L1 region of the input payload.
  *
- * Limitation deferred to a later round: object kinds beyond TEXT
- * (CELLS, RECORD_SHAPE, RECORD) are not yet re-emitted; an L1 BIND of
- * VALUE_OBJECT pointing at one of those returns FR_ERR_UNSUPPORTED. */
+ * The L1 closure widens through three relations:
+ *   1. L1 BIND -> its value's CODE / object id.
+ *   2. CODE body's PUSH_CODE_ID / PUSH_OBJECT_ID operands -> nested
+ *      CODE / object ids. The widen runs until no new ids land.
+ *   3. RECORD object -> its SHAPE; RECORD / CELL object value fields ->
+ *      any other object ids those fields encode. Each pass widens until
+ *      stable so an L1 record that points at another record that points at
+ *      a text still reaches the text.
+ *
+ * Object closure no longer narrows to TEXT — an L1 BIND of a CELLS / RECORD
+ * / RECORD_SHAPE object reaches the matching object record and the second-
+ * pass walker emits it verbatim. */
 fr_err_t fr_persist_payload_extract_library_records(
     const uint8_t *src, uint16_t src_length, uint8_t *dst, uint16_t dst_cap,
     uint16_t *out_length) {
   fr_persist_decoded_payload_t decoded;
   fr_persist_writer_t writer = {dst, 0, dst_cap};
-  fr_slot_id_t library_slots[FR_PROFILE_MAX_SLOTS];
-  uint16_t library_slot_count = 0;
   bool code_in_l1[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
   bool object_in_l1[FR_OBJECT_TABLE_CAPACITY];
+  bool slot_in_l1[FR_PROFILE_MAX_SLOTS];
   bool closure_changed = true;
+  fr_persist_reader_t scan = {src, src_length, 0};
+  const uint8_t *magic_scratch = NULL;
+  uint8_t version_scratch = 0;
 
   if (src == NULL || dst == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
   memset(code_in_l1, 0, sizeof(code_in_l1));
   memset(object_in_l1, 0, sizeof(object_in_l1));
+  memset(slot_in_l1, 0, sizeof(slot_in_l1));
 
   FR_TRY(fr_persist_decode_payload(src, src_length, &decoded));
 
@@ -2767,6 +2898,9 @@ fr_err_t fr_persist_payload_extract_library_records(
 
     if (bind->tier != FR_PERSIST_TIER_LIBRARY) {
       continue;
+    }
+    if (bind->slot_id < FR_PROFILE_MAX_SLOTS) {
+      slot_in_l1[bind->slot_id] = true;
     }
     if (bind->value_kind == FR_PERSIST_VALUE_CODE) {
       if (bind->value_word >= decoded.code_count) {
@@ -2777,20 +2911,10 @@ fr_err_t fr_persist_payload_extract_library_records(
       if (bind->value_word >= decoded.object_count) {
         return FR_ERR_CORRUPT;
       }
-      if (decoded.object_kinds[bind->value_word] != FR_PERSIST_OBJECT_TEXT) {
-        return FR_ERR_UNSUPPORTED;
-      }
       object_in_l1[bind->value_word] = true;
-    }
-    if (library_slot_count < FR_PROFILE_MAX_SLOTS) {
-      library_slots[library_slot_count++] = bind->slot_id;
     }
   }
 
-  /* Walk CODE bodies for PUSH_CODE_ID / PUSH_OBJECT_ID operands and mark any
-   * referenced ids as L1 too. Iterate until no new ids are added; nested fn
-   * bodies (a library word that calls another library word) and TEXT loads
-   * inside library code both need this closure to land in the prefix. */
   while (closure_changed) {
     closure_changed = false;
     for (uint16_t i = 0; i < decoded.code_count; i++) {
@@ -2821,15 +2945,12 @@ fr_err_t fr_persist_payload_extract_library_records(
             closure_changed = true;
           }
         }
-#if FR_FEATURE_TEXT
+#if FR_FEATURE_OBJECTS
         if (op == FR_OP_PUSH_OBJECT_ID) {
           uint16_t ref = (uint16_t)code->bytes[ip + 1] |
                          ((uint16_t)code->bytes[ip + 2] << 8);
           if (ref >= decoded.object_count) {
             return FR_ERR_CORRUPT;
-          }
-          if (decoded.object_kinds[ref] != FR_PERSIST_OBJECT_TEXT) {
-            return FR_ERR_UNSUPPORTED;
           }
           if (!object_in_l1[ref]) {
             object_in_l1[ref] = true;
@@ -2846,92 +2967,114 @@ fr_err_t fr_persist_payload_extract_library_records(
         ip = next_ip;
       }
     }
-  }
+#if FR_FEATURE_RECORDS
+    /* A RECORD object reaches its SHAPE plus any object refs its field
+     * values carry — those refs sit in decoded.record_values as tagged_t. */
+    for (uint16_t i = 0; i < decoded.record_count; i++) {
+      const fr_persist_record_record_t *rec = &decoded.record_records[i];
 
-  /* Emit L1 CODE records first, by decoded local id ascending — matches the
-   * source byte order because the decoder enforces local_id == out_code_count
-   * during decode. */
-  for (uint16_t i = 0; i < decoded.code_count; i++) {
-    const fr_persist_code_record_t *code = &decoded.code_records[i];
+      if (rec->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l1[rec->local_id]) {
+        continue;
+      }
+      if (rec->shape_local_id < FR_OBJECT_TABLE_CAPACITY &&
+          !object_in_l1[rec->shape_local_id]) {
+        object_in_l1[rec->shape_local_id] = true;
+        closure_changed = true;
+      }
+      for (uint16_t j = 0; j < rec->field_count; j++) {
+        fr_tagged_t val = decoded.record_values[rec->first_value + j];
+        fr_object_id_t obj = 0;
 
-    if (!code_in_l1[i]) {
-      continue;
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l1[(uint16_t)obj]) {
+          object_in_l1[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
     }
-    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_CODE));
-    FR_TRY(fr_persist_writer_u16(&writer, code->local_id));
-    FR_TRY(fr_persist_writer_u16(&writer, code->length));
-    FR_TRY(fr_persist_writer_bytes(&writer, code->bytes, code->length));
-  }
-
-#if FR_FEATURE_TEXT
-  /* Emit L1 TEXT records next, by decoded local id ascending. */
-  for (uint16_t i = 0; i < decoded.text_count; i++) {
-    const fr_persist_text_record_t *text = &decoded.text_records[i];
-
-    if (text->local_id >= FR_OBJECT_TABLE_CAPACITY ||
-        !object_in_l1[text->local_id]) {
-      continue;
-    }
-    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_TEXT));
-    FR_TRY(fr_persist_writer_u16(&writer, text->local_id));
-    FR_TRY(fr_persist_writer_u16(&writer, text->length));
-    FR_TRY(fr_persist_writer_bytes(&writer, text->bytes, text->length));
-  }
 #endif
+#if FR_FEATURE_CELLS
+    /* A CELLS object reaches any object refs its value slots carry. */
+    for (uint16_t i = 0; i < decoded.cell_count; i++) {
+      const fr_persist_cell_record_t *cell = &decoded.cell_records[i];
 
-  /* L1 BIND records (preserve tier, value_kind, and value bytes verbatim). */
-  for (uint16_t i = 0; i < decoded.bind_count; i++) {
-    const fr_persist_bind_record_t *bind = &decoded.bind_records[i];
+      if (cell->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l1[cell->local_id]) {
+        continue;
+      }
+      for (uint16_t j = 0; j < cell->length; j++) {
+        fr_tagged_t val = decoded.cell_values[cell->first_value + j];
+        fr_object_id_t obj = 0;
 
-    if (bind->tier != FR_PERSIST_TIER_LIBRARY) {
-      continue;
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l1[(uint16_t)obj]) {
+          object_in_l1[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
     }
+#endif
+  }
 
-    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_BIND));
-    FR_TRY(fr_persist_writer_u16(&writer, bind->slot_id));
-    FR_TRY(fr_persist_writer_u8(&writer, bind->tier));
-    FR_TRY(fr_persist_writer_u8(&writer, bind->value_kind));
-    switch (bind->value_kind) {
-    case FR_PERSIST_VALUE_NIL:
-    case FR_PERSIST_VALUE_FALSE:
-    case FR_PERSIST_VALUE_TRUE:
+  /* Source-order walk: advance through src record by record and memcpy any
+   * record that the closure marked L1. Events never qualify — D5 makes
+   * events L2-only at the encoder. */
+  FR_TRY(fr_persist_reader_bytes(&scan,
+                                 (uint16_t)sizeof(fr_persist_payload_magic),
+                                 &magic_scratch));
+  FR_TRY(fr_persist_reader_u8(&scan, &version_scratch));
+  while (true) {
+    uint16_t record_start = scan.offset;
+    uint8_t tag = 0;
+    uint16_t key = 0;
+    uint16_t record_length = 0;
+    bool qualifies = false;
+
+    FR_TRY(fr_persist_payload_advance_record(&scan, &tag, &key));
+    if (tag == FR_PERSIST_RECORD_END) {
       break;
-    case FR_PERSIST_VALUE_INT:
-      FR_TRY(fr_persist_writer_int(&writer, bind->int_value));
+    }
+    record_length = (uint16_t)(scan.offset - record_start);
+
+    switch (tag) {
+    case FR_PERSIST_RECORD_CODE:
+      qualifies =
+          key < FR_PROFILE_CODE_OBJECT_TABLE_SIZE && code_in_l1[key];
       break;
-    case FR_PERSIST_VALUE_NATIVE:
-    case FR_PERSIST_VALUE_CODE:
-    case FR_PERSIST_VALUE_OBJECT:
-      FR_TRY(fr_persist_writer_u16(&writer, bind->value_word));
+    case FR_PERSIST_RECORD_TEXT:
+#if FR_FEATURE_RECORDS
+    case FR_PERSIST_RECORD_RECORD_SHAPE:
+    case FR_PERSIST_RECORD_RECORD:
+#endif
+#if FR_FEATURE_CELLS
+    case FR_PERSIST_RECORD_CELLS:
+#endif
+      qualifies = key < FR_OBJECT_TABLE_CAPACITY && object_in_l1[key];
       break;
+    case FR_PERSIST_RECORD_BIND:
+    case FR_PERSIST_RECORD_NAME:
+      qualifies = key < FR_PROFILE_MAX_SLOTS && slot_in_l1[key];
+      break;
+#if FR_FEATURE_EVENTS
+    case FR_PERSIST_RECORD_EVENT:
+      qualifies = false;
+      break;
+#endif
     default:
       return FR_ERR_CORRUPT;
     }
-  }
-
-#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
-  for (uint16_t i = 0; i < decoded.name_count; i++) {
-    const fr_persist_name_record_t *name = &decoded.name_records[i];
-    uint8_t name_length = 0;
-    bool is_l1 = false;
-
-    for (uint16_t j = 0; j < library_slot_count; j++) {
-      if (library_slots[j] == name->slot_id) {
-        is_l1 = true;
-        break;
-      }
+    if (qualifies) {
+      FR_TRY(fr_persist_writer_bytes(&writer, src + record_start,
+                                     record_length));
     }
-    if (!is_l1) {
-      continue;
-    }
-    FR_TRY(fr_persist_name_length(name->name, &name_length));
-    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_NAME));
-    FR_TRY(fr_persist_writer_u16(&writer, name->slot_id));
-    FR_TRY(fr_persist_writer_u8(&writer, name_length));
-    FR_TRY(fr_persist_writer_bytes(&writer, (const uint8_t *)name->name,
-                                   name_length));
   }
-#endif
 
   *out_length = writer.used;
   return FR_OK;

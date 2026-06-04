@@ -661,6 +661,73 @@ static void test_save_preserves_library_code_word_from_nvs(void) {
                                 l1_records_length);
 }
 
+#if FR_FEATURE_TEXT
+/* Acceptance #5 — text-bearing fn body. A library word whose body pushes a
+ * text literal produces, on the wire, a TEXT record before the CODE record
+ * that references it (the install encoder walks PUSH_OBJECT_ID operands
+ * first, so the TEXT lands ahead of its parent CODE). The R44 extract
+ * grouped all L1 CODEs ahead of all L1 TEXTs, reordering those bytes; this
+ * test fails against that grouping and passes against the source-order
+ * walker because the saved L1 prefix byte-equals the input L1 region only
+ * when TEXT comes before CODE just like the input. */
+static void test_save_preserves_library_text_in_code_from_nvs(void) {
+  uint8_t l1_only_payload[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t saved_header[FR_PERSIST_HEADER_BYTES];
+  uint8_t saved_payload[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t l1_payload_length = 0;
+  uint16_t saved_length = 0;
+  uint16_t l1_records_length = 0;
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+
+  fr_platform_storage_debug_reset();
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime,
+                                      "lib_text is fn [ \"lib-hello\" ]",
+                                      repl_out, (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_encode(&s_runtime, l1_only_payload,
+                                                     (uint16_t)sizeof(l1_only_payload),
+                                                     &l1_payload_length));
+  seed_nvs_slot_from_runtime(&s_runtime, 0, 1);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word is 7", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_read(1, 0, saved_header,
+                                                     FR_PERSIST_HEADER_BYTES));
+  saved_length = (uint16_t)saved_header[16] |
+                 ((uint16_t)saved_header[17] << 8);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_storage_read(1, FR_PERSIST_HEADER_BYTES,
+                                             saved_payload, saved_length));
+
+  /* L1 record region is the source payload minus magic+version (5) and END
+   * (1). saved_payload's L1 prefix sits at offset 5 (after its own
+   * magic+version) and must byte-equal the input's L1 region. The new test
+   * exercises the TEXT-before-CODE interleaving the encoder produces. */
+  TEST_ASSERT_GREATER_OR_EQUAL(7, l1_payload_length);
+  l1_records_length = (uint16_t)(l1_payload_length - 6);
+  TEST_ASSERT_GREATER_THAN((uint16_t)(5 + l1_records_length), saved_length);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(&l1_only_payload[5], &saved_payload[5],
+                                l1_records_length);
+}
+#endif
+
 /* Acceptance #10 (partial): library and user words round-trip through
  * fr_persist_save + base-image reset + boot's L1 restore + user-side
  * fr_persist_restore. Save with D5 semantics only writes L2 from runtime;
@@ -1001,6 +1068,9 @@ int main(void) {
   RUN_TEST(test_wipe_user_preserves_library_word);
   RUN_TEST(test_save_preserves_library_records_from_nvs);
   RUN_TEST(test_save_preserves_library_code_word_from_nvs);
+#if FR_FEATURE_TEXT
+  RUN_TEST(test_save_preserves_library_text_in_code_from_nvs);
+#endif
   RUN_TEST(test_save_restore_round_trip_preserves_both_tiers);
   RUN_TEST(test_restore_preserves_runtime_library_tier);
   RUN_TEST(test_boot_restore_applies_library_before_user);
