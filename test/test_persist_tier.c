@@ -852,6 +852,12 @@ static void test_restore_preserves_runtime_library_tier(void) {
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
 
+  /* R54 made install-library + the L1-mode compile path auto-save the
+   * runtime to NVS so library replacement persists across a power cycle.
+   * The seed below models a single both-tier save; clear the in-session
+   * auto-saves first so that seed is the only valid slot the public
+   * restore can pick. */
+  fr_platform_storage_debug_reset();
   seed_nvs_slot_from_runtime(&s_runtime, 0, 1);
 
   TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(99, &mutated_lib));
@@ -1150,7 +1156,11 @@ static void test_install_library_drops_l1_runtime_and_nvs_preserves_user(void) {
                     fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
 
   /* Both-tier NVS image. The test models the post-save state where the user
-   * has issued `save` after an install-library + install-user round. */
+   * has issued `save` after an install-library + install-user round. R54's
+   * per-line install save has already written intermediate slots during the
+   * REPL session above; wipe them so this seed is the only valid payload
+   * and the next install-library can pick the inactive slot cleanly. */
+  fr_platform_storage_debug_reset();
   seed_nvs_slot_from_runtime(&s_runtime, 0, 1);
 
   TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_read(0, 0, pre_header,
@@ -1211,6 +1221,95 @@ static void test_install_library_drops_l1_runtime_and_nvs_preserves_user(void) {
   }
 }
 
+/* SPEC D3 + D9 + D10 close on the install-library lifecycle: a fresh
+ * install over the wire (`install-library` + the library lines) replaces
+ * every prior L1 record on the device, and the replacement persists across
+ * a power cycle. Without per-line save during install, the new L1 lives
+ * only in the runtime overlay — reset + boot-restore would lose it.
+ *
+ * Library v1 = {lib_a is 1, lib_b is 2}. Add a user word, save the user
+ * tier. Power cycle (base-image reinstall + the two-call boot restore):
+ * all three resolve. Issue install-library + `lib_b is 99` — the install
+ * receipt drops lib_a (D10) and the line that follows persists lib_b's
+ * new value into NVS (D3). Power cycle again: lib_a is gone for good,
+ * lib_b reads 99, the user word survives. The pre-R54 handler stops at
+ * the runtime overlay, so lib_b would be missing after the second power
+ * cycle — the final assertion block catches that. */
+static void test_install_library_persists_replacement_l1(void) {
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+  fr_slot_id_t scratch = 0;
+  fr_tagged_t tagged = 0;
+  fr_int_t value = 0;
+
+  fr_platform_storage_debug_reset();
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_a is 1", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_b is 2", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_x is 7", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+
+  /* Boot cycle 1: all three words from library v1 + user state restore. */
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_user(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&s_runtime, "lib_a", &scratch));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&s_runtime, "lib_b", &scratch));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&s_runtime, "usr_x", &scratch));
+
+  /* Library v2 = {lib_b is 99}. install-library wipes lib_a from runtime
+   * and NVS; the next line writes lib_b=99 through to NVS. */
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_b is 99", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                    fr_slot_id_for_name(&s_runtime, "lib_a", &scratch));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&s_runtime, "lib_b", &scratch));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, scratch, &tagged));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
+  TEST_ASSERT_EQUAL(99, value);
+
+  /* Boot cycle 2: prove the replacement persisted. Without R54's per-line
+   * save during install, lib_b would not resolve here. */
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_user(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                    fr_slot_id_for_name(&s_runtime, "lib_a", &scratch));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&s_runtime, "lib_b", &scratch));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, scratch, &tagged));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
+  TEST_ASSERT_EQUAL(99, value);
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&s_runtime, "usr_x", &scratch));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, scratch, &tagged));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
+  TEST_ASSERT_EQUAL(7, value);
+}
+
 static void test_repl_install_library_replies_ok(void) {
   char out[FR_REPL_OUTPUT_BYTES];
 
@@ -1255,6 +1354,7 @@ int main(void) {
   RUN_TEST(test_boot_two_call_applies_library_before_user);
   RUN_TEST(test_user_restore_without_prior_library_returns_not_found);
   RUN_TEST(test_install_library_drops_l1_runtime_and_nvs_preserves_user);
+  RUN_TEST(test_install_library_persists_replacement_l1);
   RUN_TEST(test_repl_install_library_replies_ok);
   RUN_TEST(test_repl_install_user_replies_ok);
   return UNITY_END();
