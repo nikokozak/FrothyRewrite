@@ -728,62 +728,72 @@ static void test_save_preserves_library_text_in_code_from_nvs(void) {
 }
 #endif
 
-/* Acceptance #10: SPEC's save + reset + restore round-trip. Install a
- * library word, install a user word, save the user tier, fully reset the
- * runtime to model a power cycle, restore via the boot L1 pass plus the
- * public L2-only restore word, and assert both names resolve and call
- * through fr_repl_eval_line.
+/* Acceptance #10: SPEC's save + reset + restore round-trip with the call
+ * shape the mixed-demo fixture compiles into. The L1 word is a fn pushing
+ * 5; the L2 word is a fn that calls the L1 word. That mirrors `to
+ * test-mixed.report [ test-mixed.echo: ]` (L1, body calls a lower-tier
+ * word) and `to demo [ test-mixed.report: ]` (L2, body calls the L1
+ * word) — the fixture's shape at the kernel layer where the host build
+ * pipeline is not in play.
  *
- * SPEC #10 names the mixed-demo fixture (test-mixed.report at L1, demo at
- * L2); test_persist_tier.c runs at the kernel layer where the host fixture
- * pipeline is not in play. lib_word / usr_word stand in for the fixture
- * words with the same install + persist shape the fixture would compile
- * into. The contract under test is "library word survives save + reset +
- * restore", not the fixture names per se.
+ * The round-trip: install library word + install user word + save L2 +
+ * reset runtime + boot L1 restore + public L2 restore + call each word
+ * via fr_repl_eval_line. The L1 call returns 5 on its own; the L2 call
+ * returns 5 because the restored L2 body resolves the restored L1 slot
+ * and invokes it. The "5\nok\n" output after public restore is what
+ * proves L2-code-calls-L1-code survives save + reset + restore — the
+ * shape a bare slot read or a fn-tagged-value push would not catch.
  *
  * Regressions this catches:
- *   - install-library does not auto-save (pre-R54): the L1 image never
- *     reaches NVS, so the L1 pass after reset cannot install lib_word.
- *   - save erases L1 bytes from NVS (pre-R42 full re-encode where runtime
- *     L1 is empty): the L1 pass after reset finds no library records.
+ *   - install-library does not auto-save (pre-R54): the L1 CODE/BIND
+ *     never reaches NVS, so restore_library installs nothing and
+ *     fr_slot_id_for_name("lib_word") returns FR_ERR_NOT_FOUND.
+ *   - save erases L1 bytes from NVS (pre-R42 full re-encode where
+ *     runtime L1 is empty): the L1 pass finds no library records, same
+ *     downstream miss.
  *   - save skips L2: usr_word does not return after public restore.
  *   - boot L1 pass binds slots but does not install L1 names (the R39
- *     finding before R40 fixed it): lib_word has a slot yet
- *     fr_slot_id_for_name returns FR_ERR_NOT_FOUND.
- *   - public restore does not install L2 names: usr_word has a slot yet
- *     fr_slot_id_for_name returns FR_ERR_NOT_FOUND. */
+ *     finding before R40): lib_word has a slot yet fr_slot_id_for_name
+ *     misses it.
+ *   - public restore does not install L2 names: same failure mode for
+ *     usr_word.
+ *   - L1 CODE body bytes corrupted across save+restore: lib_word: yields
+ *     something other than "5\nok\n".
+ *   - L2 CODE body's CALL operand drifts off its L1 slot (slot-id
+ *     instability across reset/restore_library): usr_word: errors or
+ *     yields a different value than "5\nok\n". */
 static void test_save_restore_round_trip_preserves_both_tiers(void) {
   char repl_out[FR_REPL_OUTPUT_BYTES];
   fr_slot_id_t lib_slot = 0;
   fr_slot_id_t usr_slot = 0;
   fr_slot_id_t resolved = 0;
-  fr_tagged_t tagged = 0;
-  fr_int_t value = 0;
 
   fr_platform_storage_debug_reset();
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
 
-  /* Install a library word; R54's auto-save during install-library + the
+  /* L1 fn body pushes 5; R54's auto-save during install-library + the
    * L1-mode compile path commits the L1 image to NVS as it is typed. */
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime, "install-library", repl_out,
                                       (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_repl_eval_line(&s_runtime, "lib_word is 5", repl_out,
-                                      (uint16_t)sizeof(repl_out)));
+                    fr_repl_eval_line(&s_runtime, "lib_word is fn [ 5 ]",
+                                      repl_out, (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_slot_id_for_name(&s_runtime, "lib_word", &lib_slot));
 
-  /* Install a user word; explicit save below commits L2 to NVS. */
+  /* L2 fn body calls the L1 word — the SPEC #10 call shape. Explicit save
+   * below commits L2 to NVS. */
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime, "install-user", repl_out,
                                       (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_repl_eval_line(&s_runtime, "usr_word is 7", repl_out,
-                                      (uint16_t)sizeof(repl_out)));
+                    fr_repl_eval_line(&s_runtime,
+                                      "usr_word is fn [ lib_word: ]",
+                                      repl_out, (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
@@ -799,16 +809,21 @@ static void test_save_restore_round_trip_preserves_both_tiers(void) {
                     fr_slot_id_for_name(&s_runtime, "usr_word", &resolved));
 
   /* Boot L1 pass — SPEC D6 step 4. Library Frothy returns before user
-   * Frothy; lib_word becomes resolvable, usr_word does not yet. */
+   * Frothy; lib_word becomes resolvable and callable, usr_word does not
+   * yet. */
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&s_runtime));
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_slot_id_for_name(&s_runtime, "lib_word", &resolved));
   TEST_ASSERT_EQUAL(lib_slot, resolved);
   TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
                     fr_slot_id_for_name(&s_runtime, "usr_word", &resolved));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_word:", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("5\nok\n", repl_out);
 
-  /* Public restore — SPEC D5: brings L2 back from NVS, L1 in runtime stays
-   * the L1 pass installed it just above. */
+  /* Public restore — SPEC D5: brings L2 back from NVS, leaves L1 the boot
+   * pass installed alone. */
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&s_runtime));
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_slot_id_for_name(&s_runtime, "lib_word", &resolved));
@@ -817,21 +832,19 @@ static void test_save_restore_round_trip_preserves_both_tiers(void) {
                     fr_slot_id_for_name(&s_runtime, "usr_word", &resolved));
   TEST_ASSERT_EQUAL(usr_slot, resolved);
 
-  /* SPEC #10: calling each via fr_repl_eval_line succeeds. */
+  /* SPEC #10: calling each via fr_repl_eval_line succeeds. lib_word: runs
+   * the L1 body and pushes 5. usr_word: runs the L2 body, which calls
+   * lib_word — the restored L2 CODE's CALL operand has to land on the
+   * restored L1 slot, and the restored L1 CODE has to push 5. Anything
+   * weaker than "5\nok\n" here fails. */
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_repl_eval_line(&s_runtime, "lib_word", repl_out,
+                    fr_repl_eval_line(&s_runtime, "lib_word:", repl_out,
                                       (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("5\nok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_repl_eval_line(&s_runtime, "usr_word", repl_out,
+                    fr_repl_eval_line(&s_runtime, "usr_word:", repl_out,
                                       (uint16_t)sizeof(repl_out)));
-
-  /* The values survive the round-trip with their original bindings. */
-  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, lib_slot, &tagged));
-  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
-  TEST_ASSERT_EQUAL(5, value);
-  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, usr_slot, &tagged));
-  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
-  TEST_ASSERT_EQUAL(7, value);
+  TEST_ASSERT_EQUAL_STRING("5\nok\n", repl_out);
 }
 
 /* SPEC D5 / acceptance #6: the public `restore` word applies only L2
