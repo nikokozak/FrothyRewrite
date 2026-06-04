@@ -331,7 +331,7 @@ static fr_err_t fr_native_uart_close(fr_runtime_t *runtime,
 
 #if FR_FEATURE_PWM
 enum {
-  FR_NATIVE_PWM_DUTY_MAX = 1023,
+  FR_NATIVE_PWM_DUTY_MAX = 10000,
 };
 
 static fr_err_t fr_native_decode_pwm_handle(fr_runtime_t *runtime,
@@ -1523,7 +1523,7 @@ static const fr_native_signature_t fr_native_pwm_write_signature = {
     .params = fr_native_pwm_write_params,
     .arg_count = 2,
     .result = FR_NATIVE_VALUE_NIL,
-    .help = "set a PWM duty cycle in [0, 1023]",
+    .help = "set a PWM duty cycle in [0, 10000]",
 };
 
 static const fr_native_param_t fr_native_pwm_close_params[] = {

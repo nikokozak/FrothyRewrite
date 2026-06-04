@@ -868,10 +868,12 @@ fr_err_t fr_platform_pwm_open(uint16_t pin, uint16_t freq,
 
 fr_err_t fr_platform_pwm_write(uint16_t platform_index, uint16_t duty) {
   fr_esp_pwm_t *pwm = NULL;
+  /* Input is parts-per-10k; LEDC native duty is 10-bit. */
+  uint32_t native_duty = ((uint32_t)duty * 1023U) / 10000U;
 
   FR_TRY(fr_esp_pwm_entry(platform_index, &pwm));
   FR_TRY(fr_esp_err(
-      ledc_set_duty(LEDC_LOW_SPEED_MODE, pwm->channel, (uint32_t)duty)));
+      ledc_set_duty(LEDC_LOW_SPEED_MODE, pwm->channel, native_duty)));
   return fr_esp_err(ledc_update_duty(LEDC_LOW_SPEED_MODE, pwm->channel));
 }
 
