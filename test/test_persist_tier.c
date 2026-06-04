@@ -27,6 +27,12 @@
 
 #include "unity/unity.h"
 
+/* SPEC D6 boot two-call sequence — declared via extern because persist.h is
+ * not in T12L-7's files-in-scope list, matching the wipe-user pattern from
+ * round 20. */
+extern fr_err_t fr_persist_restore_library(fr_runtime_t *runtime);
+extern fr_err_t fr_persist_restore_user(fr_runtime_t *runtime);
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -583,6 +589,93 @@ static void test_boot_restore_applies_library_before_user(void) {
   TEST_ASSERT_EQUAL(99, decoded);
 }
 
+/* SPEC D6 boot-call layer: the kernel runs the L1 restore and the L2
+ * restore as two distinct calls; user definitions only land after the
+ * library tier is in place. This test exercises the public NVS-level pair
+ * (fr_persist_restore_library / fr_persist_restore_user) the boot pipeline
+ * in fr_repl_startup_restore_and_boot uses, and asserts the intermediate
+ * state between the two calls. A single-call FULL restore would not show
+ * the lib-overlay / no-user-overlay intermediate state. */
+static void test_boot_two_call_applies_library_before_user(void) {
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+  fr_slot_id_t lib_slot = 0;
+  fr_slot_id_t usr_slot = 0;
+  fr_tagged_t tagged = 0;
+  fr_int_t value = 0;
+
+  fr_platform_storage_debug_reset();
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_word is 5", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word is 7", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "lib_word", &lib_slot));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_FALSE(fr_slot_is_overlay(&s_runtime, lib_slot));
+  TEST_ASSERT_FALSE(fr_slot_is_overlay(&s_runtime, usr_slot));
+
+  /* L1 pass: library binding lands, user binding stays untouched. A regression
+   * that re-applies both tiers in this call (the prior unified-overlay impl)
+   * would make usr_slot overlay too. */
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&s_runtime));
+  TEST_ASSERT_TRUE(fr_slot_is_overlay(&s_runtime, lib_slot));
+  TEST_ASSERT_FALSE(fr_slot_is_overlay(&s_runtime, usr_slot));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, lib_slot, &tagged));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
+  TEST_ASSERT_EQUAL(5, value);
+
+  /* L2 pass: user binding lands; library binding still resolves as before. */
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_user(&s_runtime));
+  TEST_ASSERT_TRUE(fr_slot_is_overlay(&s_runtime, lib_slot));
+  TEST_ASSERT_TRUE(fr_slot_is_overlay(&s_runtime, usr_slot));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, lib_slot, &tagged));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
+  TEST_ASSERT_EQUAL(5, value);
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, usr_slot, &tagged));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
+  TEST_ASSERT_EQUAL(7, value);
+}
+
+/* A standalone L2 pass — with no preceding L1 pass on the same payload —
+ * has no map to translate decoded local ids against. The new entry point
+ * surfaces FR_ERR_NOT_FOUND rather than silently applying L2 binds against
+ * stale or zero maps. Calling order matters; the boot pipeline owns it. */
+static void test_user_restore_without_prior_library_returns_not_found(void) {
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+
+  fr_platform_storage_debug_reset();
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word is 7", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND, fr_persist_restore_user(&s_runtime));
+}
+
 static void test_repl_install_library_replies_ok(void) {
   char out[FR_REPL_OUTPUT_BYTES];
 
@@ -617,6 +710,8 @@ int main(void) {
   RUN_TEST(test_wipe_user_preserves_library_word);
   RUN_TEST(test_save_restore_round_trip_preserves_both_tiers);
   RUN_TEST(test_boot_restore_applies_library_before_user);
+  RUN_TEST(test_boot_two_call_applies_library_before_user);
+  RUN_TEST(test_user_restore_without_prior_library_returns_not_found);
   RUN_TEST(test_repl_install_library_replies_ok);
   RUN_TEST(test_repl_install_user_replies_ok);
   return UNITY_END();

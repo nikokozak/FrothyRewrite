@@ -40,6 +40,13 @@ extern void fr_persist_session_install_tier_stamp_slot(
 /* Defined in persist.c. Drops every L2 overlay binding from the runtime and
  * saves so NVS only retains L1 records. */
 extern fr_err_t fr_persist_wipe_user(fr_runtime_t *runtime);
+/* Defined in persist.c — D6 boot two-call sequence. fr_persist_restore_library
+ * applies L1 records from NVS onto a freshly-reset runtime; per-bind failures
+ * within L1 log a warning and the walk continues. fr_persist_restore_user
+ * must follow within the same boot; it applies L2 records onto the runtime
+ * L1 left behind without resetting it. */
+extern fr_err_t fr_persist_restore_library(fr_runtime_t *runtime);
+extern fr_err_t fr_persist_restore_user(fr_runtime_t *runtime);
 #endif
 
 typedef struct fr_repl_writer_t {
@@ -729,28 +736,41 @@ static void fr_repl_write_startup_error(fr_err_t err) {
 fr_err_t fr_repl_startup_restore_and_boot(fr_runtime_t *runtime) {
 #if FR_FEATURE_PERSISTENCE
   fr_tagged_t out = fr_tagged_nil();
-  fr_err_t err = FR_OK;
+  fr_err_t l1_err = FR_OK;
+  fr_err_t l2_err = FR_OK;
+  fr_err_t boot_err = FR_OK;
 
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
 
-  err = fr_persist_restore(runtime);
-  if (err != FR_OK) {
-    if (err != FR_ERR_NOT_FOUND) {
-      fr_repl_write_startup_error(err);
-    }
+  /* SPEC D6 boot order: L1 records (library tier) before L2 (user tier).
+   * Two explicit calls — L1 first writes a freshly-reset runtime with the
+   * library layer; L2 layers user definitions on top. An L1 miss
+   * (no payload yet) is normal on first boot. An L1 error other than
+   * FR_ERR_NOT_FOUND surfaces via fr_repl_write_startup_error; the L2 call
+   * still runs so a corrupt L1 doesn't strand a saved user tier. */
+  l1_err = fr_persist_restore_library(runtime);
+  if (l1_err != FR_OK && l1_err != FR_ERR_NOT_FOUND) {
+    fr_repl_write_startup_error(l1_err);
+  }
+  l2_err = fr_persist_restore_user(runtime);
+  if (l2_err != FR_OK && l2_err != FR_ERR_NOT_FOUND) {
+    fr_repl_write_startup_error(l2_err);
+  }
+  if (l1_err != FR_OK && l2_err != FR_OK) {
+    /* Nothing installed from NVS; skip boot dispatch. */
     return FR_OK;
   }
 
-  err = fr_vm_run_boot(runtime, &out);
-  if (err == FR_ERR_INTERRUPTED) {
+  boot_err = fr_vm_run_boot(runtime, &out);
+  if (boot_err == FR_ERR_INTERRUPTED) {
     fr_runtime_clear_interrupt(runtime);
-    fr_repl_write_startup_error(err);
+    fr_repl_write_startup_error(boot_err);
     return FR_OK;
   }
-  if (err != FR_OK) {
-    fr_repl_write_startup_error(err);
+  if (boot_err != FR_OK) {
+    fr_repl_write_startup_error(boot_err);
   }
 #else
   if (runtime == NULL) {

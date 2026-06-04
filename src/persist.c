@@ -133,16 +133,93 @@ static fr_err_t fr_persist_pick_inactive(uint8_t *out_slot,
   return FR_OK;
 }
 
+/* Defined in persist_payload.c — boot two-call restore. fr_persist_restore_library
+ * resets the runtime, installs resources, and applies only L1 binds (per-bind
+ * failures log + skip per SPEC D6). fr_persist_restore_user must follow
+ * within the same boot sequence; it applies L2 binds plus names and events
+ * onto the runtime the L1 pass left behind. */
+extern fr_err_t fr_persist_payload_restore_library(fr_runtime_t *runtime,
+                                                   const uint8_t *bytes,
+                                                   uint16_t length);
+extern fr_err_t fr_persist_payload_restore_user_after_library(
+    fr_runtime_t *runtime, const uint8_t *bytes, uint16_t length);
+
+typedef fr_err_t (*fr_persist_payload_apply_fn_t)(fr_runtime_t *runtime,
+                                                  const uint8_t *bytes,
+                                                  uint16_t length);
+
 static fr_err_t fr_persist_restore_slot(fr_runtime_t *runtime, uint8_t slot,
-                                        const fr_persist_header_t *header) {
+                                        const fr_persist_header_t *header,
+                                        fr_persist_payload_apply_fn_t apply) {
   FR_TRY(fr_platform_storage_read(slot, FR_PERSIST_HEADER_BYTES,
                                   fr_persist_payload, header->payload_length));
   if (fr_crc32(fr_persist_payload, header->payload_length) !=
       header->payload_crc) {
     return FR_ERR_CORRUPT;
   }
-  return fr_persist_payload_restore(runtime, fr_persist_payload,
-                                    header->payload_length);
+  return apply(runtime, fr_persist_payload, header->payload_length);
+}
+
+/* Dual-slot retry shared by FULL restore and the boot L1/L2 passes. The
+ * tier-aware boot passes skip the auto-reset paths: L1 owns the reset that
+ * resources rely on, and L2 must not undo what L1 just installed. */
+static fr_err_t
+fr_persist_restore_dispatch(fr_runtime_t *runtime,
+                            fr_persist_payload_apply_fn_t apply,
+                            bool reset_on_miss) {
+  fr_persist_header_t headers[FR_PERSIST_STORAGE_SLOT_COUNT];
+  bool valid[FR_PERSIST_STORAGE_SLOT_COUNT];
+  fr_err_t header_err[FR_PERSIST_STORAGE_SLOT_COUNT];
+  uint8_t first = 0;
+  uint8_t second = 1;
+  fr_err_t last_err = FR_ERR_NOT_FOUND;
+
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  header_err[0] = fr_persist_read_header(0, &headers[0]);
+  header_err[1] = fr_persist_read_header(1, &headers[1]);
+  valid[0] = header_err[0] == FR_OK;
+  valid[1] = header_err[1] == FR_OK;
+  if (!valid[0] && !valid[1]) {
+    if (reset_on_miss) {
+      FR_TRY(fr_runtime_reset(runtime));
+    }
+    if (header_err[0] != FR_ERR_NOT_FOUND) {
+      return header_err[0];
+    }
+    if (header_err[1] != FR_ERR_NOT_FOUND) {
+      return header_err[1];
+    }
+    return FR_ERR_NOT_FOUND;
+  }
+  if (valid[0] && valid[1] && headers[1].generation > headers[0].generation) {
+    first = 1;
+    second = 0;
+  } else if (!valid[0]) {
+    first = 1;
+    second = 0;
+  }
+
+  if (valid[first]) {
+    last_err = fr_persist_restore_slot(runtime, first, &headers[first], apply);
+    if (last_err == FR_OK) {
+      return FR_OK;
+    }
+  }
+  if (valid[second]) {
+    last_err =
+        fr_persist_restore_slot(runtime, second, &headers[second], apply);
+    if (last_err == FR_OK) {
+      return FR_OK;
+    }
+  }
+
+  if (reset_on_miss) {
+    FR_TRY(fr_runtime_reset(runtime));
+  }
+  return last_err;
 }
 
 fr_err_t fr_persist_save(const fr_runtime_t *runtime) {
@@ -175,54 +252,17 @@ fr_err_t fr_persist_save(const fr_runtime_t *runtime) {
 }
 
 fr_err_t fr_persist_restore(fr_runtime_t *runtime) {
-  fr_persist_header_t headers[FR_PERSIST_STORAGE_SLOT_COUNT];
-  bool valid[FR_PERSIST_STORAGE_SLOT_COUNT];
-  fr_err_t header_err[FR_PERSIST_STORAGE_SLOT_COUNT];
-  uint8_t first = 0;
-  uint8_t second = 1;
-  fr_err_t last_err = FR_ERR_NOT_FOUND;
+  return fr_persist_restore_dispatch(runtime, fr_persist_payload_restore, true);
+}
 
-  if (runtime == NULL) {
-    return FR_ERR_INVALID;
-  }
+fr_err_t fr_persist_restore_library(fr_runtime_t *runtime) {
+  return fr_persist_restore_dispatch(runtime,
+                                     fr_persist_payload_restore_library, true);
+}
 
-  header_err[0] = fr_persist_read_header(0, &headers[0]);
-  header_err[1] = fr_persist_read_header(1, &headers[1]);
-  valid[0] = header_err[0] == FR_OK;
-  valid[1] = header_err[1] == FR_OK;
-  if (!valid[0] && !valid[1]) {
-    FR_TRY(fr_runtime_reset(runtime));
-    if (header_err[0] != FR_ERR_NOT_FOUND) {
-      return header_err[0];
-    }
-    if (header_err[1] != FR_ERR_NOT_FOUND) {
-      return header_err[1];
-    }
-    return FR_ERR_NOT_FOUND;
-  }
-  if (valid[0] && valid[1] && headers[1].generation > headers[0].generation) {
-    first = 1;
-    second = 0;
-  } else if (!valid[0]) {
-    first = 1;
-    second = 0;
-  }
-
-  if (valid[first]) {
-    last_err = fr_persist_restore_slot(runtime, first, &headers[first]);
-    if (last_err == FR_OK) {
-      return FR_OK;
-    }
-  }
-  if (valid[second]) {
-    last_err = fr_persist_restore_slot(runtime, second, &headers[second]);
-    if (last_err == FR_OK) {
-      return FR_OK;
-    }
-  }
-
-  FR_TRY(fr_runtime_reset(runtime));
-  return last_err;
+fr_err_t fr_persist_restore_user(fr_runtime_t *runtime) {
+  return fr_persist_restore_dispatch(
+      runtime, fr_persist_payload_restore_user_after_library, false);
 }
 
 fr_err_t fr_persist_wipe(fr_runtime_t *runtime) {
