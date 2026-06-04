@@ -596,6 +596,71 @@ static void test_save_preserves_library_records_from_nvs(void) {
                                 l1_records_length);
 }
 
+/* Acceptance #5 — VALUE_CODE case. A library word with a fn body produces an
+ * L1 BIND of VALUE_CODE plus the CODE record it references. The R42 extract
+ * implementation rejected VALUE_CODE / VALUE_OBJECT L1 BINDs outright with
+ * FR_ERR_UNSUPPORTED, so this exact sequence (install lib word with body,
+ * install user word, save) caused fr_persist_save to fail. SPEC D5 demands
+ * L1 NVS bytes survive save unchanged regardless of value_kind. The new
+ * extract walks the L1 BIND -> CODE closure (and PUSH_CODE_ID / PUSH_OBJECT_ID
+ * operands within those bodies) and re-emits each record byte-verbatim from
+ * the decoded source, so the L1 region in the saved payload byte-equals the
+ * L1 region the install-library encode produced. */
+static void test_save_preserves_library_code_word_from_nvs(void) {
+  uint8_t l1_only_payload[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t saved_header[FR_PERSIST_HEADER_BYTES];
+  uint8_t saved_payload[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t l1_payload_length = 0;
+  uint16_t saved_length = 0;
+  uint16_t l1_records_length = 0;
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+
+  fr_platform_storage_debug_reset();
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_thunk is fn [ 99 ]",
+                                      repl_out, (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_encode(&s_runtime, l1_only_payload,
+                                                     (uint16_t)sizeof(l1_only_payload),
+                                                     &l1_payload_length));
+  seed_nvs_slot_from_runtime(&s_runtime, 0, 1);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word is 7", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  /* Under R42 this returns FR_ERR_UNSUPPORTED because extract_library_records
+   * refuses VALUE_CODE L1 BINDs. The new extract walks the closure (CODE 0
+   * here, the fn body), so save succeeds and the L1 region survives. */
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_read(1, 0, saved_header,
+                                                     FR_PERSIST_HEADER_BYTES));
+  saved_length = (uint16_t)saved_header[16] |
+                 ((uint16_t)saved_header[17] << 8);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_storage_read(1, FR_PERSIST_HEADER_BYTES,
+                                             saved_payload, saved_length));
+
+  TEST_ASSERT_GREATER_OR_EQUAL(7, l1_payload_length);
+  l1_records_length = (uint16_t)(l1_payload_length - 6);
+  TEST_ASSERT_GREATER_THAN((uint16_t)(5 + l1_records_length), saved_length);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(&l1_only_payload[5], &saved_payload[5],
+                                l1_records_length);
+}
+
 /* Acceptance #10 (partial): library and user words round-trip through
  * fr_persist_save + base-image reset + fr_persist_restore. Save with D5
  * semantics only writes L2 from runtime; L1 lands in NVS via install-library
@@ -864,6 +929,7 @@ int main(void) {
   RUN_TEST(test_install_library_stamps_value_binding_slot);
   RUN_TEST(test_wipe_user_preserves_library_word);
   RUN_TEST(test_save_preserves_library_records_from_nvs);
+  RUN_TEST(test_save_preserves_library_code_word_from_nvs);
   RUN_TEST(test_save_restore_round_trip_preserves_both_tiers);
   RUN_TEST(test_boot_restore_applies_library_before_user);
   RUN_TEST(test_boot_two_call_applies_library_before_user);

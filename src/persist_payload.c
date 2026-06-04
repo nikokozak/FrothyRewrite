@@ -1164,20 +1164,25 @@ static fr_err_t fr_persist_check_no_volatile_handles(
 /* tier_filter == 0 walks every overlay slot (the historical full-encode).
  * tier_filter == FR_PERSIST_TIER_USER skips slots stamped L1; that's the save
  * path which trusts NVS for L1 (D5) and only writes L2 from the runtime.
- * library_prefix is an optional pre-encoded byte span (BIND/NAME records)
- * pasted immediately after magic+version; save passes the L1 records it
- * extracted from the existing payload so they survive the round-trip
- * byte-for-byte. */
+ * library_prefix is an optional pre-encoded byte span pasted immediately
+ * after magic+version; save passes the L1 records it extracted from the
+ * existing payload so they survive the round-trip byte-for-byte. The
+ * prefix carries its own CODE/OBJECT records with local ids 0..K-1; the
+ * caller passes K via code_count_initial / object_count_initial so the
+ * L2 encode writes new CODE/OBJECT records with local ids continuing from
+ * the prefix's last id, which is what the decoder's strict local-id sequence
+ * check at fr_persist_decode_payload requires. */
 static fr_err_t fr_persist_payload_encode_impl(
     const fr_runtime_t *runtime, uint8_t tier_filter,
+    uint16_t code_count_initial, uint16_t object_count_initial,
     const uint8_t *library_prefix, uint16_t library_prefix_length,
     uint8_t *bytes, uint16_t cap, uint16_t *out_length) {
   fr_persist_writer_t writer = {bytes, 0, cap};
   fr_code_object_id_t runtime_code_ids[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
   fr_object_id_t runtime_object_ids[FR_OBJECT_TABLE_CAPACITY];
   fr_persist_object_record_kind_t object_kinds[FR_OBJECT_TABLE_CAPACITY];
-  uint16_t code_count = 0;
-  uint16_t object_count = 0;
+  uint16_t code_count = code_count_initial;
+  uint16_t object_count = object_count_initial;
 
   if (runtime == NULL || bytes == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
@@ -1346,21 +1351,102 @@ static fr_err_t fr_persist_payload_encode_impl(
 
 fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
                                    uint16_t cap, uint16_t *out_length) {
-  return fr_persist_payload_encode_impl(runtime, 0, NULL, 0, bytes, cap,
+  return fr_persist_payload_encode_impl(runtime, 0, 0, 0, NULL, 0, bytes, cap,
                                         out_length);
 }
 
+/* Walk a prefix span (a slice of an encoded payload, starting at the first
+ * record byte after magic+version) and count CODE and OBJECT records so the
+ * downstream L2 encode pass can continue local-id numbering from where the
+ * prefix left off. The prefix must contain only well-formed records; an END
+ * tag short-circuits because save's extract never writes END into the
+ * prefix. */
+static fr_err_t fr_persist_payload_count_prefix_records(
+    const uint8_t *prefix, uint16_t prefix_length, uint16_t *out_code_count,
+    uint16_t *out_object_count) {
+  fr_persist_reader_t reader = {prefix, prefix_length, 0};
+
+  if (out_code_count == NULL || out_object_count == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_code_count = 0;
+  *out_object_count = 0;
+  if (prefix == NULL || prefix_length == 0) {
+    return FR_OK;
+  }
+
+  while (reader.offset < reader.used) {
+    uint8_t tag = 0;
+    uint16_t scratch_u16 = 0;
+    uint8_t scratch_u8 = 0;
+    const uint8_t *scratch_bytes = NULL;
+
+    FR_TRY(fr_persist_reader_u8(&reader, &tag));
+    if (tag == FR_PERSIST_RECORD_CODE) {
+      uint16_t length = 0;
+      FR_TRY(fr_persist_reader_u16(&reader, &scratch_u16));
+      FR_TRY(fr_persist_reader_u16(&reader, &length));
+      FR_TRY(fr_persist_reader_bytes(&reader, length, &scratch_bytes));
+      *out_code_count = (uint16_t)(*out_code_count + 1);
+    } else if (tag == FR_PERSIST_RECORD_TEXT) {
+      uint16_t length = 0;
+      FR_TRY(fr_persist_reader_u16(&reader, &scratch_u16));
+      FR_TRY(fr_persist_reader_u16(&reader, &length));
+      FR_TRY(fr_persist_reader_bytes(&reader, length, &scratch_bytes));
+      *out_object_count = (uint16_t)(*out_object_count + 1);
+    } else if (tag == FR_PERSIST_RECORD_BIND) {
+      uint8_t value_kind = 0;
+      FR_TRY(fr_persist_reader_u16(&reader, &scratch_u16));
+      FR_TRY(fr_persist_reader_u8(&reader, &scratch_u8));
+      FR_TRY(fr_persist_reader_u8(&reader, &value_kind));
+      switch (value_kind) {
+      case FR_PERSIST_VALUE_NIL:
+      case FR_PERSIST_VALUE_FALSE:
+      case FR_PERSIST_VALUE_TRUE:
+        break;
+      case FR_PERSIST_VALUE_INT: {
+        fr_int_t ignored = 0;
+        FR_TRY(fr_persist_reader_int(&reader, &ignored));
+        break;
+      }
+      case FR_PERSIST_VALUE_CODE:
+      case FR_PERSIST_VALUE_NATIVE:
+      case FR_PERSIST_VALUE_OBJECT:
+        FR_TRY(fr_persist_reader_u16(&reader, &scratch_u16));
+        break;
+      default:
+        return FR_ERR_CORRUPT;
+      }
+    } else if (tag == FR_PERSIST_RECORD_NAME) {
+      uint8_t name_length = 0;
+      FR_TRY(fr_persist_reader_u16(&reader, &scratch_u16));
+      FR_TRY(fr_persist_reader_u8(&reader, &name_length));
+      FR_TRY(fr_persist_reader_bytes(&reader, name_length, &scratch_bytes));
+    } else {
+      return FR_ERR_CORRUPT;
+    }
+  }
+  return FR_OK;
+}
+
 /* D5: save encodes only L2 from runtime and prefixes the existing payload's
- * L1 BIND and NAME records verbatim. Callers (fr_persist_save) extract the
- * prefix via fr_persist_payload_extract_library_records. */
+ * L1 records (CODE / TEXT / BIND / NAME — the closure of records L1 BINDs
+ * reference) verbatim. Callers (fr_persist_save) extract the prefix via
+ * fr_persist_payload_extract_library_records. */
 fr_err_t fr_persist_payload_save_encode(
     const fr_runtime_t *runtime, const uint8_t *library_prefix,
     uint16_t library_prefix_length, uint8_t *bytes, uint16_t cap,
     uint16_t *out_length) {
-  return fr_persist_payload_encode_impl(runtime,
-                                        (uint8_t)FR_PERSIST_TIER_USER,
-                                        library_prefix, library_prefix_length,
-                                        bytes, cap, out_length);
+  uint16_t prefix_code_count = 0;
+  uint16_t prefix_object_count = 0;
+
+  FR_TRY(fr_persist_payload_count_prefix_records(
+      library_prefix, library_prefix_length, &prefix_code_count,
+      &prefix_object_count));
+  return fr_persist_payload_encode_impl(
+      runtime, (uint8_t)FR_PERSIST_TIER_USER, prefix_code_count,
+      prefix_object_count, library_prefix, library_prefix_length, bytes, cap,
+      out_length);
 }
 
 static fr_err_t fr_persist_decode_value(fr_persist_reader_t *reader,
@@ -2637,21 +2723,26 @@ fr_err_t fr_persist_payload_restore_library(fr_runtime_t *runtime,
   return FR_OK;
 }
 
-/* Save's L1 preservation step (D5). Walks the existing payload's decoded
- * records, re-encodes the L1 BIND records (literal values only — see
- * limitation below) and the NAME records pointing at L1 slots into dst.
- * The encoder is deterministic on bind tier + value_kind + value, so the
- * re-encoded bytes equal the source bytes; from the test's viewpoint the
- * L1 NVS bytes survive byte-for-byte across save. dst gets just the records,
- * no magic/version/END — the caller wraps them into a fresh payload via
- * fr_persist_payload_save_encode's library_prefix arg.
+/* Save's L1 preservation step (D5). Decodes the existing NVS payload and
+ * walks it twice to compute the L1 closure: every CODE / TEXT record an L1
+ * BIND references plus every CODE / TEXT record that those L1 CODE bodies
+ * reference transitively (PUSH_CODE_ID / PUSH_OBJECT_ID operands). Re-emits
+ * the closure in decoded order (CODE by local id, then TEXT by local id),
+ * followed by L1 BIND records and L1 NAME records. dst gets just the
+ * records; the caller wraps them into a fresh payload via
+ * fr_persist_payload_save_encode's library_prefix arg, which paste them in
+ * verbatim between magic+version and the L2 records.
  *
- * Limitation: a VALUE_CODE / VALUE_OBJECT L1 BIND references a local id in
- * the source payload's resource namespace. Preserving such a bind without
- * also preserving its referenced CODE / TEXT / etc. records would leave a
- * dangling reference. This function rejects them with FR_ERR_UNSUPPORTED;
- * the literal-value bindings install-library + `name is N` produces work
- * today, and L1 function bodies wait for a future round. */
+ * The decoded record arrays preserve source byte content (decoded.code_records[i].bytes
+ * points into src), so re-emission with the decoder's stored local ids yields
+ * bytes byte-identical to the source for every closure record. The pre-R44
+ * implementation rejected VALUE_CODE / VALUE_OBJECT L1 BINDs with
+ * FR_ERR_UNSUPPORTED, which made `save` fail for any library word with a
+ * function body — the case acceptance #5 actually needs.
+ *
+ * Limitation deferred to a later round: object kinds beyond TEXT
+ * (CELLS, RECORD_SHAPE, RECORD) are not yet re-emitted; an L1 BIND of
+ * VALUE_OBJECT pointing at one of those returns FR_ERR_UNSUPPORTED. */
 fr_err_t fr_persist_payload_extract_library_records(
     const uint8_t *src, uint16_t src_length, uint8_t *dst, uint16_t dst_cap,
     uint16_t *out_length) {
@@ -2659,10 +2750,15 @@ fr_err_t fr_persist_payload_extract_library_records(
   fr_persist_writer_t writer = {dst, 0, dst_cap};
   fr_slot_id_t library_slots[FR_PROFILE_MAX_SLOTS];
   uint16_t library_slot_count = 0;
+  bool code_in_l1[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  bool object_in_l1[FR_OBJECT_TABLE_CAPACITY];
+  bool closure_changed = true;
 
   if (src == NULL || dst == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
+  memset(code_in_l1, 0, sizeof(code_in_l1));
+  memset(object_in_l1, 0, sizeof(object_in_l1));
 
   FR_TRY(fr_persist_decode_payload(src, src_length, &decoded));
 
@@ -2672,9 +2768,123 @@ fr_err_t fr_persist_payload_extract_library_records(
     if (bind->tier != FR_PERSIST_TIER_LIBRARY) {
       continue;
     }
-    if (bind->value_kind == FR_PERSIST_VALUE_CODE ||
-        bind->value_kind == FR_PERSIST_VALUE_OBJECT) {
-      return FR_ERR_UNSUPPORTED;
+    if (bind->value_kind == FR_PERSIST_VALUE_CODE) {
+      if (bind->value_word >= decoded.code_count) {
+        return FR_ERR_CORRUPT;
+      }
+      code_in_l1[bind->value_word] = true;
+    } else if (bind->value_kind == FR_PERSIST_VALUE_OBJECT) {
+      if (bind->value_word >= decoded.object_count) {
+        return FR_ERR_CORRUPT;
+      }
+      if (decoded.object_kinds[bind->value_word] != FR_PERSIST_OBJECT_TEXT) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      object_in_l1[bind->value_word] = true;
+    }
+    if (library_slot_count < FR_PROFILE_MAX_SLOTS) {
+      library_slots[library_slot_count++] = bind->slot_id;
+    }
+  }
+
+  /* Walk CODE bodies for PUSH_CODE_ID / PUSH_OBJECT_ID operands and mark any
+   * referenced ids as L1 too. Iterate until no new ids are added; nested fn
+   * bodies (a library word that calls another library word) and TEXT loads
+   * inside library code both need this closure to land in the prefix. */
+  while (closure_changed) {
+    closure_changed = false;
+    for (uint16_t i = 0; i < decoded.code_count; i++) {
+      const fr_persist_code_record_t *code = &decoded.code_records[i];
+      fr_instruction_stream_t view;
+      fr_instruction_header_t header = {0};
+      fr_code_offset_t ip = 0;
+      char scratch[64];
+
+      if (!code_in_l1[i]) {
+        continue;
+      }
+      FR_TRY(fr_instruction_stream_init(&view, code->bytes, code->length));
+      FR_TRY(fr_instruction_read_header(&view, &header));
+      ip = (fr_code_offset_t)header.header_size;
+      while (ip < view.length) {
+        fr_code_offset_t next_ip = 0;
+        fr_opcode_t op = (fr_opcode_t)code->bytes[ip];
+
+        if (op == FR_OP_PUSH_CODE_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded.code_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (!code_in_l1[ref]) {
+            code_in_l1[ref] = true;
+            closure_changed = true;
+          }
+        }
+#if FR_FEATURE_TEXT
+        if (op == FR_OP_PUSH_OBJECT_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded.object_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (decoded.object_kinds[ref] != FR_PERSIST_OBJECT_TEXT) {
+            return FR_ERR_UNSUPPORTED;
+          }
+          if (!object_in_l1[ref]) {
+            object_in_l1[ref] = true;
+            closure_changed = true;
+          }
+        }
+#endif
+        FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
+                                             (uint16_t)sizeof(scratch), NULL,
+                                             &next_ip));
+        if (next_ip <= ip) {
+          return FR_ERR_CORRUPT;
+        }
+        ip = next_ip;
+      }
+    }
+  }
+
+  /* Emit L1 CODE records first, by decoded local id ascending — matches the
+   * source byte order because the decoder enforces local_id == out_code_count
+   * during decode. */
+  for (uint16_t i = 0; i < decoded.code_count; i++) {
+    const fr_persist_code_record_t *code = &decoded.code_records[i];
+
+    if (!code_in_l1[i]) {
+      continue;
+    }
+    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_CODE));
+    FR_TRY(fr_persist_writer_u16(&writer, code->local_id));
+    FR_TRY(fr_persist_writer_u16(&writer, code->length));
+    FR_TRY(fr_persist_writer_bytes(&writer, code->bytes, code->length));
+  }
+
+#if FR_FEATURE_TEXT
+  /* Emit L1 TEXT records next, by decoded local id ascending. */
+  for (uint16_t i = 0; i < decoded.text_count; i++) {
+    const fr_persist_text_record_t *text = &decoded.text_records[i];
+
+    if (text->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+        !object_in_l1[text->local_id]) {
+      continue;
+    }
+    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_TEXT));
+    FR_TRY(fr_persist_writer_u16(&writer, text->local_id));
+    FR_TRY(fr_persist_writer_u16(&writer, text->length));
+    FR_TRY(fr_persist_writer_bytes(&writer, text->bytes, text->length));
+  }
+#endif
+
+  /* L1 BIND records (preserve tier, value_kind, and value bytes verbatim). */
+  for (uint16_t i = 0; i < decoded.bind_count; i++) {
+    const fr_persist_bind_record_t *bind = &decoded.bind_records[i];
+
+    if (bind->tier != FR_PERSIST_TIER_LIBRARY) {
+      continue;
     }
 
     FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_BIND));
@@ -2690,14 +2900,12 @@ fr_err_t fr_persist_payload_extract_library_records(
       FR_TRY(fr_persist_writer_int(&writer, bind->int_value));
       break;
     case FR_PERSIST_VALUE_NATIVE:
+    case FR_PERSIST_VALUE_CODE:
+    case FR_PERSIST_VALUE_OBJECT:
       FR_TRY(fr_persist_writer_u16(&writer, bind->value_word));
       break;
     default:
       return FR_ERR_CORRUPT;
-    }
-
-    if (library_slot_count < FR_PROFILE_MAX_SLOTS) {
-      library_slots[library_slot_count++] = bind->slot_id;
     }
   }
 
