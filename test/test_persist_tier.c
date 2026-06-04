@@ -631,20 +631,45 @@ static void test_boot_two_call_applies_library_before_user(void) {
   TEST_ASSERT_FALSE(fr_slot_is_overlay(&s_runtime, lib_slot));
   TEST_ASSERT_FALSE(fr_slot_is_overlay(&s_runtime, usr_slot));
 
-  /* L1 pass: library binding lands, user binding stays untouched. A regression
-   * that re-applies both tiers in this call (the prior unified-overlay impl)
-   * would make usr_slot overlay too. */
+  /* L1 pass: SPEC D6 "library Frothy definitions compile and install."
+   * Install means name-bound, not just slot-written — between the L1 and
+   * L2 passes the library word must resolve via fr_slot_id_for_name so
+   * the L2 pass (and any L2 definition) can reference it. A regression
+   * that defers all name binding to the L2 pass would leave the library
+   * tier in a bind-only state where the lib_word lookup fails. A
+   * regression that applies all names in the L1 pass would resolve
+   * usr_word here too. */
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&s_runtime));
   TEST_ASSERT_TRUE(fr_slot_is_overlay(&s_runtime, lib_slot));
   TEST_ASSERT_FALSE(fr_slot_is_overlay(&s_runtime, usr_slot));
+  {
+    fr_slot_id_t resolved = 0;
+
+    TEST_ASSERT_EQUAL(FR_OK,
+                      fr_slot_id_for_name(&s_runtime, "lib_word", &resolved));
+    TEST_ASSERT_EQUAL(lib_slot, resolved);
+    TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                      fr_slot_id_for_name(&s_runtime, "usr_word", &resolved));
+  }
   TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, lib_slot, &tagged));
   TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
   TEST_ASSERT_EQUAL(5, value);
 
-  /* L2 pass: user binding lands; library binding still resolves as before. */
+  /* L2 pass: user binding lands and resolves by name; library name still
+   * resolves to the same slot. */
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_user(&s_runtime));
   TEST_ASSERT_TRUE(fr_slot_is_overlay(&s_runtime, lib_slot));
   TEST_ASSERT_TRUE(fr_slot_is_overlay(&s_runtime, usr_slot));
+  {
+    fr_slot_id_t resolved = 0;
+
+    TEST_ASSERT_EQUAL(FR_OK,
+                      fr_slot_id_for_name(&s_runtime, "lib_word", &resolved));
+    TEST_ASSERT_EQUAL(lib_slot, resolved);
+    TEST_ASSERT_EQUAL(FR_OK,
+                      fr_slot_id_for_name(&s_runtime, "usr_word", &resolved));
+    TEST_ASSERT_EQUAL(usr_slot, resolved);
+  }
   TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, lib_slot, &tagged));
   TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
   TEST_ASSERT_EQUAL(5, value);

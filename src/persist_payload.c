@@ -2429,17 +2429,46 @@ fr_persist_install_resources(fr_runtime_t *runtime,
   return FR_OK;
 }
 
+/* Tier of the bind record that owns this slot in this payload. Names carry
+ * no tier on the wire (P1), so we read it from the matching bind. Returns 0
+ * if no bind matches — the validate step rules that out, so this only happens
+ * on a programming error in the caller. */
+static uint8_t
+fr_persist_name_slot_tier(const fr_persist_decoded_payload_t *decoded,
+                          fr_slot_id_t slot_id) {
+  for (uint16_t i = 0; i < decoded->bind_count; i++) {
+    if (decoded->bind_records[i].slot_id == slot_id) {
+      return decoded->bind_records[i].tier;
+    }
+  }
+  return 0;
+}
+
+/* Applies overlay name bindings filtered by the bind tier of each name's
+ * slot. tier_filter == 0 applies every name (FULL restore). The two-call
+ * boot path uses FR_PERSIST_TIER_LIBRARY on the L1 pass so library words
+ * resolve by name before the L2 pass runs, and FR_PERSIST_TIER_USER on the
+ * L2 pass to land the remaining names. */
 static fr_err_t
 fr_persist_apply_names(fr_runtime_t *runtime,
-                       const fr_persist_decoded_payload_t *decoded) {
+                       const fr_persist_decoded_payload_t *decoded,
+                       uint8_t tier_filter) {
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   for (uint16_t i = 0; i < decoded->name_count; i++) {
+    if (tier_filter != 0) {
+      uint8_t name_tier = fr_persist_name_slot_tier(
+          decoded, decoded->name_records[i].slot_id);
+      if (name_tier != tier_filter) {
+        continue;
+      }
+    }
     FR_TRY(fr_slot_bind_project_name(runtime, decoded->name_records[i].name,
                                      decoded->name_records[i].slot_id));
   }
 #else
   (void)runtime;
   (void)decoded;
+  (void)tier_filter;
 #endif
   return FR_OK;
 }
@@ -2515,16 +2544,18 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
    * skip_on_failure=false matches the strict FULL-restore contract. */
   FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,
                                        0, false));
-  FR_TRY(fr_persist_apply_names(runtime, &decoded));
+  FR_TRY(fr_persist_apply_names(runtime, &decoded, 0));
   FR_TRY(fr_persist_apply_events(runtime, &decoded, code_map));
   return FR_OK;
 }
 
 /* D6 boot L1 pass: reset the runtime, install all resources the payload
  * references (codes, texts, shapes, records, cells), then apply only L1
- * binds. A per-bind failure here writes the SPEC-shaped warning and the
- * walk continues; the L2 pass uses the stashed maps to translate decoded
- * local ids without re-installing. */
+ * binds and the names whose slot is L1. A per-bind failure here writes
+ * the SPEC-shaped warning and the walk continues; binding L1 names in
+ * this pass is what makes a library word resolve via fr_slot_id_for_name
+ * before the L2 pass runs. The L2 pass uses the stashed maps to translate
+ * decoded local ids without re-installing. */
 fr_err_t fr_persist_payload_restore_library(fr_runtime_t *runtime,
                                             const uint8_t *bytes,
                                             uint16_t length) {
@@ -2540,6 +2571,8 @@ fr_err_t fr_persist_payload_restore_library(fr_runtime_t *runtime,
   FR_TRY(fr_persist_install_resources(runtime, &decoded, code_map, object_map));
   FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,
                                        (uint8_t)FR_PERSIST_TIER_LIBRARY, true));
+  FR_TRY(fr_persist_apply_names(runtime, &decoded,
+                                (uint8_t)FR_PERSIST_TIER_LIBRARY));
   if (decoded.code_count > 0) {
     memcpy(fr_persist_boot_code_map, code_map,
            (size_t)decoded.code_count * sizeof(code_map[0]));
@@ -2574,7 +2607,8 @@ fr_err_t fr_persist_payload_restore_user_after_library(fr_runtime_t *runtime,
   FR_TRY(fr_persist_apply_binds_tiered(
       runtime, &decoded, fr_persist_boot_code_map, fr_persist_boot_object_map,
       (uint8_t)FR_PERSIST_TIER_USER, false));
-  FR_TRY(fr_persist_apply_names(runtime, &decoded));
+  FR_TRY(fr_persist_apply_names(runtime, &decoded,
+                                (uint8_t)FR_PERSIST_TIER_USER));
   FR_TRY(fr_persist_apply_events(runtime, &decoded, fr_persist_boot_code_map));
   fr_persist_boot_maps_valid = false;
   return FR_OK;
