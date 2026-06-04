@@ -10,17 +10,12 @@ import (
 	"path/filepath"
 )
 
-// SPEC D10: frothy build reads frothy.toml, resolves deps, target-
-// gates, emits libs.cmake + lib_natives.c into .frothy/build/<target>/,
-// merges all lib.fr's + main.fr into program.fr (include-resolved),
-// and invokes make for the kernel build. Flashing is a separate verb
-// (`flash`); this one only builds.
-//
-// Two main paths in the build verb:
-//   - planBuild: reads + resolves + generates + writes files. Pure-ish
-//     (does disk I/O but no network, no exec). Tested directly.
-//   - runMake: invokes `make BOARD=<target>`. Skipped in unit tests
-//     because it builds the actual kernel.
+// frothy build reads frothy.toml, resolves deps, target-gates, emits
+// libs.cmake + lib_natives.c into .frothy/build/<target>/, writes the
+// merged lib.fr stream to library.fr (consumed by `frothy install`)
+// and the include-resolved main.fr to main.fr (consumed by `frothy
+// send`), then invokes make for the kernel build. Flashing is a
+// separate verb (`flash`); this one only builds.
 
 type buildOptions struct {
 	projectDir string
@@ -74,7 +69,10 @@ func runBuild(opts buildOptions, stdout io.Writer, stderr io.Writer) error {
 	if err := emitGeneratedFiles(opts.projectDir, proj.Target, libs); err != nil {
 		return err
 	}
-	if err := emitOverlaySource(opts.projectDir, proj.Target, libs); err != nil {
+	if err := emitLibrarySource(opts.projectDir, proj.Target, libs); err != nil {
+		return err
+	}
+	if err := emitMainSource(opts.projectDir, proj.Target); err != nil {
 		return err
 	}
 	if opts.skipMake {
@@ -117,26 +115,22 @@ func emitGeneratedFiles(projectDir, target string, libs []resolvedLibrary) error
 	return nil
 }
 
-// emitOverlaySource concatenates every library's lib.fr (in dep order)
-// then the project's main.fr, with includes preprocessed throughout.
-// The result lives at .frothy/build/<target>/program.fr and is what
-// frothy-compile-overlay turns into bytecode in a future step.
-//
-// No separator markers between sections: Frothy has no comment token,
-// so any `# ---` header would fail to parse. Sections separate with
-// a blank line — the compiler tolerates blanks, debuggers can use
-// `see <word>` to find a word's source.
-func emitOverlaySource(projectDir, target string, libs []resolvedLibrary) error {
-	loader := func(path string) (string, error) {
-		bytes, err := os.ReadFile(path)
-		if err != nil {
-			return "", err
-		}
-		return string(bytes), nil
+// Sections are separated by a single newline (between lib.fr's and
+// between libraries and main.fr). Frothy has no comment token, so any
+// `# ---` header would fail to parse; the kernel compiler tolerates
+// blank lines and `see <word>` finds source by name regardless.
+func sourceLoader(path string) (string, error) {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
 	}
+	return string(bytes), nil
+}
+
+func emitLibrarySource(projectDir, target string, libs []resolvedLibrary) error {
 	var merged []byte
 	for _, lib := range libs {
-		src, err := preprocessInclude(filepath.Join(lib.path, "lib.fr"), loader)
+		src, err := preprocessInclude(filepath.Join(lib.path, "lib.fr"), sourceLoader)
 		if err != nil {
 			return fmt.Errorf("library %s: %w", lib.name, err)
 		}
@@ -145,19 +139,31 @@ func emitOverlaySource(projectDir, target string, libs []resolvedLibrary) error 
 		}
 		merged = append(merged, []byte(src)...)
 	}
+	outPath := filepath.Join(buildOutputDir(projectDir, target), "library.fr")
+	return os.WriteFile(outPath, merged, 0o644)
+}
+
+func emitMainSource(projectDir, target string) error {
 	mainFr := filepath.Join(projectDir, "main.fr")
+	var content []byte
 	if _, err := os.Stat(mainFr); err == nil {
-		src, err := preprocessInclude(mainFr, loader)
+		src, err := preprocessInclude(mainFr, sourceLoader)
 		if err != nil {
 			return fmt.Errorf("main.fr: %w", err)
 		}
-		if len(merged) > 0 {
-			merged = append(merged, '\n')
-		}
-		merged = append(merged, []byte(src)...)
+		content = []byte(src)
 	}
-	outPath := filepath.Join(buildOutputDir(projectDir, target), "program.fr")
-	return os.WriteFile(outPath, merged, 0o644)
+	outDir := buildOutputDir(projectDir, target)
+	outPath := filepath.Join(outDir, "main.fr")
+	if err := os.WriteFile(outPath, content, 0o644); err != nil {
+		return err
+	}
+	// D9 retired program.fr; drop any copy left behind by a pre-split build
+	// so `frothy install` and `frothy send` never see the obsolete artifact.
+	if err := os.Remove(filepath.Join(outDir, "program.fr")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func runMake(projectDir, target string, stdout io.Writer, stderr io.Writer) error {

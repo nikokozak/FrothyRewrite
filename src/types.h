@@ -49,6 +49,13 @@ typedef struct fr_handle_ref_t {
   fr_handle_generation_t generation;
 } fr_handle_ref_t;
 
+/* T12L-7 D3: session-scoped install tier on the runtime. Wire-byte values
+   match FR_PERSIST_TIER_* so the persist encoder can cast directly. */
+typedef enum fr_install_tier_t {
+  FR_INSTALL_TIER_LIBRARY = 1,
+  FR_INSTALL_TIER_USER = 2,
+} fr_install_tier_t;
+
 #define FR_TRY(expr)                                                           \
   do {                                                                         \
     fr_err_t fr_try_err = (expr);                                              \

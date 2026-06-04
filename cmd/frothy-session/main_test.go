@@ -1023,7 +1023,7 @@ func TestIsBootDefinition(t *testing.T) {
 }
 
 func TestReadFileLinesMovesBootDefinitionsLast(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "program.fr")
+	path := filepath.Join(t.TempDir(), "main.fr")
 	source := strings.Join([]string{
 		"boot is fn [ blink: ]",
 		"",
@@ -1124,7 +1124,7 @@ func TestSourceFormReaderCtrlCDropsPendingForm(t *testing.T) {
 }
 
 func TestReadFileLinesMovesMultilineBootDefinitionLast(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "program.fr")
+	path := filepath.Join(t.TempDir(), "main.fr")
 	source := strings.Join([]string{
 		"boot is fn [",
 		"  blink:",
@@ -2024,7 +2024,7 @@ func TestValidateSessionOptionsRejectsReplayConflicts(t *testing.T) {
 		},
 		{
 			name:      "replay file",
-			filePath:  "program.fr",
+			filePath:  "main.fr",
 			replay:    replay,
 			wantCode:  2,
 			wantError: "--replay cannot be combined with --file",

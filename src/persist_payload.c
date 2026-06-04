@@ -10,6 +10,7 @@
 #include "image.h"
 #include "instruction.h"
 #include "object.h"
+#include "platform.h"
 #include "slot.h"
 #include "tagged.h"
 
@@ -21,12 +22,14 @@ enum {
   /*
    * 16-bit and 32-bit each carry their own version because int value fields
    * are wider on 32-bit. Independent from the overlay update version in
-   * config.h. Frothy is pre-release: readers accept the current version only.
+   * config.h. Project policy is no backwards compatibility (D7 in T12L-7);
+   * the decoder only accepts the current version. Older payloads are
+   * invalid and the recovery path is dangerous.wipe + re-install.
    */
 #if FR_WORD_SIZE == 16
-  FR_PERSIST_PAYLOAD_VERSION = 2,
-#else
   FR_PERSIST_PAYLOAD_VERSION = 3,
+#else
+  FR_PERSIST_PAYLOAD_VERSION = 4,
 #endif
   FR_PERSIST_RECORD_CODE = 1,
   FR_PERSIST_RECORD_BIND = 2,
@@ -44,6 +47,8 @@ enum {
   FR_PERSIST_VALUE_CODE = 4,
   FR_PERSIST_VALUE_NATIVE = 5,
   FR_PERSIST_VALUE_OBJECT = 6,
+  FR_PERSIST_TIER_LIBRARY = 1,
+  FR_PERSIST_TIER_USER = 2,
 };
 
 typedef enum fr_persist_object_record_kind_t {
@@ -55,6 +60,138 @@ typedef enum fr_persist_object_record_kind_t {
 } fr_persist_object_record_kind_t;
 
 static const uint8_t fr_persist_payload_magic[4] = {'F', 'R', 'P', 'O'};
+
+/* fr_persist_slot_tier holds the per-slot stamp the encoder emits on BIND
+ * records. install-library by itself does not rewrite this table; only
+ * stamp_overlay (called from the REPL overlay-apply path) writes new entries
+ * with the current session install_tier, so flipping the tier mid-session
+ * never relabels previously-installed slots. Per-slot stamping stays
+ * file-static for the prototype; the session tier itself is per-runtime
+ * (runtime->install_tier) per SPEC D3. */
+static uint8_t fr_persist_slot_tier[FR_PROFILE_MAX_SLOTS];
+
+/* D6 boot two-call sequence: the L1 pass populates these maps while it
+ * installs codes and objects; the L2 pass reads them to translate decoded
+ * local ids back to runtime ids without re-installing. The validity flag
+ * keeps the L2 pass honest — it must come after an L1 pass on the same
+ * payload, with nothing in between. */
+static fr_code_object_id_t
+    fr_persist_boot_code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+static fr_object_id_t fr_persist_boot_object_map[FR_OBJECT_TABLE_CAPACITY];
+static bool fr_persist_boot_maps_valid;
+
+void fr_persist_session_install_tier_stamp_slot(const fr_runtime_t *runtime,
+                                                 fr_slot_id_t slot_id) {
+  if (runtime == NULL) {
+    return;
+  }
+  if (slot_id < FR_PROFILE_MAX_SLOTS) {
+    fr_persist_slot_tier[slot_id] = (uint8_t)runtime->install_tier;
+  }
+}
+
+void fr_persist_session_install_tier_stamp_overlay(
+    const fr_runtime_t *runtime, const fr_overlay_update_t *update) {
+  if (runtime == NULL || update == NULL) {
+    return;
+  }
+  for (uint16_t i = 0; i < update->slot_init_count; i++) {
+    fr_persist_session_install_tier_stamp_slot(runtime,
+                                                update->slot_inits[i].slot_id);
+  }
+}
+
+/* Drop every user-tier overlay binding from the runtime; library-tier
+ * stamps stay. A slot with no stamp (default 0) encodes as USER, so the
+ * non-library check covers both explicitly-USER and unstamped slots. The
+ * encoder reads runtime->slots, so a subsequent fr_persist_save writes
+ * only the library binds. Overlay-name entries that point at a no-longer-
+ * overlaid slot get compacted out so `words` and fr_slot_id_for_name no
+ * longer surface the wiped names. */
+void fr_persist_session_wipe_user_tier(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return;
+  }
+  for (fr_slot_id_t slot_id = 0; slot_id < runtime->slots.count; slot_id++) {
+    if (!fr_slot_is_overlay(runtime, slot_id)) {
+      continue;
+    }
+    if (fr_persist_slot_tier[slot_id] == FR_PERSIST_TIER_LIBRARY) {
+      continue;
+    }
+    (void)fr_slot_restore(runtime, slot_id);
+  }
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  {
+    uint16_t dst = 0;
+    for (uint16_t src = 0; src < runtime->slots.overlay_name_count; src++) {
+      fr_slot_id_t s = runtime->slots.overlay_name_slots[src];
+
+      if (fr_slot_is_overlay(runtime, s)) {
+        if (dst != src) {
+          memcpy(runtime->slots.overlay_names[dst],
+                 runtime->slots.overlay_names[src],
+                 (size_t)FR_PROFILE_MAX_NAME_BYTES + 1);
+          runtime->slots.overlay_name_slots[dst] = s;
+        }
+        dst = (uint16_t)(dst + 1);
+      }
+    }
+    for (uint16_t i = dst; i < runtime->slots.overlay_name_count; i++) {
+      runtime->slots.overlay_names[i][0] = '\0';
+      runtime->slots.overlay_name_slots[i] = 0;
+    }
+    runtime->slots.overlay_name_count = dst;
+  }
+#endif
+}
+
+/* SPEC D10: install-library on receipt drops L1 binds from the runtime so
+ * re-installing replaces removed library words. Mirror of
+ * fr_persist_session_wipe_user_tier with the tier check inverted, and the
+ * slot stamp cleared on wipe so the slot doesn't keep its L1 tag (a later
+ * install-library record will stamp it back to L1; an install-user record
+ * lands as USER). The name table compacts the same way. */
+void fr_persist_session_wipe_library_tier(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return;
+  }
+  for (fr_slot_id_t slot_id = 0; slot_id < runtime->slots.count; slot_id++) {
+    if (!fr_slot_is_overlay(runtime, slot_id)) {
+      continue;
+    }
+    if (fr_persist_slot_tier[slot_id] != FR_PERSIST_TIER_LIBRARY) {
+      continue;
+    }
+    (void)fr_slot_restore(runtime, slot_id);
+    if (slot_id < FR_PROFILE_MAX_SLOTS) {
+      fr_persist_slot_tier[slot_id] = 0;
+    }
+  }
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  {
+    uint16_t dst = 0;
+    for (uint16_t src = 0; src < runtime->slots.overlay_name_count; src++) {
+      fr_slot_id_t s = runtime->slots.overlay_name_slots[src];
+
+      if (fr_slot_is_overlay(runtime, s)) {
+        if (dst != src) {
+          memcpy(runtime->slots.overlay_names[dst],
+                 runtime->slots.overlay_names[src],
+                 (size_t)FR_PROFILE_MAX_NAME_BYTES + 1);
+          runtime->slots.overlay_name_slots[dst] = s;
+        }
+        dst = (uint16_t)(dst + 1);
+      }
+    }
+    for (uint16_t i = dst; i < runtime->slots.overlay_name_count; i++) {
+      runtime->slots.overlay_names[i][0] = '\0';
+      runtime->slots.overlay_name_slots[i] = 0;
+    }
+    runtime->slots.overlay_name_count = dst;
+  }
+#endif
+}
 
 /* Writer/reader cursors stay uint16_t; this asserts the payload buffer fits. */
 typedef char fr_persist_payload_bytes_must_fit_uint16[
@@ -80,6 +217,9 @@ typedef struct fr_persist_code_record_t {
 
 typedef struct fr_persist_bind_record_t {
   fr_slot_id_t slot_id;
+  /* Tier byte from the BIND wire record. FR_PERSIST_TIER_LIBRARY or
+     FR_PERSIST_TIER_USER; any other value is a corrupt-record reject. */
+  uint8_t tier;
   /* value_kind selects int_value for ints and value_word for compact refs. */
   uint8_t value_kind;
   fr_int_t int_value;
@@ -1068,16 +1208,33 @@ static fr_err_t fr_persist_check_no_volatile_handles(
   return FR_OK;
 }
 
-fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
-                                   uint16_t cap, uint16_t *out_length) {
+/* tier_filter == 0 walks every overlay slot (the historical full-encode).
+ * tier_filter == FR_PERSIST_TIER_USER skips slots stamped L1; that's the save
+ * path which trusts NVS for L1 (D5) and only writes L2 from the runtime.
+ * library_prefix is an optional pre-encoded byte span pasted immediately
+ * after magic+version; save passes the L1 records it extracted from the
+ * existing payload so they survive the round-trip byte-for-byte. The
+ * prefix carries its own CODE/OBJECT records with local ids 0..K-1; the
+ * caller passes K via code_count_initial / object_count_initial so the
+ * L2 encode writes new CODE/OBJECT records with local ids continuing from
+ * the prefix's last id, which is what the decoder's strict local-id sequence
+ * check at fr_persist_decode_payload requires. */
+static fr_err_t fr_persist_payload_encode_impl(
+    const fr_runtime_t *runtime, uint8_t tier_filter,
+    uint16_t code_count_initial, uint16_t object_count_initial,
+    const uint8_t *library_prefix, uint16_t library_prefix_length,
+    uint8_t *bytes, uint16_t cap, uint16_t *out_length) {
   fr_persist_writer_t writer = {bytes, 0, cap};
   fr_code_object_id_t runtime_code_ids[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
   fr_object_id_t runtime_object_ids[FR_OBJECT_TABLE_CAPACITY];
   fr_persist_object_record_kind_t object_kinds[FR_OBJECT_TABLE_CAPACITY];
-  uint16_t code_count = 0;
-  uint16_t object_count = 0;
+  uint16_t code_count = code_count_initial;
+  uint16_t object_count = object_count_initial;
 
   if (runtime == NULL || bytes == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (library_prefix == NULL && library_prefix_length > 0) {
     return FR_ERR_INVALID;
   }
 
@@ -1088,12 +1245,19 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
   FR_TRY(fr_persist_writer_bytes(&writer, fr_persist_payload_magic,
                                  (uint16_t)sizeof(fr_persist_payload_magic)));
   FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_PAYLOAD_VERSION));
+  if (library_prefix_length > 0) {
+    FR_TRY(fr_persist_writer_bytes(&writer, library_prefix,
+                                   library_prefix_length));
+  }
 
   for (fr_slot_id_t slot_id = 0; slot_id < runtime->slots.count; slot_id++) {
     fr_code_object_id_t code_id = 0;
     uint16_t ignored = 0;
 
     if (!fr_slot_is_overlay(runtime, slot_id)) {
+      continue;
+    }
+    if (tier_filter != 0 && fr_persist_slot_tier[slot_id] != tier_filter) {
       continue;
     }
     if (fr_tagged_decode_code_object_id(runtime->slots.current[slot_id],
@@ -1110,6 +1274,9 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
     uint16_t ignored = 0;
 
     if (!fr_slot_is_overlay(runtime, slot_id)) {
+      continue;
+    }
+    if (tier_filter != 0 && fr_persist_slot_tier[slot_id] != tier_filter) {
       continue;
     }
     if (fr_tagged_decode_object_id(runtime->slots.current[slot_id],
@@ -1155,9 +1322,20 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
     if (!fr_slot_is_overlay(runtime, slot_id)) {
       continue;
     }
+    if (tier_filter != 0 && fr_persist_slot_tier[slot_id] != tier_filter) {
+      continue;
+    }
 
     FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_BIND));
     FR_TRY(fr_persist_writer_u16(&writer, slot_id));
+    {
+      uint8_t tier = fr_persist_slot_tier[slot_id];
+
+      if (tier != FR_PERSIST_TIER_LIBRARY && tier != FR_PERSIST_TIER_USER) {
+        tier = (uint8_t)FR_PERSIST_TIER_USER;
+      }
+      FR_TRY(fr_persist_writer_u8(&writer, tier));
+    }
     FR_TRY(fr_persist_encode_value(&writer, runtime,
                                    runtime->slots.current[slot_id],
                                    runtime_code_ids, &code_count,
@@ -1175,6 +1353,10 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
       return FR_ERR_INVALID;
     }
     FR_TRY(fr_slot_id_for_name(runtime, name, &slot_id));
+    if (tier_filter != 0 && slot_id < FR_PROFILE_MAX_SLOTS &&
+        fr_persist_slot_tier[slot_id] != tier_filter) {
+      continue;
+    }
     FR_TRY(fr_persist_name_length(name, &name_length));
 
     FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_NAME));
@@ -1186,28 +1368,256 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
 #endif
 
 #if FR_FEATURE_EVENTS
-  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
-    const fr_event_binding_t *entry = &runtime->events.entries[i];
-    uint16_t local_code_id = 0;
+  /* Events are always L2 per D5; the boot L1 pass and a hypothetical
+   * library-only encode (tier_filter == LIBRARY) skip them. */
+  if (tier_filter != (uint8_t)FR_PERSIST_TIER_LIBRARY) {
+    for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+      const fr_event_binding_t *entry = &runtime->events.entries[i];
+      uint16_t local_code_id = 0;
 
-    if (entry->kind == FR_EVENT_KIND_NONE) {
-      continue;
+      if (entry->kind == FR_EVENT_KIND_NONE) {
+        continue;
+      }
+      FR_TRY(fr_persist_encode_code_ref(&writer, runtime, entry->body,
+                                        runtime_code_ids, &code_count,
+                                        runtime_object_ids, object_kinds,
+                                        &object_count, &local_code_id));
+      FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_EVENT));
+      FR_TRY(fr_persist_writer_u8(&writer, (uint8_t)entry->kind));
+      FR_TRY(fr_persist_writer_u16(&writer, entry->source));
+      FR_TRY(fr_persist_writer_u16(&writer, entry->debounce_ms));
+      FR_TRY(fr_persist_writer_u16(&writer, local_code_id));
     }
-    FR_TRY(fr_persist_encode_code_ref(&writer, runtime, entry->body,
-                                      runtime_code_ids, &code_count,
-                                      runtime_object_ids, object_kinds,
-                                      &object_count, &local_code_id));
-    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_EVENT));
-    FR_TRY(fr_persist_writer_u8(&writer, (uint8_t)entry->kind));
-    FR_TRY(fr_persist_writer_u16(&writer, entry->source));
-    FR_TRY(fr_persist_writer_u16(&writer, entry->debounce_ms));
-    FR_TRY(fr_persist_writer_u16(&writer, local_code_id));
   }
 #endif
 
   FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_END));
   *out_length = writer.used;
   return FR_OK;
+}
+
+fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
+                                   uint16_t cap, uint16_t *out_length) {
+  return fr_persist_payload_encode_impl(runtime, 0, 0, 0, NULL, 0, bytes, cap,
+                                        out_length);
+}
+
+/* Skip a tagged value body inside a BIND record. Mirrors the decoder's
+ * fr_persist_decode_value byte layout (kind byte plus a kind-dependent body)
+ * without rebuilding the value — the extract walker only needs the byte
+ * span, not the runtime tagged_t. */
+static fr_err_t
+fr_persist_payload_skip_value(fr_persist_reader_t *reader) {
+  uint8_t value_kind = 0;
+  fr_int_t scratch_int = 0;
+  uint16_t scratch_u16 = 0;
+
+  FR_TRY(fr_persist_reader_u8(reader, &value_kind));
+  switch (value_kind) {
+  case FR_PERSIST_VALUE_NIL:
+  case FR_PERSIST_VALUE_FALSE:
+  case FR_PERSIST_VALUE_TRUE:
+    return FR_OK;
+  case FR_PERSIST_VALUE_INT:
+    return fr_persist_reader_int(reader, &scratch_int);
+  case FR_PERSIST_VALUE_NATIVE:
+  case FR_PERSIST_VALUE_CODE:
+  case FR_PERSIST_VALUE_OBJECT:
+    return fr_persist_reader_u16(reader, &scratch_u16);
+  default:
+    return FR_ERR_CORRUPT;
+  }
+}
+
+#if FR_FEATURE_RECORDS
+/* Skip a record_name (u16 length + bytes) used inside RECORD_SHAPE bodies. */
+static fr_err_t
+fr_persist_payload_skip_record_name(fr_persist_reader_t *reader) {
+  uint16_t length = 0;
+  const uint8_t *bytes = NULL;
+
+  FR_TRY(fr_persist_reader_u16(reader, &length));
+  if (length == 0 || length > FR_PROFILE_MAX_NAME_BYTES) {
+    return FR_ERR_CORRUPT;
+  }
+  return fr_persist_reader_bytes(reader, length, &bytes);
+}
+#endif
+
+/* Advance the reader past one whole record. Returns the tag and the lookup
+ * key the extract walker needs (local_id for resource records; slot_id for
+ * BIND / NAME; zero for END / EVENT). count_prefix_records and the source-
+ * order extract walker both use this so they parse the wire format the same
+ * way and a record that one understands the other does too. */
+static fr_err_t fr_persist_payload_advance_record(
+    fr_persist_reader_t *reader, uint8_t *out_tag, uint16_t *out_key) {
+  uint8_t tag = 0;
+  uint16_t local_id = 0;
+  uint16_t length = 0;
+  uint16_t slot_id = 0;
+  uint8_t tier = 0;
+  uint8_t name_length = 0;
+  const uint8_t *bytes = NULL;
+
+  if (reader == NULL || out_tag == NULL || out_key == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_key = 0;
+
+  FR_TRY(fr_persist_reader_u8(reader, &tag));
+  *out_tag = tag;
+
+  if (tag == FR_PERSIST_RECORD_END) {
+    return FR_OK;
+  }
+  if (tag == FR_PERSIST_RECORD_CODE || tag == FR_PERSIST_RECORD_TEXT) {
+    FR_TRY(fr_persist_reader_u16(reader, &local_id));
+    FR_TRY(fr_persist_reader_u16(reader, &length));
+    FR_TRY(fr_persist_reader_bytes(reader, length, &bytes));
+    *out_key = local_id;
+    return FR_OK;
+  }
+  if (tag == FR_PERSIST_RECORD_BIND) {
+    FR_TRY(fr_persist_reader_u16(reader, &slot_id));
+    FR_TRY(fr_persist_reader_u8(reader, &tier));
+    if (tier != FR_PERSIST_TIER_LIBRARY && tier != FR_PERSIST_TIER_USER) {
+      return FR_ERR_CORRUPT;
+    }
+    FR_TRY(fr_persist_payload_skip_value(reader));
+    *out_key = slot_id;
+    return FR_OK;
+  }
+  if (tag == FR_PERSIST_RECORD_NAME) {
+    FR_TRY(fr_persist_reader_u16(reader, &slot_id));
+    FR_TRY(fr_persist_reader_u8(reader, &name_length));
+    if (name_length == 0 || name_length > FR_PROFILE_MAX_NAME_BYTES) {
+      return FR_ERR_CORRUPT;
+    }
+    FR_TRY(fr_persist_reader_bytes(reader, name_length, &bytes));
+    *out_key = slot_id;
+    return FR_OK;
+  }
+#if FR_FEATURE_RECORDS
+  if (tag == FR_PERSIST_RECORD_RECORD_SHAPE) {
+    uint16_t field_count = 0;
+
+    FR_TRY(fr_persist_reader_u16(reader, &local_id));
+    FR_TRY(fr_persist_payload_skip_record_name(reader));
+    FR_TRY(fr_persist_reader_u16(reader, &field_count));
+    for (uint16_t i = 0; i < field_count; i++) {
+      FR_TRY(fr_persist_payload_skip_record_name(reader));
+    }
+    *out_key = local_id;
+    return FR_OK;
+  }
+  if (tag == FR_PERSIST_RECORD_RECORD) {
+    uint16_t shape_local_id = 0;
+    uint16_t field_count = 0;
+
+    FR_TRY(fr_persist_reader_u16(reader, &local_id));
+    FR_TRY(fr_persist_reader_u16(reader, &shape_local_id));
+    FR_TRY(fr_persist_reader_u16(reader, &field_count));
+    for (uint16_t i = 0; i < field_count; i++) {
+      FR_TRY(fr_persist_payload_skip_value(reader));
+    }
+    *out_key = local_id;
+    return FR_OK;
+  }
+#endif
+#if FR_FEATURE_CELLS
+  if (tag == FR_PERSIST_RECORD_CELLS) {
+    FR_TRY(fr_persist_reader_u16(reader, &local_id));
+    FR_TRY(fr_persist_reader_u16(reader, &length));
+    for (uint16_t i = 0; i < length; i++) {
+      FR_TRY(fr_persist_payload_skip_value(reader));
+    }
+    *out_key = local_id;
+    return FR_OK;
+  }
+#endif
+#if FR_FEATURE_EVENTS
+  if (tag == FR_PERSIST_RECORD_EVENT) {
+    uint8_t kind = 0;
+    uint16_t scratch = 0;
+
+    FR_TRY(fr_persist_reader_u8(reader, &kind));
+    FR_TRY(fr_persist_reader_u16(reader, &scratch));
+    FR_TRY(fr_persist_reader_u16(reader, &scratch));
+    FR_TRY(fr_persist_reader_u16(reader, &scratch));
+    return FR_OK;
+  }
+#endif
+  return FR_ERR_CORRUPT;
+}
+
+/* Walk a prefix span (a slice of an encoded payload, starting at the first
+ * record byte after magic+version) and count CODE and OBJECT records so the
+ * downstream L2 encode pass can continue local-id numbering from where the
+ * prefix left off. TEXT / RECORD_SHAPE / RECORD / CELLS all live in the
+ * shared object-id namespace; EVENT never appears in a prefix because save
+ * emits events only into its own L2 tail. */
+static fr_err_t fr_persist_payload_count_prefix_records(
+    const uint8_t *prefix, uint16_t prefix_length, uint16_t *out_code_count,
+    uint16_t *out_object_count) {
+  fr_persist_reader_t reader = {prefix, prefix_length, 0};
+
+  if (out_code_count == NULL || out_object_count == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_code_count = 0;
+  *out_object_count = 0;
+  if (prefix == NULL || prefix_length == 0) {
+    return FR_OK;
+  }
+
+  while (reader.offset < reader.used) {
+    uint8_t tag = 0;
+    uint16_t key = 0;
+
+    FR_TRY(fr_persist_payload_advance_record(&reader, &tag, &key));
+    if (tag == FR_PERSIST_RECORD_END) {
+      return FR_ERR_CORRUPT;
+    }
+    if (tag == FR_PERSIST_RECORD_CODE) {
+      *out_code_count = (uint16_t)(*out_code_count + 1);
+    } else if (tag == FR_PERSIST_RECORD_TEXT
+#if FR_FEATURE_RECORDS
+               || tag == FR_PERSIST_RECORD_RECORD_SHAPE ||
+               tag == FR_PERSIST_RECORD_RECORD
+#endif
+#if FR_FEATURE_CELLS
+               || tag == FR_PERSIST_RECORD_CELLS
+#endif
+    ) {
+      *out_object_count = (uint16_t)(*out_object_count + 1);
+    } else if (tag == FR_PERSIST_RECORD_BIND ||
+               tag == FR_PERSIST_RECORD_NAME) {
+      /* no count change */
+    } else {
+      return FR_ERR_CORRUPT;
+    }
+  }
+  return FR_OK;
+}
+
+/* D5: save encodes only L2 from runtime and prefixes the existing payload's
+ * L1 records (CODE / TEXT / BIND / NAME — the closure of records L1 BINDs
+ * reference) verbatim. Callers (fr_persist_save) extract the prefix via
+ * fr_persist_payload_extract_library_records. */
+fr_err_t fr_persist_payload_save_encode(
+    const fr_runtime_t *runtime, const uint8_t *library_prefix,
+    uint16_t library_prefix_length, uint8_t *bytes, uint16_t cap,
+    uint16_t *out_length) {
+  uint16_t prefix_code_count = 0;
+  uint16_t prefix_object_count = 0;
+
+  FR_TRY(fr_persist_payload_count_prefix_records(
+      library_prefix, library_prefix_length, &prefix_code_count,
+      &prefix_object_count));
+  return fr_persist_payload_encode_impl(
+      runtime, (uint8_t)FR_PERSIST_TIER_USER, prefix_code_count,
+      prefix_object_count, library_prefix, library_prefix_length, bytes, cap,
+      out_length);
 }
 
 static fr_err_t fr_persist_decode_value(fr_persist_reader_t *reader,
@@ -1658,6 +2068,11 @@ static fr_err_t fr_persist_decode_payload(
       if (bind->slot_id >= FR_PROFILE_MAX_SLOTS) {
         return FR_ERR_CORRUPT;
       }
+      FR_TRY(fr_persist_reader_u8(&reader, &bind->tier));
+      if (bind->tier != FR_PERSIST_TIER_LIBRARY &&
+          bind->tier != FR_PERSIST_TIER_USER) {
+        return FR_ERR_CORRUPT;
+      }
       FR_TRY(fr_persist_decode_value(&reader, bind));
       *out_bind_count = (uint16_t)(*out_bind_count + 1);
     } else if (record == FR_PERSIST_RECORD_EVENT) {
@@ -2044,80 +2459,161 @@ static fr_err_t fr_persist_check_name_records(
 }
 #endif
 
-fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
-                                    uint16_t length) {
-  fr_persist_decoded_payload_t decoded;
-  fr_tagged_t cell_install_values[FR_CELL_WORD_CAPACITY];
-  const fr_persist_code_record_t *code_records = decoded.code_records;
-  const fr_persist_text_record_t *text_records = decoded.text_records;
-  const fr_persist_record_shape_record_t *shape_records =
-      decoded.shape_records;
-  const fr_record_name_t *record_fields = decoded.record_fields;
-  const fr_persist_record_record_t *record_records = decoded.record_records;
-  const fr_tagged_t *record_values = decoded.record_values;
-  const fr_persist_cell_record_t *cell_records = decoded.cell_records;
-  const fr_tagged_t *cell_values = decoded.cell_values;
-  const fr_persist_object_record_kind_t *object_kinds = decoded.object_kinds;
-  const fr_persist_bind_record_t *bind_records = decoded.bind_records;
-  const fr_persist_name_record_t *name_records = decoded.name_records;
-  fr_code_object_id_t code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
-  fr_object_id_t object_map[FR_OBJECT_TABLE_CAPACITY];
-  uint16_t code_count = 0;
-  uint16_t text_count = 0;
-  uint16_t shape_count = 0;
-  uint16_t record_count = 0;
-  uint16_t record_value_count = 0;
-  uint16_t cell_count = 0;
-  uint16_t cell_value_count = 0;
-  uint16_t object_count = 0;
-  uint16_t bind_count = 0;
-  uint16_t name_count = 0;
-#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
-  fr_slot_id_t slot_count_after_writes = 0;
-#endif
-
-  if (runtime == NULL || bytes == NULL) {
-    return FR_ERR_INVALID;
+static uint16_t fr_persist_append_str(char *buf, uint16_t cap, uint16_t used,
+                                      const char *s) {
+  while (s != NULL && *s != '\0' && used + 1 < cap) {
+    buf[used++] = *s++;
   }
+  return used;
+}
+
+static uint16_t fr_persist_append_u16(char *buf, uint16_t cap, uint16_t used,
+                                      uint16_t value) {
+  char digits[8];
+  uint8_t count = 0;
+
+  if (value == 0) {
+    if (used + 1 < cap) {
+      buf[used++] = '0';
+    }
+    return used;
+  }
+  while (value > 0 && count < (uint8_t)sizeof(digits)) {
+    digits[count++] = (char)('0' + value % 10);
+    value = (uint16_t)(value / 10);
+  }
+  while (count > 0 && used + 1 < cap) {
+    buf[used++] = digits[--count];
+  }
+  return used;
+}
+
+/* SPEC D6 paragraph 4: an L1 bind failure during boot writes one line via
+ * the same channel fr_repl_write_startup_error uses, then the loop continues.
+ * The format is fixed by the SPEC: warning: L1 skip slot=<id> err=<name>\n. */
+static void fr_persist_write_l1_skip_warning(fr_slot_id_t slot_id,
+                                             fr_err_t err) {
+  char buf[80];
+  uint16_t used = 0;
+  const char *name = fr_err_name(err);
+
+  used = fr_persist_append_str(buf, (uint16_t)sizeof(buf), used,
+                               "warning: L1 skip slot=");
+  used = fr_persist_append_u16(buf, (uint16_t)sizeof(buf), used,
+                               (uint16_t)slot_id);
+  used = fr_persist_append_str(buf, (uint16_t)sizeof(buf), used, " err=");
+  used = fr_persist_append_str(buf, (uint16_t)sizeof(buf), used,
+                               name != NULL ? name : "unknown");
+  used = fr_persist_append_str(buf, (uint16_t)sizeof(buf), used, "\n");
+  if (used < (uint16_t)sizeof(buf)) {
+    buf[used] = '\0';
+  } else {
+    buf[sizeof(buf) - 1] = '\0';
+  }
+  (void)fr_platform_write_text(buf);
+}
+
+/* Walks decoded bind records once per tier in tier-id order (L1 then L2)
+ * when tier_filter == 0; otherwise restricts the walk to the named tier.
+ * skip_on_failure=true means a single bind's bind_value/slot_write error
+ * is logged via the L1 warning channel and the walk continues — that is the
+ * D6 boot L1 contract. With skip_on_failure=false the first failure aborts
+ * the walk, which is what the FULL and L2 restore paths want. */
+static fr_err_t fr_persist_apply_binds_tiered(
+    fr_runtime_t *runtime, const fr_persist_decoded_payload_t *decoded,
+    const fr_code_object_id_t code_map[], const fr_object_id_t object_map[],
+    uint8_t tier_filter, bool skip_on_failure) {
+  const fr_persist_bind_record_t *bind_records = decoded->bind_records;
+  uint16_t bind_count = decoded->bind_count;
+  uint16_t code_count = decoded->code_count;
+  uint16_t object_count = decoded->object_count;
+  uint8_t tier_lo =
+      tier_filter == 0 ? (uint8_t)FR_PERSIST_TIER_LIBRARY : tier_filter;
+  uint8_t tier_hi =
+      tier_filter == 0 ? (uint8_t)FR_PERSIST_TIER_USER : tier_filter;
+
+  for (uint8_t pass_tier = tier_lo; pass_tier <= tier_hi; pass_tier++) {
+    for (uint16_t i = 0; i < bind_count; i++) {
+      fr_tagged_t tagged = 0;
+      fr_err_t err = FR_OK;
+
+      if (bind_records[i].tier != pass_tier) {
+        continue;
+      }
+      err = fr_persist_bind_value(runtime, &bind_records[i], code_map,
+                                  code_count, object_map, object_count,
+                                  &tagged);
+      if (err == FR_OK) {
+        err = fr_slot_write(runtime, bind_records[i].slot_id, tagged);
+      }
+      if (err != FR_OK) {
+        if (skip_on_failure) {
+          fr_persist_write_l1_skip_warning(bind_records[i].slot_id, err);
+          continue;
+        }
+        return err;
+      }
+      if (bind_records[i].slot_id < FR_PROFILE_MAX_SLOTS) {
+        fr_persist_slot_tier[bind_records[i].slot_id] = bind_records[i].tier;
+      }
+    }
+  }
+  return FR_OK;
+}
+
+/* Tier-agnostic resource install: texts, codes (with patched local id
+ * operands), shapes, records, cells. Codes are not deduped — they always
+ * append — so code_map[i] == runtime->code.base_count + i on success.
+ * Objects dedupe by content via fr_text_install_since's find path, but the
+ * encoder also dedupes by content so within a single payload no two records
+ * carry the same bytes; the dedup never collapses two distinct local ids.
+ *
+ * Optional code_filter / object_filter masks limit the install to closure
+ * subsets — used by the L2-only public restore (D5 acceptance #6) so L1
+ * resources already installed by the boot pipeline do not get reinstalled.
+ * NULL means "install every record" (FULL restore + boot L1 pass). Records
+ * outside the closure leave their code_map / object_map slot at zero; the
+ * filter must be the transitive closure under PUSH_CODE_ID / PUSH_OBJECT_ID
+ * / RECORD field-value / CELL value references so no installed record's
+ * patch step reads an uninstalled entry. */
+static fr_err_t
+fr_persist_install_resources(fr_runtime_t *runtime,
+                             const fr_persist_decoded_payload_t *decoded,
+                             const bool *code_filter,
+                             const bool *object_filter,
+                             fr_code_object_id_t code_map[],
+                             fr_object_id_t object_map[]) {
+  const fr_persist_code_record_t *code_records = decoded->code_records;
+  const fr_persist_text_record_t *text_records = decoded->text_records;
+  const fr_persist_record_shape_record_t *shape_records =
+      decoded->shape_records;
+  const fr_record_name_t *record_fields = decoded->record_fields;
+  const fr_persist_record_record_t *record_records = decoded->record_records;
+  const fr_tagged_t *record_values = decoded->record_values;
+  const fr_persist_cell_record_t *cell_records = decoded->cell_records;
+  const fr_tagged_t *cell_values = decoded->cell_values;
+  const fr_persist_object_record_kind_t *object_kinds = decoded->object_kinds;
+  uint16_t code_count = decoded->code_count;
+  uint16_t text_count = decoded->text_count;
+  uint16_t shape_count = decoded->shape_count;
+  uint16_t record_count = decoded->record_count;
+  uint16_t cell_count = decoded->cell_count;
+  uint16_t object_count = decoded->object_count;
+  fr_tagged_t cell_install_values[FR_CELL_WORD_CAPACITY];
+
 #if !FR_FEATURE_RECORDS
   (void)shape_records;
   (void)record_fields;
   (void)record_records;
   (void)record_values;
 #endif
+  (void)object_kinds;
+  (void)object_count;
 
-  memset(object_map, 0, sizeof(object_map));
-  FR_TRY(fr_persist_decode_payload(bytes, length, &decoded));
-  code_count = decoded.code_count;
-  text_count = decoded.text_count;
-  shape_count = decoded.shape_count;
-  record_count = decoded.record_count;
-  record_value_count = decoded.record_value_count;
-  cell_count = decoded.cell_count;
-  cell_value_count = decoded.cell_value_count;
-  object_count = decoded.object_count;
-  bind_count = decoded.bind_count;
-  name_count = decoded.name_count;
-  (void)cell_value_count;
-  (void)record_value_count;
-#if FR_PROFILE_MAX_OVERLAY_NAMES == 0
-  (void)name_records;
-  (void)name_count;
-#endif
-  FR_TRY(fr_persist_check_restore_capacity(runtime, &decoded));
-  for (uint16_t i = 0; i < bind_count; i++) {
-    FR_TRY(fr_persist_check_bind_record(runtime, &bind_records[i], code_count,
-                                        object_count));
-  }
-#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
-  slot_count_after_writes = fr_persist_slot_count_after_restore(
-      runtime, bind_records, bind_count);
-  FR_TRY(fr_persist_check_name_records(name_records, name_count,
-                                      slot_count_after_writes));
-#endif
-
-  FR_TRY(fr_runtime_reset(runtime));
   for (uint16_t i = 0; i < text_count; i++) {
+    if (object_filter != NULL && !object_filter[text_records[i].local_id]) {
+      continue;
+    }
     FR_TRY(fr_text_install_since(runtime, text_records[i].bytes,
                                  text_records[i].length,
                                  runtime->objects.base_count,
@@ -2130,6 +2626,9 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
     fr_code_offset_t ip = 0;
     char scratch[64];
 
+    if (code_filter != NULL && !code_filter[i]) {
+      continue;
+    }
     if (code_records[i].length > (uint16_t)sizeof(patched)) {
       return FR_ERR_CORRUPT;
     }
@@ -2178,49 +2677,57 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
     }
     FR_TRY(fr_code_install(runtime, &instructions, NULL, 0, &code_map[i]));
   }
-  /*
-   * Restore object refs in dependency order: record fields may point at text,
-   * records point at shapes, and cells may point at records.
-   */
 #if FR_FEATURE_RECORDS
-  fr_tagged_t record_install_values[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
+  {
+    fr_tagged_t record_install_values[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
 
-  for (uint16_t i = 0; i < shape_count; i++) {
-    fr_record_name_t install_fields[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
+    for (uint16_t i = 0; i < shape_count; i++) {
+      fr_record_name_t install_fields[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
 
-    for (uint16_t j = 0; j < shape_records[i].field_count; j++) {
-      install_fields[j] = record_fields[shape_records[i].first_field + j];
-    }
-    FR_TRY(fr_record_shape_install_since(
-        runtime, shape_records[i].name, install_fields,
-        shape_records[i].field_count, runtime->objects.base_count,
-        &object_map[shape_records[i].local_id]));
-  }
-  for (uint16_t i = 0; i < record_count; i++) {
-    if (record_records[i].field_count > FR_RECORD_FIELDS_PER_SHAPE_CAPACITY) {
-      return FR_ERR_CORRUPT;
-    }
-    for (uint16_t j = 0; j < record_records[i].field_count; j++) {
-      fr_tagged_t stored = record_values[record_records[i].first_value + j];
-      fr_object_id_t local_object_id = 0;
-
-      if (fr_tagged_decode_object_id(stored, &local_object_id) == FR_OK) {
-        if (local_object_id >= object_count ||
-            object_kinds[local_object_id] != FR_PERSIST_OBJECT_TEXT) {
-          return FR_ERR_CORRUPT;
-        }
-        FR_TRY(fr_tagged_encode_object_id(object_map[local_object_id],
-                                          &stored));
+      if (object_filter != NULL &&
+          !object_filter[shape_records[i].local_id]) {
+        continue;
       }
-      if (!fr_record_field_value_allowed(runtime, stored)) {
+      for (uint16_t j = 0; j < shape_records[i].field_count; j++) {
+        install_fields[j] = record_fields[shape_records[i].first_field + j];
+      }
+      FR_TRY(fr_record_shape_install_since(
+          runtime, shape_records[i].name, install_fields,
+          shape_records[i].field_count, runtime->objects.base_count,
+          &object_map[shape_records[i].local_id]));
+    }
+    for (uint16_t i = 0; i < record_count; i++) {
+      if (object_filter != NULL &&
+          !object_filter[record_records[i].local_id]) {
+        continue;
+      }
+      if (record_records[i].field_count >
+          FR_RECORD_FIELDS_PER_SHAPE_CAPACITY) {
         return FR_ERR_CORRUPT;
       }
-      record_install_values[j] = stored;
+      for (uint16_t j = 0; j < record_records[i].field_count; j++) {
+        fr_tagged_t stored =
+            record_values[record_records[i].first_value + j];
+        fr_object_id_t local_object_id = 0;
+
+        if (fr_tagged_decode_object_id(stored, &local_object_id) == FR_OK) {
+          if (local_object_id >= object_count ||
+              object_kinds[local_object_id] != FR_PERSIST_OBJECT_TEXT) {
+            return FR_ERR_CORRUPT;
+          }
+          FR_TRY(fr_tagged_encode_object_id(object_map[local_object_id],
+                                            &stored));
+        }
+        if (!fr_record_field_value_allowed(runtime, stored)) {
+          return FR_ERR_CORRUPT;
+        }
+        record_install_values[j] = stored;
+      }
+      FR_TRY(fr_record_install(
+          runtime, object_map[record_records[i].shape_local_id],
+          record_install_values, record_records[i].field_count,
+          &object_map[record_records[i].local_id]));
     }
-    FR_TRY(fr_record_install(
-        runtime, object_map[record_records[i].shape_local_id],
-        record_install_values, record_records[i].field_count,
-        &object_map[record_records[i].local_id]));
   }
 #else
   if (shape_count > 0 || record_count > 0) {
@@ -2228,6 +2735,10 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
   }
 #endif
   for (uint16_t i = 0; i < cell_count; i++) {
+    if (object_filter != NULL &&
+        !object_filter[cell_records[i].local_id]) {
+      continue;
+    }
     for (uint16_t j = 0; j < cell_records[i].length; j++) {
       fr_tagged_t stored = cell_values[cell_records[i].first_value + j];
       fr_object_id_t local_object_id = 0;
@@ -2253,31 +2764,830 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
                             cell_install_values,
                             &object_map[cell_records[i].local_id]));
   }
-  for (uint16_t i = 0; i < bind_count; i++) {
-    fr_tagged_t tagged = 0;
+  return FR_OK;
+}
 
-    FR_TRY(fr_persist_bind_value(runtime, &bind_records[i], code_map,
-                                 code_count, object_map, object_count,
-                                 &tagged));
-    FR_TRY(fr_slot_write(runtime, bind_records[i].slot_id, tagged));
+/* Tier of the bind record that owns this slot in this payload. Names carry
+ * no tier on the wire (P1), so we read it from the matching bind. Returns 0
+ * if no bind matches — the validate step rules that out, so this only happens
+ * on a programming error in the caller. */
+static uint8_t
+fr_persist_name_slot_tier(const fr_persist_decoded_payload_t *decoded,
+                          fr_slot_id_t slot_id) {
+  for (uint16_t i = 0; i < decoded->bind_count; i++) {
+    if (decoded->bind_records[i].slot_id == slot_id) {
+      return decoded->bind_records[i].tier;
+    }
+  }
+  return 0;
+}
+
+/* Applies overlay name bindings filtered by the bind tier of each name's
+ * slot. tier_filter == 0 applies every name (FULL restore). The two-call
+ * boot path uses FR_PERSIST_TIER_LIBRARY on the L1 pass so library words
+ * resolve by name before the L2 pass runs, and FR_PERSIST_TIER_USER on the
+ * L2 pass to land the remaining names. */
+static fr_err_t
+fr_persist_apply_names(fr_runtime_t *runtime,
+                       const fr_persist_decoded_payload_t *decoded,
+                       uint8_t tier_filter) {
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  for (uint16_t i = 0; i < decoded->name_count; i++) {
+    if (tier_filter != 0) {
+      uint8_t name_tier = fr_persist_name_slot_tier(
+          decoded, decoded->name_records[i].slot_id);
+      if (name_tier != tier_filter) {
+        continue;
+      }
+    }
+    FR_TRY(fr_slot_bind_project_name(runtime, decoded->name_records[i].name,
+                                     decoded->name_records[i].slot_id));
+  }
+#else
+  (void)runtime;
+  (void)decoded;
+  (void)tier_filter;
+#endif
+  return FR_OK;
+}
+
+static fr_err_t
+fr_persist_apply_events(fr_runtime_t *runtime,
+                        const fr_persist_decoded_payload_t *decoded,
+                        const fr_code_object_id_t code_map[]) {
+#if FR_FEATURE_EVENTS
+  /* fr_runtime_reset cleared the binding table at the start of the L1 pass;
+   * re-register each decoded record in payload order. fr_event_register stages
+   * platform install before writing the table (event.c:88-103), so a failed
+   * install leaves the slot empty and the restore aborts. */
+  for (uint16_t i = 0; i < decoded->event_count; i++) {
+    const fr_image_event_binding_t *binding = &decoded->event_records[i];
+
+    FR_TRY(fr_event_register(runtime, binding->kind, binding->source,
+                             binding->debounce_ms,
+                             code_map[binding->body]));
+  }
+#else
+  (void)runtime;
+  (void)decoded;
+  (void)code_map;
+#endif
+  return FR_OK;
+}
+
+/* Shared decode-and-validate step. Sets up the decoded payload plus the
+ * per-bind / per-name checks the install path relies on. Splitting it out
+ * keeps the three public entry points (FULL restore, L1 boot pass, L2 boot
+ * pass) honest about doing the same pre-flight before they diverge. */
+static fr_err_t
+fr_persist_payload_decode_and_validate(const fr_runtime_t *runtime,
+                                       const uint8_t *bytes, uint16_t length,
+                                       fr_persist_decoded_payload_t *decoded) {
+  if (runtime == NULL || bytes == NULL || decoded == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_persist_decode_payload(bytes, length, decoded));
+  FR_TRY(fr_persist_check_restore_capacity(runtime, decoded));
+  for (uint16_t i = 0; i < decoded->bind_count; i++) {
+    FR_TRY(fr_persist_check_bind_record(runtime, &decoded->bind_records[i],
+                                        decoded->code_count,
+                                        decoded->object_count));
   }
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
-  for (uint16_t i = 0; i < name_count; i++) {
-    FR_TRY(fr_slot_bind_project_name(runtime, name_records[i].name,
-                                     name_records[i].slot_id));
+  {
+    fr_slot_id_t slot_count_after_writes = fr_persist_slot_count_after_restore(
+        runtime, decoded->bind_records, decoded->bind_count);
+
+    FR_TRY(fr_persist_check_name_records(decoded->name_records,
+                                         decoded->name_count,
+                                         slot_count_after_writes));
   }
 #endif
+  return FR_OK;
+}
+
+fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
+                                    uint16_t length) {
+  fr_persist_decoded_payload_t decoded;
+  fr_code_object_id_t code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  fr_object_id_t object_map[FR_OBJECT_TABLE_CAPACITY];
+
+  memset(object_map, 0, sizeof(object_map));
+  FR_TRY(fr_persist_payload_decode_and_validate(runtime, bytes, length,
+                                                &decoded));
+  FR_TRY(fr_runtime_reset(runtime));
+  FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL,
+                                      code_map, object_map));
+  /* D6 single-call path applies both tiers in tier order so user definitions
+   * see library slots already in place. tier_filter=0 selects both passes;
+   * skip_on_failure=false matches the strict FULL-restore contract. */
+  FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,
+                                       0, false));
+  FR_TRY(fr_persist_apply_names(runtime, &decoded, 0));
+  FR_TRY(fr_persist_apply_events(runtime, &decoded, code_map));
+  return FR_OK;
+}
+
+/* D6 boot L1 pass: reset the runtime, install all resources the payload
+ * references (codes, texts, shapes, records, cells), then apply only L1
+ * binds and the names whose slot is L1. A per-bind failure here writes
+ * the SPEC-shaped warning and the walk continues; binding L1 names in
+ * this pass is what makes a library word resolve via fr_slot_id_for_name
+ * before the L2 pass runs. The L2 pass uses the stashed maps to translate
+ * decoded local ids without re-installing. */
+fr_err_t fr_persist_payload_restore_library(fr_runtime_t *runtime,
+                                            const uint8_t *bytes,
+                                            uint16_t length) {
+  fr_persist_decoded_payload_t decoded;
+  fr_code_object_id_t code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  fr_object_id_t object_map[FR_OBJECT_TABLE_CAPACITY];
+
+  memset(object_map, 0, sizeof(object_map));
+  fr_persist_boot_maps_valid = false;
+  FR_TRY(fr_persist_payload_decode_and_validate(runtime, bytes, length,
+                                                &decoded));
+  FR_TRY(fr_runtime_reset(runtime));
+  FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL,
+                                      code_map, object_map));
+  FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,
+                                       (uint8_t)FR_PERSIST_TIER_LIBRARY, true));
+  FR_TRY(fr_persist_apply_names(runtime, &decoded,
+                                (uint8_t)FR_PERSIST_TIER_LIBRARY));
+  if (decoded.code_count > 0) {
+    memcpy(fr_persist_boot_code_map, code_map,
+           (size_t)decoded.code_count * sizeof(code_map[0]));
+  }
+  if (decoded.object_count > 0) {
+    memcpy(fr_persist_boot_object_map, object_map,
+           (size_t)decoded.object_count * sizeof(object_map[0]));
+  }
+  fr_persist_boot_maps_valid = true;
+  return FR_OK;
+}
+
+/* Save's L1 preservation step (D5). Decodes the existing NVS payload to work
+ * out which records belong to the L1 closure (every CODE / object / BIND /
+ * NAME the L1 tier reaches), then walks the source bytes a second time and
+ * memcpys each L1-qualifying record into dst in its original on-wire order.
+ *
+ * Source-order verbatim emission is the contract: D5 says "L1 bytes in NVS
+ * are preserved unchanged across save." The install path emits a TEXT
+ * referenced by a CODE body before the CODE that pushes it, and nested CODE
+ * before its parent — re-emitting CODE-then-TEXT (or any other category
+ * sort) would change those bytes. Walking source order keeps the prefix
+ * byte-identical to the L1 region of the input payload.
+ *
+ * The L1 closure widens through three relations:
+ *   1. L1 BIND -> its value's CODE / object id.
+ *   2. CODE body's PUSH_CODE_ID / PUSH_OBJECT_ID operands -> nested
+ *      CODE / object ids. The widen runs until no new ids land.
+ *   3. RECORD object -> its SHAPE; RECORD / CELL object value fields ->
+ *      any other object ids those fields encode. Each pass widens until
+ *      stable so an L1 record that points at another record that points at
+ *      a text still reaches the text.
+ *
+ * Object closure no longer narrows to TEXT — an L1 BIND of a CELLS / RECORD
+ * / RECORD_SHAPE object reaches the matching object record and the second-
+ * pass walker emits it verbatim. */
+fr_err_t fr_persist_payload_extract_library_records(
+    const uint8_t *src, uint16_t src_length, uint8_t *dst, uint16_t dst_cap,
+    uint16_t *out_length) {
+  fr_persist_decoded_payload_t decoded;
+  fr_persist_writer_t writer = {dst, 0, dst_cap};
+  bool code_in_l1[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  bool object_in_l1[FR_OBJECT_TABLE_CAPACITY];
+  bool slot_in_l1[FR_PROFILE_MAX_SLOTS];
+  bool closure_changed = true;
+  fr_persist_reader_t scan = {src, src_length, 0};
+  const uint8_t *magic_scratch = NULL;
+  uint8_t version_scratch = 0;
+
+  if (src == NULL || dst == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  memset(code_in_l1, 0, sizeof(code_in_l1));
+  memset(object_in_l1, 0, sizeof(object_in_l1));
+  memset(slot_in_l1, 0, sizeof(slot_in_l1));
+
+  FR_TRY(fr_persist_decode_payload(src, src_length, &decoded));
+
+  for (uint16_t i = 0; i < decoded.bind_count; i++) {
+    const fr_persist_bind_record_t *bind = &decoded.bind_records[i];
+
+    if (bind->tier != FR_PERSIST_TIER_LIBRARY) {
+      continue;
+    }
+    if (bind->slot_id < FR_PROFILE_MAX_SLOTS) {
+      slot_in_l1[bind->slot_id] = true;
+    }
+    if (bind->value_kind == FR_PERSIST_VALUE_CODE) {
+      if (bind->value_word >= decoded.code_count) {
+        return FR_ERR_CORRUPT;
+      }
+      code_in_l1[bind->value_word] = true;
+    } else if (bind->value_kind == FR_PERSIST_VALUE_OBJECT) {
+      if (bind->value_word >= decoded.object_count) {
+        return FR_ERR_CORRUPT;
+      }
+      object_in_l1[bind->value_word] = true;
+    }
+  }
+
+  while (closure_changed) {
+    closure_changed = false;
+    for (uint16_t i = 0; i < decoded.code_count; i++) {
+      const fr_persist_code_record_t *code = &decoded.code_records[i];
+      fr_instruction_stream_t view;
+      fr_instruction_header_t header = {0};
+      fr_code_offset_t ip = 0;
+      char scratch[64];
+
+      if (!code_in_l1[i]) {
+        continue;
+      }
+      FR_TRY(fr_instruction_stream_init(&view, code->bytes, code->length));
+      FR_TRY(fr_instruction_read_header(&view, &header));
+      ip = (fr_code_offset_t)header.header_size;
+      while (ip < view.length) {
+        fr_code_offset_t next_ip = 0;
+        fr_opcode_t op = (fr_opcode_t)code->bytes[ip];
+
+        if (op == FR_OP_PUSH_CODE_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded.code_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (!code_in_l1[ref]) {
+            code_in_l1[ref] = true;
+            closure_changed = true;
+          }
+        }
+#if FR_FEATURE_OBJECTS
+        if (op == FR_OP_PUSH_OBJECT_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded.object_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (!object_in_l1[ref]) {
+            object_in_l1[ref] = true;
+            closure_changed = true;
+          }
+        }
+#endif
+        FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
+                                             (uint16_t)sizeof(scratch), NULL,
+                                             &next_ip));
+        if (next_ip <= ip) {
+          return FR_ERR_CORRUPT;
+        }
+        ip = next_ip;
+      }
+    }
+#if FR_FEATURE_RECORDS
+    /* A RECORD object reaches its SHAPE plus any object refs its field
+     * values carry — those refs sit in decoded.record_values as tagged_t. */
+    for (uint16_t i = 0; i < decoded.record_count; i++) {
+      const fr_persist_record_record_t *rec = &decoded.record_records[i];
+
+      if (rec->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l1[rec->local_id]) {
+        continue;
+      }
+      if (rec->shape_local_id < FR_OBJECT_TABLE_CAPACITY &&
+          !object_in_l1[rec->shape_local_id]) {
+        object_in_l1[rec->shape_local_id] = true;
+        closure_changed = true;
+      }
+      for (uint16_t j = 0; j < rec->field_count; j++) {
+        fr_tagged_t val = decoded.record_values[rec->first_value + j];
+        fr_object_id_t obj = 0;
+
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l1[(uint16_t)obj]) {
+          object_in_l1[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
+    }
+#endif
+#if FR_FEATURE_CELLS
+    /* A CELLS object reaches any object refs its value slots carry. */
+    for (uint16_t i = 0; i < decoded.cell_count; i++) {
+      const fr_persist_cell_record_t *cell = &decoded.cell_records[i];
+
+      if (cell->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l1[cell->local_id]) {
+        continue;
+      }
+      for (uint16_t j = 0; j < cell->length; j++) {
+        fr_tagged_t val = decoded.cell_values[cell->first_value + j];
+        fr_object_id_t obj = 0;
+
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l1[(uint16_t)obj]) {
+          object_in_l1[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
+    }
+#endif
+  }
+
+  /* Source-order walk: advance through src record by record and memcpy any
+   * record that the closure marked L1. Events never qualify — D5 makes
+   * events L2-only at the encoder. */
+  FR_TRY(fr_persist_reader_bytes(&scan,
+                                 (uint16_t)sizeof(fr_persist_payload_magic),
+                                 &magic_scratch));
+  FR_TRY(fr_persist_reader_u8(&scan, &version_scratch));
+  while (true) {
+    uint16_t record_start = scan.offset;
+    uint8_t tag = 0;
+    uint16_t key = 0;
+    uint16_t record_length = 0;
+    bool qualifies = false;
+
+    FR_TRY(fr_persist_payload_advance_record(&scan, &tag, &key));
+    if (tag == FR_PERSIST_RECORD_END) {
+      break;
+    }
+    record_length = (uint16_t)(scan.offset - record_start);
+
+    switch (tag) {
+    case FR_PERSIST_RECORD_CODE:
+      qualifies =
+          key < FR_PROFILE_CODE_OBJECT_TABLE_SIZE && code_in_l1[key];
+      break;
+    case FR_PERSIST_RECORD_TEXT:
+#if FR_FEATURE_RECORDS
+    case FR_PERSIST_RECORD_RECORD_SHAPE:
+    case FR_PERSIST_RECORD_RECORD:
+#endif
+#if FR_FEATURE_CELLS
+    case FR_PERSIST_RECORD_CELLS:
+#endif
+      qualifies = key < FR_OBJECT_TABLE_CAPACITY && object_in_l1[key];
+      break;
+    case FR_PERSIST_RECORD_BIND:
+    case FR_PERSIST_RECORD_NAME:
+      qualifies = key < FR_PROFILE_MAX_SLOTS && slot_in_l1[key];
+      break;
 #if FR_FEATURE_EVENTS
-  /* fr_runtime_reset cleared the binding table; re-register each decoded
-   * record in payload order. fr_event_register stages platform install before
-   * writing the table (event.c:88-103), so a failed install leaves the slot
-   * empty and the restore aborts. */
-  for (uint16_t i = 0; i < decoded.event_count; i++) {
-    const fr_image_event_binding_t *binding = &decoded.event_records[i];
-    FR_TRY(fr_event_register(runtime, binding->kind, binding->source,
-                             binding->debounce_ms, code_map[binding->body]));
+    case FR_PERSIST_RECORD_EVENT:
+      qualifies = false;
+      break;
+#endif
+    default:
+      return FR_ERR_CORRUPT;
+    }
+    if (qualifies) {
+      FR_TRY(fr_persist_writer_bytes(&writer, src + record_start,
+                                     record_length));
+    }
+  }
+
+  *out_length = writer.used;
+  return FR_OK;
+}
+
+/* SPEC D10 + D5: install-library on receipt drops L1 records from NVS
+ * while preserving L2 bytes byte-for-byte. Mirror of
+ * fr_persist_payload_extract_library_records with the opposite polarity —
+ * walk src record by record and copy each one that the L1 closure did NOT
+ * mark. Events always qualify (D5 makes events L2-only at the encoder).
+ *
+ * The result is a complete payload (magic + version + L2 records + END):
+ * the install-library caller writes it directly to NVS without further
+ * wrapping. */
+fr_err_t fr_persist_payload_strip_library_records(
+    const uint8_t *src, uint16_t src_length, uint8_t *dst, uint16_t dst_cap,
+    uint16_t *out_length) {
+  fr_persist_decoded_payload_t decoded;
+  fr_persist_writer_t writer = {dst, 0, dst_cap};
+  bool code_in_l1[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  bool object_in_l1[FR_OBJECT_TABLE_CAPACITY];
+  bool slot_in_l1[FR_PROFILE_MAX_SLOTS];
+  bool closure_changed = true;
+  fr_persist_reader_t scan = {src, src_length, 0};
+  const uint8_t *magic_scratch = NULL;
+  uint8_t version_scratch = 0;
+
+  if (src == NULL || dst == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  memset(code_in_l1, 0, sizeof(code_in_l1));
+  memset(object_in_l1, 0, sizeof(object_in_l1));
+  memset(slot_in_l1, 0, sizeof(slot_in_l1));
+
+  FR_TRY(fr_persist_decode_payload(src, src_length, &decoded));
+
+  for (uint16_t i = 0; i < decoded.bind_count; i++) {
+    const fr_persist_bind_record_t *bind = &decoded.bind_records[i];
+
+    if (bind->tier != FR_PERSIST_TIER_LIBRARY) {
+      continue;
+    }
+    if (bind->slot_id < FR_PROFILE_MAX_SLOTS) {
+      slot_in_l1[bind->slot_id] = true;
+    }
+    if (bind->value_kind == FR_PERSIST_VALUE_CODE) {
+      if (bind->value_word >= decoded.code_count) {
+        return FR_ERR_CORRUPT;
+      }
+      code_in_l1[bind->value_word] = true;
+    } else if (bind->value_kind == FR_PERSIST_VALUE_OBJECT) {
+      if (bind->value_word >= decoded.object_count) {
+        return FR_ERR_CORRUPT;
+      }
+      object_in_l1[bind->value_word] = true;
+    }
+  }
+
+  while (closure_changed) {
+    closure_changed = false;
+    for (uint16_t i = 0; i < decoded.code_count; i++) {
+      const fr_persist_code_record_t *code = &decoded.code_records[i];
+      fr_instruction_stream_t view;
+      fr_instruction_header_t header = {0};
+      fr_code_offset_t ip = 0;
+      char scratch[64];
+
+      if (!code_in_l1[i]) {
+        continue;
+      }
+      FR_TRY(fr_instruction_stream_init(&view, code->bytes, code->length));
+      FR_TRY(fr_instruction_read_header(&view, &header));
+      ip = (fr_code_offset_t)header.header_size;
+      while (ip < view.length) {
+        fr_code_offset_t next_ip = 0;
+        fr_opcode_t op = (fr_opcode_t)code->bytes[ip];
+
+        if (op == FR_OP_PUSH_CODE_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded.code_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (!code_in_l1[ref]) {
+            code_in_l1[ref] = true;
+            closure_changed = true;
+          }
+        }
+#if FR_FEATURE_OBJECTS
+        if (op == FR_OP_PUSH_OBJECT_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded.object_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (!object_in_l1[ref]) {
+            object_in_l1[ref] = true;
+            closure_changed = true;
+          }
+        }
+#endif
+        FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
+                                             (uint16_t)sizeof(scratch), NULL,
+                                             &next_ip));
+        if (next_ip <= ip) {
+          return FR_ERR_CORRUPT;
+        }
+        ip = next_ip;
+      }
+    }
+#if FR_FEATURE_RECORDS
+    for (uint16_t i = 0; i < decoded.record_count; i++) {
+      const fr_persist_record_record_t *rec = &decoded.record_records[i];
+
+      if (rec->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l1[rec->local_id]) {
+        continue;
+      }
+      if (rec->shape_local_id < FR_OBJECT_TABLE_CAPACITY &&
+          !object_in_l1[rec->shape_local_id]) {
+        object_in_l1[rec->shape_local_id] = true;
+        closure_changed = true;
+      }
+      for (uint16_t j = 0; j < rec->field_count; j++) {
+        fr_tagged_t val = decoded.record_values[rec->first_value + j];
+        fr_object_id_t obj = 0;
+
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l1[(uint16_t)obj]) {
+          object_in_l1[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
+    }
+#endif
+#if FR_FEATURE_CELLS
+    for (uint16_t i = 0; i < decoded.cell_count; i++) {
+      const fr_persist_cell_record_t *cell = &decoded.cell_records[i];
+
+      if (cell->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l1[cell->local_id]) {
+        continue;
+      }
+      for (uint16_t j = 0; j < cell->length; j++) {
+        fr_tagged_t val = decoded.cell_values[cell->first_value + j];
+        fr_object_id_t obj = 0;
+
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l1[(uint16_t)obj]) {
+          object_in_l1[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
+    }
+#endif
+  }
+
+  FR_TRY(fr_persist_writer_bytes(&writer, fr_persist_payload_magic,
+                                 (uint16_t)sizeof(fr_persist_payload_magic)));
+  FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_PAYLOAD_VERSION));
+
+  FR_TRY(fr_persist_reader_bytes(&scan,
+                                 (uint16_t)sizeof(fr_persist_payload_magic),
+                                 &magic_scratch));
+  FR_TRY(fr_persist_reader_u8(&scan, &version_scratch));
+  while (true) {
+    uint16_t record_start = scan.offset;
+    uint8_t tag = 0;
+    uint16_t key = 0;
+    uint16_t record_length = 0;
+    bool drop = false;
+
+    FR_TRY(fr_persist_payload_advance_record(&scan, &tag, &key));
+    if (tag == FR_PERSIST_RECORD_END) {
+      break;
+    }
+    record_length = (uint16_t)(scan.offset - record_start);
+
+    switch (tag) {
+    case FR_PERSIST_RECORD_CODE:
+      drop = key < FR_PROFILE_CODE_OBJECT_TABLE_SIZE && code_in_l1[key];
+      break;
+    case FR_PERSIST_RECORD_TEXT:
+#if FR_FEATURE_RECORDS
+    case FR_PERSIST_RECORD_RECORD_SHAPE:
+    case FR_PERSIST_RECORD_RECORD:
+#endif
+#if FR_FEATURE_CELLS
+    case FR_PERSIST_RECORD_CELLS:
+#endif
+      drop = key < FR_OBJECT_TABLE_CAPACITY && object_in_l1[key];
+      break;
+    case FR_PERSIST_RECORD_BIND:
+    case FR_PERSIST_RECORD_NAME:
+      drop = key < FR_PROFILE_MAX_SLOTS && slot_in_l1[key];
+      break;
+#if FR_FEATURE_EVENTS
+    case FR_PERSIST_RECORD_EVENT:
+      drop = false;
+      break;
+#endif
+    default:
+      return FR_ERR_CORRUPT;
+    }
+    if (!drop) {
+      FR_TRY(fr_persist_writer_bytes(&writer, src + record_start,
+                                     record_length));
+    }
+  }
+
+  FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_END));
+
+  *out_length = writer.used;
+  return FR_OK;
+}
+
+/* D6 boot L2 pass: must follow a successful library pass on the same
+ * payload. Applies only L2 binds onto the runtime the L1 pass left behind,
+ * then installs names and events. Returns FR_ERR_NOT_FOUND if no L1 pass
+ * stashed maps for this sequence. */
+fr_err_t fr_persist_payload_restore_user_after_library(fr_runtime_t *runtime,
+                                                       const uint8_t *bytes,
+                                                       uint16_t length) {
+  fr_persist_decoded_payload_t decoded;
+
+  if (runtime == NULL || bytes == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_persist_boot_maps_valid) {
+    return FR_ERR_NOT_FOUND;
+  }
+  /* The L1 pass already passed the validate checks against the same payload;
+   * decode again (the decoded record arrays live on this call's stack), then
+   * apply only L2 binds plus names and events. */
+  FR_TRY(fr_persist_decode_payload(bytes, length, &decoded));
+  FR_TRY(fr_persist_apply_binds_tiered(
+      runtime, &decoded, fr_persist_boot_code_map, fr_persist_boot_object_map,
+      (uint8_t)FR_PERSIST_TIER_USER, false));
+  FR_TRY(fr_persist_apply_names(runtime, &decoded,
+                                (uint8_t)FR_PERSIST_TIER_USER));
+  FR_TRY(fr_persist_apply_events(runtime, &decoded, fr_persist_boot_code_map));
+  fr_persist_boot_maps_valid = false;
+  return FR_OK;
+}
+
+/* D5 acceptance #6: derive the closure of CODE / object records that L2
+ * binds (and L2 event bodies) reach. The public `restore` installs only
+ * this closure, leaving L1 records on the payload alone — boot already
+ * installed them and SPEC D5 says restore is a no-op on L1.
+ *
+ * Mirrors the widen step of fr_persist_payload_extract_library_records but
+ * starts from L2 binds instead of L1, and folds in event bodies (which the
+ * encoder writes after binds; restore_user_only's apply_events reads
+ * code_map[body], so the body's CODE record must be installed). */
+static fr_err_t fr_persist_payload_compute_user_closure_marks(
+    const fr_persist_decoded_payload_t *decoded,
+    bool code_in_l2[FR_PROFILE_CODE_OBJECT_TABLE_SIZE],
+    bool object_in_l2[FR_OBJECT_TABLE_CAPACITY]) {
+  bool closure_changed = true;
+
+  for (uint16_t i = 0; i < decoded->bind_count; i++) {
+    const fr_persist_bind_record_t *bind = &decoded->bind_records[i];
+
+    if (bind->tier != FR_PERSIST_TIER_USER) {
+      continue;
+    }
+    if (bind->value_kind == FR_PERSIST_VALUE_CODE) {
+      if (bind->value_word >= decoded->code_count) {
+        return FR_ERR_CORRUPT;
+      }
+      code_in_l2[bind->value_word] = true;
+    } else if (bind->value_kind == FR_PERSIST_VALUE_OBJECT) {
+      if (bind->value_word >= decoded->object_count) {
+        return FR_ERR_CORRUPT;
+      }
+      object_in_l2[bind->value_word] = true;
+    }
+  }
+#if FR_FEATURE_EVENTS
+  for (uint16_t i = 0; i < decoded->event_count; i++) {
+    uint16_t body = decoded->event_records[i].body;
+
+    if (body >= decoded->code_count) {
+      return FR_ERR_CORRUPT;
+    }
+    code_in_l2[body] = true;
   }
 #endif
 
+  while (closure_changed) {
+    closure_changed = false;
+    for (uint16_t i = 0; i < decoded->code_count; i++) {
+      const fr_persist_code_record_t *code = &decoded->code_records[i];
+      fr_instruction_stream_t view;
+      fr_instruction_header_t header = {0};
+      fr_code_offset_t ip = 0;
+      char scratch[64];
+
+      if (!code_in_l2[i]) {
+        continue;
+      }
+      FR_TRY(fr_instruction_stream_init(&view, code->bytes, code->length));
+      FR_TRY(fr_instruction_read_header(&view, &header));
+      ip = (fr_code_offset_t)header.header_size;
+      while (ip < view.length) {
+        fr_code_offset_t next_ip = 0;
+        fr_opcode_t op = (fr_opcode_t)code->bytes[ip];
+
+        if (op == FR_OP_PUSH_CODE_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded->code_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (!code_in_l2[ref]) {
+            code_in_l2[ref] = true;
+            closure_changed = true;
+          }
+        }
+#if FR_FEATURE_OBJECTS
+        if (op == FR_OP_PUSH_OBJECT_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded->object_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (!object_in_l2[ref]) {
+            object_in_l2[ref] = true;
+            closure_changed = true;
+          }
+        }
+#endif
+        FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
+                                             (uint16_t)sizeof(scratch), NULL,
+                                             &next_ip));
+        if (next_ip <= ip) {
+          return FR_ERR_CORRUPT;
+        }
+        ip = next_ip;
+      }
+    }
+#if FR_FEATURE_RECORDS
+    for (uint16_t i = 0; i < decoded->record_count; i++) {
+      const fr_persist_record_record_t *rec = &decoded->record_records[i];
+
+      if (rec->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l2[rec->local_id]) {
+        continue;
+      }
+      if (rec->shape_local_id < FR_OBJECT_TABLE_CAPACITY &&
+          !object_in_l2[rec->shape_local_id]) {
+        object_in_l2[rec->shape_local_id] = true;
+        closure_changed = true;
+      }
+      for (uint16_t j = 0; j < rec->field_count; j++) {
+        fr_tagged_t val = decoded->record_values[rec->first_value + j];
+        fr_object_id_t obj = 0;
+
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l2[(uint16_t)obj]) {
+          object_in_l2[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
+    }
+#endif
+#if FR_FEATURE_CELLS
+    for (uint16_t i = 0; i < decoded->cell_count; i++) {
+      const fr_persist_cell_record_t *cell = &decoded->cell_records[i];
+
+      if (cell->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l2[cell->local_id]) {
+        continue;
+      }
+      for (uint16_t j = 0; j < cell->length; j++) {
+        fr_tagged_t val = decoded->cell_values[cell->first_value + j];
+        fr_object_id_t obj = 0;
+
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l2[(uint16_t)obj]) {
+          object_in_l2[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
+    }
+#endif
+  }
+  return FR_OK;
+}
+
+/* D5 acceptance #6: the public `restore` word brings L2 back from NVS while
+ * leaving the L1 the runtime already has in place. Boot's two-call sequence
+ * owns L1; the user-typed `restore` must not touch it — not the L1 binds,
+ * not the L1 CODE / object records that back them. The L2 closure walker
+ * above marks the resources L2 binds and L2 event bodies reach; install
+ * runs with that closure as a filter, so an L1-only CODE / TEXT / RECORD
+ * never enters the runtime's tables a second time. Wiping the L2 tier
+ * first means the restored set replaces (not overlays) prior session L2;
+ * library-tier slots are skipped by fr_persist_session_wipe_user_tier. */
+fr_err_t fr_persist_payload_restore_user_only(fr_runtime_t *runtime,
+                                              const uint8_t *bytes,
+                                              uint16_t length) {
+  fr_persist_decoded_payload_t decoded;
+  fr_code_object_id_t code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  fr_object_id_t object_map[FR_OBJECT_TABLE_CAPACITY];
+  bool code_in_l2[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  bool object_in_l2[FR_OBJECT_TABLE_CAPACITY];
+
+  memset(code_map, 0, sizeof(code_map));
+  memset(object_map, 0, sizeof(object_map));
+  memset(code_in_l2, 0, sizeof(code_in_l2));
+  memset(object_in_l2, 0, sizeof(object_in_l2));
+  FR_TRY(fr_persist_payload_decode_and_validate(runtime, bytes, length,
+                                                &decoded));
+  fr_persist_session_wipe_user_tier(runtime);
+  FR_TRY(fr_persist_payload_compute_user_closure_marks(&decoded, code_in_l2,
+                                                        object_in_l2));
+  FR_TRY(fr_persist_install_resources(runtime, &decoded, code_in_l2,
+                                      object_in_l2, code_map, object_map));
+  FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,
+                                       (uint8_t)FR_PERSIST_TIER_USER, false));
+  FR_TRY(fr_persist_apply_names(runtime, &decoded,
+                                (uint8_t)FR_PERSIST_TIER_USER));
+  FR_TRY(fr_persist_apply_events(runtime, &decoded, code_map));
   return FR_OK;
 }

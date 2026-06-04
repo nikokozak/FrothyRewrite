@@ -25,6 +25,39 @@
 
 #include <string.h>
 
+#if FR_FEATURE_PERSISTENCE
+/* Defined in persist_payload.c. Both helpers tag slot(s) with the runtime's
+ * current install tier so subsequent encodes emit the right BIND tier byte
+ * without rewriting pre-existing slots. stamp_overlay covers the overlay-apply
+ * path (literal definitions); stamp_slot covers the runtime value-binding path
+ * (`foo is <call>`), which writes one slot at a time without producing an
+ * overlay update. The session tier itself lives on runtime->install_tier
+ * (T12L-7 D3); the install-library and install-user REPL commands set it. */
+extern void fr_persist_session_install_tier_stamp_overlay(
+    const fr_runtime_t *runtime, const fr_overlay_update_t *update);
+extern void fr_persist_session_install_tier_stamp_slot(
+    const fr_runtime_t *runtime, fr_slot_id_t slot_id);
+/* Defined in persist.c. Drops every L2 overlay binding from the runtime and
+ * saves so NVS only retains L1 records. */
+extern fr_err_t fr_persist_wipe_user(fr_runtime_t *runtime);
+/* Defined in persist.c — D10 install-library implicit L1 wipe. Drops L1
+ * from the runtime and commits the post-wipe runtime (L2 only) to NVS
+ * before the handler flips the session install tier. */
+extern fr_err_t fr_persist_install_library(fr_runtime_t *runtime);
+/* Defined in persist.c — D3 says definitions arriving after install-library
+ * are persisted to NVS with tier tag L1; the L1-mode compile path calls this
+ * after every successful overlay-apply / value-binding so the new library
+ * word lands in NVS as it is typed (not just in the runtime overlay). */
+extern fr_err_t fr_persist_save_full(const fr_runtime_t *runtime);
+/* Defined in persist.c — D6 boot two-call sequence. fr_persist_restore_library
+ * applies L1 records from NVS onto a freshly-reset runtime; per-bind failures
+ * within L1 log a warning and the walk continues. fr_persist_restore_user
+ * must follow within the same boot; it applies L2 records onto the runtime
+ * L1 left behind without resetting it. */
+extern fr_err_t fr_persist_restore_library(fr_runtime_t *runtime);
+extern fr_err_t fr_persist_restore_user(fr_runtime_t *runtime);
+#endif
+
 typedef struct fr_repl_writer_t {
   void *ctx;
   fr_err_t (*write)(void *ctx, const char *text);
@@ -46,6 +79,9 @@ typedef enum fr_repl_command_kind_t {
   FR_REPL_COMMAND_CLEAR,
   FR_REPL_COMMAND_APPLY,
   FR_REPL_COMMAND_RUN,
+  FR_REPL_COMMAND_INSTALL_LIBRARY,
+  FR_REPL_COMMAND_INSTALL_USER,
+  FR_REPL_COMMAND_WIPE_USER,
 } fr_repl_command_kind_t;
 
 typedef struct fr_repl_command_t {
@@ -179,6 +215,24 @@ static fr_err_t fr_repl_parse_recognized_command(
     out->kind = FR_REPL_COMMAND_RUN;
     out->arg = arg;
     out->arg_len = (uint16_t)(end - arg);
+    return FR_OK;
+  }
+  if (fr_repl_span_equals(start, token_len, "install-library")) {
+    if (arg == end) {
+      out->kind = FR_REPL_COMMAND_INSTALL_LIBRARY;
+    }
+    return FR_OK;
+  }
+  if (fr_repl_span_equals(start, token_len, "install-user")) {
+    if (arg == end) {
+      out->kind = FR_REPL_COMMAND_INSTALL_USER;
+    }
+    return FR_OK;
+  }
+  if (fr_repl_span_equals(start, token_len, "wipe-user")) {
+    if (arg == end) {
+      out->kind = FR_REPL_COMMAND_WIPE_USER;
+    }
     return FR_OK;
   }
 
@@ -691,28 +745,41 @@ static void fr_repl_write_startup_error(fr_err_t err) {
 fr_err_t fr_repl_startup_restore_and_boot(fr_runtime_t *runtime) {
 #if FR_FEATURE_PERSISTENCE
   fr_tagged_t out = fr_tagged_nil();
-  fr_err_t err = FR_OK;
+  fr_err_t l1_err = FR_OK;
+  fr_err_t l2_err = FR_OK;
+  fr_err_t boot_err = FR_OK;
 
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
 
-  err = fr_persist_restore(runtime);
-  if (err != FR_OK) {
-    if (err != FR_ERR_NOT_FOUND) {
-      fr_repl_write_startup_error(err);
-    }
+  /* SPEC D6 boot order: L1 records (library tier) before L2 (user tier).
+   * Two explicit calls — L1 first writes a freshly-reset runtime with the
+   * library layer; L2 layers user definitions on top. An L1 miss
+   * (no payload yet) is normal on first boot. An L1 error other than
+   * FR_ERR_NOT_FOUND surfaces via fr_repl_write_startup_error; the L2 call
+   * still runs so a corrupt L1 doesn't strand a saved user tier. */
+  l1_err = fr_persist_restore_library(runtime);
+  if (l1_err != FR_OK && l1_err != FR_ERR_NOT_FOUND) {
+    fr_repl_write_startup_error(l1_err);
+  }
+  l2_err = fr_persist_restore_user(runtime);
+  if (l2_err != FR_OK && l2_err != FR_ERR_NOT_FOUND) {
+    fr_repl_write_startup_error(l2_err);
+  }
+  if (l1_err != FR_OK && l2_err != FR_OK) {
+    /* Nothing installed from NVS; skip boot dispatch. */
     return FR_OK;
   }
 
-  err = fr_vm_run_boot(runtime, &out);
-  if (err == FR_ERR_INTERRUPTED) {
+  boot_err = fr_vm_run_boot(runtime, &out);
+  if (boot_err == FR_ERR_INTERRUPTED) {
     fr_runtime_clear_interrupt(runtime);
-    fr_repl_write_startup_error(err);
+    fr_repl_write_startup_error(boot_err);
     return FR_OK;
   }
-  if (err != FR_OK) {
-    fr_repl_write_startup_error(err);
+  if (boot_err != FR_OK) {
+    fr_repl_write_startup_error(boot_err);
   }
 #else
   if (runtime == NULL) {
@@ -1181,6 +1248,10 @@ static fr_err_t fr_repl_eval_apply_arg(fr_runtime_t *runtime, const char *arg,
   FR_TRY(fr_overlay_update_decode(fr_repl_wire_bytes, byte_count,
                                   &fr_repl_apply_decoded));
   FR_TRY(fr_overlay_apply(runtime, &fr_repl_apply_decoded.update));
+#if FR_FEATURE_PERSISTENCE
+  fr_persist_session_install_tier_stamp_overlay(runtime,
+                                                &fr_repl_apply_decoded.update);
+#endif
   return fr_repl_writer_write(writer, "ok\n");
 }
 
@@ -1411,6 +1482,28 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
     return fr_repl_writer_write(writer, "ok\n");
   }
 
+  if (command.kind == FR_REPL_COMMAND_INSTALL_LIBRARY) {
+#if FR_FEATURE_PERSISTENCE
+    FR_TRY(fr_persist_install_library(runtime));
+#endif
+    runtime->install_tier = FR_INSTALL_TIER_LIBRARY;
+    return fr_repl_writer_write(writer, "ok\n");
+  }
+
+  if (command.kind == FR_REPL_COMMAND_INSTALL_USER) {
+    runtime->install_tier = FR_INSTALL_TIER_USER;
+    return fr_repl_writer_write(writer, "ok\n");
+  }
+
+  if (command.kind == FR_REPL_COMMAND_WIPE_USER) {
+#if FR_FEATURE_PERSISTENCE
+    FR_TRY(fr_persist_wipe_user(runtime));
+    return fr_repl_writer_write(writer, "ok\n");
+#else
+    return FR_ERR_UNSUPPORTED;
+#endif
+  }
+
   if (command.kind == FR_REPL_COMMAND_WORDS) {
 #if FR_FEATURE_INTROSPECTION
     return fr_repl_write_words(runtime, writer);
@@ -1455,6 +1548,13 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
 
     if (err == FR_OK) {
       FR_TRY(fr_overlay_apply(runtime, &compiled.overlay_update));
+#if FR_FEATURE_PERSISTENCE
+      fr_persist_session_install_tier_stamp_overlay(runtime,
+                                                    &compiled.overlay_update);
+      if (runtime->install_tier == FR_INSTALL_TIER_LIBRARY) {
+        FR_TRY(fr_persist_save_full(runtime));
+      }
+#endif
       return fr_repl_writer_write(writer, "ok\n");
     }
     if (err == FR_ERR_UNSUPPORTED) {
@@ -1464,6 +1564,12 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
 
       if (bind_err == FR_OK) {
         FR_TRY(fr_repl_eval_value_binding(runtime, &binding, &result));
+#if FR_FEATURE_PERSISTENCE
+        fr_persist_session_install_tier_stamp_slot(runtime, binding.slot_id);
+        if (runtime->install_tier == FR_INSTALL_TIER_LIBRARY) {
+          FR_TRY(fr_persist_save_full(runtime));
+        }
+#endif
         return fr_repl_writer_write(writer, "ok\n");
       }
       if (bind_err != FR_ERR_UNSUPPORTED) {
@@ -1521,6 +1627,9 @@ fr_err_t fr_repl_run(fr_runtime_t *runtime, const fr_repl_io_t *io) {
       io->write_text == NULL) {
     return FR_ERR_INVALID;
   }
+
+  /* T12L-7 D3: each fresh REPL session starts in user-install mode. */
+  runtime->install_tier = FR_INSTALL_TIER_USER;
 
   while (true) {
     FR_TRY(io->write_text("> "));
