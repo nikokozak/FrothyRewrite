@@ -341,6 +341,83 @@ fr_err_t fr_persist_wipe_user(fr_runtime_t *runtime) {
   return fr_persist_save(runtime);
 }
 
+/* Defined in persist_payload.c — D10 install-library wipe primitives.
+ * fr_persist_session_wipe_library_tier drops L1 overlay binds from the
+ * runtime and clears their tier stamps. fr_persist_payload_strip_library_records
+ * takes the existing NVS payload and produces a complete L2-only payload
+ * (magic + version + L2 records + END), L2 bytes byte-for-byte from src. */
+extern void fr_persist_session_wipe_library_tier(fr_runtime_t *runtime);
+extern fr_err_t fr_persist_payload_strip_library_records(
+    const uint8_t *src, uint16_t src_length, uint8_t *dst, uint16_t dst_cap,
+    uint16_t *out_length);
+
+/* SPEC D10: receiving install-library drops L1 from the device — runtime
+ * binds and the L1 closure in NVS — before accepting the next definitions.
+ * SPEC D5 also requires that L2 bytes in NVS are preserved unchanged across
+ * install-library entry; the stripped payload copies each L2 record byte-
+ * for-byte from the source. An install-library against empty NVS only
+ * wipes the runtime; no NVS write happens because there is nothing to
+ * preserve. */
+fr_err_t fr_persist_install_library(fr_runtime_t *runtime) {
+  uint16_t new_payload_length = 0;
+  uint8_t slot = 0;
+  uint32_t generation = 0;
+  fr_persist_header_t header = {0};
+  uint8_t header_bytes[FR_PERSIST_HEADER_BYTES];
+  fr_persist_header_t headers[FR_PERSIST_STORAGE_SLOT_COUNT] = {0};
+  bool valid[FR_PERSIST_STORAGE_SLOT_COUNT] = {false, false};
+  uint8_t read_slot = 0;
+  bool nvs_payload_valid = false;
+
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  fr_persist_session_wipe_library_tier(runtime);
+
+  valid[0] = fr_persist_read_header(0, &headers[0]) == FR_OK;
+  valid[1] = fr_persist_read_header(1, &headers[1]) == FR_OK;
+  if (!valid[0] && !valid[1]) {
+    return FR_OK;
+  }
+
+  if (valid[0] && valid[1]) {
+    read_slot = headers[0].generation >= headers[1].generation ? 0 : 1;
+  } else if (valid[1]) {
+    read_slot = 1;
+  }
+  FR_TRY(fr_platform_storage_read(read_slot, FR_PERSIST_HEADER_BYTES,
+                                  fr_persist_payload,
+                                  headers[read_slot].payload_length));
+  if (fr_crc32(fr_persist_payload, headers[read_slot].payload_length) ==
+      headers[read_slot].payload_crc) {
+    FR_TRY(fr_persist_payload_strip_library_records(
+        fr_persist_payload, headers[read_slot].payload_length,
+        fr_persist_library_prefix,
+        (uint16_t)sizeof(fr_persist_library_prefix), &new_payload_length));
+    nvs_payload_valid = true;
+  }
+
+  if (!nvs_payload_valid) {
+    return FR_OK;
+  }
+
+  fr_persist_last_payload_bytes = new_payload_length;
+  FR_TRY(fr_persist_pick_inactive(&slot, &generation));
+  FR_TRY(fr_platform_storage_erase(slot));
+  FR_TRY(fr_platform_storage_write(slot, FR_PERSIST_HEADER_BYTES,
+                                   fr_persist_library_prefix,
+                                   new_payload_length));
+
+  header.generation = generation;
+  header.payload_length = new_payload_length;
+  header.payload_crc = fr_crc32(fr_persist_library_prefix, new_payload_length);
+  FR_TRY(fr_persist_header_build(header_bytes, &header));
+  FR_TRY(fr_platform_storage_write(slot, 0, header_bytes,
+                                   (uint16_t)sizeof(header_bytes)));
+  return fr_persist_read_header(slot, &header);
+}
+
 uint16_t fr_persist_debug_last_payload_bytes(void) {
   return fr_persist_last_payload_bytes;
 }

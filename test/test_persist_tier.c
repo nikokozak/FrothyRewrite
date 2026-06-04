@@ -1099,6 +1099,118 @@ static void test_user_restore_without_prior_library_returns_not_found(void) {
   TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND, fr_persist_restore_user(&s_runtime));
 }
 
+/* SPEC D10 + D5 acceptance #9: receiving install-library drops L1 from the
+ * device — runtime binds AND the L1 closure inside NVS — before accepting
+ * the next definitions. L2 bytes in NVS are preserved byte-for-byte across
+ * the entry. The test seeds the both-tier image into slot 0 the way a save
+ * would, captures the pre-install-library NVS bytes, re-issues
+ * install-library, and asserts:
+ *   - runtime lib_word no longer resolves;
+ *   - runtime usr_word still resolves;
+ *   - the new NVS payload has no BIND for lib_slot;
+ *   - the new NVS payload still carries usr_slot's BIND with USER tier,
+ *     byte-identical to the pre-payload slice.
+ * Against the R51 handler (sets install_tier only) the runtime lib_word
+ * assertion fails. Against any impl that re-encodes L2 instead of copying
+ * the source bytes the byte-identical slice assertion fails. */
+static void test_install_library_drops_l1_runtime_and_nvs_preserves_user(void) {
+  uint8_t pre_payload[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t pre_header[FR_PERSIST_HEADER_BYTES];
+  uint8_t post_payload[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t post_header[FR_PERSIST_HEADER_BYTES];
+  uint16_t pre_length = 0;
+  uint16_t post_length = 0;
+  fr_slot_id_t lib_slot = 0;
+  fr_slot_id_t usr_slot = 0;
+  fr_slot_id_t scratch_slot = 0;
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+
+  fr_platform_storage_debug_reset();
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_word is 5", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word is 7", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "lib_word", &lib_slot));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
+
+  /* Both-tier NVS image. The test models the post-save state where the user
+   * has issued `save` after an install-library + install-user round. */
+  seed_nvs_slot_from_runtime(&s_runtime, 0, 1);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_read(0, 0, pre_header,
+                                                     FR_PERSIST_HEADER_BYTES));
+  pre_length = (uint16_t)pre_header[16] | ((uint16_t)pre_header[17] << 8);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_storage_read(0, FR_PERSIST_HEADER_BYTES,
+                                             pre_payload, pre_length));
+  TEST_ASSERT_EQUAL_INT(FR_TEST_TIER_LIBRARY,
+                        find_bind_tier_for_slot(pre_payload, pre_length,
+                                                lib_slot));
+  TEST_ASSERT_EQUAL_INT(FR_TEST_TIER_USER,
+                        find_bind_tier_for_slot(pre_payload, pre_length,
+                                                usr_slot));
+
+  /* Slice under test: install-library on receipt drops L1 from runtime and
+   * rewrites NVS to L2-only. */
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                    fr_slot_id_for_name(&s_runtime, "lib_word", &scratch_slot));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "usr_word", &scratch_slot));
+  TEST_ASSERT_EQUAL(usr_slot, scratch_slot);
+
+  /* pick_inactive picks slot 1 (empty); the new payload lands there. */
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_read(1, 0, post_header,
+                                                     FR_PERSIST_HEADER_BYTES));
+  post_length = (uint16_t)post_header[16] | ((uint16_t)post_header[17] << 8);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_storage_read(1, FR_PERSIST_HEADER_BYTES,
+                                             post_payload, post_length));
+  TEST_ASSERT_EQUAL_INT(-1,
+                        find_bind_tier_for_slot(post_payload, post_length,
+                                                lib_slot));
+  TEST_ASSERT_EQUAL_INT(FR_TEST_TIER_USER,
+                        find_bind_tier_for_slot(post_payload, post_length,
+                                                usr_slot));
+
+  /* L2 BIND bytes preserved byte-for-byte. With `lib_word is 5` and
+   * `usr_word is 7` the encoder writes magic + version + BIND(lib) +
+   * BIND(usr) + (NAME records) + END. Each VALUE_INT BIND is 5 +
+   * FR_TEST_TIER_INT_BYTES bytes: tag(1) + slot(2) + tier(1) + value_kind(1)
+   * + int(N). The L2 BIND lives at offset 5 + bind_record_length in
+   * pre_payload (the first BIND is the L1 lib_word) and at offset 5 in
+   * post_payload (L1 was dropped). The 9-byte BIND slice must match. */
+  {
+    uint16_t bind_record_length =
+        (uint16_t)(5u + (uint16_t)FR_TEST_TIER_INT_BYTES);
+    uint16_t pre_l2_offset = (uint16_t)(5u + bind_record_length);
+    TEST_ASSERT_GREATER_THAN(pre_l2_offset + bind_record_length, pre_length);
+    TEST_ASSERT_GREATER_THAN((uint16_t)(5u + bind_record_length), post_length);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(&pre_payload[pre_l2_offset],
+                                  &post_payload[5], bind_record_length);
+  }
+}
+
 static void test_repl_install_library_replies_ok(void) {
   char out[FR_REPL_OUTPUT_BYTES];
 
@@ -1142,6 +1254,7 @@ int main(void) {
   RUN_TEST(test_boot_restore_applies_library_before_user);
   RUN_TEST(test_boot_two_call_applies_library_before_user);
   RUN_TEST(test_user_restore_without_prior_library_returns_not_found);
+  RUN_TEST(test_install_library_drops_l1_runtime_and_nvs_preserves_user);
   RUN_TEST(test_repl_install_library_replies_ok);
   RUN_TEST(test_repl_install_user_replies_ok);
   return UNITY_END();

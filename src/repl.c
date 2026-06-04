@@ -40,6 +40,10 @@ extern void fr_persist_session_install_tier_stamp_slot(
 /* Defined in persist.c. Drops every L2 overlay binding from the runtime and
  * saves so NVS only retains L1 records. */
 extern fr_err_t fr_persist_wipe_user(fr_runtime_t *runtime);
+/* Defined in persist.c — D10 install-library implicit L1 wipe. Drops L1 from
+ * the runtime and from the NVS payload (preserving L2 bytes byte-for-byte
+ * per D5) before the handler flips the session install tier. */
+extern fr_err_t fr_persist_install_library(fr_runtime_t *runtime);
 /* Defined in persist.c — D6 boot two-call sequence. fr_persist_restore_library
  * applies L1 records from NVS onto a freshly-reset runtime; per-bind failures
  * within L1 log a warning and the walk continues. fr_persist_restore_user
@@ -1474,6 +1478,9 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
   }
 
   if (command.kind == FR_REPL_COMMAND_INSTALL_LIBRARY) {
+#if FR_FEATURE_PERSISTENCE
+    FR_TRY(fr_persist_install_library(runtime));
+#endif
     runtime->install_tier = FR_INSTALL_TIER_LIBRARY;
     return fr_repl_writer_write(writer, "ok\n");
   }

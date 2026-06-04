@@ -146,6 +146,53 @@ void fr_persist_session_wipe_user_tier(fr_runtime_t *runtime) {
 #endif
 }
 
+/* SPEC D10: install-library on receipt drops L1 binds from the runtime so
+ * re-installing replaces removed library words. Mirror of
+ * fr_persist_session_wipe_user_tier with the tier check inverted, and the
+ * slot stamp cleared on wipe so the slot doesn't keep its L1 tag (a later
+ * install-library record will stamp it back to L1; an install-user record
+ * lands as USER). The name table compacts the same way. */
+void fr_persist_session_wipe_library_tier(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return;
+  }
+  for (fr_slot_id_t slot_id = 0; slot_id < runtime->slots.count; slot_id++) {
+    if (!fr_slot_is_overlay(runtime, slot_id)) {
+      continue;
+    }
+    if (fr_persist_slot_tier[slot_id] != FR_PERSIST_TIER_LIBRARY) {
+      continue;
+    }
+    (void)fr_slot_restore(runtime, slot_id);
+    if (slot_id < FR_PROFILE_MAX_SLOTS) {
+      fr_persist_slot_tier[slot_id] = 0;
+    }
+  }
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  {
+    uint16_t dst = 0;
+    for (uint16_t src = 0; src < runtime->slots.overlay_name_count; src++) {
+      fr_slot_id_t s = runtime->slots.overlay_name_slots[src];
+
+      if (fr_slot_is_overlay(runtime, s)) {
+        if (dst != src) {
+          memcpy(runtime->slots.overlay_names[dst],
+                 runtime->slots.overlay_names[src],
+                 (size_t)FR_PROFILE_MAX_NAME_BYTES + 1);
+          runtime->slots.overlay_name_slots[dst] = s;
+        }
+        dst = (uint16_t)(dst + 1);
+      }
+    }
+    for (uint16_t i = dst; i < runtime->slots.overlay_name_count; i++) {
+      runtime->slots.overlay_names[i][0] = '\0';
+      runtime->slots.overlay_name_slots[i] = 0;
+    }
+    runtime->slots.overlay_name_count = dst;
+  }
+#endif
+}
+
 /* Writer/reader cursors stay uint16_t; this asserts the payload buffer fits. */
 typedef char fr_persist_payload_bytes_must_fit_uint16[
     (FR_PROFILE_PERSISTENCE_BYTES <= UINT16_MAX) ? 1 : -1];
@@ -3106,6 +3153,223 @@ fr_err_t fr_persist_payload_extract_library_records(
                                      record_length));
     }
   }
+
+  *out_length = writer.used;
+  return FR_OK;
+}
+
+/* SPEC D10 + D5: install-library on receipt drops L1 records from NVS
+ * while preserving L2 bytes byte-for-byte. Mirror of
+ * fr_persist_payload_extract_library_records with the opposite polarity —
+ * walk src record by record and copy each one that the L1 closure did NOT
+ * mark. Events always qualify (D5 makes events L2-only at the encoder).
+ *
+ * The result is a complete payload (magic + version + L2 records + END):
+ * the install-library caller writes it directly to NVS without further
+ * wrapping. */
+fr_err_t fr_persist_payload_strip_library_records(
+    const uint8_t *src, uint16_t src_length, uint8_t *dst, uint16_t dst_cap,
+    uint16_t *out_length) {
+  fr_persist_decoded_payload_t decoded;
+  fr_persist_writer_t writer = {dst, 0, dst_cap};
+  bool code_in_l1[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  bool object_in_l1[FR_OBJECT_TABLE_CAPACITY];
+  bool slot_in_l1[FR_PROFILE_MAX_SLOTS];
+  bool closure_changed = true;
+  fr_persist_reader_t scan = {src, src_length, 0};
+  const uint8_t *magic_scratch = NULL;
+  uint8_t version_scratch = 0;
+
+  if (src == NULL || dst == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  memset(code_in_l1, 0, sizeof(code_in_l1));
+  memset(object_in_l1, 0, sizeof(object_in_l1));
+  memset(slot_in_l1, 0, sizeof(slot_in_l1));
+
+  FR_TRY(fr_persist_decode_payload(src, src_length, &decoded));
+
+  for (uint16_t i = 0; i < decoded.bind_count; i++) {
+    const fr_persist_bind_record_t *bind = &decoded.bind_records[i];
+
+    if (bind->tier != FR_PERSIST_TIER_LIBRARY) {
+      continue;
+    }
+    if (bind->slot_id < FR_PROFILE_MAX_SLOTS) {
+      slot_in_l1[bind->slot_id] = true;
+    }
+    if (bind->value_kind == FR_PERSIST_VALUE_CODE) {
+      if (bind->value_word >= decoded.code_count) {
+        return FR_ERR_CORRUPT;
+      }
+      code_in_l1[bind->value_word] = true;
+    } else if (bind->value_kind == FR_PERSIST_VALUE_OBJECT) {
+      if (bind->value_word >= decoded.object_count) {
+        return FR_ERR_CORRUPT;
+      }
+      object_in_l1[bind->value_word] = true;
+    }
+  }
+
+  while (closure_changed) {
+    closure_changed = false;
+    for (uint16_t i = 0; i < decoded.code_count; i++) {
+      const fr_persist_code_record_t *code = &decoded.code_records[i];
+      fr_instruction_stream_t view;
+      fr_instruction_header_t header = {0};
+      fr_code_offset_t ip = 0;
+      char scratch[64];
+
+      if (!code_in_l1[i]) {
+        continue;
+      }
+      FR_TRY(fr_instruction_stream_init(&view, code->bytes, code->length));
+      FR_TRY(fr_instruction_read_header(&view, &header));
+      ip = (fr_code_offset_t)header.header_size;
+      while (ip < view.length) {
+        fr_code_offset_t next_ip = 0;
+        fr_opcode_t op = (fr_opcode_t)code->bytes[ip];
+
+        if (op == FR_OP_PUSH_CODE_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded.code_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (!code_in_l1[ref]) {
+            code_in_l1[ref] = true;
+            closure_changed = true;
+          }
+        }
+#if FR_FEATURE_OBJECTS
+        if (op == FR_OP_PUSH_OBJECT_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded.object_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (!object_in_l1[ref]) {
+            object_in_l1[ref] = true;
+            closure_changed = true;
+          }
+        }
+#endif
+        FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
+                                             (uint16_t)sizeof(scratch), NULL,
+                                             &next_ip));
+        if (next_ip <= ip) {
+          return FR_ERR_CORRUPT;
+        }
+        ip = next_ip;
+      }
+    }
+#if FR_FEATURE_RECORDS
+    for (uint16_t i = 0; i < decoded.record_count; i++) {
+      const fr_persist_record_record_t *rec = &decoded.record_records[i];
+
+      if (rec->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l1[rec->local_id]) {
+        continue;
+      }
+      if (rec->shape_local_id < FR_OBJECT_TABLE_CAPACITY &&
+          !object_in_l1[rec->shape_local_id]) {
+        object_in_l1[rec->shape_local_id] = true;
+        closure_changed = true;
+      }
+      for (uint16_t j = 0; j < rec->field_count; j++) {
+        fr_tagged_t val = decoded.record_values[rec->first_value + j];
+        fr_object_id_t obj = 0;
+
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l1[(uint16_t)obj]) {
+          object_in_l1[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
+    }
+#endif
+#if FR_FEATURE_CELLS
+    for (uint16_t i = 0; i < decoded.cell_count; i++) {
+      const fr_persist_cell_record_t *cell = &decoded.cell_records[i];
+
+      if (cell->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l1[cell->local_id]) {
+        continue;
+      }
+      for (uint16_t j = 0; j < cell->length; j++) {
+        fr_tagged_t val = decoded.cell_values[cell->first_value + j];
+        fr_object_id_t obj = 0;
+
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l1[(uint16_t)obj]) {
+          object_in_l1[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
+    }
+#endif
+  }
+
+  FR_TRY(fr_persist_writer_bytes(&writer, fr_persist_payload_magic,
+                                 (uint16_t)sizeof(fr_persist_payload_magic)));
+  FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_PAYLOAD_VERSION));
+
+  FR_TRY(fr_persist_reader_bytes(&scan,
+                                 (uint16_t)sizeof(fr_persist_payload_magic),
+                                 &magic_scratch));
+  FR_TRY(fr_persist_reader_u8(&scan, &version_scratch));
+  while (true) {
+    uint16_t record_start = scan.offset;
+    uint8_t tag = 0;
+    uint16_t key = 0;
+    uint16_t record_length = 0;
+    bool drop = false;
+
+    FR_TRY(fr_persist_payload_advance_record(&scan, &tag, &key));
+    if (tag == FR_PERSIST_RECORD_END) {
+      break;
+    }
+    record_length = (uint16_t)(scan.offset - record_start);
+
+    switch (tag) {
+    case FR_PERSIST_RECORD_CODE:
+      drop = key < FR_PROFILE_CODE_OBJECT_TABLE_SIZE && code_in_l1[key];
+      break;
+    case FR_PERSIST_RECORD_TEXT:
+#if FR_FEATURE_RECORDS
+    case FR_PERSIST_RECORD_RECORD_SHAPE:
+    case FR_PERSIST_RECORD_RECORD:
+#endif
+#if FR_FEATURE_CELLS
+    case FR_PERSIST_RECORD_CELLS:
+#endif
+      drop = key < FR_OBJECT_TABLE_CAPACITY && object_in_l1[key];
+      break;
+    case FR_PERSIST_RECORD_BIND:
+    case FR_PERSIST_RECORD_NAME:
+      drop = key < FR_PROFILE_MAX_SLOTS && slot_in_l1[key];
+      break;
+#if FR_FEATURE_EVENTS
+    case FR_PERSIST_RECORD_EVENT:
+      drop = false;
+      break;
+#endif
+    default:
+      return FR_ERR_CORRUPT;
+    }
+    if (!drop) {
+      FR_TRY(fr_persist_writer_bytes(&writer, src + record_start,
+                                     record_length));
+    }
+  }
+
+  FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_END));
 
   *out_length = writer.used;
   return FR_OK;
