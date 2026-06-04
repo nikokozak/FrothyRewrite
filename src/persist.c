@@ -21,6 +21,14 @@ enum {
 static const uint8_t fr_persist_header_magic[4] = {'F', 'R', 'P', 'H'};
 static uint8_t fr_persist_payload[FR_PROFILE_PERSISTENCE_BYTES -
                                   FR_PERSIST_HEADER_BYTES];
+/* Save's L1 preservation step decodes the existing payload from
+ * fr_persist_payload, extracts its L1 BIND + NAME records into this scratch
+ * buffer, then runs the L2 encoder into fr_persist_payload with the scratch
+ * passed through as the library prefix. Sized as the same upper bound as
+ * the payload itself because a save called against an L1-only NVS image
+ * could shape that whole image into the prefix. */
+static uint8_t fr_persist_library_prefix[FR_PROFILE_PERSISTENCE_BYTES -
+                                         FR_PERSIST_HEADER_BYTES];
 static uint16_t fr_persist_last_payload_bytes = 0;
 
 typedef struct fr_persist_header_t {
@@ -222,20 +230,54 @@ fr_persist_restore_dispatch(fr_runtime_t *runtime,
   return last_err;
 }
 
+/* D5: save persists the user tier only and preserves the library tier in
+ * NVS byte-for-byte. The active slot's existing payload (if any) is decoded,
+ * its L1 records are re-encoded into the scratch prefix (literal-value only;
+ * see fr_persist_payload_extract_library_records), and the prefix is pasted
+ * verbatim ahead of the freshly-encoded L2 records in the new payload.
+ * A first save against empty NVS produces an L2-only payload. */
 fr_err_t fr_persist_save(const fr_runtime_t *runtime) {
   uint16_t payload_length = 0;
+  uint16_t library_prefix_length = 0;
   uint8_t slot = 0;
   uint32_t generation = 0;
   fr_persist_header_t header = {0};
   uint8_t header_bytes[FR_PERSIST_HEADER_BYTES];
+  fr_persist_header_t headers[FR_PERSIST_STORAGE_SLOT_COUNT] = {0};
+  bool valid[FR_PERSIST_STORAGE_SLOT_COUNT] = {false, false};
 
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
 
-  FR_TRY(fr_persist_payload_encode(runtime, fr_persist_payload,
-                                   (uint16_t)sizeof(fr_persist_payload),
-                                   &payload_length));
+  valid[0] = fr_persist_read_header(0, &headers[0]) == FR_OK;
+  valid[1] = fr_persist_read_header(1, &headers[1]) == FR_OK;
+  if (valid[0] || valid[1]) {
+    uint8_t read_slot = 0;
+
+    if (valid[0] && valid[1]) {
+      read_slot = headers[0].generation >= headers[1].generation ? 0 : 1;
+    } else if (valid[1]) {
+      read_slot = 1;
+    }
+    FR_TRY(fr_platform_storage_read(read_slot, FR_PERSIST_HEADER_BYTES,
+                                    fr_persist_payload,
+                                    headers[read_slot].payload_length));
+    if (fr_crc32(fr_persist_payload, headers[read_slot].payload_length) ==
+        headers[read_slot].payload_crc) {
+      FR_TRY(fr_persist_payload_extract_library_records(
+          fr_persist_payload, headers[read_slot].payload_length,
+          fr_persist_library_prefix,
+          (uint16_t)sizeof(fr_persist_library_prefix),
+          &library_prefix_length));
+    }
+  }
+
+  FR_TRY(fr_persist_payload_save_encode(runtime, fr_persist_library_prefix,
+                                        library_prefix_length,
+                                        fr_persist_payload,
+                                        (uint16_t)sizeof(fr_persist_payload),
+                                        &payload_length));
   fr_persist_last_payload_bytes = payload_length;
   FR_TRY(fr_persist_pick_inactive(&slot, &generation));
   FR_TRY(fr_platform_storage_erase(slot));

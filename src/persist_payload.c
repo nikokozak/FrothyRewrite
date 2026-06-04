@@ -1161,8 +1161,17 @@ static fr_err_t fr_persist_check_no_volatile_handles(
   return FR_OK;
 }
 
-fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
-                                   uint16_t cap, uint16_t *out_length) {
+/* tier_filter == 0 walks every overlay slot (the historical full-encode).
+ * tier_filter == FR_PERSIST_TIER_USER skips slots stamped L1; that's the save
+ * path which trusts NVS for L1 (D5) and only writes L2 from the runtime.
+ * library_prefix is an optional pre-encoded byte span (BIND/NAME records)
+ * pasted immediately after magic+version; save passes the L1 records it
+ * extracted from the existing payload so they survive the round-trip
+ * byte-for-byte. */
+static fr_err_t fr_persist_payload_encode_impl(
+    const fr_runtime_t *runtime, uint8_t tier_filter,
+    const uint8_t *library_prefix, uint16_t library_prefix_length,
+    uint8_t *bytes, uint16_t cap, uint16_t *out_length) {
   fr_persist_writer_t writer = {bytes, 0, cap};
   fr_code_object_id_t runtime_code_ids[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
   fr_object_id_t runtime_object_ids[FR_OBJECT_TABLE_CAPACITY];
@@ -1173,6 +1182,9 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
   if (runtime == NULL || bytes == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
+  if (library_prefix == NULL && library_prefix_length > 0) {
+    return FR_ERR_INVALID;
+  }
 
   memset(runtime_code_ids, 0, sizeof(runtime_code_ids));
   memset(runtime_object_ids, 0, sizeof(runtime_object_ids));
@@ -1181,12 +1193,19 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
   FR_TRY(fr_persist_writer_bytes(&writer, fr_persist_payload_magic,
                                  (uint16_t)sizeof(fr_persist_payload_magic)));
   FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_PAYLOAD_VERSION));
+  if (library_prefix_length > 0) {
+    FR_TRY(fr_persist_writer_bytes(&writer, library_prefix,
+                                   library_prefix_length));
+  }
 
   for (fr_slot_id_t slot_id = 0; slot_id < runtime->slots.count; slot_id++) {
     fr_code_object_id_t code_id = 0;
     uint16_t ignored = 0;
 
     if (!fr_slot_is_overlay(runtime, slot_id)) {
+      continue;
+    }
+    if (tier_filter != 0 && fr_persist_slot_tier[slot_id] != tier_filter) {
       continue;
     }
     if (fr_tagged_decode_code_object_id(runtime->slots.current[slot_id],
@@ -1203,6 +1222,9 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
     uint16_t ignored = 0;
 
     if (!fr_slot_is_overlay(runtime, slot_id)) {
+      continue;
+    }
+    if (tier_filter != 0 && fr_persist_slot_tier[slot_id] != tier_filter) {
       continue;
     }
     if (fr_tagged_decode_object_id(runtime->slots.current[slot_id],
@@ -1248,6 +1270,9 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
     if (!fr_slot_is_overlay(runtime, slot_id)) {
       continue;
     }
+    if (tier_filter != 0 && fr_persist_slot_tier[slot_id] != tier_filter) {
+      continue;
+    }
 
     FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_BIND));
     FR_TRY(fr_persist_writer_u16(&writer, slot_id));
@@ -1276,6 +1301,10 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
       return FR_ERR_INVALID;
     }
     FR_TRY(fr_slot_id_for_name(runtime, name, &slot_id));
+    if (tier_filter != 0 && slot_id < FR_PROFILE_MAX_SLOTS &&
+        fr_persist_slot_tier[slot_id] != tier_filter) {
+      continue;
+    }
     FR_TRY(fr_persist_name_length(name, &name_length));
 
     FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_NAME));
@@ -1287,28 +1316,51 @@ fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
 #endif
 
 #if FR_FEATURE_EVENTS
-  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
-    const fr_event_binding_t *entry = &runtime->events.entries[i];
-    uint16_t local_code_id = 0;
+  /* Events are always L2 per D5; the boot L1 pass and a hypothetical
+   * library-only encode (tier_filter == LIBRARY) skip them. */
+  if (tier_filter != (uint8_t)FR_PERSIST_TIER_LIBRARY) {
+    for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+      const fr_event_binding_t *entry = &runtime->events.entries[i];
+      uint16_t local_code_id = 0;
 
-    if (entry->kind == FR_EVENT_KIND_NONE) {
-      continue;
+      if (entry->kind == FR_EVENT_KIND_NONE) {
+        continue;
+      }
+      FR_TRY(fr_persist_encode_code_ref(&writer, runtime, entry->body,
+                                        runtime_code_ids, &code_count,
+                                        runtime_object_ids, object_kinds,
+                                        &object_count, &local_code_id));
+      FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_EVENT));
+      FR_TRY(fr_persist_writer_u8(&writer, (uint8_t)entry->kind));
+      FR_TRY(fr_persist_writer_u16(&writer, entry->source));
+      FR_TRY(fr_persist_writer_u16(&writer, entry->debounce_ms));
+      FR_TRY(fr_persist_writer_u16(&writer, local_code_id));
     }
-    FR_TRY(fr_persist_encode_code_ref(&writer, runtime, entry->body,
-                                      runtime_code_ids, &code_count,
-                                      runtime_object_ids, object_kinds,
-                                      &object_count, &local_code_id));
-    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_EVENT));
-    FR_TRY(fr_persist_writer_u8(&writer, (uint8_t)entry->kind));
-    FR_TRY(fr_persist_writer_u16(&writer, entry->source));
-    FR_TRY(fr_persist_writer_u16(&writer, entry->debounce_ms));
-    FR_TRY(fr_persist_writer_u16(&writer, local_code_id));
   }
 #endif
 
   FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_END));
   *out_length = writer.used;
   return FR_OK;
+}
+
+fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
+                                   uint16_t cap, uint16_t *out_length) {
+  return fr_persist_payload_encode_impl(runtime, 0, NULL, 0, bytes, cap,
+                                        out_length);
+}
+
+/* D5: save encodes only L2 from runtime and prefixes the existing payload's
+ * L1 BIND and NAME records verbatim. Callers (fr_persist_save) extract the
+ * prefix via fr_persist_payload_extract_library_records. */
+fr_err_t fr_persist_payload_save_encode(
+    const fr_runtime_t *runtime, const uint8_t *library_prefix,
+    uint16_t library_prefix_length, uint8_t *bytes, uint16_t cap,
+    uint16_t *out_length) {
+  return fr_persist_payload_encode_impl(runtime,
+                                        (uint8_t)FR_PERSIST_TIER_USER,
+                                        library_prefix, library_prefix_length,
+                                        bytes, cap, out_length);
 }
 
 static fr_err_t fr_persist_decode_value(fr_persist_reader_t *reader,
@@ -2582,6 +2634,98 @@ fr_err_t fr_persist_payload_restore_library(fr_runtime_t *runtime,
            (size_t)decoded.object_count * sizeof(object_map[0]));
   }
   fr_persist_boot_maps_valid = true;
+  return FR_OK;
+}
+
+/* Save's L1 preservation step (D5). Walks the existing payload's decoded
+ * records, re-encodes the L1 BIND records (literal values only — see
+ * limitation below) and the NAME records pointing at L1 slots into dst.
+ * The encoder is deterministic on bind tier + value_kind + value, so the
+ * re-encoded bytes equal the source bytes; from the test's viewpoint the
+ * L1 NVS bytes survive byte-for-byte across save. dst gets just the records,
+ * no magic/version/END — the caller wraps them into a fresh payload via
+ * fr_persist_payload_save_encode's library_prefix arg.
+ *
+ * Limitation: a VALUE_CODE / VALUE_OBJECT L1 BIND references a local id in
+ * the source payload's resource namespace. Preserving such a bind without
+ * also preserving its referenced CODE / TEXT / etc. records would leave a
+ * dangling reference. This function rejects them with FR_ERR_UNSUPPORTED;
+ * the literal-value bindings install-library + `name is N` produces work
+ * today, and L1 function bodies wait for a future round. */
+fr_err_t fr_persist_payload_extract_library_records(
+    const uint8_t *src, uint16_t src_length, uint8_t *dst, uint16_t dst_cap,
+    uint16_t *out_length) {
+  fr_persist_decoded_payload_t decoded;
+  fr_persist_writer_t writer = {dst, 0, dst_cap};
+  fr_slot_id_t library_slots[FR_PROFILE_MAX_SLOTS];
+  uint16_t library_slot_count = 0;
+
+  if (src == NULL || dst == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_persist_decode_payload(src, src_length, &decoded));
+
+  for (uint16_t i = 0; i < decoded.bind_count; i++) {
+    const fr_persist_bind_record_t *bind = &decoded.bind_records[i];
+
+    if (bind->tier != FR_PERSIST_TIER_LIBRARY) {
+      continue;
+    }
+    if (bind->value_kind == FR_PERSIST_VALUE_CODE ||
+        bind->value_kind == FR_PERSIST_VALUE_OBJECT) {
+      return FR_ERR_UNSUPPORTED;
+    }
+
+    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_BIND));
+    FR_TRY(fr_persist_writer_u16(&writer, bind->slot_id));
+    FR_TRY(fr_persist_writer_u8(&writer, bind->tier));
+    FR_TRY(fr_persist_writer_u8(&writer, bind->value_kind));
+    switch (bind->value_kind) {
+    case FR_PERSIST_VALUE_NIL:
+    case FR_PERSIST_VALUE_FALSE:
+    case FR_PERSIST_VALUE_TRUE:
+      break;
+    case FR_PERSIST_VALUE_INT:
+      FR_TRY(fr_persist_writer_int(&writer, bind->int_value));
+      break;
+    case FR_PERSIST_VALUE_NATIVE:
+      FR_TRY(fr_persist_writer_u16(&writer, bind->value_word));
+      break;
+    default:
+      return FR_ERR_CORRUPT;
+    }
+
+    if (library_slot_count < FR_PROFILE_MAX_SLOTS) {
+      library_slots[library_slot_count++] = bind->slot_id;
+    }
+  }
+
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  for (uint16_t i = 0; i < decoded.name_count; i++) {
+    const fr_persist_name_record_t *name = &decoded.name_records[i];
+    uint8_t name_length = 0;
+    bool is_l1 = false;
+
+    for (uint16_t j = 0; j < library_slot_count; j++) {
+      if (library_slots[j] == name->slot_id) {
+        is_l1 = true;
+        break;
+      }
+    }
+    if (!is_l1) {
+      continue;
+    }
+    FR_TRY(fr_persist_name_length(name->name, &name_length));
+    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_NAME));
+    FR_TRY(fr_persist_writer_u16(&writer, name->slot_id));
+    FR_TRY(fr_persist_writer_u8(&writer, name_length));
+    FR_TRY(fr_persist_writer_bytes(&writer, (const uint8_t *)name->name,
+                                   name_length));
+  }
+#endif
+
+  *out_length = writer.used;
   return FR_OK;
 }
 

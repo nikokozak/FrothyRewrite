@@ -17,6 +17,7 @@
 #include "base_image.h"
 #include "base_defs.h"
 #include "config.h"
+#include "crc.h"
 #include "persist.h"
 #include "persist_payload.h"
 #include "platform.h"
@@ -119,6 +120,43 @@ static void build_legacy_bind(uint8_t *out, fr_int_t value) {
 
 /* magic 4 + version 1 + BIND 1 + slot 2 = 8; the tier byte sits here. */
 #define FR_TEST_TIER_BYTE_OFFSET 8
+
+/* D5 acceptance #5 leans on install-library (#9) eventually persisting L1
+ * to NVS, but install-library doesn't yet — tests that need NVS to already
+ * contain L1 records seed it directly. The runtime passed in is whatever
+ * the caller has set up; this helper encodes that runtime's overlay state
+ * via the public encoder, then wraps it in a valid header so the dispatch
+ * paths (fr_persist_save, fr_persist_restore, fr_persist_restore_library /
+ * _user) treat the slot as a normal active save. */
+static void seed_nvs_slot_from_runtime(fr_runtime_t *runtime, uint8_t slot,
+                                       uint32_t generation) {
+  uint8_t payload[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t header_bytes[FR_PERSIST_HEADER_BYTES];
+  uint16_t payload_length = 0;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_encode(runtime, payload,
+                                                     (uint16_t)sizeof(payload),
+                                                     &payload_length));
+
+  memset(header_bytes, 0, sizeof(header_bytes));
+  memcpy(header_bytes, "FRPH", 4);
+  header_bytes[4] = 1;
+  header_bytes[5] = FR_PERSIST_HEADER_BYTES;
+  fr_write_u32_le(&header_bytes[FR_PERSIST_PROFILE_HASH_OFFSET],
+                  fr_persist_debug_profile_hash());
+  fr_write_u32_le(&header_bytes[12], generation);
+  header_bytes[16] = (uint8_t)(payload_length & 0xffu);
+  header_bytes[17] = (uint8_t)((payload_length >> 8) & 0xffu);
+  fr_write_u32_le(&header_bytes[20], fr_crc32(payload, payload_length));
+  fr_write_u32_le(&header_bytes[24],
+                  fr_crc32(header_bytes, FR_PERSIST_HEADER_BYTES));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_erase(slot));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_write(slot, 0, header_bytes,
+                                                     FR_PERSIST_HEADER_BYTES));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_write(slot, FR_PERSIST_HEADER_BYTES,
+                                                     payload, payload_length));
+}
 
 static fr_runtime_t s_runtime;
 
@@ -483,10 +521,91 @@ static void test_wipe_user_preserves_library_word(void) {
                                                 usr_slot));
 }
 
-/* Acceptance #10: a library word and a user word both round-trip through
- * fr_persist_save + base-image reset + fr_persist_restore. Without the per-slot
- * tier stamping in the restore path's bind loop, lib_word would come back
- * tagged USER; without save persisting the overlay, both names would miss. */
+/* Acceptance #5: save reads the existing payload's L1 records from NVS,
+ * encodes the runtime's L2 records, and writes the merged payload. L1 bytes
+ * persist byte-for-byte across save. The pre-#5 implementation encoded the
+ * runtime overlay as a single fresh payload — that path doesn't consult NVS,
+ * so a save with no L1 in the runtime would produce a payload with no L1
+ * BIND. This test seeds slot 0 with an L1-only image (the post-#9 shape of
+ * install-library's NVS write) then sets up a runtime that has only L2 and
+ * calls save. The L1 record bytes in the new slot 1 payload must equal the
+ * L1 record bytes in the slot 0 seed. */
+static void test_save_preserves_library_records_from_nvs(void) {
+  uint8_t l1_only_payload[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t saved_header[FR_PERSIST_HEADER_BYTES];
+  uint8_t saved_payload[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t l1_payload_length = 0;
+  uint16_t saved_length = 0;
+  uint16_t l1_records_length = 0;
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+
+  fr_platform_storage_debug_reset();
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_word is 5", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  /* Capture the L1-only payload bytes so we can compare them later. */
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_encode(&s_runtime, l1_only_payload,
+                                                     (uint16_t)sizeof(l1_only_payload),
+                                                     &l1_payload_length));
+
+  /* Seed slot 0 with the L1-only payload + a valid header. */
+  seed_nvs_slot_from_runtime(&s_runtime, 0, 1);
+
+  /* Reset the runtime fully and bring up only L2 — proves the saved L1
+   * came from NVS, not from runtime overlay state. */
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word is 7", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  /* fr_persist_pick_inactive picks slot 1 since slot 0 has generation 1.
+   * Save reads slot 0's payload, extracts the L1 records (BIND + NAME for
+   * lib_word), and writes them as the prefix of slot 1's payload. */
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_read(1, 0, saved_header,
+                                                     FR_PERSIST_HEADER_BYTES));
+  saved_length = (uint16_t)saved_header[16] |
+                 ((uint16_t)saved_header[17] << 8);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_storage_read(1, FR_PERSIST_HEADER_BYTES,
+                                             saved_payload, saved_length));
+
+  /* L1-only payload layout: magic+version(5) + L1 records + END(1).
+   * The L1 record bytes are at [5 .. l1_payload_length - 2]. The new save
+   * payload starts with magic+version(5) + the same L1 record bytes (the
+   * extract step is a deterministic re-encode), then L2 records, then END.
+   * Therefore saved_payload[5 .. 5 + l1_records_length - 1] equals
+   * l1_only_payload[5 .. 5 + l1_records_length - 1]. */
+  TEST_ASSERT_GREATER_OR_EQUAL(7, l1_payload_length);
+  l1_records_length = (uint16_t)(l1_payload_length - 6);
+  TEST_ASSERT_GREATER_THAN((uint16_t)(5 + l1_records_length), saved_length);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(&l1_only_payload[5], &saved_payload[5],
+                                l1_records_length);
+}
+
+/* Acceptance #10 (partial): library and user words round-trip through
+ * fr_persist_save + base-image reset + fr_persist_restore. Save with D5
+ * semantics only writes L2 from runtime; L1 lands in NVS via install-library
+ * (acceptance #9). Until #9 wires that through, the test seeds slot 0 with
+ * the L1-only payload directly. Save then reads slot 0's L1, encodes L2 from
+ * the runtime, and writes the merged payload — preserving the L1 record
+ * bytes from the seed.
+ *
+ * This test is still "round-trip exercise" rather than the full D5 / D10
+ * proof; #10's reshape will tighten it to assert byte-identity directly. */
 static void test_save_restore_round_trip_preserves_both_tiers(void) {
   char repl_out[FR_REPL_OUTPUT_BYTES];
   fr_slot_id_t lib_slot = 0;
@@ -503,6 +622,11 @@ static void test_save_restore_round_trip_preserves_both_tiers(void) {
                     fr_repl_eval_line(&s_runtime, "lib_word is 5", repl_out,
                                       (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  /* Seed NVS with the L1-only image the way install-library will, once #9
+   * lands. Save reads this from slot 0 during fr_persist_save below. */
+  seed_nvs_slot_from_runtime(&s_runtime, 0, 1);
+
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime, "install-user", repl_out,
                                       (uint16_t)sizeof(repl_out)));
@@ -613,6 +737,12 @@ static void test_boot_two_call_applies_library_before_user(void) {
                     fr_repl_eval_line(&s_runtime, "lib_word is 5", repl_out,
                                       (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  /* D5: save writes only L2 from runtime; L1 enters NVS via install-library
+   * (acceptance #9). Seed slot 0 with the L1-only image so save can preserve
+   * it forward into the merged save the boot pipeline reads back below. */
+  seed_nvs_slot_from_runtime(&s_runtime, 0, 1);
+
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime, "install-user", repl_out,
                                       (uint16_t)sizeof(repl_out)));
@@ -733,6 +863,7 @@ int main(void) {
   RUN_TEST(test_install_user_after_library_keeps_library_slot);
   RUN_TEST(test_install_library_stamps_value_binding_slot);
   RUN_TEST(test_wipe_user_preserves_library_word);
+  RUN_TEST(test_save_preserves_library_records_from_nvs);
   RUN_TEST(test_save_restore_round_trip_preserves_both_tiers);
   RUN_TEST(test_boot_restore_applies_library_before_user);
   RUN_TEST(test_boot_two_call_applies_library_before_user);
