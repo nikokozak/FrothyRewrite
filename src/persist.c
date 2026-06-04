@@ -145,12 +145,18 @@ static fr_err_t fr_persist_pick_inactive(uint8_t *out_slot,
  * resets the runtime, installs resources, and applies only L1 binds (per-bind
  * failures log + skip per SPEC D6). fr_persist_restore_user must follow
  * within the same boot sequence; it applies L2 binds plus names and events
- * onto the runtime the L1 pass left behind. */
+ * onto the runtime the L1 pass left behind. fr_persist_payload_restore_user_only
+ * is the SPEC D5 user-`restore` path: applies L2 binds plus names and events
+ * to the runtime without resetting, so the L1 already in place from boot
+ * survives unchanged. */
 extern fr_err_t fr_persist_payload_restore_library(fr_runtime_t *runtime,
                                                    const uint8_t *bytes,
                                                    uint16_t length);
 extern fr_err_t fr_persist_payload_restore_user_after_library(
     fr_runtime_t *runtime, const uint8_t *bytes, uint16_t length);
+extern fr_err_t fr_persist_payload_restore_user_only(fr_runtime_t *runtime,
+                                                     const uint8_t *bytes,
+                                                     uint16_t length);
 
 typedef fr_err_t (*fr_persist_payload_apply_fn_t)(fr_runtime_t *runtime,
                                                   const uint8_t *bytes,
@@ -293,8 +299,13 @@ fr_err_t fr_persist_save(const fr_runtime_t *runtime) {
   return fr_persist_read_header(slot, &header);
 }
 
+/* D5: public `restore` brings L2 back from NVS; L1 already in place from
+ * boot stays untouched. The dispatch skips fr_runtime_reset on the
+ * no-payload path (reset_on_miss=false) so a `restore` against empty NVS
+ * cannot collapse the L1 the boot pipeline installed. */
 fr_err_t fr_persist_restore(fr_runtime_t *runtime) {
-  return fr_persist_restore_dispatch(runtime, fr_persist_payload_restore, true);
+  return fr_persist_restore_dispatch(
+      runtime, fr_persist_payload_restore_user_only, false);
 }
 
 fr_err_t fr_persist_restore_library(fr_runtime_t *runtime) {

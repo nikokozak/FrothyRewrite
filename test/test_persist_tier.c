@@ -662,12 +662,16 @@ static void test_save_preserves_library_code_word_from_nvs(void) {
 }
 
 /* Acceptance #10 (partial): library and user words round-trip through
- * fr_persist_save + base-image reset + fr_persist_restore. Save with D5
- * semantics only writes L2 from runtime; L1 lands in NVS via install-library
- * (acceptance #9). Until #9 wires that through, the test seeds slot 0 with
- * the L1-only payload directly. Save then reads slot 0's L1, encodes L2 from
- * the runtime, and writes the merged payload — preserving the L1 record
- * bytes from the seed.
+ * fr_persist_save + base-image reset + boot's L1 restore + user-side
+ * fr_persist_restore. Save with D5 semantics only writes L2 from runtime;
+ * L1 lands in NVS via install-library (acceptance #9). Until #9 wires that
+ * through, the test seeds slot 0 with the L1-only payload directly.
+ *
+ * After R46's #6 close, fr_persist_restore is L2-only — calling it alone
+ * after a base-image reset would leave L1 absent. The boot pipeline's L1
+ * pass (fr_persist_restore_library) is the SPEC path for getting L1 back
+ * from NVS into a freshly-booted runtime; user-typed `restore` then brings
+ * L2 back. Both invocations matter to the round-trip story.
  *
  * This test is still "round-trip exercise" rather than the full D5 / D10
  * proof; #10's reshape will tighten it to assert byte-identity directly. */
@@ -709,6 +713,7 @@ static void test_save_restore_round_trip_preserves_both_tiers(void) {
   TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
                     fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
 
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&s_runtime));
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&s_runtime));
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_slot_id_for_name(&s_runtime, "lib_word", &lib_slot));
@@ -730,6 +735,72 @@ static void test_save_restore_round_trip_preserves_both_tiers(void) {
   TEST_ASSERT_EQUAL_INT(FR_TEST_TIER_USER,
                         find_bind_tier_for_slot(encoded, encoded_len,
                                                 usr_slot));
+}
+
+/* SPEC D5 / acceptance #6: the public `restore` word applies only L2
+ * records from NVS, leaving runtime L1 alone. A FULL restore (pre-R46
+ * behavior) would reset the runtime and replay both tiers, overwriting any
+ * runtime L1 mutation; the SPEC says boot owns L1 and `restore` must not
+ * undo whatever L1 state is currently live.
+ *
+ * The test installs lib_word (L1) and usr_word (L2), snapshots into NVS,
+ * mutates lib_word in runtime to a value not present in NVS, mutates
+ * usr_word in runtime to a value not present in NVS, then calls
+ * fr_persist_restore. After restore: lib_word in runtime keeps the mutated
+ * value (restore did not touch L1); usr_word in runtime is back to the NVS
+ * value (restore did replace L2). This sequence fails against the pre-R46
+ * FULL-restore implementation — that path resets and re-applies both
+ * tiers, so lib_word would drop to 5. */
+static void test_restore_preserves_runtime_library_tier(void) {
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+  fr_slot_id_t lib_slot = 0;
+  fr_slot_id_t usr_slot = 0;
+  fr_tagged_t mutated_lib = 0;
+  fr_tagged_t mutated_usr = 0;
+  fr_tagged_t restored_lib = 0;
+  fr_tagged_t restored_usr = 0;
+  fr_int_t lib_val = 0;
+  fr_int_t usr_val = 0;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_word is 5", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word is 7", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "lib_word", &lib_slot));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
+
+  seed_nvs_slot_from_runtime(&s_runtime, 0, 1);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(99, &mutated_lib));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_write(&s_runtime, lib_slot, mutated_lib));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(13, &mutated_usr));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_write(&s_runtime, usr_slot, mutated_usr));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, lib_slot, &restored_lib));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(restored_lib, &lib_val));
+  TEST_ASSERT_EQUAL(99, lib_val);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, usr_slot, &restored_usr));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(restored_usr, &usr_val));
+  TEST_ASSERT_EQUAL(7, usr_val);
 }
 
 /* D6 boot restore order: when a single payload carries BINDs in both tiers,
@@ -931,6 +1002,7 @@ int main(void) {
   RUN_TEST(test_save_preserves_library_records_from_nvs);
   RUN_TEST(test_save_preserves_library_code_word_from_nvs);
   RUN_TEST(test_save_restore_round_trip_preserves_both_tiers);
+  RUN_TEST(test_restore_preserves_runtime_library_tier);
   RUN_TEST(test_boot_restore_applies_library_before_user);
   RUN_TEST(test_boot_two_call_applies_library_before_user);
   RUN_TEST(test_user_restore_without_prior_library_returns_not_found);

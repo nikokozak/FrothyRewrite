@@ -2965,3 +2965,34 @@ fr_err_t fr_persist_payload_restore_user_after_library(fr_runtime_t *runtime,
   fr_persist_boot_maps_valid = false;
   return FR_OK;
 }
+
+/* D5 acceptance #6: the public `restore` word brings L2 back from NVS while
+ * leaving whatever L1 the runtime has now in place. Boot already restored L1
+ * via the two-call sequence; the user-typed `restore` must not touch it.
+ *
+ * Resources install fresh into this call's local-id maps. L1 resources that
+ * boot already installed stay bound to their boot-time ids because L1 binds
+ * in runtime never route through this path — the USER tier_filter skips L1
+ * binds, so the freshly-installed copies of L1 codes/objects end up unused
+ * unless an L2 bind references them. Wiping the L2 tier first means the
+ * restored set replaces (not overlays) prior session L2; library-tier slots
+ * are skipped by fr_persist_session_wipe_user_tier. */
+fr_err_t fr_persist_payload_restore_user_only(fr_runtime_t *runtime,
+                                              const uint8_t *bytes,
+                                              uint16_t length) {
+  fr_persist_decoded_payload_t decoded;
+  fr_code_object_id_t code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  fr_object_id_t object_map[FR_OBJECT_TABLE_CAPACITY];
+
+  memset(object_map, 0, sizeof(object_map));
+  FR_TRY(fr_persist_payload_decode_and_validate(runtime, bytes, length,
+                                                &decoded));
+  fr_persist_session_wipe_user_tier(runtime);
+  FR_TRY(fr_persist_install_resources(runtime, &decoded, code_map, object_map));
+  FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,
+                                       (uint8_t)FR_PERSIST_TIER_USER, false));
+  FR_TRY(fr_persist_apply_names(runtime, &decoded,
+                                (uint8_t)FR_PERSIST_TIER_USER));
+  FR_TRY(fr_persist_apply_events(runtime, &decoded, code_map));
+  return FR_OK;
+}
