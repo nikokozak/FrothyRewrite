@@ -2519,10 +2519,21 @@ static fr_err_t fr_persist_apply_binds_tiered(
  * append — so code_map[i] == runtime->code.base_count + i on success.
  * Objects dedupe by content via fr_text_install_since's find path, but the
  * encoder also dedupes by content so within a single payload no two records
- * carry the same bytes; the dedup never collapses two distinct local ids. */
+ * carry the same bytes; the dedup never collapses two distinct local ids.
+ *
+ * Optional code_filter / object_filter masks limit the install to closure
+ * subsets — used by the L2-only public restore (D5 acceptance #6) so L1
+ * resources already installed by the boot pipeline do not get reinstalled.
+ * NULL means "install every record" (FULL restore + boot L1 pass). Records
+ * outside the closure leave their code_map / object_map slot at zero; the
+ * filter must be the transitive closure under PUSH_CODE_ID / PUSH_OBJECT_ID
+ * / RECORD field-value / CELL value references so no installed record's
+ * patch step reads an uninstalled entry. */
 static fr_err_t
 fr_persist_install_resources(fr_runtime_t *runtime,
                              const fr_persist_decoded_payload_t *decoded,
+                             const bool *code_filter,
+                             const bool *object_filter,
                              fr_code_object_id_t code_map[],
                              fr_object_id_t object_map[]) {
   const fr_persist_code_record_t *code_records = decoded->code_records;
@@ -2553,6 +2564,9 @@ fr_persist_install_resources(fr_runtime_t *runtime,
   (void)object_count;
 
   for (uint16_t i = 0; i < text_count; i++) {
+    if (object_filter != NULL && !object_filter[text_records[i].local_id]) {
+      continue;
+    }
     FR_TRY(fr_text_install_since(runtime, text_records[i].bytes,
                                  text_records[i].length,
                                  runtime->objects.base_count,
@@ -2565,6 +2579,9 @@ fr_persist_install_resources(fr_runtime_t *runtime,
     fr_code_offset_t ip = 0;
     char scratch[64];
 
+    if (code_filter != NULL && !code_filter[i]) {
+      continue;
+    }
     if (code_records[i].length > (uint16_t)sizeof(patched)) {
       return FR_ERR_CORRUPT;
     }
@@ -2620,6 +2637,10 @@ fr_persist_install_resources(fr_runtime_t *runtime,
     for (uint16_t i = 0; i < shape_count; i++) {
       fr_record_name_t install_fields[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
 
+      if (object_filter != NULL &&
+          !object_filter[shape_records[i].local_id]) {
+        continue;
+      }
       for (uint16_t j = 0; j < shape_records[i].field_count; j++) {
         install_fields[j] = record_fields[shape_records[i].first_field + j];
       }
@@ -2629,6 +2650,10 @@ fr_persist_install_resources(fr_runtime_t *runtime,
           &object_map[shape_records[i].local_id]));
     }
     for (uint16_t i = 0; i < record_count; i++) {
+      if (object_filter != NULL &&
+          !object_filter[record_records[i].local_id]) {
+        continue;
+      }
       if (record_records[i].field_count >
           FR_RECORD_FIELDS_PER_SHAPE_CAPACITY) {
         return FR_ERR_CORRUPT;
@@ -2663,6 +2688,10 @@ fr_persist_install_resources(fr_runtime_t *runtime,
   }
 #endif
   for (uint16_t i = 0; i < cell_count; i++) {
+    if (object_filter != NULL &&
+        !object_filter[cell_records[i].local_id]) {
+      continue;
+    }
     for (uint16_t j = 0; j < cell_records[i].length; j++) {
       fr_tagged_t stored = cell_values[cell_records[i].first_value + j];
       fr_object_id_t local_object_id = 0;
@@ -2800,7 +2829,8 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
   FR_TRY(fr_persist_payload_decode_and_validate(runtime, bytes, length,
                                                 &decoded));
   FR_TRY(fr_runtime_reset(runtime));
-  FR_TRY(fr_persist_install_resources(runtime, &decoded, code_map, object_map));
+  FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL,
+                                      code_map, object_map));
   /* D6 single-call path applies both tiers in tier order so user definitions
    * see library slots already in place. tier_filter=0 selects both passes;
    * skip_on_failure=false matches the strict FULL-restore contract. */
@@ -2830,7 +2860,8 @@ fr_err_t fr_persist_payload_restore_library(fr_runtime_t *runtime,
   FR_TRY(fr_persist_payload_decode_and_validate(runtime, bytes, length,
                                                 &decoded));
   FR_TRY(fr_runtime_reset(runtime));
-  FR_TRY(fr_persist_install_resources(runtime, &decoded, code_map, object_map));
+  FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL,
+                                      code_map, object_map));
   FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,
                                        (uint8_t)FR_PERSIST_TIER_LIBRARY, true));
   FR_TRY(fr_persist_apply_names(runtime, &decoded,
@@ -3109,29 +3140,186 @@ fr_err_t fr_persist_payload_restore_user_after_library(fr_runtime_t *runtime,
   return FR_OK;
 }
 
-/* D5 acceptance #6: the public `restore` word brings L2 back from NVS while
- * leaving whatever L1 the runtime has now in place. Boot already restored L1
- * via the two-call sequence; the user-typed `restore` must not touch it.
+/* D5 acceptance #6: derive the closure of CODE / object records that L2
+ * binds (and L2 event bodies) reach. The public `restore` installs only
+ * this closure, leaving L1 records on the payload alone — boot already
+ * installed them and SPEC D5 says restore is a no-op on L1.
  *
- * Resources install fresh into this call's local-id maps. L1 resources that
- * boot already installed stay bound to their boot-time ids because L1 binds
- * in runtime never route through this path — the USER tier_filter skips L1
- * binds, so the freshly-installed copies of L1 codes/objects end up unused
- * unless an L2 bind references them. Wiping the L2 tier first means the
- * restored set replaces (not overlays) prior session L2; library-tier slots
- * are skipped by fr_persist_session_wipe_user_tier. */
+ * Mirrors the widen step of fr_persist_payload_extract_library_records but
+ * starts from L2 binds instead of L1, and folds in event bodies (which the
+ * encoder writes after binds; restore_user_only's apply_events reads
+ * code_map[body], so the body's CODE record must be installed). */
+static fr_err_t fr_persist_payload_compute_user_closure_marks(
+    const fr_persist_decoded_payload_t *decoded,
+    bool code_in_l2[FR_PROFILE_CODE_OBJECT_TABLE_SIZE],
+    bool object_in_l2[FR_OBJECT_TABLE_CAPACITY]) {
+  bool closure_changed = true;
+
+  for (uint16_t i = 0; i < decoded->bind_count; i++) {
+    const fr_persist_bind_record_t *bind = &decoded->bind_records[i];
+
+    if (bind->tier != FR_PERSIST_TIER_USER) {
+      continue;
+    }
+    if (bind->value_kind == FR_PERSIST_VALUE_CODE) {
+      if (bind->value_word >= decoded->code_count) {
+        return FR_ERR_CORRUPT;
+      }
+      code_in_l2[bind->value_word] = true;
+    } else if (bind->value_kind == FR_PERSIST_VALUE_OBJECT) {
+      if (bind->value_word >= decoded->object_count) {
+        return FR_ERR_CORRUPT;
+      }
+      object_in_l2[bind->value_word] = true;
+    }
+  }
+#if FR_FEATURE_EVENTS
+  for (uint16_t i = 0; i < decoded->event_count; i++) {
+    uint16_t body = decoded->event_records[i].body;
+
+    if (body >= decoded->code_count) {
+      return FR_ERR_CORRUPT;
+    }
+    code_in_l2[body] = true;
+  }
+#endif
+
+  while (closure_changed) {
+    closure_changed = false;
+    for (uint16_t i = 0; i < decoded->code_count; i++) {
+      const fr_persist_code_record_t *code = &decoded->code_records[i];
+      fr_instruction_stream_t view;
+      fr_instruction_header_t header = {0};
+      fr_code_offset_t ip = 0;
+      char scratch[64];
+
+      if (!code_in_l2[i]) {
+        continue;
+      }
+      FR_TRY(fr_instruction_stream_init(&view, code->bytes, code->length));
+      FR_TRY(fr_instruction_read_header(&view, &header));
+      ip = (fr_code_offset_t)header.header_size;
+      while (ip < view.length) {
+        fr_code_offset_t next_ip = 0;
+        fr_opcode_t op = (fr_opcode_t)code->bytes[ip];
+
+        if (op == FR_OP_PUSH_CODE_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded->code_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (!code_in_l2[ref]) {
+            code_in_l2[ref] = true;
+            closure_changed = true;
+          }
+        }
+#if FR_FEATURE_OBJECTS
+        if (op == FR_OP_PUSH_OBJECT_ID) {
+          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
+                         ((uint16_t)code->bytes[ip + 2] << 8);
+          if (ref >= decoded->object_count) {
+            return FR_ERR_CORRUPT;
+          }
+          if (!object_in_l2[ref]) {
+            object_in_l2[ref] = true;
+            closure_changed = true;
+          }
+        }
+#endif
+        FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
+                                             (uint16_t)sizeof(scratch), NULL,
+                                             &next_ip));
+        if (next_ip <= ip) {
+          return FR_ERR_CORRUPT;
+        }
+        ip = next_ip;
+      }
+    }
+#if FR_FEATURE_RECORDS
+    for (uint16_t i = 0; i < decoded->record_count; i++) {
+      const fr_persist_record_record_t *rec = &decoded->record_records[i];
+
+      if (rec->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l2[rec->local_id]) {
+        continue;
+      }
+      if (rec->shape_local_id < FR_OBJECT_TABLE_CAPACITY &&
+          !object_in_l2[rec->shape_local_id]) {
+        object_in_l2[rec->shape_local_id] = true;
+        closure_changed = true;
+      }
+      for (uint16_t j = 0; j < rec->field_count; j++) {
+        fr_tagged_t val = decoded->record_values[rec->first_value + j];
+        fr_object_id_t obj = 0;
+
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l2[(uint16_t)obj]) {
+          object_in_l2[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
+    }
+#endif
+#if FR_FEATURE_CELLS
+    for (uint16_t i = 0; i < decoded->cell_count; i++) {
+      const fr_persist_cell_record_t *cell = &decoded->cell_records[i];
+
+      if (cell->local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !object_in_l2[cell->local_id]) {
+        continue;
+      }
+      for (uint16_t j = 0; j < cell->length; j++) {
+        fr_tagged_t val = decoded->cell_values[cell->first_value + j];
+        fr_object_id_t obj = 0;
+
+        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
+          continue;
+        }
+        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
+            !object_in_l2[(uint16_t)obj]) {
+          object_in_l2[(uint16_t)obj] = true;
+          closure_changed = true;
+        }
+      }
+    }
+#endif
+  }
+  return FR_OK;
+}
+
+/* D5 acceptance #6: the public `restore` word brings L2 back from NVS while
+ * leaving the L1 the runtime already has in place. Boot's two-call sequence
+ * owns L1; the user-typed `restore` must not touch it — not the L1 binds,
+ * not the L1 CODE / object records that back them. The L2 closure walker
+ * above marks the resources L2 binds and L2 event bodies reach; install
+ * runs with that closure as a filter, so an L1-only CODE / TEXT / RECORD
+ * never enters the runtime's tables a second time. Wiping the L2 tier
+ * first means the restored set replaces (not overlays) prior session L2;
+ * library-tier slots are skipped by fr_persist_session_wipe_user_tier. */
 fr_err_t fr_persist_payload_restore_user_only(fr_runtime_t *runtime,
                                               const uint8_t *bytes,
                                               uint16_t length) {
   fr_persist_decoded_payload_t decoded;
   fr_code_object_id_t code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
   fr_object_id_t object_map[FR_OBJECT_TABLE_CAPACITY];
+  bool code_in_l2[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  bool object_in_l2[FR_OBJECT_TABLE_CAPACITY];
 
+  memset(code_map, 0, sizeof(code_map));
   memset(object_map, 0, sizeof(object_map));
+  memset(code_in_l2, 0, sizeof(code_in_l2));
+  memset(object_in_l2, 0, sizeof(object_in_l2));
   FR_TRY(fr_persist_payload_decode_and_validate(runtime, bytes, length,
                                                 &decoded));
   fr_persist_session_wipe_user_tier(runtime);
-  FR_TRY(fr_persist_install_resources(runtime, &decoded, code_map, object_map));
+  FR_TRY(fr_persist_payload_compute_user_closure_marks(&decoded, code_in_l2,
+                                                        object_in_l2));
+  FR_TRY(fr_persist_install_resources(runtime, &decoded, code_in_l2,
+                                      object_in_l2, code_map, object_map));
   FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,
                                        (uint8_t)FR_PERSIST_TIER_USER, false));
   FR_TRY(fr_persist_apply_names(runtime, &decoded,

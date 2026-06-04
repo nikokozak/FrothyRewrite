@@ -870,6 +870,71 @@ static void test_restore_preserves_runtime_library_tier(void) {
   TEST_ASSERT_EQUAL(7, usr_val);
 }
 
+/* SPEC D5 / acceptance #6: the public `restore` word brings L2 back from
+ * NVS without touching L1 — including L1's CODE / TEXT / object records.
+ * The boot pipeline installed those once; restore must not install them a
+ * second time, or the runtime's code table fills up across save/restore
+ * cycles. The test installs a code-bearing library word (one L1 CODE
+ * record) plus an int-valued user word (an L2 VALUE_INT BIND, no L2
+ * resources), runs the full boot pair, snapshots the code count, then
+ * calls public restore. The L2 closure of resources here is empty (the
+ * L2 bind references no CODE / object), so a SPEC-conformant restore
+ * installs nothing and code.count stays put. The pre-R50 full-payload
+ * install path would re-emit the L1 thunk's CODE here and grow code.count
+ * by one — the assertion below catches that regression. */
+static void test_restore_does_not_reinstall_library_resources(void) {
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+  fr_slot_id_t lib_slot = 0;
+  fr_slot_id_t usr_slot = 0;
+  uint16_t code_count_after_boot = 0;
+  fr_tagged_t tagged = 0;
+  fr_int_t value = 0;
+
+  fr_platform_storage_debug_reset();
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_thunk is fn [ 99 ]",
+                                      repl_out, (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+
+  /* Seed slot 0 with the L1-only image install-library will eventually
+   * write itself (#9). Save below reads it to preserve L1 bytes forward. */
+  seed_nvs_slot_from_runtime(&s_runtime, 0, 1);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word is 7", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "lib_thunk", &lib_slot));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_user(&s_runtime));
+  code_count_after_boot = s_runtime.code.count;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&s_runtime));
+  TEST_ASSERT_EQUAL(code_count_after_boot, s_runtime.code.count);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, usr_slot, &tagged));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &value));
+  TEST_ASSERT_EQUAL(7, value);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_thunk", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+}
+
 /* D6 boot restore order: when a single payload carries BINDs in both tiers,
  * the L1 pass must run before the L2 pass so user code wakes up with the
  * library it references already installed. The wire payload encodes two
@@ -1073,6 +1138,7 @@ int main(void) {
 #endif
   RUN_TEST(test_save_restore_round_trip_preserves_both_tiers);
   RUN_TEST(test_restore_preserves_runtime_library_tier);
+  RUN_TEST(test_restore_does_not_reinstall_library_resources);
   RUN_TEST(test_boot_restore_applies_library_before_user);
   RUN_TEST(test_boot_two_call_applies_library_before_user);
   RUN_TEST(test_user_restore_without_prior_library_returns_not_found);
