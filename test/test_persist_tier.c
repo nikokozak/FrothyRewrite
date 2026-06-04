@@ -18,6 +18,7 @@
 #include "base_defs.h"
 #include "config.h"
 #include "crc.h"
+#include "lib_native.h"
 #include "persist.h"
 #include "persist_payload.h"
 #include "platform.h"
@@ -37,6 +38,22 @@ extern fr_err_t fr_persist_restore_user(fr_runtime_t *runtime);
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+
+/* test-mixed.echo native: returns 7. Mirrors test/fixtures/test-mixed/native/
+ * test_mixed.c so the kernel-layer round-trip can exercise the SPEC #10
+ * fixture's L1-Frothy-calls-native call chain end to end. */
+static fr_err_t test_mixed_echo(fr_runtime_t *runtime, const fr_tagged_t *args,
+                                uint8_t arg_count, fr_tagged_t *out) {
+  (void)runtime;
+  (void)args;
+  (void)arg_count;
+  return fr_tagged_encode_int(7, out);
+}
+
+const fr_lib_native_def_t fr_lib_natives[] = {
+    {"test-mixed.echo", test_mixed_echo, 0},
+};
+const uint16_t fr_lib_natives_count = 1;
 
 /* Mirror persist_payload.c's enum so a public test can shape the bytes. */
 #if FR_WORD_SIZE == 16
@@ -728,40 +745,41 @@ static void test_save_preserves_library_text_in_code_from_nvs(void) {
 }
 #endif
 
-/* Acceptance #10: SPEC's save + reset + restore round-trip with the call
- * shape the mixed-demo fixture compiles into. The L1 word is a fn pushing
- * 5; the L2 word is a fn that calls the L1 word. That mirrors `to
- * test-mixed.report [ test-mixed.echo: ]` (L1, body calls a lower-tier
- * word) and `to demo [ test-mixed.report: ]` (L2, body calls the L1
- * word) — the fixture's shape at the kernel layer where the host build
- * pipeline is not in play.
+/* Acceptance #10: SPEC's save + reset + restore round-trip with the
+ * mixed-demo fixture's exact names and call chain. `test-mixed.echo`
+ * is the L0 library native (returns 7, mirroring
+ * test/fixtures/test-mixed/native/test_mixed.c). `test-mixed.report`
+ * is the L1 Frothy word whose body calls the native — the same shape
+ * as `to test-mixed.report [ test-mixed.echo: ]` in
+ * test/fixtures/test-mixed/lib.fr. `demo` is the L2 word whose body
+ * calls the L1 word — the same shape as `to demo [ test-mixed.report: ]`
+ * in test/fixtures/projects/mixed-demo/main.fr. The result of `demo:`
+ * is 7 by chaining L2 → L1 → L0 native.
  *
  * The round-trip: install library word + install user word + save L2 +
  * reset runtime + boot L1 restore + public L2 restore + call each word
- * via fr_repl_eval_line. The L1 call returns 5 on its own; the L2 call
- * returns 5 because the restored L2 body resolves the restored L1 slot
- * and invokes it. The "5\nok\n" output after public restore is what
- * proves L2-code-calls-L1-code survives save + reset + restore — the
- * shape a bare slot read or a fn-tagged-value push would not catch.
+ * via fr_repl_eval_line. After public restore, both fr_slot_id_for_name
+ * resolutions return valid slots and the two eval calls produce
+ * "7\nok\n" — the SPEC acceptance text in code.
  *
  * Regressions this catches:
  *   - install-library does not auto-save (pre-R54): the L1 CODE/BIND
  *     never reaches NVS, so restore_library installs nothing and
- *     fr_slot_id_for_name("lib_word") returns FR_ERR_NOT_FOUND.
+ *     fr_slot_id_for_name("test-mixed.report") returns FR_ERR_NOT_FOUND.
  *   - save erases L1 bytes from NVS (pre-R42 full re-encode where
  *     runtime L1 is empty): the L1 pass finds no library records, same
  *     downstream miss.
- *   - save skips L2: usr_word does not return after public restore.
+ *   - save skips L2: demo does not return after public restore.
  *   - boot L1 pass binds slots but does not install L1 names (the R39
- *     finding before R40): lib_word has a slot yet fr_slot_id_for_name
- *     misses it.
+ *     finding before R40): test-mixed.report has a slot yet
+ *     fr_slot_id_for_name misses it.
  *   - public restore does not install L2 names: same failure mode for
- *     usr_word.
- *   - L1 CODE body bytes corrupted across save+restore: lib_word: yields
- *     something other than "5\nok\n".
+ *     demo.
+ *   - L1 CODE body's CALL operand drifts off the native slot: the L1
+ *     call yields something other than "7\nok\n".
  *   - L2 CODE body's CALL operand drifts off its L1 slot (slot-id
- *     instability across reset/restore_library): usr_word: errors or
- *     yields a different value than "5\nok\n". */
+ *     instability across reset/restore_library): demo errors or yields
+ *     a different value than "7\nok\n". */
 static void test_save_restore_round_trip_preserves_both_tiers(void) {
   char repl_out[FR_REPL_OUTPUT_BYTES];
   fr_slot_id_t lib_slot = 0;
@@ -771,32 +789,36 @@ static void test_save_restore_round_trip_preserves_both_tiers(void) {
   fr_platform_storage_debug_reset();
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
 
-  /* L1 fn body pushes 5; R54's auto-save during install-library + the
-   * L1-mode compile path commits the L1 image to NVS as it is typed. */
+  /* L1 fn body calls the test-mixed.echo native (L0 → 7). R54's auto-save
+   * during install-library + the L1-mode compile path commits the L1
+   * image to NVS as it is typed. */
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime, "install-library", repl_out,
                                       (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_repl_eval_line(&s_runtime, "lib_word is fn [ 5 ]",
+                    fr_repl_eval_line(&s_runtime,
+                                      "test-mixed.report is fn [ test-mixed.echo: ]",
                                       repl_out, (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_slot_id_for_name(&s_runtime, "lib_word", &lib_slot));
+                    fr_slot_id_for_name(&s_runtime, "test-mixed.report",
+                                        &lib_slot));
 
-  /* L2 fn body calls the L1 word — the SPEC #10 call shape. Explicit save
-   * below commits L2 to NVS. */
+  /* L2 fn body calls the L1 word — the SPEC #10 call shape: demo →
+   * test-mixed.report → test-mixed.echo native. Explicit save below
+   * commits L2 to NVS. */
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime, "install-user", repl_out,
                                       (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime,
-                                      "usr_word is fn [ lib_word: ]",
+                                      "demo is fn [ test-mixed.report: ]",
                                       repl_out, (uint16_t)sizeof(repl_out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_slot_id_for_name(&s_runtime, "usr_word", &usr_slot));
+                    fr_slot_id_for_name(&s_runtime, "demo", &usr_slot));
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
 
   /* Reset: model a power cycle. fr_base_image_install drops the whole
@@ -804,47 +826,51 @@ static void test_save_restore_round_trip_preserves_both_tiers(void) {
    * one, so neither installed name resolves until restore brings it back. */
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
   TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
-                    fr_slot_id_for_name(&s_runtime, "lib_word", &resolved));
+                    fr_slot_id_for_name(&s_runtime, "test-mixed.report",
+                                        &resolved));
   TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
-                    fr_slot_id_for_name(&s_runtime, "usr_word", &resolved));
+                    fr_slot_id_for_name(&s_runtime, "demo", &resolved));
 
   /* Boot L1 pass — SPEC D6 step 4. Library Frothy returns before user
-   * Frothy; lib_word becomes resolvable and callable, usr_word does not
-   * yet. */
+   * Frothy; test-mixed.report becomes resolvable and callable, demo
+   * does not yet. */
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&s_runtime));
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_slot_id_for_name(&s_runtime, "lib_word", &resolved));
+                    fr_slot_id_for_name(&s_runtime, "test-mixed.report",
+                                        &resolved));
   TEST_ASSERT_EQUAL(lib_slot, resolved);
   TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
-                    fr_slot_id_for_name(&s_runtime, "usr_word", &resolved));
+                    fr_slot_id_for_name(&s_runtime, "demo", &resolved));
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_repl_eval_line(&s_runtime, "lib_word:", repl_out,
-                                      (uint16_t)sizeof(repl_out)));
-  TEST_ASSERT_EQUAL_STRING("5\nok\n", repl_out);
+                    fr_repl_eval_line(&s_runtime, "test-mixed.report:",
+                                      repl_out, (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("7\nok\n", repl_out);
 
   /* Public restore — SPEC D5: brings L2 back from NVS, leaves L1 the boot
    * pass installed alone. */
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&s_runtime));
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_slot_id_for_name(&s_runtime, "lib_word", &resolved));
+                    fr_slot_id_for_name(&s_runtime, "test-mixed.report",
+                                        &resolved));
   TEST_ASSERT_EQUAL(lib_slot, resolved);
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_slot_id_for_name(&s_runtime, "usr_word", &resolved));
+                    fr_slot_id_for_name(&s_runtime, "demo", &resolved));
   TEST_ASSERT_EQUAL(usr_slot, resolved);
 
-  /* SPEC #10: calling each via fr_repl_eval_line succeeds. lib_word: runs
-   * the L1 body and pushes 5. usr_word: runs the L2 body, which calls
-   * lib_word — the restored L2 CODE's CALL operand has to land on the
-   * restored L1 slot, and the restored L1 CODE has to push 5. Anything
-   * weaker than "5\nok\n" here fails. */
+  /* SPEC #10: calling each via fr_repl_eval_line succeeds. test-mixed.report:
+   * runs the L1 body, which calls test-mixed.echo (native → 7). demo: runs
+   * the L2 body, which calls test-mixed.report — the restored L2 CODE's
+   * CALL operand has to land on the restored L1 slot, the restored L1
+   * CODE's CALL operand has to land on the native slot, and the native
+   * has to return 7. Anything weaker than "7\nok\n" here fails. */
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_repl_eval_line(&s_runtime, "lib_word:", repl_out,
-                                      (uint16_t)sizeof(repl_out)));
-  TEST_ASSERT_EQUAL_STRING("5\nok\n", repl_out);
+                    fr_repl_eval_line(&s_runtime, "test-mixed.report:",
+                                      repl_out, (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("7\nok\n", repl_out);
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_repl_eval_line(&s_runtime, "usr_word:", repl_out,
+                    fr_repl_eval_line(&s_runtime, "demo:", repl_out,
                                       (uint16_t)sizeof(repl_out)));
-  TEST_ASSERT_EQUAL_STRING("5\nok\n", repl_out);
+  TEST_ASSERT_EQUAL_STRING("7\nok\n", repl_out);
 }
 
 /* SPEC D5 / acceptance #6: the public `restore` word applies only L2
