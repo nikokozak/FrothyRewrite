@@ -45,9 +45,16 @@ export async function sendFile(): Promise<void> {
   const port = cfg.get<string>('port', '');
   const baud = cfg.get<number>('baud', 115200);
 
-  const args = ['send', doc.fileName];
-  if (port) args.push('--port', port);
-  args.push('--baud', String(baud));
+  // `frothy send` requires --port unless --dry-run is set
+  // (cmd/frothy-session/main.go:2000-2002). Refuse rather than spawn a child
+  // that will exit 2 with an unfamiliar error.
+  if (!port) {
+    appendLine('send: set frothy.port in workspace settings first.');
+    show();
+    return;
+  }
+
+  const args = ['send', doc.fileName, '--port', port, '--baud', String(baud)];
 
   show();
   appendLine(`$ ${bin} ${args.join(' ')}`);
