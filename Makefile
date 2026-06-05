@@ -353,6 +353,17 @@ wipe-nvs:
 	fi
 	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null 2>&1 && esptool.py --chip esp32 --port "$(BOARD_PORT)" erase_region 0x9000 0x6000
 
+# Merged .bin for the web flasher (T13b D11). Local esptool.py is
+# v4.12.dev1 which only accepts merge_bin (underscore).
+web-bins:
+	$(MAKE) BOARD=esp32_devkit_v1 PROFILE=esp32_plain artifacts
+	@mkdir -p web/flash/firmware
+	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null 2>&1 && esptool.py --chip esp32 merge_bin \
+		-o web/flash/firmware/esp32_devkit_v1-esp32_plain.bin \
+		0x1000 build/esp32_devkit_v1/bootloader/bootloader.bin \
+		0x8000 build/esp32_devkit_v1/partition_table/partition-table.bin \
+		0x10000 build/esp32_devkit_v1/frothy.bin
+
 test-tiny-328:
 	$(MAKE) BOARD=host PROFILE=tiny_328 TEST_BINARY=test/test-tiny-328 test
 
@@ -734,4 +745,4 @@ vsix:
 clean:
 	rm -rf build frothy test/test test/test-tiny-328 test/test-tiny-328-volatile test/test-tiny-328-tethered test/test-tiny-328-tethered-host-names test/test-tiny-328-tethered-host-names-persist test/test-host-normal
 
-.PHONY: test test-unity artifacts flash wipe-nvs test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session install-host test-install-host test-helper-targets print-config vsix clean
+.PHONY: test test-unity artifacts flash wipe-nvs web-bins test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session install-host test-install-host test-helper-targets print-config vsix clean
