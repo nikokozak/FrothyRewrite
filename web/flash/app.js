@@ -65,15 +65,16 @@ async function flash(row, lockables) {
 
   let transport = null;
   try {
-    // D9: writeFlash data is Uint8Array in v0.6.0 (breaking change from v0.5.x).
-    setStatus(status, "Fetching firmware…");
-    const data = new Uint8Array(
-      await fetch(`./${row.file}`).then((r) => r.arrayBuffer()),
-    );
-
-    // requestPort needs a user gesture — the click that called us counts.
+    // requestPort needs transient activation. Call it before any other await
+    // so the click's user gesture isn't consumed by a slow firmware fetch.
     setStatus(status, "Pick a serial port…");
     const port = await navigator.serial.requestPort();
+
+    setStatus(status, "Fetching firmware…");
+    const res = await fetch(`./${row.file}`);
+    if (!res.ok) throw new Error(`firmware fetch ${res.status} for ${row.file}`);
+    // D9: writeFlash data is Uint8Array in v0.6.0 (breaking change from v0.5.x).
+    const data = new Uint8Array(await res.arrayBuffer());
     transport = new Transport(port, false);
 
     setStatus(status, "Connecting…");
