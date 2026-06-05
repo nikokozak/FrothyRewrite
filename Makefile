@@ -728,7 +728,10 @@ print-config:
 	@printf 'ARTIFACT_HEX=%s\n' "$(ARTIFACT_HEX)"
 	@printf 'ARTIFACT_SIZE=%s\n' "$(ARTIFACT_SIZE)"
 
+vsix:
+	cd editors/vscode && npm ci && npm run build && npx vsce package
+
 clean:
 	rm -rf build frothy test/test test/test-tiny-328 test/test-tiny-328-volatile test/test-tiny-328-tethered test/test-tiny-328-tethered-host-names test/test-tiny-328-tethered-host-names-persist test/test-host-normal
 
-.PHONY: test test-unity artifacts flash wipe-nvs test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session install-host test-install-host test-helper-targets print-config clean
+.PHONY: test test-unity artifacts flash wipe-nvs test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session install-host test-install-host test-helper-targets print-config vsix clean

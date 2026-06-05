@@ -1,0 +1,58 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Frothy",
+  "scopeName": "source.frothy",
+  "patterns": [
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#keyword" },
+    { "include": "#repl-command" },
+    { "include": "#boolean" },
+    { "include": "#constant" },
+    { "include": "#operator" },
+    { "include": "#punctuation" },
+    { "include": "#identifier" }
+  ],
+  "repository": {
+    "string": {
+      "name": "string.quoted.double.frothy",
+      "begin": "\"",
+      "end": "\""
+    },
+    "number": {
+      "patterns": [
+        { "name": "constant.numeric.hex.frothy",     "match": "(?<![A-Za-z0-9_.?\\-$])0[xX][0-9A-Fa-f]+(?![A-Za-z0-9_.?\\-$])" },
+        { "name": "constant.numeric.binary.frothy",  "match": "(?<![A-Za-z0-9_.?\\-$])0[bB][01]+(?![A-Za-z0-9_.?\\-$])" },
+        { "name": "constant.numeric.integer.frothy", "match": "(?<![A-Za-z0-9_.?\\-$])[0-9]+(?![A-Za-z0-9_.?\\-$])" }
+      ]
+    },
+    "keyword": {
+      "name": "keyword.control.frothy",
+      "match": "(?<![A-Za-z0-9_.?\\-$])(to|with|if|else|repeat)(?![A-Za-z0-9_.?\\-$])"
+    },
+    "repl-command": {
+      "name": "keyword.other.repl.frothy",
+      "match": "(?<![A-Za-z0-9_.?\\-$])(words|see|apply|run|clear|events|status|mem|install-library|install-user|wipe-user)(?![A-Za-z0-9_.?\\-$])"
+    },
+    "boolean": {
+      "name": "constant.language.boolean.frothy",
+      "match": "(?<![A-Za-z0-9_.?\\-$])(true|false)(?![A-Za-z0-9_.?\\-$])"
+    },
+    "constant": {
+      "name": "variable.other.constant.frothy",
+      "match": "\\$[A-Za-z_][A-Za-z0-9_.?\\-]*"
+    },
+    "operator": {
+      "name": "keyword.operator.frothy",
+      "match": "->|<=|>=|<>|[<>=+\\-*/%]"
+    },
+    "punctuation": {
+      "name": "punctuation.frothy",
+      "match": "[\\[\\](){};:,]"
+    },
+    "identifier": {
+      "name": "variable.other.frothy",
+      "match": "[A-Za-z_][A-Za-z0-9_.?\\-]*"
+    }
+  }
+}
