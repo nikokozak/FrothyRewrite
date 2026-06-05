@@ -21,6 +21,10 @@ fr_err_t fr_platform_poll_interrupt(fr_runtime_t *runtime);
 fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
                                   uint16_t platform_index);
 
+/* Return 0 when the platform can't report (host, AVR); not an error. */
+fr_err_t fr_platform_heap_free(uint32_t *out_bytes);
+fr_err_t fr_platform_heap_largest(uint32_t *out_bytes);
+
 typedef uint8_t fr_event_kind_t;
 
 enum {

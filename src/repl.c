@@ -82,6 +82,7 @@ typedef enum fr_repl_command_kind_t {
   FR_REPL_COMMAND_INSTALL_LIBRARY,
   FR_REPL_COMMAND_INSTALL_USER,
   FR_REPL_COMMAND_WIPE_USER,
+  FR_REPL_COMMAND_MEM,
 } fr_repl_command_kind_t;
 
 typedef struct fr_repl_command_t {
@@ -235,6 +236,21 @@ static fr_err_t fr_repl_parse_recognized_command(
     }
     return FR_OK;
   }
+  if (fr_repl_span_equals(start, token_len, "mem")) {
+    out->kind = FR_REPL_COMMAND_MEM;
+    if (arg == end) {
+      return FR_OK;
+    }
+    if ((uint32_t)(end - arg) > UINT16_MAX) {
+      return FR_ERR_RANGE;
+    }
+    /* The dispatcher matches arg against known topic names; anything else
+     * (unknown topic, or a known topic with trailing junk that prevents an
+     * exact match) returns FR_ERR_DOMAIN per SPEC D2. */
+    out->arg = arg;
+    out->arg_len = (uint16_t)(end - arg);
+    return FR_OK;
+  }
 
   return FR_OK;
 }
@@ -302,7 +318,6 @@ static fr_err_t fr_repl_write_u16(char *out, uint16_t out_cap, uint16_t value) {
   return FR_OK;
 }
 
-#if FR_WORD_SIZE == 32
 static fr_err_t fr_repl_write_u32(char *out, uint16_t out_cap, uint32_t value) {
   char digits[10];
   uint8_t count = 0;
@@ -329,7 +344,6 @@ static fr_err_t fr_repl_write_u32(char *out, uint16_t out_cap, uint32_t value) {
   out[used] = '\0';
   return FR_OK;
 }
-#endif
 
 static fr_err_t fr_repl_append(char *out, uint16_t out_cap, uint16_t *used,
                                const char *text) {
@@ -928,6 +942,114 @@ static fr_err_t fr_repl_write_events(fr_runtime_t *runtime,
 }
 #endif
 
+static fr_err_t fr_repl_write_mem_pair(const fr_repl_writer_t *writer,
+                                       const char *key, uint32_t value) {
+  char number[11];
+
+  FR_TRY(fr_repl_writer_write(writer, key));
+  FR_TRY(fr_repl_writer_write(writer, " "));
+  FR_TRY(fr_repl_write_u32(number, (uint16_t)sizeof(number), value));
+  FR_TRY(fr_repl_writer_write(writer, number));
+  return fr_repl_writer_write(writer, "\n");
+}
+
+static fr_err_t fr_repl_write_mem_heap(const fr_repl_writer_t *writer) {
+  uint32_t heap_free = 0;
+  uint32_t heap_largest = 0;
+
+  FR_TRY(fr_platform_heap_free(&heap_free));
+  FR_TRY(fr_platform_heap_largest(&heap_largest));
+  FR_TRY(fr_repl_write_mem_pair(writer, "heap.free", heap_free));
+  return fr_repl_write_mem_pair(writer, "heap.largest", heap_largest);
+}
+
+static fr_err_t fr_repl_write_mem_slots(fr_runtime_t *runtime,
+                                        const fr_repl_writer_t *writer) {
+  FR_TRY(fr_repl_write_mem_pair(writer, "slots.used", runtime->slots.count));
+  return fr_repl_write_mem_pair(writer, "slots.total", FR_PROFILE_MAX_SLOTS);
+}
+
+static fr_err_t fr_repl_write_mem_objects(fr_runtime_t *runtime,
+                                          const fr_repl_writer_t *writer) {
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.entries.used",
+                                runtime->objects.count));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.entries.total",
+                                FR_OBJECT_TABLE_CAPACITY));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.cells.used",
+                                runtime->objects.used_cell_words));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.cells.total",
+                                FR_CELL_WORD_CAPACITY));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.text.used",
+                                runtime->objects.used_text_bytes));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.text.total",
+                                FR_TEXT_BYTE_CAPACITY));
+#if FR_FEATURE_RECORDS
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.record_names.used",
+                                runtime->objects.used_record_names));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.record_names.total",
+                                FR_RECORD_NAME_ENTRY_CAPACITY));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.record_shape_fields.used",
+                                runtime->objects.used_record_shape_fields));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.record_shape_fields.total",
+                                FR_RECORD_SHAPE_FIELD_CAPACITY));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.record_values.used",
+                                runtime->objects.used_record_values));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.record_values.total",
+                                FR_RECORD_VALUE_FIELD_CAPACITY));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.record_name_bytes.used",
+                                runtime->objects.used_record_name_bytes));
+  FR_TRY(fr_repl_write_mem_pair(writer, "objects.record_name_bytes.total",
+                                FR_RECORD_NAME_BYTE_CAPACITY));
+#endif
+  return FR_OK;
+}
+
+static fr_err_t fr_repl_write_mem_events(fr_runtime_t *runtime,
+                                         const fr_repl_writer_t *writer) {
+  uint16_t used = 0;
+
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    if (runtime->events.entries[i].kind != FR_EVENT_KIND_NONE) {
+      used = (uint16_t)(used + 1);
+    }
+  }
+  FR_TRY(fr_repl_write_mem_pair(writer, "events.used", used));
+  return fr_repl_write_mem_pair(writer, "events.total", FR_EVENT_BINDING_COUNT);
+}
+
+static fr_err_t fr_repl_write_mem(fr_runtime_t *runtime, const char *arg,
+                                  uint16_t arg_len,
+                                  const fr_repl_writer_t *writer) {
+  if (runtime == NULL || writer == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  if (arg_len == 0) {
+    FR_TRY(fr_repl_write_mem_heap(writer));
+    FR_TRY(fr_repl_write_mem_slots(runtime, writer));
+    FR_TRY(fr_repl_write_mem_objects(runtime, writer));
+    FR_TRY(fr_repl_write_mem_events(runtime, writer));
+    return fr_repl_writer_write(writer, "ok\n");
+  }
+  if (fr_repl_span_equals(arg, arg_len, "heap")) {
+    FR_TRY(fr_repl_write_mem_heap(writer));
+    return fr_repl_writer_write(writer, "ok\n");
+  }
+  if (fr_repl_span_equals(arg, arg_len, "slots")) {
+    FR_TRY(fr_repl_write_mem_slots(runtime, writer));
+    return fr_repl_writer_write(writer, "ok\n");
+  }
+  if (fr_repl_span_equals(arg, arg_len, "objects")) {
+    FR_TRY(fr_repl_write_mem_objects(runtime, writer));
+    return fr_repl_writer_write(writer, "ok\n");
+  }
+  if (fr_repl_span_equals(arg, arg_len, "events")) {
+    FR_TRY(fr_repl_write_mem_events(runtime, writer));
+    return fr_repl_writer_write(writer, "ok\n");
+  }
+  return FR_ERR_DOMAIN;
+}
+
 #if FR_FEATURE_INTROSPECTION || FR_FEATURE_NUMERIC_SLOT_CALLS
 static fr_err_t fr_repl_parse_slot_id(const char *start, uint16_t length,
                                       fr_slot_id_t *out_slot_id) {
@@ -1518,6 +1640,10 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
 #else
     return FR_ERR_UNSUPPORTED;
 #endif
+  }
+
+  if (command.kind == FR_REPL_COMMAND_MEM) {
+    return fr_repl_write_mem(runtime, command.arg, command.arg_len, writer);
   }
 
   FR_TRY(fr_repl_eval_zero_arg_call(runtime, line, &result, &matched));

@@ -14,6 +14,8 @@
 #include "driver/uart.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -507,6 +509,22 @@ fr_err_t fr_platform_poll_interrupt(fr_runtime_t *runtime) {
   } else {
     fr_esp_save_pending_byte(byte);
   }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_heap_free(uint32_t *out_bytes) {
+  if (out_bytes == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_bytes = (uint32_t)esp_get_free_heap_size();
+  return FR_OK;
+}
+
+fr_err_t fr_platform_heap_largest(uint32_t *out_bytes) {
+  if (out_bytes == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_bytes = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
   return FR_OK;
 }
 

@@ -288,6 +288,22 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
   return FR_OK;
 }
 
+fr_err_t fr_platform_heap_free(uint32_t *out_bytes) {
+  if (out_bytes == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_bytes = 0;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_heap_largest(uint32_t *out_bytes) {
+  if (out_bytes == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_bytes = 0;
+  return FR_OK;
+}
+
 #if FR_FEATURE_REPL
 fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
   static bool skip_lf_after_cr = false;
