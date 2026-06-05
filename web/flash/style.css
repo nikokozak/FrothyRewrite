@@ -23,3 +23,16 @@ h1 {
   color: var(--shadow); font-family: var(--sans); font-size: 13px;
   margin: 4px 0 28px;
 }
+
+#picker { display: flex; gap: 16px; flex-wrap: wrap; margin: 24px 0; }
+#picker label {
+  font-family: var(--sans); font-size: 13px; color: var(--shadow);
+  display: flex; align-items: center; gap: 8px;
+}
+#picker select {
+  font-family: var(--sans); font-size: 14px; color: var(--espresso);
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 6px 10px;
+}
+#picker select:focus { outline: 2px solid var(--crema); outline-offset: 1px; }
+#picker select:disabled { opacity: 0.6; }
