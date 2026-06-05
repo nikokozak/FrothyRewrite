@@ -1,0 +1,66 @@
+:root {
+  --cream: #f8f1e3; --paper: #fbf6ea;
+  --espresso: #2c1a10; --crema: #c89f6e; --shadow: #6e4a2e;
+  --rule: #d8c9ad;
+  --ok: #3f6b3a; --warn: #a05a1a; --err: #8b2c1f;
+  --serif: "Iowan Old Style", "Charter", "Georgia", serif;
+  --sans: "Inter", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+  --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+html, body { background: var(--cream); color: var(--espresso); }
+body {
+  font-family: var(--serif); font-size: 17px; line-height: 1.55;
+  max-width: 820px; margin: 0 auto; padding: 56px 32px 96px;
+}
+
+h1 {
+  font-family: var(--sans); color: var(--espresso); line-height: 1.2;
+  font-size: 30px; margin: 0 0 0.4em; letter-spacing: -0.01em;
+}
+
+.meta {
+  color: var(--shadow); font-family: var(--sans); font-size: 13px;
+  margin: 4px 0 28px;
+}
+
+#picker { display: flex; gap: 16px; flex-wrap: wrap; margin: 24px 0; }
+#picker label {
+  font-family: var(--sans); font-size: 13px; color: var(--shadow);
+  display: flex; align-items: center; gap: 8px;
+}
+#picker select {
+  font-family: var(--sans); font-size: 14px; color: var(--espresso);
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 6px 10px;
+}
+#picker select:focus { outline: 2px solid var(--crema); outline-offset: 1px; }
+#picker select:disabled { opacity: 0.6; }
+
+button {
+  font-family: var(--sans); font-size: 14px; color: var(--espresso);
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 6px 14px; cursor: pointer;
+}
+button:focus { outline: 2px solid var(--crema); outline-offset: 1px; }
+button:disabled { opacity: 0.6; cursor: default; }
+
+.status {
+  font-family: var(--mono); font-size: 13px; color: var(--shadow);
+  margin: 16px 0;
+}
+.status.err { color: var(--err); }
+
+#repl { margin: 24px 0; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+#log {
+  font-family: var(--mono); font-size: 13px; color: var(--espresso);
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 12px; margin: 0; align-self: stretch;
+  height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+#line {
+  font-family: var(--mono); font-size: 14px; color: var(--espresso);
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 6px 10px; align-self: stretch;
+}
+#line:focus { outline: 2px solid var(--crema); outline-offset: 1px; }
