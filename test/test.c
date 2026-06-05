@@ -1977,7 +1977,7 @@ static void test_pwm(void) {
                 FR_OK &&
             strcmp(out,
                    "pwm.write(handle: handle, duty: int) -> nil\n"
-                   "set a PWM duty cycle in [0, 1023]\n"
+                   "set a PWM duty cycle in [0, 10000]\n"
                    "ok\n") == 0);
   CHECK("pwm see close renders signature",
         fr_repl_eval_line(&runtime, "see pwm.close", out, sizeof(out)) ==
@@ -1992,9 +1992,9 @@ static void test_pwm(void) {
             test_pwm_write_call(&runtime, write_entry, handle, 0, &result) ==
                 FR_OK &&
             fr_tagged_is_nil(result) &&
-            test_pwm_write_call(&runtime, write_entry, handle, 512, &result) ==
+            test_pwm_write_call(&runtime, write_entry, handle, 5000, &result) ==
                 FR_OK &&
-            test_pwm_write_call(&runtime, write_entry, handle, 1023,
+            test_pwm_write_call(&runtime, write_entry, handle, 10000,
                                 &result) == FR_OK &&
             test_pwm_close_call(&runtime, close_entry, handle, &result) ==
                 FR_OK &&
@@ -2011,7 +2011,7 @@ static void test_pwm(void) {
         test_pwm_open_call(&runtime, open_entry, 6, 1000, &handle) == FR_OK &&
             test_pwm_write_call(&runtime, write_entry, handle, -1, &result) ==
                 FR_ERR_DOMAIN &&
-            test_pwm_write_call(&runtime, write_entry, handle, 1024,
+            test_pwm_write_call(&runtime, write_entry, handle, 10001,
                                 &result) == FR_ERR_DOMAIN &&
             test_pwm_close_call(&runtime, close_entry, handle, &result) ==
                 FR_OK);

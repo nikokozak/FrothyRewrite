@@ -19,11 +19,18 @@ static uint8_t fr_host_gpio_values[FR_HOST_MAX_PIN + 1];
 static uint16_t fr_host_millis;
 
 #if FR_FEATURE_PWM
+enum {
+  FR_HOST_PWM_RING_CAP = 8,
+};
+
 typedef struct fr_host_pwm_t {
   bool in_use;
   uint16_t pin;
   uint16_t freq;
-  uint16_t duty;
+  /* Recorded duty values for test assertion; oldest dropped on overflow. */
+  uint16_t write_ring[FR_HOST_PWM_RING_CAP];
+  uint8_t write_head;
+  uint8_t write_count;
 } fr_host_pwm_t;
 
 static fr_host_pwm_t fr_host_pwms[FR_PROFILE_MAX_HANDLES];
@@ -490,7 +497,11 @@ fr_err_t fr_platform_pwm_write(uint16_t platform_index, uint16_t duty) {
   fr_host_pwm_t *pwm = NULL;
 
   FR_TRY(fr_host_pwm_entry(platform_index, &pwm));
-  pwm->duty = duty;
+  pwm->write_ring[pwm->write_head] = duty;
+  pwm->write_head = (uint8_t)((pwm->write_head + 1u) % FR_HOST_PWM_RING_CAP);
+  if (pwm->write_count < FR_HOST_PWM_RING_CAP) {
+    pwm->write_count += 1u;
+  }
   return FR_OK;
 }
 
@@ -501,6 +512,31 @@ fr_err_t fr_platform_pwm_close(uint16_t platform_index) {
   memset(&fr_host_pwms[platform_index], 0, sizeof(fr_host_pwms[platform_index]));
   return FR_OK;
 }
+
+#ifdef FR_HOST_TEST_HELPERS
+uint16_t fr_host_pwm_drain_writes(uint16_t platform_index, uint16_t *out_duties,
+                                  uint16_t max_count) {
+  if (platform_index >= FR_PROFILE_MAX_HANDLES ||
+      !fr_host_pwms[platform_index].in_use || out_duties == NULL) {
+    return 0;
+  }
+
+  fr_host_pwm_t *pwm = &fr_host_pwms[platform_index];
+  uint16_t avail = pwm->write_count;
+  uint16_t take = avail < max_count ? avail : max_count;
+  uint8_t oldest =
+      (uint8_t)((pwm->write_head + FR_HOST_PWM_RING_CAP - pwm->write_count) %
+                FR_HOST_PWM_RING_CAP);
+
+  for (uint16_t i = 0; i < take; i++) {
+    out_duties[i] = pwm->write_ring[oldest];
+    oldest = (uint8_t)((oldest + 1u) % FR_HOST_PWM_RING_CAP);
+  }
+  pwm->write_head = 0;
+  pwm->write_count = 0;
+  return take;
+}
+#endif
 #endif
 
 #if FR_FEATURE_I2C

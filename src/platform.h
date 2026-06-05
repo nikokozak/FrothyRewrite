@@ -87,6 +87,13 @@ fr_err_t fr_platform_pwm_open(uint16_t pin, uint16_t freq,
                               uint16_t *out_platform_index);
 fr_err_t fr_platform_pwm_write(uint16_t platform_index, uint16_t duty);
 fr_err_t fr_platform_pwm_close(uint16_t platform_index);
+#ifdef FR_HOST_TEST_HELPERS
+/* Host PWM test fixture. drain returns recorded duty values in FIFO order and
+ * empties the per-handle ring; pwm has no read path so there is no queue
+ * analog. */
+uint16_t fr_host_pwm_drain_writes(uint16_t platform_index, uint16_t *out_duties,
+                                  uint16_t max_count);
+#endif
 #endif
 
 #if FR_FEATURE_I2C
