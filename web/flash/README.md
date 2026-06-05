@@ -18,7 +18,12 @@ WebSerial both need a real HTTP origin.
 GitHub Pages serves the same files at
 `https://nikokozak.github.io/FrothyRewrite/web/flash/`.
 
-## Status
+## esptool-js
 
-Slice A landed: detect + D6 fallback. Picker, flash, and REPL ship in
-later slices.
+`vendor/esptool-js/0.6.0/bundle.js` is the unmodified `package/bundle.js`
+file from the v0.6.0 release at
+https://github.com/espressif/esptool-js/releases/tag/v0.6.0 (217,616
+bytes). The page imports it as an ES module — no CDN fetch at flash
+time. To update, drop the new bundle in a sibling
+`vendor/esptool-js/<version>/` directory, bump the import in `app.js`,
+and update this note.

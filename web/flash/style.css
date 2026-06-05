@@ -51,4 +51,16 @@ button:disabled { opacity: 0.6; cursor: default; }
 }
 .status.err { color: var(--err); }
 
-#repl { margin: 24px 0; }
+#repl { margin: 24px 0; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+#log {
+  font-family: var(--mono); font-size: 13px; color: var(--espresso);
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 12px; margin: 0; align-self: stretch;
+  height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+#line {
+  font-family: var(--mono); font-size: 14px; color: var(--espresso);
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 6px 10px; align-self: stretch;
+}
+#line:focus { outline: 2px solid var(--crema); outline-offset: 1px; }
