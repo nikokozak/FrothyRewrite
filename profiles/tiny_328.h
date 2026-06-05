@@ -62,3 +62,5 @@
  * `on`/`every`/`after`/`cancel` source forms reject at compile time. */
 #undef FR_FEATURE_EVENTS
 #define FR_FEATURE_EVENTS 0
+
+#define FR_FEATURE_NET 0

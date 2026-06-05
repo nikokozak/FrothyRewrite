@@ -34,6 +34,8 @@ enum {
   FR_EVENT_KIND_GPIO_CHANGES = 3,
   FR_EVENT_KIND_EVERY = 4,
   FR_EVENT_KIND_AFTER = 5,
+  FR_EVENT_KIND_WIFI_DISCONNECTED = 6,
+  FR_EVENT_KIND_WIFI_RECONNECTED = 7,
 };
 
 typedef struct fr_event_candidate_t {
@@ -133,4 +135,50 @@ fr_err_t fr_platform_storage_write(uint8_t slot, uint16_t offset,
 fr_err_t fr_platform_storage_erase(uint8_t slot);
 
 void fr_platform_storage_debug_reset(void);
+#endif
+
+#if FR_FEATURE_NET
+fr_err_t fr_platform_wifi_save(const char *ssid, const char *pass);
+fr_err_t fr_platform_wifi_connect(void);
+fr_err_t fr_platform_wifi_ready(bool *out_ready);
+
+/* out_body buffer is caller-owned with size cap; out_length receives the byte
+ * count written. Bodies larger than cap return FR_ERR_NET_TOO_LARGE with no
+ * partial result (D5). */
+fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
+                              uint16_t *out_length);
+
+fr_err_t fr_platform_tcp_open(const char *host, uint16_t port,
+                              uint16_t *out_platform_index);
+/* Blocks until >=1 byte arrives, peer EOF, the 5s timeout, or Ctrl-C (D20).
+ * out_length carries the bytes written; 0 with FR_OK means graceful EOF. */
+fr_err_t fr_platform_tcp_read(uint16_t platform_index, uint16_t count,
+                              uint8_t *out_bytes, uint16_t *out_length);
+fr_err_t fr_platform_tcp_write(uint16_t platform_index, const uint8_t *bytes,
+                               uint16_t length);
+fr_err_t fr_platform_tcp_close(uint16_t platform_index);
+fr_err_t fr_platform_tcp_bytes_ready(uint16_t platform_index,
+                                     uint16_t *out_count);
+
+/* Wi-Fi event install/remove. Binding-index matches by kind only — at most one
+ * binding per kind, since wifi.disconnected and wifi.reconnected each have one
+ * source at a time (D19). */
+fr_err_t fr_platform_event_wifi_install(fr_event_kind_t kind,
+                                        uint16_t binding_index,
+                                        uint16_t generation);
+fr_err_t fr_platform_event_wifi_remove(fr_event_kind_t kind);
+
+#ifdef FR_HOST_TEST_HELPERS
+/* Host net fixtures (D16). wifi_set_connected flips the stub ready state.
+ * http_queue_response enqueues one response that the next fr_platform_http_get
+ * consumes. tcp_drain_writes returns recorded bytes from a per-handle ring;
+ * tcp_queue_read appends bytes the next fr_platform_tcp_read consumes. */
+void fr_host_wifi_set_connected(bool connected);
+void fr_host_http_queue_response(uint16_t status, const uint8_t *body,
+                                 uint16_t length);
+uint16_t fr_host_tcp_drain_writes(uint16_t platform_index, uint8_t *out_bytes,
+                                  uint16_t max_length);
+void fr_host_tcp_queue_read(uint16_t platform_index, const uint8_t *bytes,
+                            uint16_t length);
+#endif
 #endif
