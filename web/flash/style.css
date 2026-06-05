@@ -36,3 +36,19 @@ h1 {
 }
 #picker select:focus { outline: 2px solid var(--crema); outline-offset: 1px; }
 #picker select:disabled { opacity: 0.6; }
+
+button {
+  font-family: var(--sans); font-size: 14px; color: var(--espresso);
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 6px 14px; cursor: pointer;
+}
+button:focus { outline: 2px solid var(--crema); outline-offset: 1px; }
+button:disabled { opacity: 0.6; cursor: default; }
+
+.status {
+  font-family: var(--mono); font-size: 13px; color: var(--shadow);
+  margin: 16px 0;
+}
+.status.err { color: var(--err); }
+
+#repl { margin: 24px 0; }

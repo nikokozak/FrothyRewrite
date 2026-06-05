@@ -1,6 +1,8 @@
 // Page module: detect → (picker → flash → REPL) | fallback.
 // Slice A: detect + D6 fallback. Slice B: manifest picker + D8 persistence.
-// Later slices wire flash + REPL.
+// Slice C: flash flow via vendored esptool-js (D4, D9).
+
+import { ESPLoader, Transport } from "./vendor/esptool-js/0.6.0/bundle.js";
 
 const app = document.getElementById("app");
 const fallback = document.getElementById("fallback");
@@ -21,6 +23,7 @@ async function initPicker() {
   const manifest = await fetch("./firmware/manifest.json").then((r) => r.json());
   const boardSel = document.getElementById("board");
   const profileSel = document.getElementById("profile");
+  const flashBtn = document.getElementById("flash");
 
   const boards = [...new Set(manifest.map((row) => row.board))];
   for (const b of boards) boardSel.append(option(b));
@@ -45,6 +48,73 @@ async function initPicker() {
   profileSel.addEventListener("change", () => {
     localStorage.setItem("frothy.flash.profile", profileSel.value);
   });
+
+  flashBtn.addEventListener("click", () => {
+    const row = manifest.find(
+      (r) => r.board === boardSel.value && r.profile === profileSel.value,
+    );
+    if (row) flash(row, [boardSel, profileSel, flashBtn]);
+  });
+}
+
+async function flash(row, lockables) {
+  const status = document.getElementById("status");
+  const repl = document.getElementById("repl");
+  status.hidden = false;
+  for (const el of lockables) el.disabled = true;
+
+  let transport = null;
+  try {
+    // D9: writeFlash data is Uint8Array in v0.6.0 (breaking change from v0.5.x).
+    setStatus(status, "Fetching firmware…");
+    const data = new Uint8Array(
+      await fetch(`./${row.file}`).then((r) => r.arrayBuffer()),
+    );
+
+    // requestPort needs a user gesture — the click that called us counts.
+    setStatus(status, "Pick a serial port…");
+    const port = await navigator.serial.requestPort();
+    transport = new Transport(port, false);
+
+    setStatus(status, "Connecting…");
+    const loader = new ESPLoader({
+      transport,
+      baudrate: 921600,
+      romBaudrate: 115200,
+    });
+    const chip = await loader.main();
+    setStatus(status, `Connected to ${chip}. Flashing…`);
+
+    await loader.writeFlash({
+      fileArray: [{ address: 0x0, data }],
+      flashMode: "keep",
+      flashFreq: "keep",
+      flashSize: "keep",
+      eraseAll: false,
+      compress: true,
+      reportProgress: (_i, written, total) => {
+        const pct = total ? Math.round((written / total) * 100) : 0;
+        setStatus(status, `Flashing… ${pct}%`);
+      },
+    });
+
+    // D13: hard-reset into Frothy, then surface "Connect REPL".
+    await loader.after("hard_reset");
+    await transport.disconnect();
+    setStatus(status, "Flashed. Connect the REPL when ready.");
+    repl.hidden = false;
+  } catch (err) {
+    setStatus(status, `Flash failed: ${err.message ?? err}`, true);
+    if (transport) {
+      try { await transport.disconnect(); } catch {}
+    }
+    for (const el of lockables) el.disabled = false;
+  }
+}
+
+function setStatus(el, text, isError = false) {
+  el.textContent = text;
+  el.classList.toggle("err", isError);
 }
 
 function option(value) {
