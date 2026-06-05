@@ -23,6 +23,12 @@ typedef enum fr_err_t {
   FR_ERR_IO,
   FR_ERR_VOLATILE,
   FR_ERR_HANDLE,
+  FR_ERR_NET_DISCONNECTED,
+  FR_ERR_NET_TIMEOUT,
+  FR_ERR_NET_DNS,
+  FR_ERR_NET_REFUSED,
+  FR_ERR_NET_TOO_LARGE,
+  FR_ERR_NET_PROTOCOL,
 } fr_err_t;
 
 const char *fr_err_name(fr_err_t err);

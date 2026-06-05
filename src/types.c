@@ -32,6 +32,18 @@ const char *fr_err_name(fr_err_t err) {
     return "not saved";
   case FR_ERR_HANDLE:
     return "bad handle";
+  case FR_ERR_NET_DISCONNECTED:
+    return "no network";
+  case FR_ERR_NET_TIMEOUT:
+    return "timed out";
+  case FR_ERR_NET_DNS:
+    return "dns failed";
+  case FR_ERR_NET_REFUSED:
+    return "refused";
+  case FR_ERR_NET_TOO_LARGE:
+    return "too large";
+  case FR_ERR_NET_PROTOCOL:
+    return "bad protocol";
   case FR_OK:
   default:
     return NULL;
