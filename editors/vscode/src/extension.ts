@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
+import * as connect from './connect';
+import { dispose as disposeOutput } from './output';
 
-const COMMAND_IDS = [
-  'frothy.connect',
+const NOOP_IDS = [
   'frothy.sendSelection',
   'frothy.sendFile',
   'frothy.see',
@@ -12,9 +13,15 @@ const COMMAND_IDS = [
 ] as const;
 
 export function activate(context: vscode.ExtensionContext): void {
-  for (const id of COMMAND_IDS) {
+  context.subscriptions.push(
+    vscode.commands.registerCommand('frothy.connect', () => connect.connect()),
+  );
+  for (const id of NOOP_IDS) {
     context.subscriptions.push(vscode.commands.registerCommand(id, () => {}));
   }
 }
 
-export function deactivate(): void {}
+export async function deactivate(): Promise<void> {
+  await connect.teardown();
+  disposeOutput();
+}
