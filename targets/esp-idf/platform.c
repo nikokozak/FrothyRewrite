@@ -1449,6 +1449,7 @@ fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "event.h"
 
 enum {
   FR_ESP_WIFI_SSID_MAX = 32,
@@ -1459,21 +1460,49 @@ enum {
 
 static bool fr_esp_wifi_initialized;
 static volatile bool fr_esp_wifi_ready;
+/* D13/D19: track whether we've ever reached an IP. Initial got_ip is a fresh
+ * connect (no wifi.reconnected event); a got_ip after disconnect is a
+ * reconnect (wifi.reconnected fires). */
+static volatile bool fr_esp_wifi_was_connected;
+
+static void fr_esp_wifi_enqueue(fr_event_kind_t kind) {
+  uint16_t binding_index = 0;
+  uint16_t generation = 0;
+  fr_event_candidate_t candidate;
+  if (!fr_event_wifi_lookup(kind, &binding_index, &generation)) {
+    return;
+  }
+  candidate = (fr_event_candidate_t){
+      .binding_index = binding_index,
+      .generation = generation,
+      .timestamp_ms = fr_esp_event_millis_now(),
+  };
+  if (xQueueSend(fr_esp_event_queue, &candidate, 0) != pdTRUE) {
+    fr_esp_event_overflow++;
+  }
+}
 
 /* Wi-Fi events fire on the ESP-IDF sys_evt task. D13: Frothy owns reconnect,
  * so a disconnect retries esp_wifi_connect from here; the 30 s wifi.connect:
- * budget catches pathological loops (bad creds). Slice F adds per-binding
- * enqueue into fr_esp_event_queue for the user-visible wifi.disconnected /
- * wifi.reconnected events. */
+ * budget catches pathological loops (bad creds). D19: when a Frothy `on
+ * wifi.*` binding is present, enqueue a candidate into fr_esp_event_queue
+ * using the same shape as the timer callback. */
 static void fr_esp_wifi_event_handler(void *arg, esp_event_base_t base,
                                       int32_t id, void *data) {
   (void)arg;
   (void)data;
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    if (fr_esp_wifi_was_connected) {
+      fr_esp_wifi_enqueue(FR_EVENT_KIND_WIFI_DISCONNECTED);
+    }
     fr_esp_wifi_ready = false;
     (void)esp_wifi_connect();
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+    if (fr_esp_wifi_was_connected) {
+      fr_esp_wifi_enqueue(FR_EVENT_KIND_WIFI_RECONNECTED);
+    }
     fr_esp_wifi_ready = true;
+    fr_esp_wifi_was_connected = true;
   }
 }
 

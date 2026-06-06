@@ -1316,7 +1316,7 @@ fr_err_t fr_overlay_update_encode(const fr_overlay_update_t *update,
     const fr_image_event_binding_t *binding = &records.event_bindings[i];
 
     if (binding->kind == FR_EVENT_KIND_NONE ||
-        binding->kind > FR_EVENT_KIND_AFTER) {
+        binding->kind > FR_EVENT_KIND_WIFI_RECONNECTED) {
       return FR_ERR_INVALID;
     }
     if (binding->body >= records.code_object_count) {
@@ -1543,7 +1543,7 @@ fr_overlay_update_decode_event(fr_overlay_update_reader_t *reader,
   }
 
   FR_TRY(fr_overlay_update_reader_u8(reader, &kind));
-  if (kind == FR_EVENT_KIND_NONE || kind > FR_EVENT_KIND_AFTER) {
+  if (kind == FR_EVENT_KIND_NONE || kind > FR_EVENT_KIND_WIFI_RECONNECTED) {
     return FR_ERR_CORRUPT;
   }
   FR_TRY(fr_overlay_update_reader_u16(reader, &source));

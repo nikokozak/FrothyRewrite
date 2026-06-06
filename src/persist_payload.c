@@ -2089,7 +2089,7 @@ static fr_err_t fr_persist_decode_payload(
         return FR_ERR_CAPACITY;
       }
       FR_TRY(fr_persist_reader_u8(&reader, &kind));
-      if (kind == FR_EVENT_KIND_NONE || kind > FR_EVENT_KIND_AFTER) {
+      if (kind == FR_EVENT_KIND_NONE || kind > FR_EVENT_KIND_WIFI_RECONNECTED) {
         return FR_ERR_CORRUPT;
       }
       FR_TRY(fr_persist_reader_u16(&reader, &source));

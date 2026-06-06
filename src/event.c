@@ -16,6 +16,27 @@ static bool fr_event_kind_is_timer(fr_event_kind_t kind) {
   return kind == FR_EVENT_KIND_EVERY || kind == FR_EVENT_KIND_AFTER;
 }
 
+static bool fr_event_kind_is_wifi(fr_event_kind_t kind) {
+  return kind == FR_EVENT_KIND_WIFI_DISCONNECTED ||
+         kind == FR_EVENT_KIND_WIFI_RECONNECTED;
+}
+
+/* D19: wifi events match by kind only (one binding per kind, source is 0).
+ * The platform's wifi handler reads this via fr_event_wifi_lookup so the
+ * candidate it enqueues carries the kernel-assigned binding_index/generation,
+ * keeping drain semantics identical to GPIO and timer paths. */
+typedef struct fr_event_wifi_slot_t {
+  bool present;
+  uint16_t binding_index;
+  uint16_t generation;
+} fr_event_wifi_slot_t;
+
+static fr_event_wifi_slot_t fr_event_wifi_slots[2];
+
+static uint8_t fr_event_wifi_index(fr_event_kind_t kind) {
+  return (uint8_t)(kind - FR_EVENT_KIND_WIFI_DISCONNECTED);
+}
+
 /* GPIO last-write replaces on pin alone; timers replace on (kind, ms). */
 static bool fr_event_entry_matches(const fr_event_binding_t *entry,
                                    fr_event_kind_t kind, uint16_t source) {
@@ -41,6 +62,15 @@ static fr_err_t fr_event_platform_install(fr_event_kind_t kind, uint16_t source,
     return fr_platform_event_gpio_install(kind, source, binding_index,
                                           generation);
   }
+  /* Wifi events ride the existing fr_esp_event_queue from inside the platform
+   * Wi-Fi handler, which reads binding identity via fr_event_wifi_lookup. The
+   * kernel side has no per-kind hardware resource to arm here. */
+  if (fr_event_kind_is_wifi(kind)) {
+    (void)source;
+    (void)binding_index;
+    (void)generation;
+    return FR_OK;
+  }
   return fr_platform_event_timer_install(kind, (uint32_t)source, binding_index,
                                          generation);
 }
@@ -49,6 +79,10 @@ static fr_err_t fr_event_platform_remove(const fr_event_binding_t *entry,
                                          uint16_t binding_index) {
   if (fr_event_kind_is_gpio(entry->kind)) {
     return fr_platform_event_gpio_remove(entry->source);
+  }
+  if (fr_event_kind_is_wifi(entry->kind)) {
+    (void)binding_index;
+    return FR_OK;
   }
   return fr_platform_event_timer_remove(binding_index);
 }
@@ -63,7 +97,8 @@ fr_err_t fr_event_register(fr_runtime_t *runtime, fr_event_kind_t kind,
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
-  if (!fr_event_kind_is_gpio(kind) && !fr_event_kind_is_timer(kind)) {
+  if (!fr_event_kind_is_gpio(kind) && !fr_event_kind_is_timer(kind) &&
+      !fr_event_kind_is_wifi(kind)) {
     return FR_ERR_INVALID;
   }
 
@@ -100,6 +135,13 @@ fr_err_t fr_event_register(fr_runtime_t *runtime, fr_event_kind_t kind,
   entry->registered_at_ms = fr_event_now_ms();
   entry->last_fire_ms = 0;
   entry->has_fired = false;
+  if (fr_event_kind_is_wifi(kind)) {
+    fr_event_wifi_slots[fr_event_wifi_index(kind)] = (fr_event_wifi_slot_t){
+        .present = true,
+        .binding_index = target,
+        .generation = next_generation,
+    };
+  }
   return FR_OK;
 }
 
@@ -111,7 +153,8 @@ fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
-  if (!fr_event_kind_is_gpio(kind) && !fr_event_kind_is_timer(kind)) {
+  if (!fr_event_kind_is_gpio(kind) && !fr_event_kind_is_timer(kind) &&
+      !fr_event_kind_is_wifi(kind)) {
     return FR_ERR_INVALID;
   }
 
@@ -126,6 +169,10 @@ fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
   }
 
   entry = &runtime->events.entries[target];
+  if (fr_event_kind_is_wifi(entry->kind)) {
+    fr_event_wifi_slots[fr_event_wifi_index(entry->kind)] =
+        (fr_event_wifi_slot_t){0};
+  }
   FR_TRY(fr_event_platform_remove(entry, target));
   entry->kind = FR_EVENT_KIND_NONE;
   entry->generation = (uint16_t)(entry->generation + 1);
@@ -255,5 +302,25 @@ fr_err_t fr_event_clear_table(fr_runtime_t *runtime) {
     }
   }
   memset(&runtime->events, 0, sizeof(runtime->events));
+  memset(fr_event_wifi_slots, 0, sizeof fr_event_wifi_slots);
   return first_err;
+}
+
+bool fr_event_wifi_lookup(fr_event_kind_t kind, uint16_t *out_binding_index,
+                          uint16_t *out_generation) {
+  uint8_t idx;
+  if (!fr_event_kind_is_wifi(kind)) {
+    return false;
+  }
+  idx = fr_event_wifi_index(kind);
+  if (!fr_event_wifi_slots[idx].present) {
+    return false;
+  }
+  if (out_binding_index != NULL) {
+    *out_binding_index = fr_event_wifi_slots[idx].binding_index;
+  }
+  if (out_generation != NULL) {
+    *out_generation = fr_event_wifi_slots[idx].generation;
+  }
+  return true;
 }
