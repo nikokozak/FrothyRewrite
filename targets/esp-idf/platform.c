@@ -1543,7 +1543,7 @@ fr_err_t fr_platform_wifi_save(const char *ssid, const char *pass) {
   return err;
 }
 
-fr_err_t fr_platform_wifi_connect(void) {
+fr_err_t fr_platform_wifi_connect(fr_runtime_t *runtime) {
   nvs_handle_t handle = 0;
   char ssid[FR_ESP_WIFI_SSID_MAX + 1];
   char pass[FR_ESP_WIFI_PASS_MAX + 1];
@@ -1554,6 +1554,10 @@ fr_err_t fr_platform_wifi_connect(void) {
   fr_err_t err = FR_OK;
   uint64_t start_us = 0;
   uint64_t budget_us = 0;
+
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
 
   err = fr_esp_wifi_nvs_open(NVS_READONLY, &handle);
   if (err == FR_ERR_NOT_FOUND) {
@@ -1587,6 +1591,10 @@ fr_err_t fr_platform_wifi_connect(void) {
   start_us = (uint64_t)esp_timer_get_time();
   budget_us = (uint64_t)FR_ESP_WIFI_CONNECT_TIMEOUT_MS * 1000u;
   while (!fr_esp_wifi_ready) {
+    FR_TRY(fr_platform_poll_interrupt(runtime));
+    if (fr_runtime_is_interrupted(runtime)) {
+      return FR_ERR_INTERRUPTED;
+    }
     if ((uint64_t)esp_timer_get_time() - start_us > budget_us) {
       return FR_ERR_NET_TIMEOUT;
     }

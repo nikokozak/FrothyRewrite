@@ -939,9 +939,12 @@ fr_err_t fr_platform_wifi_save(const char *ssid, const char *pass) {
   return FR_OK;
 }
 
-fr_err_t fr_platform_wifi_connect(void) {
+fr_err_t fr_platform_wifi_connect(fr_runtime_t *runtime) {
   /* D7: host stub flips state to connected. Saved creds gate the call so an
    * unconfigured fixture surfaces the right error. */
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
   if (fr_host_wifi_ssid[0] == '\0') {
     return FR_ERR_NET_DISCONNECTED;
   }

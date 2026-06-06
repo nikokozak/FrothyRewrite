@@ -770,13 +770,12 @@ static fr_err_t fr_native_wifi_save(fr_runtime_t *runtime,
 static fr_err_t fr_native_wifi_connect(fr_runtime_t *runtime,
                                        const fr_tagged_t *args,
                                        uint8_t arg_count, fr_tagged_t *out) {
-  (void)runtime;
   (void)args;
-  if (arg_count != 0 || out == NULL) {
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
     return FR_ERR_INVALID;
   }
 
-  FR_TRY(fr_platform_wifi_connect());
+  FR_TRY(fr_platform_wifi_connect(runtime));
   *out = fr_tagged_nil();
   return FR_OK;
 }

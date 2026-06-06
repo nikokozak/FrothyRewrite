@@ -139,7 +139,10 @@ void fr_platform_storage_debug_reset(void);
 
 #if FR_FEATURE_NET
 fr_err_t fr_platform_wifi_save(const char *ssid, const char *pass);
-fr_err_t fr_platform_wifi_connect(void);
+/* Blocks until ready or the 30 s D8 budget; polls fr_platform_poll_interrupt
+ * between waits so Ctrl-C still wins (D2). Returns FR_ERR_INTERRUPTED on
+ * Ctrl-C, mirroring the `ms` native (targets/common/target_defs.c:54-61). */
+fr_err_t fr_platform_wifi_connect(fr_runtime_t *runtime);
 fr_err_t fr_platform_wifi_ready(bool *out_ready);
 
 /* out_body buffer is caller-owned with size cap; out_length receives the byte
