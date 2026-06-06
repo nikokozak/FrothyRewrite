@@ -169,5 +169,8 @@ void fr_host_wifi_set_connected(bool connected);
 void fr_host_http_queue_response(uint16_t status, const uint8_t *body,
                                  uint16_t length);
 void fr_host_wifi_fire_event(fr_event_kind_t kind);
+/* Clears credential buffers, ready flag, queued response, wifi slot table,
+ * and the host event queue so Unity tests start from a known state. */
+void fr_host_net_reset(void);
 #endif
 #endif

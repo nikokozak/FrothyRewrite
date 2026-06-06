@@ -1220,7 +1220,8 @@ static fr_err_t fr_native_event_register(fr_runtime_t *runtime,
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 0, &kind_int));
-  if (kind_int < FR_EVENT_KIND_GPIO_RISING || kind_int > FR_EVENT_KIND_AFTER) {
+  if (kind_int < FR_EVENT_KIND_GPIO_RISING ||
+      kind_int > FR_EVENT_KIND_WIFI_RECONNECTED) {
     return FR_ERR_DOMAIN;
   }
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &source));
@@ -1247,7 +1248,8 @@ static fr_err_t fr_native_event_cancel(fr_runtime_t *runtime,
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 0, &kind_int));
-  if (kind_int < FR_EVENT_KIND_GPIO_RISING || kind_int > FR_EVENT_KIND_AFTER) {
+  if (kind_int < FR_EVENT_KIND_GPIO_RISING ||
+      kind_int > FR_EVENT_KIND_WIFI_RECONNECTED) {
     return FR_ERR_DOMAIN;
   }
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &source));

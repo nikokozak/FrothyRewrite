@@ -1029,8 +1029,28 @@ void fr_host_wifi_fire_event(fr_event_kind_t kind) {
   if (!slot->active) {
     return;
   }
+  /* fr_event_drain drops candidates with timestamp_ms < registered_at_ms
+   * (src/event.c). Match the registration clock so a fixture that called
+   * fr_platform_delay_ms before binding still receives the candidate. */
   (void)fr_platform_event_post_test_candidate(slot->binding_index,
-                                              slot->generation, 0);
+                                              slot->generation,
+                                              (uint32_t)fr_host_millis);
+}
+
+void fr_host_net_reset(void) {
+  uint8_t i;
+  memset(fr_host_wifi_ssid, 0, sizeof(fr_host_wifi_ssid));
+  memset(fr_host_wifi_pass, 0, sizeof(fr_host_wifi_pass));
+  fr_host_wifi_ready_flag = false;
+  memset(&fr_host_http_response, 0, sizeof(fr_host_http_response));
+  for (i = 0; i < 2; i++) {
+    fr_host_wifi_slots[i].binding_index = 0;
+    fr_host_wifi_slots[i].generation = 0;
+    fr_host_wifi_slots[i].active = false;
+  }
+  fr_host_event_queue_head = 0;
+  fr_host_event_queue_count = 0;
+  fr_host_event_overflow = 0;
 }
 
 #endif
