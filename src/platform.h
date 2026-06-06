@@ -160,14 +160,6 @@ fr_err_t fr_platform_tcp_close(uint16_t platform_index);
 fr_err_t fr_platform_tcp_bytes_ready(uint16_t platform_index,
                                      uint16_t *out_count);
 
-/* Wi-Fi event install/remove. Binding-index matches by kind only — at most one
- * binding per kind, since wifi.disconnected and wifi.reconnected each have one
- * source at a time (D19). */
-fr_err_t fr_platform_event_wifi_install(fr_event_kind_t kind,
-                                        uint16_t binding_index,
-                                        uint16_t generation);
-fr_err_t fr_platform_event_wifi_remove(fr_event_kind_t kind);
-
 #ifdef FR_HOST_TEST_HELPERS
 /* Host net fixtures (D16). wifi_set_connected flips the stub ready state.
  * http_queue_response enqueues one response that the next fr_platform_http_get

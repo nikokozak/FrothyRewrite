@@ -284,6 +284,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
     return fr_platform_i2c_close(platform_index);
   }
 #endif
+#if FR_FEATURE_NET
+  if (kind == FR_HANDLE_KIND_TCP) {
+    return fr_platform_tcp_close(platform_index);
+  }
+#endif
   (void)kind;
   (void)platform_index;
   return FR_OK;
@@ -869,3 +874,268 @@ fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
   fr_host_event_queue_count = (uint8_t)(fr_host_event_queue_count + 1u);
   return FR_OK;
 }
+
+#if FR_FEATURE_NET
+enum {
+  FR_HOST_TCP_RING_CAP = 64,
+  FR_HOST_WIFI_SSID_CAP = 32,
+  FR_HOST_WIFI_PASS_CAP = 64,
+};
+
+static char fr_host_wifi_ssid[FR_HOST_WIFI_SSID_CAP + 1];
+static char fr_host_wifi_pass[FR_HOST_WIFI_PASS_CAP + 1];
+static bool fr_host_wifi_ready_flag;
+
+typedef struct fr_host_http_response_t {
+  bool queued;
+  uint16_t status;
+  uint16_t length;
+  uint8_t body[FR_HTTP_MAX_BODY];
+} fr_host_http_response_t;
+
+static fr_host_http_response_t fr_host_http_response;
+
+typedef struct fr_host_tcp_t {
+  bool in_use;
+  /* Recorded write bytes for test assertion; oldest dropped on overflow. */
+  uint8_t write_ring[FR_HOST_TCP_RING_CAP];
+  uint8_t write_head;
+  uint8_t write_count;
+  /* Canned read bytes pre-queued by tests. */
+  uint8_t read_queue[FR_HOST_TCP_RING_CAP];
+  uint8_t read_head;
+  uint8_t read_count;
+} fr_host_tcp_t;
+
+static fr_host_tcp_t fr_host_tcps[FR_TCP_HANDLE_COUNT];
+
+static fr_err_t fr_host_tcp_entry(uint16_t platform_index,
+                                  fr_host_tcp_t **out_tcp) {
+  if (out_tcp == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (platform_index >= FR_TCP_HANDLE_COUNT ||
+      !fr_host_tcps[platform_index].in_use) {
+    return FR_ERR_HANDLE;
+  }
+  *out_tcp = &fr_host_tcps[platform_index];
+  return FR_OK;
+}
+
+fr_err_t fr_platform_wifi_save(const char *ssid, const char *pass) {
+  if (ssid == NULL || pass == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  size_t ssid_len = strlen(ssid);
+  size_t pass_len = strlen(pass);
+  if (ssid_len == 0 || ssid_len > FR_HOST_WIFI_SSID_CAP ||
+      pass_len > FR_HOST_WIFI_PASS_CAP) {
+    return FR_ERR_DOMAIN;
+  }
+
+  memcpy(fr_host_wifi_ssid, ssid, ssid_len + 1);
+  memcpy(fr_host_wifi_pass, pass, pass_len + 1);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_wifi_connect(void) {
+  /* Tests flip readiness via fr_host_wifi_set_connected; saved creds gate the
+   * call so an unconfigured fixture surfaces the right error. */
+  if (fr_host_wifi_ssid[0] == '\0') {
+    return FR_ERR_NET_DISCONNECTED;
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_wifi_ready(bool *out_ready) {
+  if (out_ready == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_ready = fr_host_wifi_ready_flag;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
+                              uint16_t *out_length) {
+  if (url == NULL || out_length == NULL || (out_body == NULL && cap > 0)) {
+    return FR_ERR_INVALID;
+  }
+  if (url[0] == '\0') {
+    return FR_ERR_NET_PROTOCOL;
+  }
+  if (!fr_host_wifi_ready_flag) {
+    return FR_ERR_NET_DISCONNECTED;
+  }
+  if (!fr_host_http_response.queued) {
+    return FR_ERR_NET_REFUSED;
+  }
+
+  uint16_t length = fr_host_http_response.length;
+  uint16_t status = fr_host_http_response.status;
+  fr_host_http_response.queued = false;
+
+  if (length > cap) {
+    *out_length = 0;
+    return FR_ERR_NET_TOO_LARGE;
+  }
+  if (status < 200u || status >= 300u) {
+    *out_length = 0;
+    return FR_ERR_NET_REFUSED;
+  }
+  if (length > 0) {
+    memcpy(out_body, fr_host_http_response.body, length);
+  }
+  *out_length = length;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_open(const char *host, uint16_t port,
+                              uint16_t *out_platform_index) {
+  if (host == NULL || out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (host[0] == '\0' || port == 0) {
+    return FR_ERR_DOMAIN;
+  }
+  if (!fr_host_wifi_ready_flag) {
+    return FR_ERR_NET_DISCONNECTED;
+  }
+
+  for (uint16_t i = 0; i < FR_TCP_HANDLE_COUNT; i++) {
+    fr_host_tcp_t *tcp = &fr_host_tcps[i];
+
+    if (tcp->in_use) {
+      continue;
+    }
+
+    *tcp = (fr_host_tcp_t){
+        .in_use = true,
+    };
+    *out_platform_index = i;
+    return FR_OK;
+  }
+  return FR_ERR_CAPACITY;
+}
+
+fr_err_t fr_platform_tcp_read(uint16_t platform_index, uint16_t count,
+                              uint8_t *out_bytes, uint16_t *out_length) {
+  fr_host_tcp_t *tcp = NULL;
+
+  if (out_length == NULL || (out_bytes == NULL && count > 0)) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_tcp_entry(platform_index, &tcp));
+
+  uint16_t avail = tcp->read_count;
+  uint16_t take = avail < count ? avail : count;
+  uint8_t oldest =
+      (uint8_t)((tcp->read_head + FR_HOST_TCP_RING_CAP - tcp->read_count) %
+                FR_HOST_TCP_RING_CAP);
+
+  for (uint16_t i = 0; i < take; i++) {
+    out_bytes[i] = tcp->read_queue[oldest];
+    oldest = (uint8_t)((oldest + 1u) % FR_HOST_TCP_RING_CAP);
+  }
+  tcp->read_count = (uint8_t)(tcp->read_count - take);
+  *out_length = take;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_write(uint16_t platform_index, const uint8_t *bytes,
+                               uint16_t length) {
+  fr_host_tcp_t *tcp = NULL;
+
+  if (bytes == NULL && length > 0) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_tcp_entry(platform_index, &tcp));
+
+  for (uint16_t i = 0; i < length; i++) {
+    tcp->write_ring[tcp->write_head] = bytes[i];
+    tcp->write_head = (uint8_t)((tcp->write_head + 1u) % FR_HOST_TCP_RING_CAP);
+    if (tcp->write_count < FR_HOST_TCP_RING_CAP) {
+      tcp->write_count += 1u;
+    }
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_close(uint16_t platform_index) {
+  if (platform_index >= FR_TCP_HANDLE_COUNT) {
+    return FR_OK;
+  }
+  memset(&fr_host_tcps[platform_index], 0, sizeof(fr_host_tcps[platform_index]));
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_bytes_ready(uint16_t platform_index,
+                                     uint16_t *out_count) {
+  fr_host_tcp_t *tcp = NULL;
+
+  if (out_count == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_tcp_entry(platform_index, &tcp));
+  *out_count = tcp->read_count;
+  return FR_OK;
+}
+
+#ifdef FR_HOST_TEST_HELPERS
+void fr_host_wifi_set_connected(bool connected) {
+  fr_host_wifi_ready_flag = connected;
+}
+
+void fr_host_http_queue_response(uint16_t status, const uint8_t *body,
+                                 uint16_t length) {
+  uint16_t copy = length > FR_HTTP_MAX_BODY ? FR_HTTP_MAX_BODY : length;
+
+  fr_host_http_response.queued = true;
+  fr_host_http_response.status = status;
+  fr_host_http_response.length = length;
+  if (copy > 0 && body != NULL) {
+    memcpy(fr_host_http_response.body, body, copy);
+  }
+}
+
+uint16_t fr_host_tcp_drain_writes(uint16_t platform_index, uint8_t *out_bytes,
+                                  uint16_t max_length) {
+  if (platform_index >= FR_TCP_HANDLE_COUNT ||
+      !fr_host_tcps[platform_index].in_use || out_bytes == NULL) {
+    return 0;
+  }
+
+  fr_host_tcp_t *tcp = &fr_host_tcps[platform_index];
+  uint16_t avail = tcp->write_count;
+  uint16_t take = avail < max_length ? avail : max_length;
+  uint8_t oldest =
+      (uint8_t)((tcp->write_head + FR_HOST_TCP_RING_CAP - tcp->write_count) %
+                FR_HOST_TCP_RING_CAP);
+
+  for (uint16_t i = 0; i < take; i++) {
+    out_bytes[i] = tcp->write_ring[oldest];
+    oldest = (uint8_t)((oldest + 1u) % FR_HOST_TCP_RING_CAP);
+  }
+  tcp->write_head = 0;
+  tcp->write_count = 0;
+  return take;
+}
+
+void fr_host_tcp_queue_read(uint16_t platform_index, const uint8_t *bytes,
+                            uint16_t length) {
+  if (platform_index >= FR_TCP_HANDLE_COUNT ||
+      !fr_host_tcps[platform_index].in_use || (bytes == NULL && length > 0)) {
+    return;
+  }
+
+  fr_host_tcp_t *tcp = &fr_host_tcps[platform_index];
+  for (uint16_t i = 0; i < length; i++) {
+    tcp->read_queue[tcp->read_head] = bytes[i];
+    tcp->read_head = (uint8_t)((tcp->read_head + 1u) % FR_HOST_TCP_RING_CAP);
+    if (tcp->read_count < FR_HOST_TCP_RING_CAP) {
+      tcp->read_count += 1u;
+    }
+  }
+}
+#endif
+#endif
