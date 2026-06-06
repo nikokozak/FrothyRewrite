@@ -1447,6 +1447,7 @@ fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
 
 #if FR_FEATURE_NET
 #include "esp_event.h"
+#include "esp_http_client.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "event.h"
@@ -1456,6 +1457,7 @@ enum {
   FR_ESP_WIFI_PASS_MAX = 64,
   FR_ESP_WIFI_CONNECT_TIMEOUT_MS = 30000,
   FR_ESP_WIFI_POLL_MS = 50,
+  FR_ESP_HTTP_TIMEOUT_MS = 5000,
 };
 
 static bool fr_esp_wifi_initialized;
@@ -1640,16 +1642,93 @@ fr_err_t fr_platform_wifi_ready(bool *out_ready) {
   return FR_OK;
 }
 
+typedef struct fr_esp_http_ctx_t {
+  uint8_t *body;
+  uint16_t cap;
+  uint16_t written;
+  bool too_large;
+} fr_esp_http_ctx_t;
+
+/* HTTP_EVENT_ON_DATA can deliver multiple chunks. D5: stop at the cap and
+ * report no partial result; we drop further writes once too_large latches but
+ * keep returning ESP_OK so the client finishes its session cleanly. */
+static esp_err_t fr_esp_http_event(esp_http_client_event_t *evt) {
+  fr_esp_http_ctx_t *ctx = (fr_esp_http_ctx_t *)evt->user_data;
+  uint16_t remaining;
+  if (ctx == NULL || evt->event_id != HTTP_EVENT_ON_DATA ||
+      evt->data_len <= 0) {
+    return ESP_OK;
+  }
+  if (ctx->too_large) {
+    return ESP_OK;
+  }
+  remaining = (uint16_t)(ctx->cap - ctx->written);
+  if ((uint32_t)evt->data_len > (uint32_t)remaining) {
+    ctx->too_large = true;
+    return ESP_OK;
+  }
+  memcpy(ctx->body + ctx->written, evt->data, (size_t)evt->data_len);
+  ctx->written = (uint16_t)(ctx->written + (uint16_t)evt->data_len);
+  return ESP_OK;
+}
+
 fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
                               uint16_t *out_length) {
-  (void)url;
-  (void)out_body;
-  (void)cap;
-  if (out_length == NULL) {
+  fr_esp_http_ctx_t ctx;
+  esp_http_client_config_t config;
+  esp_http_client_handle_t client;
+  esp_err_t perform_err;
+  int status;
+
+  if (url == NULL || url[0] == '\0' || out_body == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
   *out_length = 0;
-  return FR_ERR_UNSUPPORTED;
+
+  ctx.body = out_body;
+  ctx.cap = cap;
+  ctx.written = 0;
+  ctx.too_large = false;
+
+  memset(&config, 0, sizeof config);
+  config.url = url;
+  config.method = HTTP_METHOD_GET;
+  config.timeout_ms = (int)FR_ESP_HTTP_TIMEOUT_MS;
+  config.event_handler = fr_esp_http_event;
+  config.user_data = &ctx;
+
+  client = esp_http_client_init(&config);
+  if (client == NULL) {
+    return FR_ERR_NET_PROTOCOL;
+  }
+  perform_err = esp_http_client_perform(client);
+  status = esp_http_client_get_status_code(client);
+  (void)esp_http_client_cleanup(client);
+
+  if (ctx.too_large) {
+    return FR_ERR_NET_TOO_LARGE;
+  }
+  if (perform_err == ESP_ERR_HTTP_CONNECT) {
+    return FR_ERR_NET_REFUSED;
+  }
+  if (perform_err == ESP_ERR_HTTP_EAGAIN) {
+    return FR_ERR_NET_TIMEOUT;
+  }
+  if (perform_err == ESP_ERR_HTTP_INVALID_TRANSPORT ||
+      perform_err == ESP_ERR_HTTP_FETCH_HEADER ||
+      perform_err == ESP_ERR_HTTP_MAX_REDIRECT) {
+    return FR_ERR_NET_PROTOCOL;
+  }
+  if (perform_err != ESP_OK) {
+    /* TLS handshake failure, DNS failure, and other transport errors land
+     * here; D11 maps no-bundle https failure to NET_PROTOCOL. */
+    return FR_ERR_NET_PROTOCOL;
+  }
+  if (status < 200 || status >= 300) {
+    return FR_ERR_NET_REFUSED;
+  }
+  *out_length = ctx.written;
+  return FR_OK;
 }
 
 fr_err_t fr_platform_tcp_open(const char *host, uint16_t port,
