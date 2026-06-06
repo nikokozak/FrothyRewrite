@@ -1446,26 +1446,160 @@ fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
 }
 
 #if FR_FEATURE_NET
-/* T15 ESP-IDF net stubs. Real implementations land in Slices E (Wi-Fi),
- * G (HTTP), H (TCP). Until then the natives are dispatchable but report
- * FR_ERR_UNSUPPORTED so a real device surfaces "not built yet" instead of
- * pretending the call succeeded. */
+#include "esp_event.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
+
+enum {
+  FR_ESP_WIFI_SSID_MAX = 32,
+  FR_ESP_WIFI_PASS_MAX = 64,
+  FR_ESP_WIFI_CONNECT_TIMEOUT_MS = 30000,
+  FR_ESP_WIFI_POLL_MS = 50,
+};
+
+static bool fr_esp_wifi_initialized;
+static volatile bool fr_esp_wifi_ready;
+
+/* Wi-Fi events fire on the ESP-IDF sys_evt task. D13: Frothy owns reconnect,
+ * so a disconnect retries esp_wifi_connect from here; the 30 s wifi.connect:
+ * budget catches pathological loops (bad creds). Slice F adds per-binding
+ * enqueue into fr_esp_event_queue for the user-visible wifi.disconnected /
+ * wifi.reconnected events. */
+static void fr_esp_wifi_event_handler(void *arg, esp_event_base_t base,
+                                      int32_t id, void *data) {
+  (void)arg;
+  (void)data;
+  if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    fr_esp_wifi_ready = false;
+    (void)esp_wifi_connect();
+  } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+    fr_esp_wifi_ready = true;
+  }
+}
+
+static fr_err_t fr_esp_wifi_init_once(void) {
+  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+
+  if (fr_esp_wifi_initialized) {
+    return FR_OK;
+  }
+  FR_TRY(fr_esp_nvs_init());
+  FR_TRY(fr_esp_err(esp_netif_init()));
+  FR_TRY(fr_esp_err(esp_event_loop_create_default()));
+  if (esp_netif_create_default_wifi_sta() == NULL) {
+    return FR_ERR_CAPACITY;
+  }
+  FR_TRY(fr_esp_err(esp_wifi_init(&cfg)));
+  FR_TRY(fr_esp_err(esp_event_handler_register(
+      WIFI_EVENT, ESP_EVENT_ANY_ID, fr_esp_wifi_event_handler, NULL)));
+  FR_TRY(fr_esp_err(esp_event_handler_register(
+      IP_EVENT, IP_EVENT_STA_GOT_IP, fr_esp_wifi_event_handler, NULL)));
+  FR_TRY(fr_esp_err(esp_wifi_set_mode(WIFI_MODE_STA)));
+  FR_TRY(fr_esp_err(esp_wifi_start()));
+  fr_esp_wifi_initialized = true;
+  return FR_OK;
+}
+
+/* D15: dedicated frothy_wifi namespace, parallel to the user-tier frothy
+ * namespace at line 1071. NVS init is shared. */
+static fr_err_t fr_esp_wifi_nvs_open(nvs_open_mode_t mode,
+                                     nvs_handle_t *out_handle) {
+  if (out_handle == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_platform_init());
+  FR_TRY(fr_esp_nvs_init());
+  return fr_esp_err(nvs_open("frothy_wifi", mode, out_handle));
+}
 
 fr_err_t fr_platform_wifi_save(const char *ssid, const char *pass) {
-  (void)ssid;
-  (void)pass;
-  return FR_ERR_UNSUPPORTED;
+  nvs_handle_t handle = 0;
+  size_t ssid_len = 0;
+  size_t pass_len = 0;
+  fr_err_t err = FR_OK;
+
+  if (ssid == NULL || pass == NULL) {
+    return FR_ERR_INVALID;
+  }
+  ssid_len = strlen(ssid);
+  pass_len = strlen(pass);
+  if (ssid_len == 0 || ssid_len > FR_ESP_WIFI_SSID_MAX ||
+      pass_len > FR_ESP_WIFI_PASS_MAX) {
+    return FR_ERR_DOMAIN;
+  }
+
+  err = fr_esp_wifi_nvs_open(NVS_READWRITE, &handle);
+  if (err != FR_OK) {
+    return err;
+  }
+  err = fr_esp_err(nvs_set_str(handle, "ssid", ssid));
+  if (err == FR_OK) {
+    err = fr_esp_err(nvs_set_str(handle, "pass", pass));
+  }
+  if (err == FR_OK) {
+    err = fr_esp_err(nvs_commit(handle));
+  }
+  nvs_close(handle);
+  return err;
 }
 
 fr_err_t fr_platform_wifi_connect(void) {
-  return FR_ERR_UNSUPPORTED;
+  nvs_handle_t handle = 0;
+  char ssid[FR_ESP_WIFI_SSID_MAX + 1];
+  char pass[FR_ESP_WIFI_PASS_MAX + 1];
+  size_t ssid_len = sizeof ssid;
+  size_t pass_len = sizeof pass;
+  wifi_config_t wifi_config = {0};
+  esp_err_t nvs_err = ESP_OK;
+  fr_err_t err = FR_OK;
+  uint64_t start_us = 0;
+  uint64_t budget_us = 0;
+
+  err = fr_esp_wifi_nvs_open(NVS_READONLY, &handle);
+  if (err == FR_ERR_NOT_FOUND) {
+    return FR_ERR_NET_DISCONNECTED;
+  }
+  if (err != FR_OK) {
+    return err;
+  }
+  nvs_err = nvs_get_str(handle, "ssid", ssid, &ssid_len);
+  if (nvs_err == ESP_OK) {
+    nvs_err = nvs_get_str(handle, "pass", pass, &pass_len);
+  }
+  nvs_close(handle);
+  if (nvs_err == ESP_ERR_NVS_NOT_FOUND) {
+    return FR_ERR_NET_DISCONNECTED;
+  }
+  FR_TRY(fr_esp_err(nvs_err));
+
+  FR_TRY(fr_esp_wifi_init_once());
+
+  fr_esp_wifi_ready = false;
+  /* wifi_sta_config_t fields are byte arrays sized 32/64 (D15). NVS strings
+   * are NUL-terminated; copy bytes without the terminator. */
+  memcpy(wifi_config.sta.ssid, ssid, strlen(ssid));
+  memcpy(wifi_config.sta.password, pass, strlen(pass));
+  FR_TRY(fr_esp_err(esp_wifi_set_config(WIFI_IF_STA, &wifi_config)));
+  /* esp_wifi_connect may report "already in progress" when the disconnect
+   * handler raced ahead; the wait loop catches actual success or timeout. */
+  (void)esp_wifi_connect();
+
+  start_us = (uint64_t)esp_timer_get_time();
+  budget_us = (uint64_t)FR_ESP_WIFI_CONNECT_TIMEOUT_MS * 1000u;
+  while (!fr_esp_wifi_ready) {
+    if ((uint64_t)esp_timer_get_time() - start_us > budget_us) {
+      return FR_ERR_NET_TIMEOUT;
+    }
+    vTaskDelay(pdMS_TO_TICKS(FR_ESP_WIFI_POLL_MS));
+  }
+  return FR_OK;
 }
 
 fr_err_t fr_platform_wifi_ready(bool *out_ready) {
   if (out_ready == NULL) {
     return FR_ERR_INVALID;
   }
-  *out_ready = false;
+  *out_ready = fr_esp_wifi_ready;
   return FR_OK;
 }
 

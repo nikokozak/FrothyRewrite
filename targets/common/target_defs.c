@@ -870,13 +870,15 @@ static fr_err_t fr_native_tcp_read(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_tcp_handle(runtime, args, arg_count, 0,
                                      &platform_index));
   FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 1, &count));
+  /* Zero-byte read would collide with D20's empty-text-success EOF signal. */
+  if (count == 0) {
+    return FR_ERR_DOMAIN;
+  }
   if (count > FR_PROFILE_MAX_TEXT_LENGTH) {
     return FR_ERR_RANGE;
   }
-  if (count > 0) {
-    FR_TRY(fr_platform_tcp_read(platform_index, (uint16_t)count, buffer,
-                                &length));
-  }
+  FR_TRY(fr_platform_tcp_read(platform_index, (uint16_t)count, buffer,
+                              &length));
   FR_TRY(fr_text_install(runtime, buffer, length, &object_id));
   return fr_tagged_encode_object_id(object_id, out);
 }

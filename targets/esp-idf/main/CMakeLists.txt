@@ -64,7 +64,10 @@ idf_component_register(
     REQUIRES
         driver
         esp_adc
+        esp_event
+        esp_netif
         esp_timer
+        esp_wifi
         nvs_flash)
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
