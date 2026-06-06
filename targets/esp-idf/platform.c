@@ -555,6 +555,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
     return fr_platform_i2c_close(platform_index);
   }
 #endif
+#if FR_FEATURE_NET
+  if (kind == FR_HANDLE_KIND_TCP) {
+    return fr_platform_tcp_close(platform_index);
+  }
+#endif
   (void)kind;
   (void)platform_index;
   return FR_OK;
@@ -1439,3 +1444,83 @@ fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
   (void)timestamp_ms;
   return FR_ERR_UNSUPPORTED;
 }
+
+#if FR_FEATURE_NET
+/* T15 ESP-IDF net stubs. Real implementations land in Slices E (Wi-Fi),
+ * G (HTTP), H (TCP). Until then the natives are dispatchable but report
+ * FR_ERR_UNSUPPORTED so a real device surfaces "not built yet" instead of
+ * pretending the call succeeded. */
+
+fr_err_t fr_platform_wifi_save(const char *ssid, const char *pass) {
+  (void)ssid;
+  (void)pass;
+  return FR_ERR_UNSUPPORTED;
+}
+
+fr_err_t fr_platform_wifi_connect(void) {
+  return FR_ERR_UNSUPPORTED;
+}
+
+fr_err_t fr_platform_wifi_ready(bool *out_ready) {
+  if (out_ready == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_ready = false;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
+                              uint16_t *out_length) {
+  (void)url;
+  (void)out_body;
+  (void)cap;
+  if (out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_length = 0;
+  return FR_ERR_UNSUPPORTED;
+}
+
+fr_err_t fr_platform_tcp_open(const char *host, uint16_t port,
+                              uint16_t *out_platform_index) {
+  (void)host;
+  (void)port;
+  (void)out_platform_index;
+  return FR_ERR_UNSUPPORTED;
+}
+
+fr_err_t fr_platform_tcp_read(uint16_t platform_index, uint16_t count,
+                              uint8_t *out_bytes, uint16_t *out_length) {
+  (void)platform_index;
+  (void)count;
+  (void)out_bytes;
+  if (out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_length = 0;
+  return FR_ERR_UNSUPPORTED;
+}
+
+fr_err_t fr_platform_tcp_write(uint16_t platform_index, const uint8_t *bytes,
+                               uint16_t length) {
+  (void)platform_index;
+  (void)bytes;
+  (void)length;
+  return FR_ERR_UNSUPPORTED;
+}
+
+fr_err_t fr_platform_tcp_close(uint16_t platform_index) {
+  (void)platform_index;
+  return FR_ERR_UNSUPPORTED;
+}
+
+fr_err_t fr_platform_tcp_bytes_ready(uint16_t platform_index,
+                                     uint16_t *out_count) {
+  (void)platform_index;
+  if (out_count == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_count = 0;
+  return FR_ERR_UNSUPPORTED;
+}
+#endif

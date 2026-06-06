@@ -940,11 +940,12 @@ fr_err_t fr_platform_wifi_save(const char *ssid, const char *pass) {
 }
 
 fr_err_t fr_platform_wifi_connect(void) {
-  /* Tests flip readiness via fr_host_wifi_set_connected; saved creds gate the
-   * call so an unconfigured fixture surfaces the right error. */
+  /* D7: host stub flips state to connected. Saved creds gate the call so an
+   * unconfigured fixture surfaces the right error. */
   if (fr_host_wifi_ssid[0] == '\0') {
     return FR_ERR_NET_DISCONNECTED;
   }
+  fr_host_wifi_ready_flag = true;
   return FR_OK;
 }
 
