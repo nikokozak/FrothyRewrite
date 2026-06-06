@@ -151,29 +151,12 @@ fr_err_t fr_platform_wifi_ready(bool *out_ready);
 fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
                               uint16_t *out_length);
 
-fr_err_t fr_platform_tcp_open(const char *host, uint16_t port,
-                              uint16_t *out_platform_index);
-/* Blocks until >=1 byte arrives, peer EOF, the 5s timeout, or Ctrl-C (D20).
- * out_length carries the bytes written; 0 with FR_OK means graceful EOF. */
-fr_err_t fr_platform_tcp_read(uint16_t platform_index, uint16_t count,
-                              uint8_t *out_bytes, uint16_t *out_length);
-fr_err_t fr_platform_tcp_write(uint16_t platform_index, const uint8_t *bytes,
-                               uint16_t length);
-fr_err_t fr_platform_tcp_close(uint16_t platform_index);
-fr_err_t fr_platform_tcp_bytes_ready(uint16_t platform_index,
-                                     uint16_t *out_count);
-
 #ifdef FR_HOST_TEST_HELPERS
 /* Host net fixtures (D16). wifi_set_connected flips the stub ready state.
  * http_queue_response enqueues one response that the next fr_platform_http_get
- * consumes. tcp_drain_writes returns recorded bytes from a per-handle ring;
- * tcp_queue_read appends bytes the next fr_platform_tcp_read consumes. */
+ * consumes. */
 void fr_host_wifi_set_connected(bool connected);
 void fr_host_http_queue_response(uint16_t status, const uint8_t *body,
                                  uint16_t length);
-uint16_t fr_host_tcp_drain_writes(uint16_t platform_index, uint8_t *out_bytes,
-                                  uint16_t max_length);
-void fr_host_tcp_queue_read(uint16_t platform_index, const uint8_t *bytes,
-                            uint16_t length);
 #endif
 #endif

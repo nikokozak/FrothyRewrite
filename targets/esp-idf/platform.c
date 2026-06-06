@@ -555,11 +555,6 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
     return fr_platform_i2c_close(platform_index);
   }
 #endif
-#if FR_FEATURE_NET
-  if (kind == FR_HANDLE_KIND_TCP) {
-    return fr_platform_tcp_close(platform_index);
-  }
-#endif
   (void)kind;
   (void)platform_index;
   return FR_OK;
@@ -1467,42 +1462,19 @@ static volatile bool fr_esp_wifi_ready;
  * reconnect (wifi.reconnected fires). */
 static volatile bool fr_esp_wifi_was_connected;
 
-static void fr_esp_wifi_enqueue(fr_event_kind_t kind) {
-  uint16_t binding_index = 0;
-  uint16_t generation = 0;
-  fr_event_candidate_t candidate;
-  if (!fr_event_wifi_lookup(kind, &binding_index, &generation)) {
-    return;
-  }
-  candidate = (fr_event_candidate_t){
-      .binding_index = binding_index,
-      .generation = generation,
-      .timestamp_ms = fr_esp_event_millis_now(),
-  };
-  if (xQueueSend(fr_esp_event_queue, &candidate, 0) != pdTRUE) {
-    fr_esp_event_overflow++;
-  }
-}
-
 /* Wi-Fi events fire on the ESP-IDF sys_evt task. D13: Frothy owns reconnect,
  * so a disconnect retries esp_wifi_connect from here; the 30 s wifi.connect:
- * budget catches pathological loops (bad creds). D19: when a Frothy `on
- * wifi.*` binding is present, enqueue a candidate into fr_esp_event_queue
- * using the same shape as the timer callback. */
+ * budget catches pathological loops (bad creds). Slice F rewrite (D19
+ * parallel install/remove pair) will add the platform-side per-kind binding
+ * tracking and the enqueue path; for now the handler just maintains state. */
 static void fr_esp_wifi_event_handler(void *arg, esp_event_base_t base,
                                       int32_t id, void *data) {
   (void)arg;
   (void)data;
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-    if (fr_esp_wifi_was_connected) {
-      fr_esp_wifi_enqueue(FR_EVENT_KIND_WIFI_DISCONNECTED);
-    }
     fr_esp_wifi_ready = false;
     (void)esp_wifi_connect();
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-    if (fr_esp_wifi_was_connected) {
-      fr_esp_wifi_enqueue(FR_EVENT_KIND_WIFI_RECONNECTED);
-    }
     fr_esp_wifi_ready = true;
     fr_esp_wifi_was_connected = true;
   }
@@ -1731,46 +1703,4 @@ fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
   return FR_OK;
 }
 
-fr_err_t fr_platform_tcp_open(const char *host, uint16_t port,
-                              uint16_t *out_platform_index) {
-  (void)host;
-  (void)port;
-  (void)out_platform_index;
-  return FR_ERR_UNSUPPORTED;
-}
-
-fr_err_t fr_platform_tcp_read(uint16_t platform_index, uint16_t count,
-                              uint8_t *out_bytes, uint16_t *out_length) {
-  (void)platform_index;
-  (void)count;
-  (void)out_bytes;
-  if (out_length == NULL) {
-    return FR_ERR_INVALID;
-  }
-  *out_length = 0;
-  return FR_ERR_UNSUPPORTED;
-}
-
-fr_err_t fr_platform_tcp_write(uint16_t platform_index, const uint8_t *bytes,
-                               uint16_t length) {
-  (void)platform_index;
-  (void)bytes;
-  (void)length;
-  return FR_ERR_UNSUPPORTED;
-}
-
-fr_err_t fr_platform_tcp_close(uint16_t platform_index) {
-  (void)platform_index;
-  return FR_ERR_UNSUPPORTED;
-}
-
-fr_err_t fr_platform_tcp_bytes_ready(uint16_t platform_index,
-                                     uint16_t *out_count) {
-  (void)platform_index;
-  if (out_count == NULL) {
-    return FR_ERR_INVALID;
-  }
-  *out_count = 0;
-  return FR_ERR_UNSUPPORTED;
-}
 #endif
