@@ -961,6 +961,47 @@ fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
   return FR_OK;
 }
 
+typedef struct fr_host_wifi_slot_t {
+  uint16_t binding_index;
+  uint16_t generation;
+  bool active;
+} fr_host_wifi_slot_t;
+
+/* One slot per wifi kind; FR_EVENT_KIND_WIFI_DISCONNECTED → 0,
+ * FR_EVENT_KIND_WIFI_RECONNECTED → 1. */
+static fr_host_wifi_slot_t fr_host_wifi_slots[2];
+
+static uint8_t fr_host_wifi_slot_index(fr_event_kind_t kind) {
+  return kind == FR_EVENT_KIND_WIFI_DISCONNECTED ? 0u : 1u;
+}
+
+fr_err_t fr_platform_event_wifi_install(fr_event_kind_t kind,
+                                        uint16_t binding_index,
+                                        uint16_t generation) {
+  uint8_t i;
+  if (kind != FR_EVENT_KIND_WIFI_DISCONNECTED &&
+      kind != FR_EVENT_KIND_WIFI_RECONNECTED) {
+    return FR_ERR_INVALID;
+  }
+  i = fr_host_wifi_slot_index(kind);
+  fr_host_wifi_slots[i].binding_index = binding_index;
+  fr_host_wifi_slots[i].generation = generation;
+  fr_host_wifi_slots[i].active = true;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_event_wifi_remove(uint16_t binding_index) {
+  for (uint8_t i = 0; i < 2; i++) {
+    if (fr_host_wifi_slots[i].active &&
+        fr_host_wifi_slots[i].binding_index == binding_index) {
+      fr_host_wifi_slots[i].active = false;
+      fr_host_wifi_slots[i].binding_index = 0;
+      fr_host_wifi_slots[i].generation = 0;
+    }
+  }
+  return FR_OK;
+}
+
 #ifdef FR_HOST_TEST_HELPERS
 void fr_host_wifi_set_connected(bool connected) {
   fr_host_wifi_ready_flag = connected;
@@ -976,6 +1017,20 @@ void fr_host_http_queue_response(uint16_t status, const uint8_t *body,
   if (copy > 0 && body != NULL) {
     memcpy(fr_host_http_response.body, body, copy);
   }
+}
+
+void fr_host_wifi_fire_event(fr_event_kind_t kind) {
+  const fr_host_wifi_slot_t *slot;
+  if (kind != FR_EVENT_KIND_WIFI_DISCONNECTED &&
+      kind != FR_EVENT_KIND_WIFI_RECONNECTED) {
+    return;
+  }
+  slot = &fr_host_wifi_slots[fr_host_wifi_slot_index(kind)];
+  if (!slot->active) {
+    return;
+  }
+  (void)fr_platform_event_post_test_candidate(slot->binding_index,
+                                              slot->generation, 0);
 }
 
 #endif

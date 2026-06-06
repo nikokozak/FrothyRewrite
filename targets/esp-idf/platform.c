@@ -1462,21 +1462,66 @@ static volatile bool fr_esp_wifi_ready;
  * reconnect (wifi.reconnected fires). */
 static volatile bool fr_esp_wifi_was_connected;
 
+/* D19 parallel install/remove pair backing. One slot per wifi kind because
+ * each kind has at most one binding and the wifi handler has no per-pin or
+ * per-period source dimension. The fields are word-sized so the sys_evt-task
+ * read in the handler races safely against the main-task write in install /
+ * remove; a stale candidate that slips through gets dropped by the runtime's
+ * generation filter (src/event.c:192-194). */
+typedef struct fr_esp_wifi_slot_t {
+  uint16_t binding_index;
+  uint16_t generation;
+  bool active;
+} fr_esp_wifi_slot_t;
+
+static fr_esp_wifi_slot_t fr_esp_wifi_slots[2];
+
+static uint8_t fr_esp_wifi_slot_index(fr_event_kind_t kind) {
+  return kind == FR_EVENT_KIND_WIFI_DISCONNECTED ? 0u : 1u;
+}
+
+/* Push a candidate for the wifi kind onto the shared event queue. Same shape
+ * as the timer-task path (fr_esp_event_timer_callback above) — non-FromISR
+ * send because the wifi handler runs on the sys_evt task. */
+static void fr_esp_wifi_enqueue(fr_event_kind_t kind) {
+  const fr_esp_wifi_slot_t *slot =
+      &fr_esp_wifi_slots[fr_esp_wifi_slot_index(kind)];
+  fr_event_candidate_t candidate;
+  if (!slot->active || fr_esp_event_queue == NULL) {
+    return;
+  }
+  candidate.binding_index = slot->binding_index;
+  candidate.generation = slot->generation;
+  candidate.timestamp_ms = fr_esp_event_millis_now();
+  if (xQueueSend(fr_esp_event_queue, &candidate, 0) != pdTRUE) {
+    fr_esp_event_overflow++;
+  }
+}
+
 /* Wi-Fi events fire on the ESP-IDF sys_evt task. D13: Frothy owns reconnect,
  * so a disconnect retries esp_wifi_connect from here; the 30 s wifi.connect:
- * budget catches pathological loops (bad creds). Slice F rewrite (D19
- * parallel install/remove pair) will add the platform-side per-kind binding
- * tracking and the enqueue path; for now the handler just maintains state. */
+ * budget catches pathological loops (bad creds). D19: a wifi.disconnected
+ * binding only fires after we have observed an IP at least once, and
+ * wifi.reconnected only on re-establishment (initial got_ip stays silent). */
 static void fr_esp_wifi_event_handler(void *arg, esp_event_base_t base,
                                       int32_t id, void *data) {
+  bool was_connected;
   (void)arg;
   (void)data;
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    was_connected = fr_esp_wifi_was_connected;
     fr_esp_wifi_ready = false;
     (void)esp_wifi_connect();
+    if (was_connected) {
+      fr_esp_wifi_enqueue(FR_EVENT_KIND_WIFI_DISCONNECTED);
+    }
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+    was_connected = fr_esp_wifi_was_connected;
     fr_esp_wifi_ready = true;
     fr_esp_wifi_was_connected = true;
+    if (was_connected) {
+      fr_esp_wifi_enqueue(FR_EVENT_KIND_WIFI_RECONNECTED);
+    }
   }
 }
 
@@ -1611,6 +1656,37 @@ fr_err_t fr_platform_wifi_ready(bool *out_ready) {
     return FR_ERR_INVALID;
   }
   *out_ready = fr_esp_wifi_ready;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_event_wifi_install(fr_event_kind_t kind,
+                                        uint16_t binding_index,
+                                        uint16_t generation) {
+  uint8_t i;
+  if (kind != FR_EVENT_KIND_WIFI_DISCONNECTED &&
+      kind != FR_EVENT_KIND_WIFI_RECONNECTED) {
+    return FR_ERR_INVALID;
+  }
+  if (binding_index >= FR_EVENT_BINDING_COUNT) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_event_queue_ensure());
+  i = fr_esp_wifi_slot_index(kind);
+  fr_esp_wifi_slots[i].binding_index = binding_index;
+  fr_esp_wifi_slots[i].generation = generation;
+  fr_esp_wifi_slots[i].active = true;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_event_wifi_remove(uint16_t binding_index) {
+  for (uint8_t i = 0; i < 2; i++) {
+    if (fr_esp_wifi_slots[i].active &&
+        fr_esp_wifi_slots[i].binding_index == binding_index) {
+      fr_esp_wifi_slots[i].active = false;
+      fr_esp_wifi_slots[i].binding_index = 0;
+      fr_esp_wifi_slots[i].generation = 0;
+    }
+  }
   return FR_OK;
 }
 

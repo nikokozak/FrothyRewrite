@@ -46,15 +46,16 @@ static fr_err_t fr_event_platform_install(fr_event_kind_t kind, uint16_t source,
     return fr_platform_event_gpio_install(kind, source, binding_index,
                                           generation);
   }
-  /* Slice F rewrite: route through fr_platform_event_wifi_install (parallel
-   * to GPIO and timer install pairs); platform layer tracks per-kind binding
-   * for the Wi-Fi event handler to consume. Until that lands, no-op so the
-   * kernel side compiles. */
   if (fr_event_kind_is_wifi(kind)) {
+#if FR_FEATURE_NET
+    (void)source;
+    return fr_platform_event_wifi_install(kind, binding_index, generation);
+#else
     (void)source;
     (void)binding_index;
     (void)generation;
-    return FR_OK;
+    return FR_ERR_INVALID;
+#endif
   }
   return fr_platform_event_timer_install(kind, (uint32_t)source, binding_index,
                                          generation);
@@ -65,10 +66,13 @@ static fr_err_t fr_event_platform_remove(const fr_event_binding_t *entry,
   if (fr_event_kind_is_gpio(entry->kind)) {
     return fr_platform_event_gpio_remove(entry->source);
   }
-  /* Slice F rewrite: route through fr_platform_event_wifi_remove. */
   if (fr_event_kind_is_wifi(entry->kind)) {
+#if FR_FEATURE_NET
+    return fr_platform_event_wifi_remove(binding_index);
+#else
     (void)binding_index;
-    return FR_OK;
+    return FR_ERR_INVALID;
+#endif
   }
   return fr_platform_event_timer_remove(binding_index);
 }
