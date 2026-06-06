@@ -42,3 +42,5 @@
    on; with math off here, the pressure profile skips source-base. */
 #undef FR_FEATURE_SOURCE_BASE
 #define FR_FEATURE_SOURCE_BASE 0
+
+#define FR_FEATURE_NET 0

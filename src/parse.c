@@ -883,12 +883,32 @@ static fr_err_t fr_parse_timer_event(fr_parser_t *parser,
 /* `on <pin-expr> <edge> [debounce <ms-expr>] [body]` — child layout is
  * (pin, body) or (pin, body, debounce); int_value carries the GPIO edge
  * as the matching fr_event_kind_t value so the compile slice can lift it
- * straight into the registration call. */
+ * straight into the registration call. `on wifi.disconnected [body]` and
+ * `on wifi.reconnected [body]` (D19) carry the wifi kind in int_value and
+ * use a single-child layout (body), no pin or debounce. */
 static fr_err_t fr_parse_on(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   fr_parse_expr_t reg = {.kind = FR_PARSE_EXPR_EVENT_REGISTER};
   fr_int_t edge = 0;
 
   FR_TRY(fr_parse_advance(parser));
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "wifi.disconnected")) {
+    reg.int_value = FR_EVENT_KIND_WIFI_DISCONNECTED;
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_bracket_block(parser, &reg.children[0]));
+    reg.child = reg.children[0];
+    reg.child_count = 1;
+    return fr_parse_add_expr(parser, reg, out_id);
+  }
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "wifi.reconnected")) {
+    reg.int_value = FR_EVENT_KIND_WIFI_RECONNECTED;
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_bracket_block(parser, &reg.children[0]));
+    reg.child = reg.children[0];
+    reg.child_count = 1;
+    return fr_parse_add_expr(parser, reg, out_id);
+  }
   FR_TRY(fr_parse_expression(parser, &reg.children[0]));
   if (parser->token.kind != FR_TOKEN_NAME) {
     return FR_ERR_INVALID;
@@ -926,6 +946,20 @@ static fr_err_t fr_parse_cancel(fr_parser_t *parser,
   fr_parse_expr_t reg = {.kind = FR_PARSE_EXPR_EVENT_CANCEL};
 
   FR_TRY(fr_parse_advance(parser));
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "wifi.disconnected")) {
+    reg.int_value = FR_EVENT_KIND_WIFI_DISCONNECTED;
+    FR_TRY(fr_parse_advance(parser));
+    reg.child_count = 0;
+    return fr_parse_add_expr(parser, reg, out_id);
+  }
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "wifi.reconnected")) {
+    reg.int_value = FR_EVENT_KIND_WIFI_RECONNECTED;
+    FR_TRY(fr_parse_advance(parser));
+    reg.child_count = 0;
+    return fr_parse_add_expr(parser, reg, out_id);
+  }
   if (parser->token.kind == FR_TOKEN_NAME &&
       fr_parse_span_equals(parser->token.span, "every")) {
     reg.int_value = FR_EVENT_KIND_EVERY;

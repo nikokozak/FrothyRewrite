@@ -793,6 +793,8 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
   uint16_t body_offset = FR_INSTRUCTION_LOCALS_HEADER_SIZE;
   bool is_gpio_kind = false;
   bool is_timer_kind = false;
+  bool is_wifi_kind = false;
+  uint8_t body_child = 1;
 
   if (expr == NULL) {
     return FR_ERR_INVALID;
@@ -802,7 +804,9 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
                  expr->int_value <= FR_EVENT_KIND_GPIO_CHANGES;
   is_timer_kind = expr->int_value == FR_EVENT_KIND_EVERY ||
                   expr->int_value == FR_EVENT_KIND_AFTER;
-  if (!is_gpio_kind && !is_timer_kind) {
+  is_wifi_kind = expr->int_value == FR_EVENT_KIND_WIFI_DISCONNECTED ||
+                 expr->int_value == FR_EVENT_KIND_WIFI_RECONNECTED;
+  if (!is_gpio_kind && !is_timer_kind && !is_wifi_kind) {
     return FR_ERR_INVALID;
   }
   if (is_gpio_kind && expr->child_count != 2 && expr->child_count != 3) {
@@ -810,6 +814,13 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
   }
   if (is_timer_kind && expr->child_count != 2) {
     return FR_ERR_INVALID;
+  }
+  /* D19: wifi binds have one child — the body. Source and debounce are 0. */
+  if (is_wifi_kind && expr->child_count != 1) {
+    return FR_ERR_INVALID;
+  }
+  if (is_wifi_kind) {
+    body_child = 0;
   }
   if (ctx == NULL || ctx->event_body == NULL) {
     return FR_ERR_UNSUPPORTED;
@@ -828,8 +839,8 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
   body_ctx.runtime = ctx->runtime;
   body_ctx.body_texts = ctx->body_texts;
   body_ctx.locals = &body_locals;
-  FR_TRY(fr_compile_emit_expr(&body_ctx, parsed, expr->children[1], body->bytes,
-                              &body_offset));
+  FR_TRY(fr_compile_emit_expr(&body_ctx, parsed, expr->children[body_child],
+                              body->bytes, &body_offset));
   FR_TRY(fr_compile_write_byte(body->bytes, &body_offset, FR_OP_RETURN));
   /* next_index is the high-water-mark; LIST emit restores `count` on close
    * so the body needs to size locals to what was ever assigned. */
@@ -841,8 +852,12 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
   body->used = true;
 
   FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, expr->int_value));
-  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0], instruction_bytes,
-                              offset));
+  if (is_wifi_kind) {
+    FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, 0));
+  } else {
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
+                                instruction_bytes, offset));
+  }
   if (expr->child_count == 3) {
     FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[2],
                                 instruction_bytes, offset));
@@ -1079,17 +1094,29 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_EVENT_REGISTER:
     return fr_compile_emit_event_register(ctx, parsed, expr, instruction_bytes,
                                           offset);
-  case FR_PARSE_EXPR_EVENT_CANCEL:
-    if (expr->child_count != 1) {
+  case FR_PARSE_EXPR_EVENT_CANCEL: {
+    bool cancel_is_wifi =
+        expr->int_value == FR_EVENT_KIND_WIFI_DISCONNECTED ||
+        expr->int_value == FR_EVENT_KIND_WIFI_RECONNECTED;
+    if (cancel_is_wifi) {
+      if (expr->child_count != 0) {
+        return FR_ERR_INVALID;
+      }
+    } else if (expr->child_count != 1) {
       return FR_ERR_INVALID;
     }
     FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_EVENTS));
     FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, expr->int_value));
-    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
-                                instruction_bytes, offset));
+    if (cancel_is_wifi) {
+      FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, 0));
+    } else {
+      FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
+                                  instruction_bytes, offset));
+    }
     return fr_compile_emit_slot_op(instruction_bytes, offset,
                                    FR_OP_CALL_NATIVE_SLOT,
                                    FR_SLOT_EVENT_CANCEL);
+  }
   default:
     return FR_ERR_UNSUPPORTED;
   }

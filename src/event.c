@@ -16,6 +16,11 @@ static bool fr_event_kind_is_timer(fr_event_kind_t kind) {
   return kind == FR_EVENT_KIND_EVERY || kind == FR_EVENT_KIND_AFTER;
 }
 
+static bool fr_event_kind_is_wifi(fr_event_kind_t kind) {
+  return kind == FR_EVENT_KIND_WIFI_DISCONNECTED ||
+         kind == FR_EVENT_KIND_WIFI_RECONNECTED;
+}
+
 /* GPIO last-write replaces on pin alone; timers replace on (kind, ms). */
 static bool fr_event_entry_matches(const fr_event_binding_t *entry,
                                    fr_event_kind_t kind, uint16_t source) {
@@ -41,6 +46,17 @@ static fr_err_t fr_event_platform_install(fr_event_kind_t kind, uint16_t source,
     return fr_platform_event_gpio_install(kind, source, binding_index,
                                           generation);
   }
+  if (fr_event_kind_is_wifi(kind)) {
+#if FR_FEATURE_NET
+    (void)source;
+    return fr_platform_event_wifi_install(kind, binding_index, generation);
+#else
+    (void)source;
+    (void)binding_index;
+    (void)generation;
+    return FR_ERR_INVALID;
+#endif
+  }
   return fr_platform_event_timer_install(kind, (uint32_t)source, binding_index,
                                          generation);
 }
@@ -49,6 +65,14 @@ static fr_err_t fr_event_platform_remove(const fr_event_binding_t *entry,
                                          uint16_t binding_index) {
   if (fr_event_kind_is_gpio(entry->kind)) {
     return fr_platform_event_gpio_remove(entry->source);
+  }
+  if (fr_event_kind_is_wifi(entry->kind)) {
+#if FR_FEATURE_NET
+    return fr_platform_event_wifi_remove(binding_index);
+#else
+    (void)binding_index;
+    return FR_ERR_INVALID;
+#endif
   }
   return fr_platform_event_timer_remove(binding_index);
 }
@@ -63,7 +87,8 @@ fr_err_t fr_event_register(fr_runtime_t *runtime, fr_event_kind_t kind,
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
-  if (!fr_event_kind_is_gpio(kind) && !fr_event_kind_is_timer(kind)) {
+  if (!fr_event_kind_is_gpio(kind) && !fr_event_kind_is_timer(kind) &&
+      !fr_event_kind_is_wifi(kind)) {
     return FR_ERR_INVALID;
   }
 
@@ -111,7 +136,8 @@ fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
-  if (!fr_event_kind_is_gpio(kind) && !fr_event_kind_is_timer(kind)) {
+  if (!fr_event_kind_is_gpio(kind) && !fr_event_kind_is_timer(kind) &&
+      !fr_event_kind_is_wifi(kind)) {
     return FR_ERR_INVALID;
   }
 

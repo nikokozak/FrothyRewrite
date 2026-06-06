@@ -686,6 +686,120 @@ static fr_err_t fr_native_i2c_write_reg16(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_NET
+enum {
+  FR_NATIVE_WIFI_SSID_MAX = 32,
+  FR_NATIVE_WIFI_PASS_MAX = 64,
+};
+
+static fr_err_t fr_native_decode_text_view(const fr_runtime_t *runtime,
+                                           const fr_tagged_t *args,
+                                           uint8_t arg_count, uint8_t index,
+                                           const uint8_t **out_bytes,
+                                           uint16_t *out_length) {
+  fr_object_id_t object_id = 0;
+
+  if (args == NULL || index >= arg_count || out_bytes == NULL ||
+      out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_object_id(args[index], &object_id));
+  return fr_text_view(runtime, object_id, out_bytes, out_length);
+}
+
+/* cap counts the NUL slot; the caller's text must fit in cap - 1 bytes. */
+static fr_err_t fr_native_copy_text_cstring(const fr_runtime_t *runtime,
+                                            const fr_tagged_t *args,
+                                            uint8_t arg_count, uint8_t index,
+                                            char *out_buf, uint16_t cap) {
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (out_buf == NULL || cap == 0) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_decode_text_view(runtime, args, arg_count, index, &bytes,
+                                    &length));
+  if ((uint32_t)length + 1u > cap) {
+    return FR_ERR_DOMAIN;
+  }
+  if (length > 0) {
+    memcpy(out_buf, bytes, length);
+  }
+  out_buf[length] = '\0';
+  return FR_OK;
+}
+
+static fr_err_t fr_native_wifi_save(fr_runtime_t *runtime,
+                                    const fr_tagged_t *args, uint8_t arg_count,
+                                    fr_tagged_t *out) {
+  char ssid[FR_NATIVE_WIFI_SSID_MAX + 1];
+  char pass[FR_NATIVE_WIFI_PASS_MAX + 1];
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_copy_text_cstring(runtime, args, arg_count, 0, ssid,
+                                     sizeof ssid));
+  FR_TRY(fr_native_copy_text_cstring(runtime, args, arg_count, 1, pass,
+                                     sizeof pass));
+  FR_TRY(fr_platform_wifi_save(ssid, pass));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_wifi_connect(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_platform_wifi_connect(runtime));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_wifi_ready_p(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  bool ready = false;
+
+  (void)runtime;
+  (void)args;
+  if (arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_platform_wifi_ready(&ready));
+  return fr_tagged_encode_bool(ready, out);
+}
+
+static fr_err_t fr_native_http_get(fr_runtime_t *runtime,
+                                   const fr_tagged_t *args, uint8_t arg_count,
+                                   fr_tagged_t *out) {
+  char url[FR_PROFILE_MAX_TEXT_LENGTH + 1];
+  uint8_t body[FR_HTTP_MAX_BODY];
+  uint16_t length = 0;
+  fr_object_id_t object_id = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_native_copy_text_cstring(runtime, args, arg_count, 0, url,
+                                     sizeof url));
+  FR_TRY(fr_platform_http_get(url, body, FR_HTTP_MAX_BODY, &length));
+  FR_TRY(fr_text_install(runtime, body, length, &object_id));
+  return fr_tagged_encode_object_id(object_id, out);
+}
+
+#endif
+
 #if FR_FEATURE_MATH
 static fr_err_t fr_native_abs(fr_runtime_t *runtime, const fr_tagged_t *args,
                               uint8_t arg_count, fr_tagged_t *out) {
@@ -1106,7 +1220,8 @@ static fr_err_t fr_native_event_register(fr_runtime_t *runtime,
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 0, &kind_int));
-  if (kind_int < FR_EVENT_KIND_GPIO_RISING || kind_int > FR_EVENT_KIND_AFTER) {
+  if (kind_int < FR_EVENT_KIND_GPIO_RISING ||
+      kind_int > FR_EVENT_KIND_WIFI_RECONNECTED) {
     return FR_ERR_DOMAIN;
   }
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &source));
@@ -1133,7 +1248,8 @@ static fr_err_t fr_native_event_cancel(fr_runtime_t *runtime,
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 0, &kind_int));
-  if (kind_int < FR_EVENT_KIND_GPIO_RISING || kind_int > FR_EVENT_KIND_AFTER) {
+  if (kind_int < FR_EVENT_KIND_GPIO_RISING ||
+      kind_int > FR_EVENT_KIND_WIFI_RECONNECTED) {
     return FR_ERR_DOMAIN;
   }
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &source));
@@ -1625,6 +1741,43 @@ static const fr_native_signature_t fr_native_i2c_write_reg16_signature = {
 };
 #endif
 
+#if FR_FEATURE_NET
+static const fr_native_param_t fr_native_wifi_save_params[] = {
+    {"ssid", FR_NATIVE_VALUE_TEXT},
+    {"pass", FR_NATIVE_VALUE_TEXT},
+};
+static const fr_native_signature_t fr_native_wifi_save_signature = {
+    .params = fr_native_wifi_save_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "store wifi credentials in the frothy_wifi nvs namespace",
+};
+
+static const fr_native_signature_t fr_native_wifi_connect_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "connect to wifi using stored credentials",
+};
+
+static const fr_native_signature_t fr_native_wifi_ready_p_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "true when wifi is connected",
+};
+
+static const fr_native_param_t fr_native_http_get_params[] = {
+    {"url", FR_NATIVE_VALUE_TEXT},
+};
+static const fr_native_signature_t fr_native_http_get_signature = {
+    .params = fr_native_http_get_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_TEXT,
+    .help = "fetch a url and return the body up to the http body cap",
+};
+#endif
+
 #if FR_FEATURE_MATH
 static const fr_native_param_t fr_native_abs_params[] = {
     {"x", FR_NATIVE_VALUE_INT},
@@ -2107,6 +2260,56 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 4,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_i2c_write_reg16_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_NET
+    {
+        .slot_id = FR_SLOT_WIFI_SAVE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "wifi.save",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_wifi_save,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_wifi_save_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_WIFI_CONNECT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "wifi.connect",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_wifi_connect,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_wifi_connect_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_WIFI_READY_P,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "wifi.ready?",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_wifi_ready_p,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_wifi_ready_p_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_HTTP_GET,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "http.get",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_http_get,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_http_get_signature,
 #endif
     },
 #endif

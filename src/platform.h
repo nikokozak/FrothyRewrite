@@ -34,6 +34,8 @@ enum {
   FR_EVENT_KIND_GPIO_CHANGES = 3,
   FR_EVENT_KIND_EVERY = 4,
   FR_EVENT_KIND_AFTER = 5,
+  FR_EVENT_KIND_WIFI_DISCONNECTED = 6,
+  FR_EVENT_KIND_WIFI_RECONNECTED = 7,
 };
 
 typedef struct fr_event_candidate_t {
@@ -50,6 +52,15 @@ fr_err_t fr_platform_event_timer_install(fr_event_kind_t kind, uint32_t ms,
                                          uint16_t binding_index,
                                          uint16_t generation);
 fr_err_t fr_platform_event_timer_remove(uint16_t binding_index);
+#if FR_FEATURE_NET
+/* D19: wifi events ride the same candidate queue as gpio and timer; the
+ * platform tracks a binding per wifi kind because each kind has at most one
+ * binding and there is no per-pin / per-period source dimension. */
+fr_err_t fr_platform_event_wifi_install(fr_event_kind_t kind,
+                                        uint16_t binding_index,
+                                        uint16_t generation);
+fr_err_t fr_platform_event_wifi_remove(uint16_t binding_index);
+#endif
 fr_err_t fr_platform_event_drain(fr_event_candidate_t *out_events,
                                  uint8_t out_cap, uint8_t *out_count,
                                  uint32_t *overflow_delta);
@@ -133,4 +144,33 @@ fr_err_t fr_platform_storage_write(uint8_t slot, uint16_t offset,
 fr_err_t fr_platform_storage_erase(uint8_t slot);
 
 void fr_platform_storage_debug_reset(void);
+#endif
+
+#if FR_FEATURE_NET
+fr_err_t fr_platform_wifi_save(const char *ssid, const char *pass);
+/* Blocks until ready or the 30 s D8 budget; polls fr_platform_poll_interrupt
+ * between waits so Ctrl-C still wins (D2). Returns FR_ERR_INTERRUPTED on
+ * Ctrl-C, mirroring the `ms` native (targets/common/target_defs.c:54-61). */
+fr_err_t fr_platform_wifi_connect(fr_runtime_t *runtime);
+fr_err_t fr_platform_wifi_ready(bool *out_ready);
+
+/* out_body buffer is caller-owned with size cap; out_length receives the byte
+ * count written. Bodies larger than cap return FR_ERR_NET_TOO_LARGE with no
+ * partial result (D5). */
+fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
+                              uint16_t *out_length);
+
+#ifdef FR_HOST_TEST_HELPERS
+/* Host net fixtures (D16). wifi_set_connected flips the stub ready state.
+ * http_queue_response enqueues one response that the next fr_platform_http_get
+ * consumes. wifi_fire_event posts a candidate for the bound kind so the unity
+ * test can exercise wifi.disconnected / wifi.reconnected delivery. */
+void fr_host_wifi_set_connected(bool connected);
+void fr_host_http_queue_response(uint16_t status, const uint8_t *body,
+                                 uint16_t length);
+void fr_host_wifi_fire_event(fr_event_kind_t kind);
+/* Clears credential buffers, ready flag, queued response, wifi slot table,
+ * and the host event queue so Unity tests start from a known state. */
+void fr_host_net_reset(void);
+#endif
 #endif
