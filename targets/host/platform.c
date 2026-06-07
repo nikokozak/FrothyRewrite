@@ -284,6 +284,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
     return fr_platform_i2c_close(platform_index);
   }
 #endif
+#if FR_FEATURE_NET
+  if (kind == FR_HANDLE_KIND_TCP) {
+    return fr_platform_tcp_close(platform_index);
+  }
+#endif
   (void)kind;
   (void)platform_index;
   return FR_OK;
@@ -959,6 +964,52 @@ fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
   }
   *out_length = length;
   return FR_OK;
+}
+
+/* Slice B placeholders. Slice D replaces with the recording-ring + D18
+ * host helpers; until then any call surfaces as FR_ERR_NET_REFUSED so a
+ * misordered slice can't masquerade as a working TCP stub. */
+fr_err_t fr_platform_tcp_open(const char *host, uint16_t port,
+                              uint16_t *out_platform_index) {
+  (void)host;
+  (void)port;
+  if (out_platform_index != NULL) {
+    *out_platform_index = 0;
+  }
+  return FR_ERR_NET_REFUSED;
+}
+
+fr_err_t fr_platform_tcp_read(uint16_t platform_index, uint8_t *out_bytes,
+                              uint16_t cap, uint16_t *out_length) {
+  (void)platform_index;
+  (void)out_bytes;
+  (void)cap;
+  if (out_length != NULL) {
+    *out_length = 0;
+  }
+  return FR_ERR_HANDLE;
+}
+
+fr_err_t fr_platform_tcp_write(uint16_t platform_index, const uint8_t *bytes,
+                               uint16_t length) {
+  (void)platform_index;
+  (void)bytes;
+  (void)length;
+  return FR_ERR_HANDLE;
+}
+
+fr_err_t fr_platform_tcp_close(uint16_t platform_index) {
+  (void)platform_index;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_bytes_ready(uint16_t platform_index,
+                                     uint16_t *out_count) {
+  (void)platform_index;
+  if (out_count != NULL) {
+    *out_count = 0;
+  }
+  return FR_ERR_HANDLE;
 }
 
 typedef struct fr_host_wifi_slot_t {
