@@ -1452,11 +1452,23 @@ enum {
   FR_ESP_WIFI_PASS_MAX = 64,
   FR_ESP_WIFI_CONNECT_TIMEOUT_MS = 30000,
   FR_ESP_WIFI_POLL_MS = 50,
+  /* Best-effort settle after esp_wifi_disconnect() so the prior
+   * association's STA_DISCONNECTED event is delivered before we
+   * set_config + connect a new association. */
+  FR_ESP_WIFI_RECONFIG_SETTLE_MS = 100,
   FR_ESP_HTTP_TIMEOUT_MS = 5000,
 };
 
 static bool fr_esp_wifi_initialized;
 static volatile bool fr_esp_wifi_ready;
+/* Suppresses the disconnect handler's auto-retry while user code is
+ * tearing down and re-establishing the station association — held true
+ * across the full disconnect → set_config → connect sequence. Without
+ * it, esp_wifi_connect() from the handler races with our set_config
+ * ("sta is connecting, cannot set config" → FR_ERR_IO) or undoes our
+ * intended association in the tiny window before we issue our own
+ * connect. */
+static volatile bool fr_esp_wifi_reconfiguring;
 /* D13/D19: track whether we've ever reached an IP. Initial got_ip is a fresh
  * connect (no wifi.reconnected event); a got_ip after disconnect is a
  * reconnect (wifi.reconnected fires). */
@@ -1511,7 +1523,11 @@ static void fr_esp_wifi_event_handler(void *arg, esp_event_base_t base,
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
     was_connected = fr_esp_wifi_was_connected;
     fr_esp_wifi_ready = false;
-    (void)esp_wifi_connect();
+    /* Skip the auto-retry while user code is mid-reconfigure — it will
+     * issue its own esp_wifi_connect() once set_config completes. */
+    if (!fr_esp_wifi_reconfiguring) {
+      (void)esp_wifi_connect();
+    }
     if (was_connected) {
       fr_esp_wifi_enqueue(FR_EVENT_KIND_WIFI_DISCONNECTED);
     }
@@ -1538,6 +1554,13 @@ static fr_err_t fr_esp_wifi_init_once(void) {
     return FR_ERR_CAPACITY;
   }
   FR_TRY(fr_esp_err(esp_wifi_init(&cfg)));
+  /* esp_wifi caches its own station config in NVS when storage defaults to
+   * FLASH; that cache survives chip reset and triggers an auto-reconnect
+   * to the prior AP on esp_wifi_start, which then fights any later
+   * wifi.connect: with new creds ("sta is connected, disconnect before
+   * connecting to new ap"). Keep esp_wifi state in RAM only — Frothy
+   * owns persistence via the frothy_wifi NVS namespace. */
+  FR_TRY(fr_esp_err(esp_wifi_set_storage(WIFI_STORAGE_RAM)));
   FR_TRY(fr_esp_err(esp_event_handler_register(
       WIFI_EVENT, ESP_EVENT_ANY_ID, fr_esp_wifi_event_handler, NULL)));
   FR_TRY(fr_esp_err(esp_event_handler_register(
@@ -1627,14 +1650,31 @@ fr_err_t fr_platform_wifi_connect(fr_runtime_t *runtime) {
   FR_TRY(fr_esp_wifi_init_once());
 
   fr_esp_wifi_ready = false;
+  /* Tear down any prior association before set_config + connect. Without
+   * this, calling wifi.connect: after a successful connection (or with
+   * fresh creds via wifi.save:) is rejected by esp_wifi with "sta is
+   * connected, disconnect before connecting to new ap" and the wait loop
+   * below times out. The reconfiguring flag suppresses the disconnect
+   * handler's auto-retry so it doesn't race set_config or undo our
+   * intended association. A small settle lets the disconnect propagate
+   * before we reconfigure. */
+  fr_esp_wifi_reconfiguring = true;
+  (void)esp_wifi_disconnect();
+  vTaskDelay(pdMS_TO_TICKS(FR_ESP_WIFI_RECONFIG_SETTLE_MS));
   /* wifi_sta_config_t fields are byte arrays sized 32/64 (D15). NVS strings
    * are NUL-terminated; copy bytes without the terminator. */
   memcpy(wifi_config.sta.ssid, ssid, strlen(ssid));
   memcpy(wifi_config.sta.password, pass, strlen(pass));
-  FR_TRY(fr_esp_err(esp_wifi_set_config(WIFI_IF_STA, &wifi_config)));
-  /* esp_wifi_connect may report "already in progress" when the disconnect
-   * handler raced ahead; the wait loop catches actual success or timeout. */
+  err = fr_esp_err(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+  if (err != FR_OK) {
+    fr_esp_wifi_reconfiguring = false;
+    return err;
+  }
+  /* Re-clear ready: a stale GOT_IP from the prior association's wait
+   * could otherwise satisfy the loop below for the wrong association. */
+  fr_esp_wifi_ready = false;
   (void)esp_wifi_connect();
+  fr_esp_wifi_reconfiguring = false;
 
   start_us = (uint64_t)esp_timer_get_time();
   budget_us = (uint64_t)FR_ESP_WIFI_CONNECT_TIMEOUT_MS * 1000u;
