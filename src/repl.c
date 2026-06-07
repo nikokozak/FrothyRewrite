@@ -1668,7 +1668,13 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
 
 #if FR_FEATURE_COMPILER
   {
-    fr_compile_overlay_update_t compiled = {0};
+    /* T15-hwfix: static rather than automatic — fr_compile_overlay_update_t
+     * embeds profile-sized text buffers (FR_PROFILE_MAX_TEXT_LENGTH + 8 body
+     * buffers); on esp32_plain that's ~36KB which overflows the REPL task
+     * stack. The REPL processes one line at a time on a single task, so
+     * static storage is safe. */
+    static fr_compile_overlay_update_t compiled;
+    memset(&compiled, 0, sizeof(compiled));
     fr_err_t err =
         fr_compile_overlay_update_for_runtime(runtime, line, &compiled);
 

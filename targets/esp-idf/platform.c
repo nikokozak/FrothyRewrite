@@ -1731,6 +1731,12 @@ fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
   if (url == NULL || url[0] == '\0' || out_body == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
+  /* T15-hwfix: esp_http_client_perform calls into lwip; if the TCP/IP
+   * stack isn't running yet (because wifi.connect: was never called) lwip
+   * asserts with "Invalid mbox" and panics the device. Refuse early. */
+  if (!fr_esp_wifi_ready) {
+    return FR_ERR_NET_DISCONNECTED;
+  }
   *out_length = 0;
 
   ctx.body = out_body;
