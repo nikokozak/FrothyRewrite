@@ -71,6 +71,18 @@ typedef struct fr_event_table_t {
   uint32_t overflow_count;
 } fr_event_table_t;
 
+#if FR_FEATURE_NET
+/* D5: per-TCP-handle state. The handle table's platform_index for a TCP
+ * handle indexes this array. Target-specific OS state (the lwip fd on
+ * ESP-IDF) lives in the platform layer (D17); the kernel-visible flag here
+ * latches when the platform observes wifi_down on this socket so later
+ * operations on the same handle return FR_ERR_NET_DISCONNECTED until the
+ * user closes it explicitly (D12). */
+typedef struct fr_tcp_handle_state_t {
+  bool failed;
+} fr_tcp_handle_state_t;
+#endif
+
 struct fr_runtime_t {
   fr_slot_table_t slots;
   fr_code_table_t code;
@@ -83,6 +95,9 @@ struct fr_runtime_t {
   fr_pad_t pad;
 #endif
   fr_event_table_t events;
+#if FR_FEATURE_NET
+  fr_tcp_handle_state_t tcp_handles[FR_TCP_HANDLE_COUNT];
+#endif
   bool interrupted;
   /* Set while fr_event_dispatch is running a body so the VM step loop does
      not re-enter dispatch from inside a handler (spec §5: no preemption). */

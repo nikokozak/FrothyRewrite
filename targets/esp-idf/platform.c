@@ -1451,6 +1451,8 @@ fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "event.h"
+#include "lwip/netdb.h"
+#include "lwip/sockets.h"
 
 enum {
   FR_ESP_WIFI_SSID_MAX = 32,
@@ -1462,6 +1464,13 @@ enum {
    * set_config + connect a new association. */
   FR_ESP_WIFI_RECONFIG_SETTLE_MS = 100,
   FR_ESP_HTTP_TIMEOUT_MS = 5000,
+  /* D7 budgets. */
+  FR_ESP_TCP_OPEN_TIMEOUT_MS = 10000,
+  FR_ESP_TCP_RW_TIMEOUT_MS = 5000,
+  /* Inner socket timeout drives the cooperative-yield cadence. Small enough
+   * that Ctrl-C / wifi_down latency stays under ~100 ms; large enough that
+   * we don't burn cycles spinning. */
+  FR_ESP_TCP_POLL_MS = 100,
 };
 
 static bool fr_esp_wifi_initialized;
@@ -1478,6 +1487,11 @@ static volatile bool fr_esp_wifi_reconfiguring;
  * connect (no wifi.reconnected event); a got_ip after disconnect is a
  * reconnect (wifi.reconnected fires). */
 static volatile bool fr_esp_wifi_was_connected;
+/* T15b D12: set when WIFI_EVENT_STA_DISCONNECTED fires outside the
+ * reconfigure window; cleared on IP_EVENT_STA_GOT_IP. Any TCP native that
+ * observes it returns FR_ERR_NET_DISCONNECTED and latches the per-handle
+ * failed flag so a reassociation cannot silently revive a stale fd. */
+static volatile bool fr_esp_wifi_down;
 
 /* D19 parallel install/remove pair backing. One slot per wifi kind because
  * each kind has at most one binding and the wifi handler has no per-pin or
@@ -1529,8 +1543,11 @@ static void fr_esp_wifi_event_handler(void *arg, esp_event_base_t base,
     was_connected = fr_esp_wifi_was_connected;
     fr_esp_wifi_ready = false;
     /* Skip the auto-retry while user code is mid-reconfigure — it will
-     * issue its own esp_wifi_connect() once set_config completes. */
+     * issue its own esp_wifi_connect() once set_config completes. The
+     * wifi_down flag is also gated: a reconfigure-driven drop should not
+     * surface to in-flight TCP as a transport failure. */
     if (!fr_esp_wifi_reconfiguring) {
+      fr_esp_wifi_down = true;
       (void)esp_wifi_connect();
     }
     if (was_connected) {
@@ -1540,6 +1557,7 @@ static void fr_esp_wifi_event_handler(void *arg, esp_event_base_t base,
     was_connected = fr_esp_wifi_was_connected;
     fr_esp_wifi_ready = true;
     fr_esp_wifi_was_connected = true;
+    fr_esp_wifi_down = false;
     if (was_connected) {
       fr_esp_wifi_enqueue(FR_EVENT_KIND_WIFI_RECONNECTED);
     }
@@ -1830,50 +1848,311 @@ fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
   return FR_OK;
 }
 
-/* Slice B placeholders. Slice C replaces with the lwip-backed impl plus
- * the per-handle state array; until then a stray call surfaces as
- * FR_ERR_NET_REFUSED rather than silently linking to dead code. */
-fr_err_t fr_platform_tcp_open(const char *host, uint16_t port,
-                              uint16_t *out_platform_index) {
-  (void)host;
-  (void)port;
-  if (out_platform_index != NULL) {
-    *out_platform_index = 0;
+/* D17: target-side per-handle TCP state. Parallel to the runtime array
+ * declared in src/runtime.h: the runtime array carries the kernel-visible
+ * failed flag (D12); this array carries the OS resource (lwip fd) so
+ * fr_platform_tcp_close, which fr_platform_handle_close routes to without
+ * a runtime pointer, still has somewhere to look. Both are indexed by
+ * platform_index in lockstep — open populates both, close clears this one
+ * and the next open clears the runtime entry. */
+typedef struct fr_esp_tcp_t {
+  bool in_use;
+  int fd;
+} fr_esp_tcp_t;
+
+static fr_esp_tcp_t fr_esp_tcps[FR_TCP_HANDLE_COUNT];
+
+static fr_err_t fr_esp_tcp_entry(uint16_t platform_index,
+                                 fr_esp_tcp_t **out_entry) {
+  if (out_entry == NULL) {
+    return FR_ERR_INVALID;
   }
-  return FR_ERR_NET_REFUSED;
-}
-
-fr_err_t fr_platform_tcp_read(uint16_t platform_index, uint8_t *out_bytes,
-                              uint16_t cap, uint16_t *out_length) {
-  (void)platform_index;
-  (void)out_bytes;
-  (void)cap;
-  if (out_length != NULL) {
-    *out_length = 0;
+  if (platform_index >= FR_TCP_HANDLE_COUNT ||
+      !fr_esp_tcps[platform_index].in_use) {
+    return FR_ERR_HANDLE;
   }
-  return FR_ERR_HANDLE;
-}
-
-fr_err_t fr_platform_tcp_write(uint16_t platform_index, const uint8_t *bytes,
-                               uint16_t length) {
-  (void)platform_index;
-  (void)bytes;
-  (void)length;
-  return FR_ERR_HANDLE;
-}
-
-fr_err_t fr_platform_tcp_close(uint16_t platform_index) {
-  (void)platform_index;
+  *out_entry = &fr_esp_tcps[platform_index];
   return FR_OK;
 }
 
-fr_err_t fr_platform_tcp_bytes_ready(uint16_t platform_index,
-                                     uint16_t *out_count) {
-  (void)platform_index;
-  if (out_count != NULL) {
-    *out_count = 0;
+/* D12 gate. Checks both the global wifi_down flag and the per-handle
+ * failed flag; latches the per-handle flag on observed wifi_down so a
+ * later reassociation (which clears the global flag) cannot silently
+ * revive this stale fd. */
+static fr_err_t fr_esp_tcp_check_alive(fr_runtime_t *runtime,
+                                       uint16_t platform_index) {
+  if (runtime == NULL || platform_index >= FR_TCP_HANDLE_COUNT) {
+    return FR_ERR_INVALID;
   }
-  return FR_ERR_HANDLE;
+  if (fr_esp_wifi_down) {
+    runtime->tcp_handles[platform_index].failed = true;
+  }
+  if (runtime->tcp_handles[platform_index].failed) {
+    return FR_ERR_NET_DISCONNECTED;
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_esp_tcp_set_rw_timeout(int fd) {
+  struct timeval tv;
+  tv.tv_sec = FR_ESP_TCP_POLL_MS / 1000;
+  tv.tv_usec = (FR_ESP_TCP_POLL_MS % 1000) * 1000;
+  if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) < 0) {
+    return FR_ERR_IO;
+  }
+  if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) < 0) {
+    return FR_ERR_IO;
+  }
+  return FR_OK;
+}
+
+/* Strict-aliasing-clean port write for the AF_INET sockaddr that
+ * getaddrinfo returns. */
+static void fr_esp_tcp_set_port(struct addrinfo *info, uint16_t port) {
+  struct sockaddr_in *sin;
+  if (info == NULL || info->ai_addr == NULL ||
+      info->ai_addrlen < sizeof(struct sockaddr_in)) {
+    return;
+  }
+  sin = (struct sockaddr_in *)info->ai_addr;
+  sin->sin_port = htons(port);
+}
+
+fr_err_t fr_platform_tcp_open(fr_runtime_t *runtime, const char *host,
+                              uint16_t port, uint16_t *out_platform_index) {
+  struct addrinfo hints;
+  struct addrinfo *info = NULL;
+  uint16_t slot = 0;
+  bool slot_found = false;
+  int fd = -1;
+  int rc = 0;
+  uint64_t start_us = 0;
+  uint64_t budget_us = 0;
+  fr_err_t err = FR_OK;
+
+  if (runtime == NULL || host == NULL || host[0] == '\0' || port == 0 ||
+      out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_esp_wifi_down || !fr_esp_wifi_ready) {
+    return FR_ERR_NET_DISCONNECTED;
+  }
+  for (uint16_t i = 0; i < FR_TCP_HANDLE_COUNT; i++) {
+    if (!fr_esp_tcps[i].in_use) {
+      slot = i;
+      slot_found = true;
+      break;
+    }
+  }
+  if (!slot_found) {
+    return FR_ERR_CAPACITY;
+  }
+
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  rc = getaddrinfo(host, NULL, &hints, &info);
+  if (rc != 0 || info == NULL) {
+    if (info != NULL) {
+      freeaddrinfo(info);
+    }
+    return FR_ERR_NET_DNS;
+  }
+  fr_esp_tcp_set_port(info, port);
+
+  fd = socket(info->ai_family, info->ai_socktype, info->ai_protocol);
+  if (fd < 0) {
+    freeaddrinfo(info);
+    return FR_ERR_NET_REFUSED;
+  }
+  err = fr_esp_tcp_set_rw_timeout(fd);
+  if (err != FR_OK) {
+    (void)close(fd);
+    freeaddrinfo(info);
+    return err;
+  }
+
+  /* connect() honors SO_SNDTIMEO on lwip; loop until the 10 s budget
+   * elapses, the connect completes, Ctrl-C wins, or Wi-Fi drops. */
+  start_us = (uint64_t)esp_timer_get_time();
+  budget_us = (uint64_t)FR_ESP_TCP_OPEN_TIMEOUT_MS * 1000u;
+  for (;;) {
+    rc = connect(fd, info->ai_addr, info->ai_addrlen);
+    if (rc == 0) {
+      break;
+    }
+    if (errno == EISCONN) {
+      break;
+    }
+    if (errno != EINPROGRESS && errno != EALREADY && errno != EAGAIN &&
+        errno != EWOULDBLOCK && errno != EINTR) {
+      (void)close(fd);
+      freeaddrinfo(info);
+      return FR_ERR_NET_REFUSED;
+    }
+    if (fr_esp_wifi_down) {
+      (void)close(fd);
+      freeaddrinfo(info);
+      return FR_ERR_NET_DISCONNECTED;
+    }
+    err = fr_platform_poll_interrupt(runtime);
+    if (err != FR_OK) {
+      (void)close(fd);
+      freeaddrinfo(info);
+      return err;
+    }
+    if (fr_runtime_is_interrupted(runtime)) {
+      (void)close(fd);
+      freeaddrinfo(info);
+      return FR_ERR_INTERRUPTED;
+    }
+    if ((uint64_t)esp_timer_get_time() - start_us > budget_us) {
+      (void)close(fd);
+      freeaddrinfo(info);
+      return FR_ERR_NET_TIMEOUT;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+  freeaddrinfo(info);
+
+  fr_esp_tcps[slot].in_use = true;
+  fr_esp_tcps[slot].fd = fd;
+  runtime->tcp_handles[slot].failed = false;
+  *out_platform_index = slot;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_read(fr_runtime_t *runtime, uint16_t platform_index,
+                              uint8_t *out_bytes, uint16_t cap,
+                              uint16_t *out_length) {
+  fr_esp_tcp_t *entry = NULL;
+  uint64_t start_us = 0;
+  uint64_t budget_us = 0;
+  int n = 0;
+  fr_err_t err = FR_OK;
+
+  if (out_bytes == NULL || out_length == NULL || cap == 0) {
+    return FR_ERR_INVALID;
+  }
+  *out_length = 0;
+  FR_TRY(fr_esp_tcp_check_alive(runtime, platform_index));
+  FR_TRY(fr_esp_tcp_entry(platform_index, &entry));
+
+  start_us = (uint64_t)esp_timer_get_time();
+  budget_us = (uint64_t)FR_ESP_TCP_RW_TIMEOUT_MS * 1000u;
+  for (;;) {
+    n = recv(entry->fd, out_bytes, cap, 0);
+    if (n > 0) {
+      *out_length = (uint16_t)n;
+      return FR_OK;
+    }
+    if (n == 0) {
+      /* D8 (2): graceful EOF is FR_OK with zero length. */
+      return FR_OK;
+    }
+    if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+      return FR_ERR_NET_REFUSED;
+    }
+    if (fr_esp_wifi_down) {
+      runtime->tcp_handles[platform_index].failed = true;
+      return FR_ERR_NET_DISCONNECTED;
+    }
+    err = fr_platform_poll_interrupt(runtime);
+    if (err != FR_OK) {
+      return err;
+    }
+    if (fr_runtime_is_interrupted(runtime)) {
+      return FR_ERR_INTERRUPTED;
+    }
+    if ((uint64_t)esp_timer_get_time() - start_us > budget_us) {
+      return FR_ERR_NET_TIMEOUT;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+}
+
+fr_err_t fr_platform_tcp_write(fr_runtime_t *runtime, uint16_t platform_index,
+                               const uint8_t *bytes, uint16_t length) {
+  fr_esp_tcp_t *entry = NULL;
+  uint64_t start_us = 0;
+  uint64_t budget_us = 0;
+  uint16_t sent = 0;
+  int n = 0;
+  fr_err_t err = FR_OK;
+
+  if (bytes == NULL && length > 0) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_tcp_check_alive(runtime, platform_index));
+  FR_TRY(fr_esp_tcp_entry(platform_index, &entry));
+  if (length == 0) {
+    return FR_OK;
+  }
+
+  start_us = (uint64_t)esp_timer_get_time();
+  budget_us = (uint64_t)FR_ESP_TCP_RW_TIMEOUT_MS * 1000u;
+  while (sent < length) {
+    n = send(entry->fd, bytes + sent, (size_t)(length - sent), 0);
+    if (n > 0) {
+      sent = (uint16_t)(sent + (uint16_t)n);
+      continue;
+    }
+    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+      return FR_ERR_NET_REFUSED;
+    }
+    if (fr_esp_wifi_down) {
+      runtime->tcp_handles[platform_index].failed = true;
+      return FR_ERR_NET_DISCONNECTED;
+    }
+    err = fr_platform_poll_interrupt(runtime);
+    if (err != FR_OK) {
+      return err;
+    }
+    if (fr_runtime_is_interrupted(runtime)) {
+      return FR_ERR_INTERRUPTED;
+    }
+    if ((uint64_t)esp_timer_get_time() - start_us > budget_us) {
+      return FR_ERR_NET_TIMEOUT;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_close(uint16_t platform_index) {
+  fr_esp_tcp_t *entry = NULL;
+  fr_err_t err = fr_esp_tcp_entry(platform_index, &entry);
+  if (err != FR_OK) {
+    return err;
+  }
+  (void)close(entry->fd);
+  entry->in_use = false;
+  entry->fd = -1;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_bytes_ready(fr_runtime_t *runtime,
+                                     uint16_t platform_index,
+                                     uint16_t *out_count) {
+  fr_esp_tcp_t *entry = NULL;
+  int ready = 0;
+  if (out_count == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_count = 0;
+  FR_TRY(fr_esp_tcp_check_alive(runtime, platform_index));
+  FR_TRY(fr_esp_tcp_entry(platform_index, &entry));
+  if (ioctl(entry->fd, FIONREAD, &ready) < 0) {
+    return FR_ERR_NET_REFUSED;
+  }
+  if (ready < 0) {
+    ready = 0;
+  }
+  if (ready > UINT16_MAX) {
+    ready = UINT16_MAX;
+  }
+  *out_count = (uint16_t)ready;
+  return FR_OK;
 }
 
 #endif

@@ -162,21 +162,28 @@ fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
 
 /* T15b D17. host is a NUL-terminated DNS name or dotted-quad; the platform
  * resolves and connects under the D7 10 s budget. out_platform_index receives
- * the per-target TCP-handle slot index (0..FR_TCP_HANDLE_COUNT-1). */
-fr_err_t fr_platform_tcp_open(const char *host, uint16_t port,
-                              uint16_t *out_platform_index);
+ * the per-target TCP-handle slot index (0..FR_TCP_HANDLE_COUNT-1). runtime
+ * carries the per-handle state array (D5) and is the Ctrl-C / interrupt
+ * source the connect poll loop reads. */
+fr_err_t fr_platform_tcp_open(fr_runtime_t *runtime, const char *host,
+                              uint16_t port, uint16_t *out_platform_index);
 /* D8: blocks until >=1 byte / EOF / 5 s / Ctrl-C. EOF surfaces as FR_OK with
  * *out_length == 0, not as an error. */
-fr_err_t fr_platform_tcp_read(uint16_t platform_index, uint8_t *out_bytes,
-                              uint16_t cap, uint16_t *out_length);
+fr_err_t fr_platform_tcp_read(fr_runtime_t *runtime, uint16_t platform_index,
+                              uint8_t *out_bytes, uint16_t cap,
+                              uint16_t *out_length);
 /* D9: blocks until all length bytes accepted by lwip, 5 s timeout, or an
  * error. length == 0 is a no-op returning FR_OK. */
-fr_err_t fr_platform_tcp_write(uint16_t platform_index, const uint8_t *bytes,
-                               uint16_t length);
-/* Routed by fr_platform_handle_close on FR_HANDLE_KIND_TCP. */
+fr_err_t fr_platform_tcp_write(fr_runtime_t *runtime, uint16_t platform_index,
+                               const uint8_t *bytes, uint16_t length);
+/* Routed by fr_platform_handle_close on FR_HANDLE_KIND_TCP; no runtime
+ * because fr_platform_handle_close itself does not carry one. The platform
+ * tracks the OS resource (lwip fd) in its own slot map so close does not
+ * need runtime to find what to free. */
 fr_err_t fr_platform_tcp_close(uint16_t platform_index);
 /* D10: non-blocking receive-queue byte count. */
-fr_err_t fr_platform_tcp_bytes_ready(uint16_t platform_index,
+fr_err_t fr_platform_tcp_bytes_ready(fr_runtime_t *runtime,
+                                     uint16_t platform_index,
                                      uint16_t *out_count);
 
 #ifdef FR_HOST_TEST_HELPERS

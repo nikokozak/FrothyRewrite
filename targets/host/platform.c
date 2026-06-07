@@ -966,11 +966,12 @@ fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
   return FR_OK;
 }
 
-/* Slice B placeholders. Slice D replaces with the recording-ring + D18
+/* Slice B/C placeholders. Slice D replaces with the recording-ring + D18
  * host helpers; until then any call surfaces as FR_ERR_NET_REFUSED so a
  * misordered slice can't masquerade as a working TCP stub. */
-fr_err_t fr_platform_tcp_open(const char *host, uint16_t port,
-                              uint16_t *out_platform_index) {
+fr_err_t fr_platform_tcp_open(fr_runtime_t *runtime, const char *host,
+                              uint16_t port, uint16_t *out_platform_index) {
+  (void)runtime;
   (void)host;
   (void)port;
   if (out_platform_index != NULL) {
@@ -979,8 +980,10 @@ fr_err_t fr_platform_tcp_open(const char *host, uint16_t port,
   return FR_ERR_NET_REFUSED;
 }
 
-fr_err_t fr_platform_tcp_read(uint16_t platform_index, uint8_t *out_bytes,
-                              uint16_t cap, uint16_t *out_length) {
+fr_err_t fr_platform_tcp_read(fr_runtime_t *runtime, uint16_t platform_index,
+                              uint8_t *out_bytes, uint16_t cap,
+                              uint16_t *out_length) {
+  (void)runtime;
   (void)platform_index;
   (void)out_bytes;
   (void)cap;
@@ -990,8 +993,9 @@ fr_err_t fr_platform_tcp_read(uint16_t platform_index, uint8_t *out_bytes,
   return FR_ERR_HANDLE;
 }
 
-fr_err_t fr_platform_tcp_write(uint16_t platform_index, const uint8_t *bytes,
-                               uint16_t length) {
+fr_err_t fr_platform_tcp_write(fr_runtime_t *runtime, uint16_t platform_index,
+                               const uint8_t *bytes, uint16_t length) {
+  (void)runtime;
   (void)platform_index;
   (void)bytes;
   (void)length;
@@ -1003,8 +1007,10 @@ fr_err_t fr_platform_tcp_close(uint16_t platform_index) {
   return FR_OK;
 }
 
-fr_err_t fr_platform_tcp_bytes_ready(uint16_t platform_index,
+fr_err_t fr_platform_tcp_bytes_ready(fr_runtime_t *runtime,
+                                     uint16_t platform_index,
                                      uint16_t *out_count) {
+  (void)runtime;
   (void)platform_index;
   if (out_count != NULL) {
     *out_count = 0;

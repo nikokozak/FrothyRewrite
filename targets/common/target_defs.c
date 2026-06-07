@@ -839,7 +839,7 @@ static fr_err_t fr_native_tcp_open(fr_runtime_t *runtime,
   }
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_TCP, &ref, &handle));
-  err = fr_platform_tcp_open(host, (uint16_t)port_in, &platform_index);
+  err = fr_platform_tcp_open(runtime, host, (uint16_t)port_in, &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
     return err;
@@ -878,7 +878,7 @@ static fr_err_t fr_native_tcp_read(fr_runtime_t *runtime,
   if (count > FR_PROFILE_MAX_TEXT_LENGTH) {
     return FR_ERR_DOMAIN;
   }
-  FR_TRY(fr_platform_tcp_read(platform_index, buffer, (uint16_t)count,
+  FR_TRY(fr_platform_tcp_read(runtime, platform_index, buffer, (uint16_t)count,
                               &length));
   FR_TRY(fr_text_install(runtime, buffer, length, &object_id));
   return fr_tagged_encode_object_id(object_id, out);
@@ -899,7 +899,7 @@ static fr_err_t fr_native_tcp_write(fr_runtime_t *runtime,
                                      &platform_index));
   FR_TRY(fr_tagged_decode_object_id(args[1], &object_id));
   FR_TRY(fr_text_view(runtime, object_id, &bytes, &length));
-  FR_TRY(fr_platform_tcp_write(platform_index, bytes, length));
+  FR_TRY(fr_platform_tcp_write(runtime, platform_index, bytes, length));
   *out = fr_tagged_nil();
   return FR_OK;
 }
@@ -932,7 +932,7 @@ static fr_err_t fr_native_tcp_bytes_ready_p(fr_runtime_t *runtime,
   }
   FR_TRY(fr_native_decode_tcp_handle(runtime, args, arg_count, 0,
                                      &platform_index));
-  FR_TRY(fr_platform_tcp_bytes_ready(platform_index, &count));
+  FR_TRY(fr_platform_tcp_bytes_ready(runtime, platform_index, &count));
   return fr_tagged_encode_int((fr_int_t)count, out);
 }
 
