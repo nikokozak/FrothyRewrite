@@ -431,6 +431,9 @@ static fr_err_t fr_repl_append_hex_byte(char *out, uint16_t out_cap,
   return fr_repl_append_char(out, out_cap, used, digits[byte & 0x0fu]);
 }
 
+/* Buffered quoted-text formatter, used by see/records. The eval-result
+ * display uses a streaming variant (fr_repl_writer_write_quoted_text);
+ * if you change escape rules here, change them there too. */
 static fr_err_t fr_repl_append_quoted_text(char *out, uint16_t out_cap,
                                            uint16_t *used,
                                            const uint8_t *bytes,
@@ -696,24 +699,20 @@ static fr_err_t fr_repl_write_tagged_value(fr_runtime_t *runtime, char *out,
   return FR_ERR_UNSUPPORTED;
 }
 
-/* Streaming display path for eval results.
- *
- * The buffered formatter above writes into a caller-supplied char[] capped at
- * FR_REPL_OUTPUT_BYTES (64). That's fine for ints, slot ids, native ids, and
- * the like, but text values can be up to FR_PROFILE_MAX_TEXT_LENGTH bytes
- * (4096 on esp32_plain) and overflow the buffer with FR_ERR_RANGE — so a
- * user can `http.get:` a 500-byte response, the body is stored correctly,
- * and yet the REPL line `out of range (1)` makes it look like a failure.
- *
- * These helpers stream the formatted value straight to the writer in small
- * batches. Text values pass through a chunk buffer that flushes whenever
- * the next byte's escape might not fit. Non-text values fall back to the
- * buffered formatter because they always fit in the 64-byte scratch. */
+/* Eval-result display streams text because text may exceed
+ * FR_REPL_OUTPUT_BYTES; non-text tagged values still go through the fixed
+ * formatter above. Text escape rules MUST stay in sync with
+ * fr_repl_append_quoted_text — that one still serves see/records. */
+enum {
+  FR_REPL_TEXT_CHUNK_BYTES = 64,
+  /* Longest per-byte escape is \xNN. */
+  FR_REPL_MAX_TEXT_ESCAPE_BYTES = 4,
+};
+
 static fr_err_t
 fr_repl_writer_write_quoted_text(const fr_repl_writer_t *writer,
                                  const uint8_t *bytes, uint16_t length) {
-  /* Longest per-byte escape is \xNN (4 chars); reserve that plus the NUL. */
-  char chunk[64];
+  char chunk[FR_REPL_TEXT_CHUNK_BYTES];
   uint16_t used = 0;
 
   if (writer == NULL || (length > 0 && bytes == NULL)) {
@@ -723,7 +722,7 @@ fr_repl_writer_write_quoted_text(const fr_repl_writer_t *writer,
   for (uint16_t i = 0; i < length; i++) {
     uint8_t byte = bytes[i];
 
-    if (used + 5 > sizeof(chunk)) {
+    if (used + FR_REPL_MAX_TEXT_ESCAPE_BYTES + 1 > sizeof(chunk)) {
       chunk[used] = '\0';
       FR_TRY(fr_repl_writer_write(writer, chunk));
       used = 0;
@@ -778,6 +777,9 @@ fr_repl_writer_write_tagged_value(const fr_repl_writer_t *writer,
   return fr_repl_writer_write(writer, buf);
 }
 
+/* value + "\nok\n" — always displays the value, including nil. Used after
+ * bare-word lookup, where reading a slot bound to nil should still print
+ * "nil" rather than swallow the result. */
 static fr_err_t
 fr_repl_writer_write_tagged_response(const fr_repl_writer_t *writer,
                                      fr_runtime_t *runtime,
@@ -786,6 +788,8 @@ fr_repl_writer_write_tagged_response(const fr_repl_writer_t *writer,
   return fr_repl_writer_write(writer, "\nok\n");
 }
 
+/* Short-circuit nil to "ok\n"; otherwise value + "\nok\n". Used after
+ * expression eval, where a nil result usually means "no value to show". */
 static fr_err_t
 fr_repl_writer_write_eval_response(const fr_repl_writer_t *writer,
                                    fr_runtime_t *runtime, fr_tagged_t tagged) {
