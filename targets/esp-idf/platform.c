@@ -1452,16 +1452,22 @@ enum {
   FR_ESP_WIFI_PASS_MAX = 64,
   FR_ESP_WIFI_CONNECT_TIMEOUT_MS = 30000,
   FR_ESP_WIFI_POLL_MS = 50,
+  /* Best-effort settle after esp_wifi_disconnect() so the prior
+   * association's STA_DISCONNECTED event is delivered before we
+   * set_config + connect a new association. */
+  FR_ESP_WIFI_RECONFIG_SETTLE_MS = 100,
   FR_ESP_HTTP_TIMEOUT_MS = 5000,
 };
 
 static bool fr_esp_wifi_initialized;
 static volatile bool fr_esp_wifi_ready;
 /* Suppresses the disconnect handler's auto-retry while user code is
- * reconfiguring station credentials. Without it, esp_wifi_connect()
- * from the handler races with our esp_wifi_set_config(), which then
- * fails with "sta is connecting, cannot set config" and the wifi.connect:
- * call returns FR_ERR_IO. */
+ * tearing down and re-establishing the station association — held true
+ * across the full disconnect → set_config → connect sequence. Without
+ * it, esp_wifi_connect() from the handler races with our set_config
+ * ("sta is connecting, cannot set config" → FR_ERR_IO) or undoes our
+ * intended association in the tiny window before we issue our own
+ * connect. */
 static volatile bool fr_esp_wifi_reconfiguring;
 /* D13/D19: track whether we've ever reached an IP. Initial got_ip is a fresh
  * connect (no wifi.reconnected event); a got_ip after disconnect is a
@@ -1649,21 +1655,26 @@ fr_err_t fr_platform_wifi_connect(fr_runtime_t *runtime) {
    * fresh creds via wifi.save:) is rejected by esp_wifi with "sta is
    * connected, disconnect before connecting to new ap" and the wait loop
    * below times out. The reconfiguring flag suppresses the disconnect
-   * handler's auto-retry so it doesn't race set_config. A small settle
-   * delay lets the disconnect propagate before we reconfigure. */
+   * handler's auto-retry so it doesn't race set_config or undo our
+   * intended association. A small settle lets the disconnect propagate
+   * before we reconfigure. */
   fr_esp_wifi_reconfiguring = true;
   (void)esp_wifi_disconnect();
-  vTaskDelay(pdMS_TO_TICKS(100));
+  vTaskDelay(pdMS_TO_TICKS(FR_ESP_WIFI_RECONFIG_SETTLE_MS));
   /* wifi_sta_config_t fields are byte arrays sized 32/64 (D15). NVS strings
    * are NUL-terminated; copy bytes without the terminator. */
   memcpy(wifi_config.sta.ssid, ssid, strlen(ssid));
   memcpy(wifi_config.sta.password, pass, strlen(pass));
   err = fr_esp_err(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-  fr_esp_wifi_reconfiguring = false;
-  FR_TRY(err);
-  /* esp_wifi_connect may report "already in progress" when the disconnect
-   * handler raced ahead; the wait loop catches actual success or timeout. */
+  if (err != FR_OK) {
+    fr_esp_wifi_reconfiguring = false;
+    return err;
+  }
+  /* Re-clear ready: a stale GOT_IP from the prior association's wait
+   * could otherwise satisfy the loop below for the wrong association. */
+  fr_esp_wifi_ready = false;
   (void)esp_wifi_connect();
+  fr_esp_wifi_reconfiguring = false;
 
   start_us = (uint64_t)esp_timer_get_time();
   budget_us = (uint64_t)FR_ESP_WIFI_CONNECT_TIMEOUT_MS * 1000u;
