@@ -1453,6 +1453,7 @@ fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
 #include "event.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
+#include <fcntl.h>
 
 enum {
   FR_ESP_WIFI_SSID_MAX = 32,
@@ -1492,6 +1493,12 @@ static volatile bool fr_esp_wifi_was_connected;
  * observes it returns FR_ERR_NET_DISCONNECTED and latches the per-handle
  * failed flag so a reassociation cannot silently revive a stale fd. */
 static volatile bool fr_esp_wifi_down;
+/* T15b D12: bumped each time a real disconnect fires (not reconfigure).
+ * Each TCP handle captures the value at open; check_alive flips the
+ * runtime failed flag when the captured epoch differs from the current
+ * one, so an idle handle that was open across a disconnect+reconnect
+ * cycle still fails on its next use even after wifi_down clears. */
+static volatile uint32_t fr_esp_wifi_down_epoch;
 
 /* D19 parallel install/remove pair backing. One slot per wifi kind because
  * each kind has at most one binding and the wifi handler has no per-pin or
@@ -1548,6 +1555,7 @@ static void fr_esp_wifi_event_handler(void *arg, esp_event_base_t base,
      * surface to in-flight TCP as a transport failure. */
     if (!fr_esp_wifi_reconfiguring) {
       fr_esp_wifi_down = true;
+      fr_esp_wifi_down_epoch++;
       (void)esp_wifi_connect();
     }
     if (was_connected) {
@@ -1858,6 +1866,7 @@ fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
 typedef struct fr_esp_tcp_t {
   bool in_use;
   int fd;
+  uint32_t open_epoch;
 } fr_esp_tcp_t;
 
 static fr_esp_tcp_t fr_esp_tcps[FR_TCP_HANDLE_COUNT];
@@ -1875,16 +1884,18 @@ static fr_err_t fr_esp_tcp_entry(uint16_t platform_index,
   return FR_OK;
 }
 
-/* D12 gate. Checks both the global wifi_down flag and the per-handle
- * failed flag; latches the per-handle flag on observed wifi_down so a
- * later reassociation (which clears the global flag) cannot silently
- * revive this stale fd. */
+/* D12 gate. Catches three cases: wifi is down right now, the handle was
+ * open across a disconnect window that has since cleared (epoch mismatch),
+ * and a prior call already latched failure. Latches the runtime flag on
+ * the first two so once a handle has failed it stays failed for the rest
+ * of its life. */
 static fr_err_t fr_esp_tcp_check_alive(fr_runtime_t *runtime,
                                        uint16_t platform_index) {
   if (runtime == NULL || platform_index >= FR_TCP_HANDLE_COUNT) {
     return FR_ERR_INVALID;
   }
-  if (fr_esp_wifi_down) {
+  if (fr_esp_wifi_down ||
+      fr_esp_wifi_down_epoch != fr_esp_tcps[platform_index].open_epoch) {
     runtime->tcp_handles[platform_index].failed = true;
   }
   if (runtime->tcp_handles[platform_index].failed) {
@@ -1926,6 +1937,7 @@ fr_err_t fr_platform_tcp_open(fr_runtime_t *runtime, const char *host,
   bool slot_found = false;
   int fd = -1;
   int rc = 0;
+  int flags = 0;
   uint64_t start_us = 0;
   uint64_t budget_us = 0;
   fr_err_t err = FR_OK;
@@ -1948,6 +1960,12 @@ fr_err_t fr_platform_tcp_open(fr_runtime_t *runtime, const char *host,
     return FR_ERR_CAPACITY;
   }
 
+  /* D7 10 s budget covers DNS + connect together. getaddrinfo is
+   * synchronously bounded by lwip's own retransmit; the post-DNS check
+   * caps the total before the connect loop starts. */
+  start_us = (uint64_t)esp_timer_get_time();
+  budget_us = (uint64_t)FR_ESP_TCP_OPEN_TIMEOUT_MS * 1000u;
+
   memset(&hints, 0, sizeof hints);
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
@@ -1957,6 +1975,10 @@ fr_err_t fr_platform_tcp_open(fr_runtime_t *runtime, const char *host,
       freeaddrinfo(info);
     }
     return FR_ERR_NET_DNS;
+  }
+  if ((uint64_t)esp_timer_get_time() - start_us > budget_us) {
+    freeaddrinfo(info);
+    return FR_ERR_NET_TIMEOUT;
   }
   fr_esp_tcp_set_port(info, port);
 
@@ -1972,10 +1994,16 @@ fr_err_t fr_platform_tcp_open(fr_runtime_t *runtime, const char *host,
     return err;
   }
 
-  /* connect() honors SO_SNDTIMEO on lwip; loop until the 10 s budget
-   * elapses, the connect completes, Ctrl-C wins, or Wi-Fi drops. */
-  start_us = (uint64_t)esp_timer_get_time();
-  budget_us = (uint64_t)FR_ESP_TCP_OPEN_TIMEOUT_MS * 1000u;
+  /* Non-blocking for connect so the first connect() returns immediately
+   * with EINPROGRESS and the loop checks wifi_down / Ctrl-C / budget at
+   * the ~1 ms cooperative cadence instead of waiting up to SO_SNDTIMEO. */
+  flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+    (void)close(fd);
+    freeaddrinfo(info);
+    return FR_ERR_IO;
+  }
+
   for (;;) {
     rc = connect(fd, info->ai_addr, info->ai_addrlen);
     if (rc == 0) {
@@ -2015,8 +2043,17 @@ fr_err_t fr_platform_tcp_open(fr_runtime_t *runtime, const char *host,
   }
   freeaddrinfo(info);
 
+  /* Restore the original flags so SO_RCVTIMEO / SO_SNDTIMEO drive the
+   * read/write cadence. lwip recv/send ignore the timeout sockopts when
+   * O_NONBLOCK is set. */
+  if (fcntl(fd, F_SETFL, flags) < 0) {
+    (void)close(fd);
+    return FR_ERR_IO;
+  }
+
   fr_esp_tcps[slot].in_use = true;
   fr_esp_tcps[slot].fd = fd;
+  fr_esp_tcps[slot].open_epoch = fr_esp_wifi_down_epoch;
   runtime->tcp_handles[slot].failed = false;
   *out_platform_index = slot;
   return FR_OK;
