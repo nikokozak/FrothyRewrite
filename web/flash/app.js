@@ -202,6 +202,30 @@ async function enterRepl(fromFlash) {
   log.replaceChildren();
   readDone = readLoop(log);
 
+  // Pulse the chip into a clean fresh-boot state on every REPL connect.
+  // Without this:
+  //   - After Connect-to-board, WebSerial's default signal state on a
+  //     CP2102 board can leave EN low (chip held in reset) — no UART
+  //     output, no response to typed input.
+  //   - After Flash, esptool's hard_reset + transport.disconnect leaves
+  //     the chip in a state where the next port.open() finds it
+  //     unresponsive; an active reset pulse is required to recover.
+  // Two timing quirks (observed empirically on Chrome 121 + CP2102):
+  //   (1) setSignals issued immediately after port.open() is silently
+  //       no-op — a settle delay is required.
+  //   (2) The pulse must run *after* readLoop has called reader.read(),
+  //       otherwise the chip's boot output is dropped.
+  // Sequence: settle, assert RTS (EN low = reset), hold, deassert RTS
+  // (run). DTR stays low throughout so IO0 is high — chip boots into
+  // the app, not the bootloader. setSignals is best-effort; on boards
+  // without an auto-reset circuit it's a harmless no-op.
+  try {
+    await new Promise((r) => setTimeout(r, 500));
+    await currentPort.setSignals({ requestToSend: true, dataTerminalReady: false });
+    await new Promise((r) => setTimeout(r, 200));
+    await currentPort.setSignals({ requestToSend: false, dataTerminalReady: false });
+  } catch {}
+
   picker.hidden = true;
   repl.hidden = false;
   connectBtn.hidden = true;
