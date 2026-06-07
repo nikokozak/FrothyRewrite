@@ -431,6 +431,9 @@ static fr_err_t fr_repl_append_hex_byte(char *out, uint16_t out_cap,
   return fr_repl_append_char(out, out_cap, used, digits[byte & 0x0fu]);
 }
 
+/* Buffered quoted-text formatter, used by see/records. The eval-result
+ * display uses a streaming variant (fr_repl_writer_write_quoted_text);
+ * if you change escape rules here, change them there too. */
 static fr_err_t fr_repl_append_quoted_text(char *out, uint16_t out_cap,
                                            uint16_t *used,
                                            const uint8_t *bytes,
@@ -696,34 +699,104 @@ static fr_err_t fr_repl_write_tagged_value(fr_runtime_t *runtime, char *out,
   return FR_ERR_UNSUPPORTED;
 }
 
-static fr_err_t fr_repl_write_tagged_response(fr_runtime_t *runtime, char *out,
-                                              uint16_t out_cap,
-                                              fr_tagged_t tagged) {
+/* Eval-result display streams text because text may exceed
+ * FR_REPL_OUTPUT_BYTES; non-text tagged values still go through the fixed
+ * formatter above. Text escape rules MUST stay in sync with
+ * fr_repl_append_quoted_text — that one still serves see/records. */
+enum {
+  FR_REPL_TEXT_CHUNK_BYTES = 64,
+  /* Longest per-byte escape is \xNN. */
+  FR_REPL_MAX_TEXT_ESCAPE_BYTES = 4,
+};
+
+static fr_err_t
+fr_repl_writer_write_quoted_text(const fr_repl_writer_t *writer,
+                                 const uint8_t *bytes, uint16_t length) {
+  char chunk[FR_REPL_TEXT_CHUNK_BYTES];
   uint16_t used = 0;
 
-  FR_TRY(fr_repl_write_tagged_value(runtime, out, out_cap, tagged, false));
-  used = (uint16_t)strlen(out);
-  return fr_repl_append(out, out_cap, &used, "\nok\n");
-}
-
-static fr_err_t fr_repl_write(char *out, uint16_t out_cap, const char *text) {
-  if (out == NULL || text == NULL) {
+  if (writer == NULL || (length > 0 && bytes == NULL)) {
     return FR_ERR_INVALID;
   }
-  if (strlen(text) + 1 > out_cap) {
-    return FR_ERR_RANGE;
+  FR_TRY(fr_repl_writer_write(writer, "\""));
+  for (uint16_t i = 0; i < length; i++) {
+    uint8_t byte = bytes[i];
+
+    if (used + FR_REPL_MAX_TEXT_ESCAPE_BYTES + 1 > sizeof(chunk)) {
+      chunk[used] = '\0';
+      FR_TRY(fr_repl_writer_write(writer, chunk));
+      used = 0;
+    }
+    if (byte == '"' || byte == '\\') {
+      chunk[used++] = '\\';
+      chunk[used++] = (char)byte;
+    } else if (byte == '\n') {
+      chunk[used++] = '\\';
+      chunk[used++] = 'n';
+    } else if (byte == '\r') {
+      chunk[used++] = '\\';
+      chunk[used++] = 'r';
+    } else if (byte == '\t') {
+      chunk[used++] = '\\';
+      chunk[used++] = 't';
+    } else if (byte >= 0x20u && byte <= 0x7eu) {
+      chunk[used++] = (char)byte;
+    } else {
+      static const char hex_digits[] = "0123456789abcdef";
+
+      chunk[used++] = '\\';
+      chunk[used++] = 'x';
+      chunk[used++] = hex_digits[byte >> 4];
+      chunk[used++] = hex_digits[byte & 0x0fu];
+    }
   }
-  strcpy(out, text);
-  return FR_OK;
+  if (used > 0) {
+    chunk[used] = '\0';
+    FR_TRY(fr_repl_writer_write(writer, chunk));
+  }
+  return fr_repl_writer_write(writer, "\"");
 }
 
-static fr_err_t fr_repl_write_eval_response(fr_runtime_t *runtime, char *out,
-                                            uint16_t out_cap,
-                                            fr_tagged_t tagged) {
-  if (fr_tagged_is_nil(tagged)) {
-    return fr_repl_write(out, out_cap, "ok\n");
+static fr_err_t
+fr_repl_writer_write_tagged_value(const fr_repl_writer_t *writer,
+                                  fr_runtime_t *runtime, fr_tagged_t tagged) {
+  fr_object_id_t object_id = 0;
+  const uint8_t *text_bytes = NULL;
+  uint16_t text_length = 0;
+  char buf[FR_REPL_OUTPUT_BYTES];
+
+  if (writer == NULL) {
+    return FR_ERR_INVALID;
   }
-  return fr_repl_write_tagged_response(runtime, out, out_cap, tagged);
+  if (fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+      fr_text_view(runtime, object_id, &text_bytes, &text_length) == FR_OK) {
+    return fr_repl_writer_write_quoted_text(writer, text_bytes, text_length);
+  }
+  FR_TRY(fr_repl_write_tagged_value(runtime, buf, (uint16_t)sizeof(buf),
+                                    tagged, false));
+  return fr_repl_writer_write(writer, buf);
+}
+
+/* value + "\nok\n" — always displays the value, including nil. Used after
+ * bare-word lookup, where reading a slot bound to nil should still print
+ * "nil" rather than swallow the result. */
+static fr_err_t
+fr_repl_writer_write_tagged_response(const fr_repl_writer_t *writer,
+                                     fr_runtime_t *runtime,
+                                     fr_tagged_t tagged) {
+  FR_TRY(fr_repl_writer_write_tagged_value(writer, runtime, tagged));
+  return fr_repl_writer_write(writer, "\nok\n");
+}
+
+/* Short-circuit nil to "ok\n"; otherwise value + "\nok\n". Used after
+ * expression eval, where a nil result usually means "no value to show". */
+static fr_err_t
+fr_repl_writer_write_eval_response(const fr_repl_writer_t *writer,
+                                   fr_runtime_t *runtime, fr_tagged_t tagged) {
+  if (fr_tagged_is_nil(tagged)) {
+    return fr_repl_writer_write(writer, "ok\n");
+  }
+  return fr_repl_writer_write_tagged_response(writer, runtime, tagged);
 }
 
 static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap,
@@ -1382,7 +1455,6 @@ static fr_err_t fr_repl_eval_run_arg(fr_runtime_t *runtime, const char *arg,
   fr_instruction_stream_t instructions = {0};
   fr_tagged_t result = 0;
   uint16_t byte_count = 0;
-  char response[FR_REPL_OUTPUT_BYTES];
 
   if (runtime == NULL || arg == NULL || writer == NULL) {
     return FR_ERR_INVALID;
@@ -1394,10 +1466,7 @@ static fr_err_t fr_repl_eval_run_arg(fr_runtime_t *runtime, const char *arg,
   FR_TRY(fr_instruction_stream_init(&instructions, fr_repl_wire_bytes,
                                     byte_count));
   FR_TRY(fr_vm_run_instruction_stream(runtime, &instructions, &result));
-  FR_TRY(fr_repl_write_eval_response(runtime, response,
-                                     (uint16_t)sizeof(response),
-                                     result));
-  return fr_repl_writer_write(writer, response);
+  return fr_repl_writer_write_eval_response(writer, runtime, result);
 }
 #endif
 
@@ -1557,7 +1626,6 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
   fr_tagged_t result = 0;
   bool matched = false;
   bool ran_command = false;
-  char response[FR_REPL_OUTPUT_BYTES];
 
   if (runtime == NULL || line == NULL || writer == NULL) {
     return FR_ERR_INVALID;
@@ -1648,10 +1716,7 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
 
   FR_TRY(fr_repl_eval_zero_arg_call(runtime, line, &result, &matched));
   if (matched) {
-    FR_TRY(fr_repl_write_eval_response(runtime, response,
-                                       (uint16_t)sizeof(response),
-                                       result));
-    return fr_repl_writer_write(writer, response);
+    return fr_repl_writer_write_eval_response(writer, runtime, result);
   }
 
   FR_TRY(fr_repl_eval_bare_word(runtime, line, &result, &matched,
@@ -1660,10 +1725,7 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
     if (ran_command) {
       return fr_repl_writer_write(writer, "ok\n");
     }
-    FR_TRY(fr_repl_write_tagged_response(runtime, response,
-                                         (uint16_t)sizeof(response),
-                                         result));
-    return fr_repl_writer_write(writer, response);
+    return fr_repl_writer_write_tagged_response(writer, runtime, result);
   }
 
 #if FR_FEATURE_COMPILER
@@ -1719,10 +1781,7 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
     FR_TRY(fr_compile_expression_for_runtime(runtime, line, &expression));
     FR_TRY(fr_vm_run_instruction_stream(runtime, &expression.instructions,
                                         &result));
-    FR_TRY(fr_repl_write_eval_response(runtime, response,
-                                       (uint16_t)sizeof(response),
-                                       result));
-    return fr_repl_writer_write(writer, response);
+    return fr_repl_writer_write_eval_response(writer, runtime, result);
   }
 #else
   return FR_ERR_UNSUPPORTED;
