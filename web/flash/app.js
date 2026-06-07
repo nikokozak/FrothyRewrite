@@ -1,7 +1,7 @@
-// Page module: detect → (picker → flash → REPL) | fallback.
-// Slice A: detect + D6 fallback. Slice B: manifest picker + D8 persistence.
-// Slice C: flash flow via vendored esptool-js (D4, D9).
-// Slice D: raw-byte REPL on the post-flash port (D5, D12, D13).
+// Page module. Two REPL entry points:
+//   1. Flash → auto-reveal "Connect REPL" → enter REPL
+//   2. "Connect to board" on the picker → enter REPL on already-flashed device
+// Both routes share enterRepl() so the REPL surface is identical.
 
 import { ESPLoader, Transport } from "./vendor/esptool-js/0.6.0/bundle.js";
 
@@ -21,19 +21,20 @@ if (!supported) {
   initRepl();
 }
 
-// D13: the REPL reopens the SAME SerialPort the flash flow picked, so the
-// user sees one OS port dialog total. Module-scope keeps that reference
-// + the active reader/writer visible at the top of the file.
+// Module-scope so the post-flash "Connect REPL" can reuse the same port
+// without a second OS port dialog. Also drives the re-flash cleanup path.
 let currentPort = null;
 let reader = null;
 let writer = null;
 let readDone = null;
+const encoder = new TextEncoder();
 
 async function initPicker() {
   const manifest = await fetch("./firmware/manifest.json").then((r) => r.json());
   const boardSel = document.getElementById("board");
   const profileSel = document.getElementById("profile");
   const flashBtn = document.getElementById("flash");
+  const connectExistingBtn = document.getElementById("connect-existing");
 
   const boards = [...new Set(manifest.map((row) => row.board))];
   for (const b of boards) boardSel.append(option(b));
@@ -63,7 +64,24 @@ async function initPicker() {
     const row = manifest.find(
       (r) => r.board === boardSel.value && r.profile === profileSel.value,
     );
-    if (row) flash(row, [boardSel, profileSel, flashBtn]);
+    if (row) flash(row, [boardSel, profileSel, flashBtn, connectExistingBtn]);
+  });
+
+  // "Connect to board" — REPL entry for an already-flashed board, bypasses
+  // the flash step entirely so Connect REPL doesn't depend on re-flashing.
+  connectExistingBtn.addEventListener("click", async () => {
+    const status = document.getElementById("status");
+    status.hidden = false;
+    try {
+      // requestPort needs transient activation; this is the click's first await.
+      setStatus(status, "Pick a serial port…");
+      await releaseCurrentPort();
+      currentPort = await navigator.serial.requestPort();
+      await enterRepl(/* fromFlash */ false);
+    } catch (err) {
+      setStatus(status, `Connect failed: ${err.message ?? err}`, true);
+      currentPort = null;
+    }
   });
 }
 
@@ -78,6 +96,7 @@ async function flash(row, lockables) {
     // requestPort needs transient activation. Call it before any other await
     // so the click's user gesture isn't consumed by a slow firmware fetch.
     setStatus(status, "Pick a serial port…");
+    await releaseCurrentPort();
     currentPort = await navigator.serial.requestPort();
 
     setStatus(status, "Fetching firmware…");
@@ -109,85 +128,150 @@ async function flash(row, lockables) {
       },
     });
 
-    // D13: hard-reset into Frothy, then surface "Connect REPL".
+    // D13: hard-reset into Frothy. Transport.disconnect releases the port
+    // so we can reopen it at 115200 in enterRepl. After disconnect the
+    // device is mid-boot; entering the REPL immediately catches its banner.
     await loader.after("hard_reset");
     await transport.disconnect();
-    setStatus(status, "Flashed. Connect the REPL when ready.");
+    transport = null;
+    setStatus(status, "Flashed. Click Connect REPL to talk to the device.");
     repl.hidden = false;
   } catch (err) {
     setStatus(status, `Flash failed: ${err.message ?? err}`, true);
     if (transport) {
       try { await transport.disconnect(); } catch {}
     }
-    currentPort = null;
+    await releaseCurrentPort();
     for (const el of lockables) el.disabled = false;
+  }
+}
+
+// Cleanly close the cached SerialPort + any reader/writer locks. Safe to
+// call when nothing is open. Bug B: without this between attempts, a
+// second Flash click finds the port half-locked and esptool can't open it.
+async function releaseCurrentPort() {
+  if (reader) {
+    try { await reader.cancel(); } catch {}
+    try { reader.releaseLock(); } catch {}
+    reader = null;
+  }
+  if (writer) {
+    try { writer.releaseLock(); } catch {}
+    writer = null;
+  }
+  if (readDone) {
+    try { await readDone; } catch {}
+    readDone = null;
+  }
+  if (currentPort) {
+    try { await currentPort.close(); } catch {}
+    currentPort = null;
   }
 }
 
 function initRepl() {
   const connectBtn = document.getElementById("connect");
+
+  connectBtn.addEventListener("click", () => {
+    enterRepl(/* fromFlash */ true);
+  });
+
+  document.getElementById("disconnect").addEventListener("click", leaveRepl);
+}
+
+async function enterRepl(fromFlash) {
+  const status = document.getElementById("status");
+  const repl = document.getElementById("repl");
+  const connectBtn = document.getElementById("connect");
   const disconnectBtn = document.getElementById("disconnect");
   const log = document.getElementById("log");
   const line = document.getElementById("line");
-  const status = document.getElementById("status");
-  const repl = document.getElementById("repl");
-  const lockables = ["flash", "board", "profile"].map((id) =>
-    document.getElementById(id),
-  );
-  const encoder = new TextEncoder();
+  const picker = document.getElementById("picker");
 
-  connectBtn.addEventListener("click", async () => {
-    if (!currentPort) return;
-    try {
-      // D13: reopen the same SerialPort at the Frothy console baud.
-      await currentPort.open({ baudRate: 115200 });
-    } catch (err) {
-      setStatus(status, `REPL open failed: ${err.message ?? err}`, true);
-      return;
-    }
-    writer = currentPort.writable.getWriter();
-    readDone = readLoop(log);
-    connectBtn.hidden = true;
-    log.hidden = false;
-    line.hidden = false;
-    disconnectBtn.hidden = false;
-    setStatus(status, "REPL connected at 115200.");
-    line.focus();
-  });
+  if (!currentPort) {
+    setStatus(status, "No serial port held; pick one via Flash or Connect to board.", true);
+    return;
+  }
 
-  line.addEventListener("keydown", async (e) => {
-    if (e.key !== "Enter" || !writer) return;
-    e.preventDefault();
-    const value = line.value;
-    line.value = "";
-    // D5/D12: send the raw line + newline; the device echoes back through readLoop.
+  try {
+    await currentPort.open({ baudRate: 115200 });
+  } catch (err) {
+    setStatus(status, `REPL open failed: ${err.message ?? err}`, true);
+    return;
+  }
+
+  writer = currentPort.writable.getWriter();
+  log.textContent = "";
+  readDone = readLoop(log);
+
+  // UI: hide picker + Flash flow, show REPL controls
+  picker.hidden = true;
+  repl.hidden = false;
+  connectBtn.hidden = true;
+  log.hidden = false;
+  line.hidden = false;
+  disconnectBtn.hidden = false;
+  setStatus(status, fromFlash
+    ? "REPL connected at 115200 (post-flash)."
+    : "REPL connected at 115200.");
+  line.focus();
+
+  // Wake nudge: if the device already emitted its boot banner before the
+  // port reopen, send a newline to elicit an `ok` so the user sees the
+  // REPL is alive instead of staring at an empty log.
+  appendLog(log, "(connected — type a Frothy line and press Enter)\n");
+  try {
+    await writer.write(encoder.encode("\n"));
+  } catch (err) {
+    appendLog(log, `(wake newline failed: ${err.message ?? err})\n`);
+  }
+
+  // Bind keydown here (not in initRepl) so the writer reference is fresh
+  // each REPL session. Remove on disconnect via the lineHandler reference.
+  line.addEventListener("keydown", lineKeydown);
+}
+
+async function lineKeydown(e) {
+  if (e.key !== "Enter" || !writer) return;
+  e.preventDefault();
+  const value = e.target.value;
+  e.target.value = "";
+  const log = document.getElementById("log");
+  // Write-echo so the user sees their input went out even if the device
+  // is slow or silent. Prefixed with > to distinguish from device output.
+  appendLog(log, `> ${value}\n`);
+  try {
     await writer.write(encoder.encode(value + "\n"));
-  });
+  } catch (err) {
+    appendLog(log, `(write failed: ${err.message ?? err})\n`);
+  }
+}
 
-  disconnectBtn.addEventListener("click", async () => {
-    // Order: cancel the reader so read() yields done, await the loop so its
-    // finally releases the lock, release the writer, then close the port —
-    // close() rejects if either stream is still locked.
-    try {
-      if (reader) await reader.cancel();
-      if (readDone) await readDone;
-      if (writer) writer.releaseLock();
-      if (currentPort) await currentPort.close();
-    } catch {}
-    reader = null;
-    writer = null;
-    readDone = null;
-    currentPort = null;
-    log.textContent = "";
-    line.value = "";
-    log.hidden = true;
-    line.hidden = true;
-    disconnectBtn.hidden = true;
-    connectBtn.hidden = false;
-    repl.hidden = true;
-    setStatus(status, "Disconnected.");
-    for (const el of lockables) el.disabled = false;
-  });
+async function leaveRepl() {
+  const log = document.getElementById("log");
+  const line = document.getElementById("line");
+  const repl = document.getElementById("repl");
+  const picker = document.getElementById("picker");
+  const status = document.getElementById("status");
+  const connectBtn = document.getElementById("connect");
+  const disconnectBtn = document.getElementById("disconnect");
+
+  line.removeEventListener("keydown", lineKeydown);
+  await releaseCurrentPort();
+  log.textContent = "";
+  line.value = "";
+  log.hidden = true;
+  line.hidden = true;
+  disconnectBtn.hidden = true;
+  connectBtn.hidden = false;
+  repl.hidden = true;
+  picker.hidden = false;
+  // Re-enable any picker controls that may still be disabled from a prior
+  // Flash attempt (the success-path leaves them disabled until disconnect).
+  for (const id of ["flash", "board", "profile", "connect-existing"]) {
+    document.getElementById(id).disabled = false;
+  }
+  setStatus(status, "Disconnected.");
 }
 
 async function readLoop(log) {
@@ -197,12 +281,18 @@ async function readLoop(log) {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      log.textContent += decoder.decode(value, { stream: true });
-      log.scrollTop = log.scrollHeight;
+      appendLog(log, decoder.decode(value, { stream: true }));
     }
+  } catch (err) {
+    appendLog(log, `(read loop ended: ${err.message ?? err})\n`);
   } finally {
     try { reader.releaseLock(); } catch {}
   }
+}
+
+function appendLog(log, text) {
+  log.textContent += text;
+  log.scrollTop = log.scrollHeight;
 }
 
 function setStatus(el, text, isError = false) {

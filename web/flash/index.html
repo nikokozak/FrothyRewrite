@@ -10,12 +10,14 @@
 
 <main id="app" hidden>
   <h1>Frothy</h1>
-  <p class="meta">Flash a board, then talk to it.</p>
+  <p class="meta">Flash a board, then talk to it. Or connect to one
+  already running Frothy.</p>
 
   <section id="picker">
     <label>Board <select id="board"></select></label>
     <label>Profile <select id="profile"></select></label>
     <button id="flash" type="button">Flash</button>
+    <button id="connect-existing" type="button">Connect to board</button>
   </section>
 
   <p id="status" class="status" hidden></p>
@@ -23,7 +25,8 @@
   <section id="repl" hidden>
     <button id="connect" type="button">Connect REPL</button>
     <pre id="log" hidden></pre>
-    <input id="line" type="text" autocomplete="off" spellcheck="false" hidden>
+    <input id="line" type="text" autocomplete="off" spellcheck="false"
+           placeholder="type a Frothy line and press Enter" hidden>
     <button id="disconnect" type="button" hidden>Disconnect</button>
   </section>
 </main>
