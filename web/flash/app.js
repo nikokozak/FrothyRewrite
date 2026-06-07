@@ -1,15 +1,13 @@
-// Page module. Two REPL entry points:
-//   1. Flash → auto-reveal "Connect REPL" → enter REPL
-//   2. "Connect to board" on the picker → enter REPL on already-flashed device
-// Both routes share enterRepl() so the REPL surface is identical.
+// Two REPL entry points (flash → connect-after, or connect-existing) share
+// enterRepl(). Designed deliberately thin: no wake newlines, no write echo,
+// no Frothy-shaped reformatting. The device echoes input and prints its own
+// prompt; the page is a window onto that traffic.
 
 import { ESPLoader, Transport } from "./vendor/esptool-js/0.6.0/bundle.js";
 
 const app = document.getElementById("app");
 const fallback = document.getElementById("fallback");
 
-// D6: WebSerial only, desktop only. Chrome Android exposes navigator.serial
-// but only over Bluetooth RFCOMM, which cannot drive a USB-CDC ESP32.
 const supported =
   "serial" in navigator && navigator.userAgentData?.mobile !== true;
 
@@ -19,15 +17,26 @@ if (!supported) {
   app.hidden = false;
   initPicker();
   initRepl();
+  // Page close / reload: release the port so a re-flash from a new tab works.
+  // Without this Chrome/Arc holds the FD open at the OS level and the next
+  // esptool open fails with "Failed to connect."
+  window.addEventListener("beforeunload", () => {
+    if (currentPort) {
+      try { currentPort.close(); } catch {}
+    }
+  });
 }
 
-// Module-scope so the post-flash "Connect REPL" can reuse the same port
-// without a second OS port dialog. Also drives the re-flash cleanup path.
 let currentPort = null;
 let reader = null;
 let writer = null;
 let readDone = null;
 const encoder = new TextEncoder();
+
+// Bounded log. Each line is a text node; we trim from the head when the count
+// exceeds the cap. Avoids the O(n²) textContent += pattern that locks the
+// page when the device blasts hundreds of `ok\n> ` lines on boot replay.
+const LOG_MAX_NODES = 800;
 
 async function initPicker() {
   const manifest = await fetch("./firmware/manifest.json").then((r) => r.json());
@@ -67,19 +76,16 @@ async function initPicker() {
     if (row) flash(row, [boardSel, profileSel, flashBtn, connectExistingBtn]);
   });
 
-  // "Connect to board" — REPL entry for an already-flashed board, bypasses
-  // the flash step entirely so Connect REPL doesn't depend on re-flashing.
   connectExistingBtn.addEventListener("click", async () => {
     const status = document.getElementById("status");
     status.hidden = false;
     try {
-      // requestPort needs transient activation; this is the click's first await.
       setStatus(status, "Pick a serial port…");
       await releaseCurrentPort();
       currentPort = await navigator.serial.requestPort();
       await enterRepl(/* fromFlash */ false);
     } catch (err) {
-      setStatus(status, `Connect failed: ${err.message ?? err}`, true);
+      setStatus(status, openErrorMessage(err), true);
       currentPort = null;
     }
   });
@@ -93,8 +99,6 @@ async function flash(row, lockables) {
 
   let transport = null;
   try {
-    // requestPort needs transient activation. Call it before any other await
-    // so the click's user gesture isn't consumed by a slow firmware fetch.
     setStatus(status, "Pick a serial port…");
     await releaseCurrentPort();
     currentPort = await navigator.serial.requestPort();
@@ -102,7 +106,6 @@ async function flash(row, lockables) {
     setStatus(status, "Fetching firmware…");
     const res = await fetch(`./${row.file}`);
     if (!res.ok) throw new Error(`firmware fetch ${res.status} for ${row.file}`);
-    // D9: writeFlash data is Uint8Array in v0.6.0 (breaking change from v0.5.x).
     const data = new Uint8Array(await res.arrayBuffer());
     transport = new Transport(currentPort, false);
 
@@ -128,16 +131,13 @@ async function flash(row, lockables) {
       },
     });
 
-    // D13: hard-reset into Frothy. Transport.disconnect releases the port
-    // so we can reopen it at 115200 in enterRepl. After disconnect the
-    // device is mid-boot; entering the REPL immediately catches its banner.
     await loader.after("hard_reset");
     await transport.disconnect();
     transport = null;
     setStatus(status, "Flashed. Click Connect REPL to talk to the device.");
     repl.hidden = false;
   } catch (err) {
-    setStatus(status, `Flash failed: ${err.message ?? err}`, true);
+    setStatus(status, `Flash failed: ${err.message ?? err}${portLockHint(err)}`, true);
     if (transport) {
       try { await transport.disconnect(); } catch {}
     }
@@ -146,9 +146,9 @@ async function flash(row, lockables) {
   }
 }
 
-// Cleanly close the cached SerialPort + any reader/writer locks. Safe to
-// call when nothing is open. Bug B: without this between attempts, a
-// second Flash click finds the port half-locked and esptool can't open it.
+// Cleanly cancel reader, release writer, await readDone, close port.
+// Safe to call when nothing is open. Without this, repeat Flash attempts
+// or page reloads leave Arc/Chrome holding the OS-level FD.
 async function releaseCurrentPort() {
   if (reader) {
     try { await reader.cancel(); } catch {}
@@ -170,12 +170,9 @@ async function releaseCurrentPort() {
 }
 
 function initRepl() {
-  const connectBtn = document.getElementById("connect");
-
-  connectBtn.addEventListener("click", () => {
+  document.getElementById("connect").addEventListener("click", () => {
     enterRepl(/* fromFlash */ true);
   });
-
   document.getElementById("disconnect").addEventListener("click", leaveRepl);
 }
 
@@ -196,15 +193,15 @@ async function enterRepl(fromFlash) {
   try {
     await currentPort.open({ baudRate: 115200 });
   } catch (err) {
-    setStatus(status, `REPL open failed: ${err.message ?? err}`, true);
+    setStatus(status, `${openErrorMessage(err)}`, true);
+    currentPort = null;
     return;
   }
 
   writer = currentPort.writable.getWriter();
-  log.textContent = "";
+  log.replaceChildren();
   readDone = readLoop(log);
 
-  // UI: hide picker + Flash flow, show REPL controls
   picker.hidden = true;
   repl.hidden = false;
   connectBtn.hidden = true;
@@ -212,22 +209,10 @@ async function enterRepl(fromFlash) {
   line.hidden = false;
   disconnectBtn.hidden = false;
   setStatus(status, fromFlash
-    ? "REPL connected at 115200 (post-flash)."
+    ? "REPL connected at 115200 (post-flash). Boot output appears below."
     : "REPL connected at 115200.");
   line.focus();
 
-  // Wake nudge: if the device already emitted its boot banner before the
-  // port reopen, send a newline to elicit an `ok` so the user sees the
-  // REPL is alive instead of staring at an empty log.
-  appendLog(log, "(connected — type a Frothy line and press Enter)\n");
-  try {
-    await writer.write(encoder.encode("\n"));
-  } catch (err) {
-    appendLog(log, `(wake newline failed: ${err.message ?? err})\n`);
-  }
-
-  // Bind keydown here (not in initRepl) so the writer reference is fresh
-  // each REPL session. Remove on disconnect via the lineHandler reference.
   line.addEventListener("keydown", lineKeydown);
 }
 
@@ -236,14 +221,10 @@ async function lineKeydown(e) {
   e.preventDefault();
   const value = e.target.value;
   e.target.value = "";
-  const log = document.getElementById("log");
-  // Write-echo so the user sees their input went out even if the device
-  // is slow or silent. Prefixed with > to distinguish from device output.
-  appendLog(log, `> ${value}\n`);
   try {
     await writer.write(encoder.encode(value + "\n"));
   } catch (err) {
-    appendLog(log, `(write failed: ${err.message ?? err})\n`);
+    appendLog(document.getElementById("log"), `(write failed: ${err.message ?? err})\n`);
   }
 }
 
@@ -258,7 +239,7 @@ async function leaveRepl() {
 
   line.removeEventListener("keydown", lineKeydown);
   await releaseCurrentPort();
-  log.textContent = "";
+  log.replaceChildren();
   line.value = "";
   log.hidden = true;
   line.hidden = true;
@@ -266,8 +247,6 @@ async function leaveRepl() {
   connectBtn.hidden = false;
   repl.hidden = true;
   picker.hidden = false;
-  // Re-enable any picker controls that may still be disabled from a prior
-  // Flash attempt (the success-path leaves them disabled until disconnect).
   for (const id of ["flash", "board", "profile", "connect-existing"]) {
     document.getElementById(id).disabled = false;
   }
@@ -281,7 +260,8 @@ async function readLoop(log) {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      appendLog(log, decoder.decode(value, { stream: true }));
+      const text = decoder.decode(value, { stream: true });
+      if (text) appendLog(log, text);
     }
   } catch (err) {
     appendLog(log, `(read loop ended: ${err.message ?? err})\n`);
@@ -290,9 +270,31 @@ async function readLoop(log) {
   }
 }
 
+// Append text as a single text node and trim oldest nodes when the cap is
+// hit. textContent += would re-serialize the whole log on every chunk,
+// which is O(n²) and locks the page after a few hundred lines.
 function appendLog(log, text) {
-  log.textContent += text;
+  log.appendChild(document.createTextNode(text));
+  while (log.childNodes.length > LOG_MAX_NODES) {
+    log.removeChild(log.firstChild);
+  }
   log.scrollTop = log.scrollHeight;
+}
+
+function openErrorMessage(err) {
+  const msg = err?.message ?? String(err);
+  if (/already open|InvalidStateError|access|locked/i.test(msg)) {
+    return `Open failed (${msg}). The serial port is likely held by another tab or browser process. Close all Frothy flasher tabs and try again; if that doesn't free it, restart the browser.`;
+  }
+  return `Open failed: ${msg}`;
+}
+
+function portLockHint(err) {
+  const msg = err?.message ?? String(err);
+  if (/Failed to connect|access|locked/i.test(msg)) {
+    return ` — if this is a re-flash attempt, the serial port may be locked by another tab; close all Frothy flasher tabs or restart the browser to release it.`;
+  }
+  return "";
 }
 
 function setStatus(el, text, isError = false) {
