@@ -23,8 +23,14 @@ func runConnectCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 	var (
 		port        = fs.String("port", "", "serial port, for example /dev/cu.usbmodem101")
 		baud        = fs.Int("baud", 115200, "serial baud rate")
-		timeout     = fs.Duration("timeout", 3*time.Second, "serial prompt timeout")
-		settle      = fs.Duration("settle", 2*time.Second, "delay after opening serial")
+		// Defaults sized for ESP32-class boards: opening the port can
+		// trigger a CP2102 auto-reset, and the chip needs ~500 ms to boot
+		// past ROM + app init before the REPL accepts input. The settle
+		// covers that boot; the timeout covers a slow syncPrompt round
+		// (first read times out on a quiet chip, then \n + echo). Faster
+		// targets like tiny_328 still complete well inside these budgets.
+		timeout     = fs.Duration("timeout", 5*time.Second, "serial prompt timeout")
+		settle      = fs.Duration("settle", 4*time.Second, "delay after opening serial")
 		noHistory   = fs.Bool("no-history", false, "disable history read/write")
 		historyFile = fs.String("history-file", "", "override history file path (default $XDG_DATA_HOME/frothy/history)")
 	)
