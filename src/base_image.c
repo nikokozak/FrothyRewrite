@@ -6,6 +6,8 @@
 #include "slot.h"
 #include "tagged.h"
 
+#include <stdlib.h>
+
 #if FR_FEATURE_SOURCE_BASE
 #include "compile.h"
 #include "fr_source_base.h"
@@ -22,6 +24,14 @@ typedef struct {
 
 static fr_source_base_record_t fr_source_base_records[FR_SOURCE_BASE_RECORD_MAX];
 static uint16_t fr_source_base_slot_count;
+
+/* T15-hwfix: fr_compile_overlay_update_t embeds profile-sized text buffers
+ * (one max-text + 8 body texts). On esp32_plain with FR_PROFILE_MAX_TEXT_LENGTH
+ * = 4096, putting it on app_main's 24KB task stack overflows. Heap-allocate
+ * a single scratch the first time it's needed and reuse it across boot's
+ * many per-line compiles. Single-threaded boot path; never freed (intent:
+ * use it from REPL paths too in a future tightening). */
+static fr_compile_overlay_update_t *fr_source_base_compile_scratch;
 
 void fr_base_source_record_reset(void) { fr_source_base_slot_count = 0; }
 
@@ -90,16 +100,23 @@ fr_err_t fr_base_source_record_slot_id_at(uint16_t index,
 
 static fr_err_t fr_base_compile_source_line(fr_runtime_t *runtime,
                                             const char *line) {
-  fr_compile_overlay_update_t compiled = {0};
+  if (fr_source_base_compile_scratch == NULL) {
+    fr_source_base_compile_scratch =
+        (fr_compile_overlay_update_t *)malloc(sizeof(*fr_source_base_compile_scratch));
+    if (fr_source_base_compile_scratch == NULL) {
+      return FR_ERR_CAPACITY;
+    }
+  }
+  fr_compile_overlay_update_t *compiled = fr_source_base_compile_scratch;
 
-  FR_TRY(fr_compile_overlay_update_for_runtime(runtime, line, &compiled));
-  if (compiled.overlay_update.slot_init_count != 1 ||
-      compiled.overlay_update.slot_name_count != 1) {
+  FR_TRY(fr_compile_overlay_update_for_runtime(runtime, line, compiled));
+  if (compiled->overlay_update.slot_init_count != 1 ||
+      compiled->overlay_update.slot_name_count != 1) {
     return FR_ERR_INVALID;
   }
-  fr_slot_id_t slot_id = compiled.overlay_update.slot_inits[0].slot_id;
-  FR_TRY(fr_overlay_apply_base(runtime, &compiled.overlay_update));
-  return fr_base_source_record_add(slot_id, compiled.slot_name.name);
+  fr_slot_id_t slot_id = compiled->overlay_update.slot_inits[0].slot_id;
+  FR_TRY(fr_overlay_apply_base(runtime, &compiled->overlay_update));
+  return fr_base_source_record_add(slot_id, compiled->slot_name.name);
 }
 
 /* Compile base/core.frothy one definition per line into base bindings. */
@@ -165,38 +182,54 @@ static fr_err_t fr_base_install_def(fr_runtime_t *runtime,
 }
 
 fr_err_t fr_base_image_install(fr_runtime_t *runtime) {
-  fr_runtime_t next;
+  /* T15-hwfix: heap-allocate the staging runtime — fr_runtime_t embeds
+   * profile-sized arrays (several KB on esp32_plain) and putting it on
+   * app_main's task stack alongside the compile scratch overflows. Freed
+   * before returning since the final state is copied to *runtime. */
+  fr_runtime_t *next = (fr_runtime_t *)malloc(sizeof(*next));
+  fr_err_t err;
 
   if (runtime == NULL) {
     return FR_ERR_INVALID;
+  }
+  if (next == NULL) {
+    return FR_ERR_CAPACITY;
   }
 
 #if FR_FEATURE_SOURCE_BASE
   fr_base_source_record_reset();
 #endif
   fr_lib_native_records_reset();
-  FR_TRY(fr_runtime_init(&next));
+  err = fr_runtime_init(next);
+  if (err != FR_OK) { free(next); return err; }
+
   for (uint16_t layer = 0; layer < fr_base_def_layer_count(); layer++) {
     fr_base_def_layer_t def_layer = {0};
 
-    FR_TRY(fr_base_def_layer_at(layer, &def_layer));
+    err = fr_base_def_layer_at(layer, &def_layer);
+    if (err != FR_OK) { free(next); return err; }
     if (def_layer.count > 0 && def_layer.defs == NULL) {
+      free(next);
       return FR_ERR_INVALID;
     }
     for (uint16_t i = 0; i < def_layer.count; i++) {
-      FR_TRY(fr_base_install_def(&next, &def_layer.defs[i]));
+      err = fr_base_install_def(next, &def_layer.defs[i]);
+      if (err != FR_OK) { free(next); return err; }
     }
   }
 
 #if FR_FEATURE_SOURCE_BASE
-  FR_TRY(fr_base_compile_source(&next, fr_source_base_bytes,
-                                fr_source_base_bytes_len));
+  err = fr_base_compile_source(next, fr_source_base_bytes,
+                               fr_source_base_bytes_len);
+  if (err != FR_OK) { free(next); return err; }
 #endif
 
-  FR_TRY(fr_lib_natives_install(&next));
+  err = fr_lib_natives_install(next);
+  if (err != FR_OK) { free(next); return err; }
 
-  fr_code_mark_base(&next);
-  fr_native_mark_base(&next);
-  *runtime = next;
+  fr_code_mark_base(next);
+  fr_native_mark_base(next);
+  *runtime = *next;
+  free(next);
   return FR_OK;
 }
