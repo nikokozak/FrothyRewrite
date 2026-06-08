@@ -1020,6 +1020,18 @@ static fr_err_t fr_native_sleep_wake_on_gpio(fr_runtime_t *runtime,
   *out = fr_tagged_nil();
   return FR_OK;
 }
+
+#ifdef FR_HOST_TEST_HELPERS
+/* D17/D19: simulates the WDT fire by wiping the kernel armed flag.
+ * On a real device a missed feed panics and cold-boots the chip;
+ * armed lives in RAM and is gone post-boot. The host fixture mirrors
+ * that — after force_timeout the next watchdog.feed: surfaces
+ * FR_ERR_INVALID (D11) since armed is back to its post-boot value.
+ * Lives here because the armed flag is file-static to this TU. */
+void fr_host_watchdog_force_timeout(void) {
+  fr_native_watchdog_armed = false;
+}
+#endif
 #endif
 
 #if FR_FEATURE_MATH

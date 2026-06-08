@@ -1336,11 +1336,8 @@ fr_err_t fr_platform_sleep_wake_on_gpio(uint16_t pin, uint16_t level) {
 }
 
 #ifdef FR_HOST_TEST_HELPERS
-void fr_host_watchdog_force_timeout(void) {
-  /* D17: simulates the WDT fire. Host stubs don't reset the process;
-   * the call exists so D19 can exercise the helper path. */
-}
-
+/* fr_host_watchdog_force_timeout lives in targets/common/target_defs.c
+ * since it needs to clear the kernel armed flag (file-static there). */
 void fr_host_sleep_deep_captures(uint32_t *out_ms, uint16_t *out_pin,
                                  uint16_t *out_level) {
   if (out_ms != NULL) {
