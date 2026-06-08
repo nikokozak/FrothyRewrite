@@ -2180,7 +2180,14 @@ fr_err_t fr_platform_tcp_bytes_ready(fr_runtime_t *runtime,
   FR_TRY(fr_esp_tcp_check_alive(runtime, platform_index));
   FR_TRY(fr_esp_tcp_entry(platform_index, &entry));
   if (ioctl(entry->fd, FIONREAD, &ready) < 0) {
-    return FR_ERR_NET_REFUSED;
+    /* lwip returns -1 once the peer has FIN'd. From the user model,
+     * bytes-ready?: asks how many bytes are readable right now; post-EOF
+     * that's zero. Latching REFUSED here would break the canonical drain
+     * loop (until ready=0 and chunk=""), since the read that observes
+     * EOF and the bytes-ready that follows cross the same FIN. The next
+     * tcp.read: still surfaces empty (EOF) or a real per-handle error. */
+    *out_count = 0;
+    return FR_OK;
   }
   if (ready < 0) {
     ready = 0;
