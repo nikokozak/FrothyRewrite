@@ -64,3 +64,4 @@
 #define FR_FEATURE_EVENTS 0
 
 #define FR_FEATURE_NET 0
+#define FR_FEATURE_POWER 0

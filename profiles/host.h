@@ -44,3 +44,4 @@
 #define FR_FEATURE_SOURCE_BASE 0
 
 #define FR_FEATURE_NET 0
+#define FR_FEATURE_POWER 0

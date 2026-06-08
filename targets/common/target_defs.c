@@ -938,6 +938,102 @@ static fr_err_t fr_native_tcp_bytes_ready_p(fr_runtime_t *runtime,
 
 #endif
 
+#if FR_FEATURE_POWER
+enum {
+  /* D9: clamp matches ESP-IDF's own Task WDT Kconfig "range 1 60" (s),
+   * the canonical "what makes sense" span. The runtime API would accept
+   * any uint32_t. */
+  FR_NATIVE_WATCHDOG_TIMEOUT_MIN_MS = 1000,
+  FR_NATIVE_WATCHDOG_TIMEOUT_MAX_MS = 60000,
+};
+
+/* D11/D17: the kernel owns the user-visible armed state. The platform
+ * carries no duplicate flag. Re-arm replaces by reconfiguring the WDT
+ * (D10), and the platform's first-subscribe gate is platform-side. */
+static bool fr_native_watchdog_armed;
+
+static fr_err_t fr_native_watchdog_arm(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  fr_int_t timeout = 0;
+
+  (void)runtime;
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 0, &timeout));
+  if (timeout < FR_NATIVE_WATCHDOG_TIMEOUT_MIN_MS ||
+      timeout > FR_NATIVE_WATCHDOG_TIMEOUT_MAX_MS) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_watchdog_arm((uint32_t)timeout));
+  fr_native_watchdog_armed = true;
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_watchdog_feed(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count, fr_tagged_t *out) {
+  (void)runtime;
+  (void)args;
+  if (arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_native_watchdog_armed) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_watchdog_feed());
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_sleep_deep(fr_runtime_t *runtime,
+                                     const fr_tagged_t *args,
+                                     uint8_t arg_count, fr_tagged_t *out) {
+  fr_int_t ms = 0;
+
+  (void)runtime;
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 0, &ms));
+  FR_TRY(fr_platform_sleep_deep((uint32_t)ms));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_sleep_wake_on_gpio(fr_runtime_t *runtime,
+                                             const fr_tagged_t *args,
+                                             uint8_t arg_count,
+                                             fr_tagged_t *out) {
+  uint16_t pin = 0;
+  uint16_t level = 0;
+
+  (void)runtime;
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &pin));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &level));
+  FR_TRY(fr_platform_sleep_wake_on_gpio(pin, level));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+#ifdef FR_HOST_TEST_HELPERS
+/* D17/D19: simulates the WDT fire by wiping the kernel armed flag.
+ * On a real device a missed feed panics and cold-boots the chip;
+ * armed lives in RAM and is gone post-boot. The host fixture mirrors
+ * that — after force_timeout the next watchdog.feed: surfaces
+ * FR_ERR_INVALID (D11) since armed is back to its post-boot value.
+ * Lives here because the armed flag is file-static to this TU. */
+void fr_host_watchdog_force_timeout(void) {
+  fr_native_watchdog_armed = false;
+}
+#endif
+#endif
+
 #if FR_FEATURE_MATH
 static fr_err_t fr_native_abs(fr_runtime_t *runtime, const fr_tagged_t *args,
                               uint8_t arg_count, fr_tagged_t *out) {
@@ -1969,6 +2065,46 @@ static const fr_native_signature_t fr_native_tcp_bytes_ready_p_signature = {
 };
 #endif
 
+#if FR_FEATURE_POWER
+static const fr_native_param_t fr_native_watchdog_arm_params[] = {
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_watchdog_arm_signature = {
+    .params = fr_native_watchdog_arm_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "arm the watchdog with a timeout in ms; window restarts now",
+};
+
+static const fr_native_signature_t fr_native_watchdog_feed_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "feed the armed watchdog; errors if not yet armed",
+};
+
+static const fr_native_param_t fr_native_sleep_deep_params[] = {
+    {"ms", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_sleep_deep_signature = {
+    .params = fr_native_sleep_deep_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "enter deep sleep for ms; chip cold-boots on wake",
+};
+
+static const fr_native_param_t fr_native_sleep_wake_on_gpio_params[] = {
+    {"pin", FR_NATIVE_VALUE_INT},
+    {"level", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_sleep_wake_on_gpio_signature = {
+    .params = fr_native_sleep_wake_on_gpio_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "configure ext0 GPIO wake for the next sleep.deep",
+};
+#endif
+
 #if FR_FEATURE_MATH
 static const fr_native_param_t fr_native_abs_params[] = {
     {"x", FR_NATIVE_VALUE_INT},
@@ -2561,6 +2697,56 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_tcp_bytes_ready_p_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_POWER
+    {
+        .slot_id = FR_SLOT_WATCHDOG_ARM,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "watchdog.arm",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_watchdog_arm,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_watchdog_arm_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_WATCHDOG_FEED,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "watchdog.feed",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_watchdog_feed,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_watchdog_feed_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_SLEEP_DEEP,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "sleep.deep",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_sleep_deep,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_sleep_deep_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_SLEEP_WAKE_ON_GPIO,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "sleep.wake-on-gpio",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_sleep_wake_on_gpio,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_sleep_wake_on_gpio_signature,
 #endif
     },
 #endif
