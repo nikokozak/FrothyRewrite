@@ -46,3 +46,4 @@
 #define FR_FEATURE_NET 1
 
 #define FR_HTTP_MAX_BODY 16384
+#define FR_TCP_HANDLE_COUNT 4

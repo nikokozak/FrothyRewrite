@@ -1,6 +1,7 @@
 #include "platform.h"
 
 #include "handle.h"
+#include "runtime.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -282,6 +283,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
 #if FR_FEATURE_I2C
   if (kind == FR_HANDLE_KIND_I2C_BUS) {
     return fr_platform_i2c_close(platform_index);
+  }
+#endif
+#if FR_FEATURE_NET
+  if (kind == FR_HANDLE_KIND_TCP) {
+    return fr_platform_tcp_close(platform_index);
   }
 #endif
   (void)kind;
@@ -961,6 +967,152 @@ fr_err_t fr_platform_http_get(const char *url, uint8_t *out_body, uint16_t cap,
   return FR_OK;
 }
 
+/* T15b D17 host TCP. queued gates open success per the SPEC: a slot must be
+ * pre-staged via fr_host_tcp_queue_response, otherwise open returns
+ * FR_ERR_NET_REFUSED. Magic hostnames "fr.test.dns" / "fr.test.timeout"
+ * route open to FR_ERR_NET_DNS / FR_ERR_NET_TIMEOUT for the matching
+ * acceptance #10 paths. Ring cap matches the per-profile text length so a
+ * single tcp.read: can drain a full queued response without truncation. */
+enum {
+  FR_HOST_TCP_RING_CAP = FR_PROFILE_MAX_TEXT_LENGTH,
+};
+
+typedef struct fr_host_tcp_t {
+  bool in_use;
+  bool queued;
+  bool wifi_down;
+  uint16_t rx_head;
+  uint16_t rx_count;
+  uint16_t tx_head;
+  uint16_t tx_count;
+  uint8_t rx_ring[FR_HOST_TCP_RING_CAP];
+  uint8_t tx_ring[FR_HOST_TCP_RING_CAP];
+} fr_host_tcp_t;
+
+static fr_host_tcp_t fr_host_tcps[FR_TCP_HANDLE_COUNT];
+
+static fr_err_t fr_host_tcp_check_alive(fr_runtime_t *runtime,
+                                        uint16_t platform_index) {
+  if (platform_index >= FR_TCP_HANDLE_COUNT ||
+      !fr_host_tcps[platform_index].in_use) {
+    return FR_ERR_HANDLE;
+  }
+  if (runtime->tcp_handles[platform_index].failed) {
+    return FR_ERR_NET_DISCONNECTED;
+  }
+  if (fr_host_tcps[platform_index].wifi_down) {
+    runtime->tcp_handles[platform_index].failed = true;
+    return FR_ERR_NET_DISCONNECTED;
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_open(fr_runtime_t *runtime, const char *host,
+                              uint16_t port, uint16_t *out_platform_index) {
+  if (runtime == NULL || host == NULL || out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (port == 0) {
+    return FR_ERR_DOMAIN;
+  }
+  if (strcmp(host, "fr.test.dns") == 0) {
+    return FR_ERR_NET_DNS;
+  }
+  if (strcmp(host, "fr.test.timeout") == 0) {
+    return FR_ERR_NET_TIMEOUT;
+  }
+  for (uint16_t i = 0; i < FR_TCP_HANDLE_COUNT; i++) {
+    if (fr_host_tcps[i].in_use) {
+      continue;
+    }
+    if (!fr_host_tcps[i].queued) {
+      continue;
+    }
+    fr_host_tcps[i].in_use = true;
+    fr_host_tcps[i].wifi_down = false;
+    fr_host_tcps[i].tx_head = 0;
+    fr_host_tcps[i].tx_count = 0;
+    runtime->tcp_handles[i].failed = false;
+    *out_platform_index = i;
+    return FR_OK;
+  }
+  for (uint16_t i = 0; i < FR_TCP_HANDLE_COUNT; i++) {
+    if (!fr_host_tcps[i].in_use) {
+      return FR_ERR_NET_REFUSED;
+    }
+  }
+  return FR_ERR_CAPACITY;
+}
+
+fr_err_t fr_platform_tcp_read(fr_runtime_t *runtime, uint16_t platform_index,
+                              uint8_t *out_bytes, uint16_t cap,
+                              uint16_t *out_length) {
+  fr_host_tcp_t *slot = NULL;
+  uint16_t take = 0;
+
+  if (runtime == NULL || out_length == NULL || (out_bytes == NULL && cap > 0)) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_runtime_is_interrupted(runtime)) {
+    return FR_ERR_INTERRUPTED;
+  }
+  FR_TRY(fr_host_tcp_check_alive(runtime, platform_index));
+  slot = &fr_host_tcps[platform_index];
+  take = slot->rx_count < cap ? slot->rx_count : cap;
+  for (uint16_t i = 0; i < take; i++) {
+    out_bytes[i] = slot->rx_ring[slot->rx_head];
+    slot->rx_head =
+        (uint16_t)((slot->rx_head + 1u) % FR_HOST_TCP_RING_CAP);
+  }
+  slot->rx_count = (uint16_t)(slot->rx_count - take);
+  *out_length = take;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_write(fr_runtime_t *runtime, uint16_t platform_index,
+                               const uint8_t *bytes, uint16_t length) {
+  fr_host_tcp_t *slot = NULL;
+
+  if (runtime == NULL || (bytes == NULL && length > 0)) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_runtime_is_interrupted(runtime)) {
+    return FR_ERR_INTERRUPTED;
+  }
+  FR_TRY(fr_host_tcp_check_alive(runtime, platform_index));
+  slot = &fr_host_tcps[platform_index];
+  for (uint16_t i = 0; i < length; i++) {
+    slot->tx_ring[(uint16_t)((slot->tx_head + slot->tx_count) %
+                             FR_HOST_TCP_RING_CAP)] = bytes[i];
+    if (slot->tx_count < FR_HOST_TCP_RING_CAP) {
+      slot->tx_count = (uint16_t)(slot->tx_count + 1u);
+    } else {
+      slot->tx_head =
+          (uint16_t)((slot->tx_head + 1u) % FR_HOST_TCP_RING_CAP);
+    }
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_close(uint16_t platform_index) {
+  if (platform_index < FR_TCP_HANDLE_COUNT) {
+    memset(&fr_host_tcps[platform_index], 0,
+           sizeof(fr_host_tcps[platform_index]));
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_tcp_bytes_ready(fr_runtime_t *runtime,
+                                     uint16_t platform_index,
+                                     uint16_t *out_count) {
+  if (runtime == NULL || out_count == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_tcp_check_alive(runtime, platform_index));
+  *out_count = fr_host_tcps[platform_index].rx_count;
+  return FR_OK;
+}
+
 typedef struct fr_host_wifi_slot_t {
   uint16_t binding_index;
   uint16_t generation;
@@ -1037,6 +1189,60 @@ void fr_host_wifi_fire_event(fr_event_kind_t kind) {
                                               (uint32_t)fr_host_millis);
 }
 
+void fr_host_tcp_queue_response(uint16_t handle_platform_index,
+                                const uint8_t *bytes, uint16_t length) {
+  fr_host_tcp_t *slot = NULL;
+
+  if (handle_platform_index >= FR_TCP_HANDLE_COUNT ||
+      (bytes == NULL && length > 0)) {
+    return;
+  }
+  slot = &fr_host_tcps[handle_platform_index];
+  slot->queued = true;
+  for (uint16_t i = 0; i < length; i++) {
+    slot->rx_ring[(uint16_t)((slot->rx_head + slot->rx_count) %
+                             FR_HOST_TCP_RING_CAP)] = bytes[i];
+    if (slot->rx_count < FR_HOST_TCP_RING_CAP) {
+      slot->rx_count = (uint16_t)(slot->rx_count + 1u);
+    } else {
+      slot->rx_head =
+          (uint16_t)((slot->rx_head + 1u) % FR_HOST_TCP_RING_CAP);
+    }
+  }
+}
+
+fr_err_t fr_host_tcp_drain_writes(uint16_t handle_platform_index,
+                                  uint8_t *out_bytes, uint16_t cap,
+                                  uint16_t *out_length) {
+  fr_host_tcp_t *slot = NULL;
+  uint16_t take = 0;
+
+  if (out_length == NULL || (out_bytes == NULL && cap > 0)) {
+    return FR_ERR_INVALID;
+  }
+  if (handle_platform_index >= FR_TCP_HANDLE_COUNT ||
+      !fr_host_tcps[handle_platform_index].in_use) {
+    return FR_ERR_HANDLE;
+  }
+  slot = &fr_host_tcps[handle_platform_index];
+  take = slot->tx_count < cap ? slot->tx_count : cap;
+  for (uint16_t i = 0; i < take; i++) {
+    out_bytes[i] = slot->tx_ring[slot->tx_head];
+    slot->tx_head =
+        (uint16_t)((slot->tx_head + 1u) % FR_HOST_TCP_RING_CAP);
+  }
+  slot->tx_count = (uint16_t)(slot->tx_count - take);
+  *out_length = take;
+  return FR_OK;
+}
+
+void fr_host_tcp_force_disconnect(uint16_t handle_platform_index) {
+  if (handle_platform_index >= FR_TCP_HANDLE_COUNT) {
+    return;
+  }
+  fr_host_tcps[handle_platform_index].wifi_down = true;
+}
+
 void fr_host_net_reset(void) {
   uint8_t i;
   memset(fr_host_wifi_ssid, 0, sizeof(fr_host_wifi_ssid));
@@ -1048,6 +1254,7 @@ void fr_host_net_reset(void) {
     fr_host_wifi_slots[i].generation = 0;
     fr_host_wifi_slots[i].active = false;
   }
+  memset(fr_host_tcps, 0, sizeof(fr_host_tcps));
   fr_host_event_queue_head = 0;
   fr_host_event_queue_count = 0;
   fr_host_event_overflow = 0;

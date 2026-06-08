@@ -35,6 +35,9 @@ fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
   FR_TRY(fr_pad_reset(runtime));
 #endif
   memset(&runtime->events, 0, sizeof(runtime->events));
+#if FR_FEATURE_NET
+  memset(&runtime->tcp_handles, 0, sizeof(runtime->tcp_handles));
+#endif
   runtime->interrupted = false;
   runtime->dispatching_event = false;
   runtime->install_tier = FR_INSTALL_TIER_USER;
