@@ -1262,3 +1262,102 @@ void fr_host_net_reset(void) {
 
 #endif
 #endif
+
+#if FR_FEATURE_POWER
+/* T14 D17. arm and feed are pure no-ops: the kernel owns the armed
+ * state (target_defs.c), so the host has nothing to record for the
+ * arm/re-arm/feed paths. sleep records the args from the most recent
+ * sleep.deep: call and the pending GPIO config so D19's tests can read
+ * what was passed. force_timeout sets a host-side fired flag the test
+ * reads via fr_host_watchdog_fired; the kernel armed flag stays the
+ * source of truth for the user model. */
+static uint32_t fr_host_sleep_captured_ms;
+static uint16_t fr_host_sleep_pending_pin;
+static uint16_t fr_host_sleep_pending_level;
+static bool fr_host_sleep_pending;
+#ifdef FR_HOST_TEST_HELPERS
+static bool fr_host_watchdog_fired_flag;
+#endif
+
+/* RTC-capable wake pins on ESP32; ext0 wake accepts these only
+ * (esp_sleep.h:262-267). Host mirrors the list so D19's reject-non-RTC
+ * test runs against the same set the device enforces. */
+static bool fr_host_sleep_is_rtc_pin(uint16_t pin) {
+  switch (pin) {
+  case 0:
+  case 2:
+  case 4:
+  case 12:
+  case 13:
+  case 14:
+  case 15:
+  case 25:
+  case 26:
+  case 27:
+  case 32:
+  case 33:
+  case 34:
+  case 35:
+  case 36:
+  case 37:
+  case 38:
+  case 39:
+    return true;
+  default:
+    return false;
+  }
+}
+
+fr_err_t fr_platform_watchdog_arm(uint32_t timeout_ms) {
+  (void)timeout_ms;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_watchdog_feed(void) { return FR_OK; }
+
+fr_err_t fr_platform_sleep_deep(uint32_t ms) {
+  if (ms == 0 && !fr_host_sleep_pending) {
+    return FR_ERR_INVALID;
+  }
+  fr_host_sleep_captured_ms = ms;
+  /* The pending config is consumed by this call; user must re-configure
+   * after the simulated cold-boot (D12). Captures of pin/level stay
+   * readable so D19 can assert what was used. */
+  fr_host_sleep_pending = false;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_sleep_wake_on_gpio(uint16_t pin, uint16_t level) {
+  if (!fr_host_sleep_is_rtc_pin(pin)) {
+    return FR_ERR_INVALID;
+  }
+  if (level > 1) {
+    return FR_ERR_INVALID;
+  }
+  fr_host_sleep_pending = true;
+  fr_host_sleep_pending_pin = pin;
+  fr_host_sleep_pending_level = level;
+  return FR_OK;
+}
+
+#ifdef FR_HOST_TEST_HELPERS
+void fr_host_watchdog_force_timeout(void) {
+  fr_host_watchdog_fired_flag = true;
+}
+
+bool fr_host_watchdog_fired(void) { return fr_host_watchdog_fired_flag; }
+
+void fr_host_sleep_deep_captures(uint32_t *out_ms, uint16_t *out_pin,
+                                 uint16_t *out_level) {
+  if (out_ms != NULL) {
+    *out_ms = fr_host_sleep_captured_ms;
+  }
+  if (out_pin != NULL) {
+    *out_pin = fr_host_sleep_pending_pin;
+  }
+  if (out_level != NULL) {
+    *out_level = fr_host_sleep_pending_level;
+  }
+}
+#endif
+#endif

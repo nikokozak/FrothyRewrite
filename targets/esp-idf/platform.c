@@ -2200,3 +2200,28 @@ fr_err_t fr_platform_tcp_bytes_ready(fr_runtime_t *runtime,
 }
 
 #endif
+
+#if FR_FEATURE_POWER
+/* T14 Slice A placeholder. Slice B replaces with the Task WDT impl
+ * (D8: esp_task_wdt_reconfigure + conditional esp_task_wdt_add(NULL))
+ * and the esp_sleep impl (D12: timer + ext0 wake, then
+ * esp_deep_sleep_start). The stubs return FR_OK so target_defs.c links
+ * for acceptance #8 without claiming D8/D12 behavior. */
+fr_err_t fr_platform_watchdog_arm(uint32_t timeout_ms) {
+  (void)timeout_ms;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_watchdog_feed(void) { return FR_OK; }
+
+fr_err_t fr_platform_sleep_deep(uint32_t ms) {
+  (void)ms;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_sleep_wake_on_gpio(uint16_t pin, uint16_t level) {
+  (void)pin;
+  (void)level;
+  return FR_OK;
+}
+#endif

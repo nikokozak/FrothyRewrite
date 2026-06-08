@@ -213,3 +213,34 @@ fr_err_t fr_host_tcp_drain_writes(uint16_t handle_platform_index,
 void fr_host_tcp_force_disconnect(uint16_t handle_platform_index);
 #endif
 #endif
+
+#if FR_FEATURE_POWER
+/* T14 D8/D9/D10/D11: timeout_ms is the caller-provided window. The kernel
+ * shim validates the [1000, 60000] range and the not-armed feed case
+ * (D9, D11), so the platform impl trusts its input. The ESP-IDF impl
+ * reconfigures the Task WDT and subscribes the caller task once (D8). */
+fr_err_t fr_platform_watchdog_arm(uint32_t timeout_ms);
+fr_err_t fr_platform_watchdog_feed(void);
+
+/* T14 D12: sleep.deep enters deep sleep for ms milliseconds. If a
+ * wake-on-gpio config is pending, it is consumed; the chip cold-boots on
+ * wake. ms == 0 with no pending wake returns FR_ERR_INVALID so the chip
+ * never sleeps indefinitely. */
+fr_err_t fr_platform_sleep_deep(uint32_t ms);
+/* T14 D12: pin must be RTC-capable per the ESP32 ext0 list (0, 2, 4,
+ * 12-15, 25-27, 32-39); else FR_ERR_INVALID. level is 0 or 1; other
+ * values return FR_ERR_INVALID. */
+fr_err_t fr_platform_sleep_wake_on_gpio(uint16_t pin, uint16_t level);
+
+#ifdef FR_HOST_TEST_HELPERS
+/* T14 D17 host fixtures. force_timeout sets a host-side flag the test
+ * reads via fr_host_watchdog_fired; the kernel's armed flag stays the
+ * source of truth for the user model. captures returns the last
+ * sleep.deep args plus the pending GPIO config that was set by the most
+ * recent sleep.wake-on-gpio: call. */
+void fr_host_watchdog_force_timeout(void);
+bool fr_host_watchdog_fired(void);
+void fr_host_sleep_deep_captures(uint32_t *out_ms, uint16_t *out_pin,
+                                 uint16_t *out_level);
+#endif
+#endif
