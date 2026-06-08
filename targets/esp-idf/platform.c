@@ -15,6 +15,10 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#if FR_FEATURE_POWER
+#include "esp_sleep.h"
+#include "esp_task_wdt.h"
+#endif
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -2202,26 +2206,93 @@ fr_err_t fr_platform_tcp_bytes_ready(fr_runtime_t *runtime,
 #endif
 
 #if FR_FEATURE_POWER
-/* T14 Slice A placeholder. Slice B replaces with the Task WDT impl
- * (D8: esp_task_wdt_reconfigure + conditional esp_task_wdt_add(NULL))
- * and the esp_sleep impl (D12: timer + ext0 wake, then
- * esp_deep_sleep_start). The stubs return FR_OK so target_defs.c links
- * for acceptance #8 without claiming D8/D12 behavior. */
+/* T14 D8/D10/D11 Task WDT. The Frothy-local armed flag in target_defs.c
+ * drives the kernel's D11 "feed when not armed" contract. We keep a
+ * platform-side subscribed flag so the call sequence runs as D8 spells
+ * out: every arm calls esp_task_wdt_reconfigure (D10 replaces the
+ * running config), and only the first arm calls esp_task_wdt_add(NULL)
+ * to subscribe the calling task. ESP-IDF rejects a duplicate add with
+ * ESP_ERR_INVALID_ARG (task_wdt.c:196), so re-arm skips it. The idle
+ * mask mirrors what ESP-IDF's own startup builds
+ * (freertos/app_startup.c:184-199) so the IDLE-task safety net stays
+ * exactly as the default boot init set it up. */
+static bool fr_esp_watchdog_subscribed;
+
+static uint32_t fr_esp_watchdog_idle_mask(void) {
+  uint32_t mask = 0;
+#if CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0
+  mask |= 1u << 0;
+#endif
+#if CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1
+  mask |= 1u << 1;
+#endif
+  return mask;
+}
+
 fr_err_t fr_platform_watchdog_arm(uint32_t timeout_ms) {
-  (void)timeout_ms;
+  esp_task_wdt_config_t cfg = {
+      .timeout_ms = timeout_ms,
+      .idle_core_mask = fr_esp_watchdog_idle_mask(),
+      .trigger_panic = true,
+  };
+  if (esp_task_wdt_reconfigure(&cfg) != ESP_OK) {
+    return FR_ERR_IO;
+  }
+  if (!fr_esp_watchdog_subscribed) {
+    if (esp_task_wdt_add(NULL) != ESP_OK) {
+      return FR_ERR_IO;
+    }
+    fr_esp_watchdog_subscribed = true;
+  }
   return FR_OK;
 }
 
-fr_err_t fr_platform_watchdog_feed(void) { return FR_OK; }
+fr_err_t fr_platform_watchdog_feed(void) {
+  if (esp_task_wdt_reset() != ESP_OK) {
+    return FR_ERR_IO;
+  }
+  return FR_OK;
+}
+
+/* T14 D12 deep sleep. Pending wake-on-gpio is RAM-only; deep sleep
+ * cold-boots and the user must call sleep.wake-on-gpio: again before
+ * the next sleep.deep:. esp_deep_sleep_start is __noreturn__
+ * (esp_sleep.h:610-616); the trailing return statement is unreachable. */
+static bool fr_esp_sleep_pending;
+static uint16_t fr_esp_sleep_pending_pin;
+static uint16_t fr_esp_sleep_pending_level;
 
 fr_err_t fr_platform_sleep_deep(uint32_t ms) {
-  (void)ms;
+  if (ms == 0 && !fr_esp_sleep_pending) {
+    return FR_ERR_INVALID;
+  }
+  if (ms > 0) {
+    if (esp_sleep_enable_timer_wakeup((uint64_t)ms * 1000ULL) != ESP_OK) {
+      return FR_ERR_IO;
+    }
+  }
+  if (fr_esp_sleep_pending) {
+    if (esp_sleep_enable_ext0_wakeup((gpio_num_t)fr_esp_sleep_pending_pin,
+                                     (int)fr_esp_sleep_pending_level) !=
+        ESP_OK) {
+      return FR_ERR_IO;
+    }
+    fr_esp_sleep_pending = false;
+  }
+  esp_deep_sleep_start();
   return FR_OK;
 }
 
 fr_err_t fr_platform_sleep_wake_on_gpio(uint16_t pin, uint16_t level) {
-  (void)pin;
-  (void)level;
+  if (level > 1) {
+    return FR_ERR_INVALID;
+  }
+  if (!esp_sleep_is_valid_wakeup_gpio((gpio_num_t)pin)) {
+    return FR_ERR_INVALID;
+  }
+  fr_esp_sleep_pending = true;
+  fr_esp_sleep_pending_pin = pin;
+  fr_esp_sleep_pending_level = level;
   return FR_OK;
 }
 #endif

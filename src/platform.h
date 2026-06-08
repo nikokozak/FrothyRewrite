@@ -233,13 +233,12 @@ fr_err_t fr_platform_sleep_deep(uint32_t ms);
 fr_err_t fr_platform_sleep_wake_on_gpio(uint16_t pin, uint16_t level);
 
 #ifdef FR_HOST_TEST_HELPERS
-/* T14 D17 host fixtures. force_timeout sets a host-side flag the test
- * reads via fr_host_watchdog_fired; the kernel's armed flag stays the
- * source of truth for the user model. captures returns the last
- * sleep.deep args plus the pending GPIO config that was set by the most
- * recent sleep.wake-on-gpio: call. */
+/* T14 D17 host fixtures. force_timeout simulates the WDT fire; the
+ * kernel's armed flag stays the source of truth for the user model so
+ * D19's arm and re-arm tests assert by return status. captures returns
+ * the last sleep.deep args plus the pending GPIO config that was set by
+ * the most recent sleep.wake-on-gpio: call. */
 void fr_host_watchdog_force_timeout(void);
-bool fr_host_watchdog_fired(void);
 void fr_host_sleep_deep_captures(uint32_t *out_ms, uint16_t *out_pin,
                                  uint16_t *out_level);
 #endif

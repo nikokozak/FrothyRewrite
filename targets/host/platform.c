@@ -1268,16 +1268,11 @@ void fr_host_net_reset(void) {
  * state (target_defs.c), so the host has nothing to record for the
  * arm/re-arm/feed paths. sleep records the args from the most recent
  * sleep.deep: call and the pending GPIO config so D19's tests can read
- * what was passed. force_timeout sets a host-side fired flag the test
- * reads via fr_host_watchdog_fired; the kernel armed flag stays the
- * source of truth for the user model. */
+ * what was passed. */
 static uint32_t fr_host_sleep_captured_ms;
 static uint16_t fr_host_sleep_pending_pin;
 static uint16_t fr_host_sleep_pending_level;
 static bool fr_host_sleep_pending;
-#ifdef FR_HOST_TEST_HELPERS
-static bool fr_host_watchdog_fired_flag;
-#endif
 
 /* RTC-capable wake pins on ESP32; ext0 wake accepts these only
  * (esp_sleep.h:262-267). Host mirrors the list so D19's reject-non-RTC
@@ -1342,10 +1337,9 @@ fr_err_t fr_platform_sleep_wake_on_gpio(uint16_t pin, uint16_t level) {
 
 #ifdef FR_HOST_TEST_HELPERS
 void fr_host_watchdog_force_timeout(void) {
-  fr_host_watchdog_fired_flag = true;
+  /* D17: simulates the WDT fire. Host stubs don't reset the process;
+   * the call exists so D19 can exercise the helper path. */
 }
-
-bool fr_host_watchdog_fired(void) { return fr_host_watchdog_fired_flag; }
 
 void fr_host_sleep_deep_captures(uint32_t *out_ms, uint16_t *out_pin,
                                  uint16_t *out_level) {
