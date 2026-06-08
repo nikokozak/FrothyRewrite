@@ -198,5 +198,18 @@ void fr_host_wifi_fire_event(fr_event_kind_t kind);
 /* Clears credential buffers, ready flag, queued response, wifi slot table,
  * and the host event queue so Unity tests start from a known state. */
 void fr_host_net_reset(void);
+
+/* T15b D18. queue_response stages bytes for the slot the next tcp.open: will
+ * pick up; absence routes that open to FR_ERR_NET_REFUSED. drain_writes
+ * returns recorded tcp.write: bytes in FIFO order and empties the per-slot
+ * ring. force_disconnect latches wifi-down on the slot so the next TCP op
+ * surfaces FR_ERR_NET_DISCONNECTED and trips runtime->tcp_handles[i].failed
+ * per D12 — no auto-close. */
+void fr_host_tcp_queue_response(uint16_t handle_platform_index,
+                                const uint8_t *bytes, uint16_t length);
+fr_err_t fr_host_tcp_drain_writes(uint16_t handle_platform_index,
+                                  uint8_t *out_bytes, uint16_t cap,
+                                  uint16_t *out_length);
+void fr_host_tcp_force_disconnect(uint16_t handle_platform_index);
 #endif
 #endif
