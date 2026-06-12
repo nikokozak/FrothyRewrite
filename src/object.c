@@ -408,10 +408,14 @@ fr_err_t fr_cells_read(const fr_runtime_t *runtime, fr_object_id_t object_id,
 fr_err_t fr_cells_write(fr_runtime_t *runtime, fr_object_id_t object_id,
                         uint16_t index, fr_tagged_t tagged) {
   const fr_object_entry_t *entry = NULL;
+  fr_bytes_ref_t bytes_ref = {0};
 
   FR_TRY(fr_object_entry_of_kind(runtime, object_id, FR_OBJECT_CELLS, &entry));
   if (index >= entry->length) {
     return FR_ERR_RANGE;
+  }
+  if (fr_tagged_decode_bytes_ref(tagged, &bytes_ref) == FR_OK) {
+    return FR_ERR_VOLATILE;
   }
   if (!fr_cells_value_allowed(runtime, tagged)) {
     return FR_ERR_TYPE;
@@ -1094,6 +1098,7 @@ fr_err_t fr_record_write_field(fr_runtime_t *runtime,
   fr_object_id_t shape_object_id = 0;
   uint16_t field_count = 0;
   uint16_t field_index = 0;
+  fr_bytes_ref_t bytes_ref = {0};
 
   FR_TRY(fr_object_entry_of_kind(runtime, object_id, FR_OBJECT_RECORD,
                                  &entry));
@@ -1102,6 +1107,9 @@ fr_err_t fr_record_write_field(fr_runtime_t *runtime,
   (void)field_count;
   FR_TRY(fr_record_shape_field_index(runtime, shape_object_id, field,
                                      &field_index));
+  if (fr_tagged_decode_bytes_ref(tagged, &bytes_ref) == FR_OK) {
+    return FR_ERR_VOLATILE;
+  }
   if (!fr_record_field_value_allowed(runtime, tagged)) {
     return FR_ERR_TYPE;
   }

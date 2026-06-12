@@ -1143,6 +1143,7 @@ static fr_err_t fr_persist_encode_value(
   fr_native_id_t native_id = 0;
   fr_object_id_t object_id = 0;
   fr_handle_ref_t handle_ref = {0};
+  fr_bytes_ref_t bytes_ref = {0};
   uint16_t local_code_id = 0;
   uint16_t local_object_id = 0;
 
@@ -1182,6 +1183,9 @@ static fr_err_t fr_persist_encode_value(
   if (fr_tagged_decode_handle_ref(tagged, &handle_ref) == FR_OK) {
     return FR_ERR_VOLATILE;
   }
+  if (fr_tagged_decode_bytes_ref(tagged, &bytes_ref) == FR_OK) {
+    return FR_ERR_VOLATILE;
+  }
 
   return FR_ERR_UNSUPPORTED;
 }
@@ -1201,6 +1205,19 @@ static fr_err_t fr_persist_check_no_volatile_handles(
     }
     if (fr_tagged_decode_handle_ref(runtime->slots.current[slot_id],
                                     &handle_ref) == FR_OK) {
+      return FR_ERR_VOLATILE;
+    }
+  }
+#endif
+#if FR_FEATURE_BYTES
+  for (fr_slot_id_t slot_id = 0; slot_id < runtime->slots.count; slot_id++) {
+    fr_bytes_ref_t bytes_ref = {0};
+
+    if (!fr_slot_is_overlay(runtime, slot_id)) {
+      continue;
+    }
+    if (fr_tagged_decode_bytes_ref(runtime->slots.current[slot_id],
+                                   &bytes_ref) == FR_OK) {
       return FR_ERR_VOLATILE;
     }
   }
