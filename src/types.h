@@ -55,6 +55,14 @@ typedef struct fr_handle_ref_t {
   fr_handle_generation_t generation;
 } fr_handle_ref_t;
 
+typedef uint8_t fr_bytes_id_t;
+typedef uint8_t fr_bytes_generation_t;
+
+typedef struct fr_bytes_ref_t {
+  fr_bytes_id_t id;
+  fr_bytes_generation_t generation;
+} fr_bytes_ref_t;
+
 /* T12L-7 D3: session-scoped install tier on the runtime. Wire-byte values
    match FR_PERSIST_TIER_* so the persist encoder can cast directly. */
 typedef enum fr_install_tier_t {

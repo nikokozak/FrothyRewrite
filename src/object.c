@@ -1133,3 +1133,51 @@ bool fr_object_is_overlay(const fr_runtime_t *runtime,
   return runtime->objects.overlay[object_id];
 #endif
 }
+
+fr_err_t fr_bytes_install(fr_runtime_t *runtime, const uint8_t *bytes,
+                          uint16_t length, fr_tagged_t *out_tagged) {
+#if FR_FEATURE_BYTES
+  if (runtime == NULL || out_tagged == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (length > 0 && bytes == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if ((uint32_t)runtime->bytes.arena_used + length >
+      FR_PROFILE_BYTES_ARENA_BYTES) {
+    return FR_ERR_CAPACITY;
+  }
+
+  for (fr_bytes_id_t i = 0; i < FR_PROFILE_BYTES_COUNT; i++) {
+    fr_bytes_entry_t *entry = &runtime->bytes.entries[i];
+
+    if (entry->in_use || entry->retired) {
+      continue;
+    }
+    if (entry->generation == FR_TAGGED_BYTES_MAX_GENERATION) {
+      entry->retired = true;
+      continue;
+    }
+
+    entry->generation = (fr_bytes_generation_t)(entry->generation + 1u);
+    entry->offset = runtime->bytes.arena_used;
+    entry->length = length;
+    entry->in_use = true;
+    if (length > 0) {
+      memcpy(&runtime->bytes.arena[runtime->bytes.arena_used], bytes, length);
+    }
+    runtime->bytes.arena_used =
+        (uint16_t)(runtime->bytes.arena_used + length);
+
+    fr_bytes_ref_t ref = {.id = i, .generation = entry->generation};
+    return fr_tagged_encode_bytes_ref(ref, out_tagged);
+  }
+  return FR_ERR_CAPACITY;
+#else
+  (void)runtime;
+  (void)bytes;
+  (void)length;
+  (void)out_tagged;
+  return FR_ERR_UNSUPPORTED;
+#endif
+}

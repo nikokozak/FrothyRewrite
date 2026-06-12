@@ -31,6 +31,9 @@ fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
   fr_native_reset(runtime);
   fr_object_reset(runtime);
   fr_handle_reset(runtime);
+#if FR_FEATURE_BYTES
+  fr_bytes_init(runtime);
+#endif
 #if FR_FEATURE_PAD
   FR_TRY(fr_pad_reset(runtime));
 #endif
@@ -71,6 +74,9 @@ fr_err_t fr_runtime_clear_project(fr_runtime_t *runtime) {
   fr_code_restore_base(runtime);
   fr_native_restore_base(runtime);
   fr_object_restore_base(runtime);
+#if FR_FEATURE_BYTES
+  fr_bytes_init(runtime);
+#endif
 #if FR_FEATURE_PAD
   FR_TRY(fr_pad_reset(runtime));
 #endif
@@ -97,6 +103,32 @@ void fr_runtime_clear_interrupt(fr_runtime_t *runtime) {
 bool fr_runtime_is_interrupted(const fr_runtime_t *runtime) {
   return runtime != NULL && runtime->interrupted;
 }
+
+#if FR_FEATURE_BYTES
+void fr_bytes_init(fr_runtime_t *runtime) {
+  memset(&runtime->bytes, 0, sizeof(runtime->bytes));
+}
+
+void fr_bytes_reset_if_outermost(fr_runtime_t *runtime) {
+  if (runtime == NULL || runtime->bytes.eval_depth != 0) {
+    return;
+  }
+  runtime->bytes.arena_used = 0;
+  for (fr_bytes_id_t i = 0; i < FR_PROFILE_BYTES_COUNT; i++) {
+    fr_bytes_entry_t *entry = &runtime->bytes.entries[i];
+    if (!entry->in_use) {
+      continue;
+    }
+    if (entry->generation == FR_TAGGED_BYTES_MAX_GENERATION) {
+      entry->retired = true;
+    } else {
+      entry->generation =
+          (fr_bytes_generation_t)(entry->generation + 1u);
+    }
+    entry->in_use = false;
+  }
+}
+#endif
 
 fr_runtime_limits_t fr_runtime_get_limits(void) {
   return (fr_runtime_limits_t){

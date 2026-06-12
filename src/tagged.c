@@ -17,6 +17,10 @@ fr_tagged_kind_t fr_tagged_kind(fr_tagged_t tagged) {
   } else if (tagged <= FR_TAGGED_HANDLE_END) {
     return FR_TAGGED_HANDLE;
 #endif
+#if FR_FEATURE_BYTES
+  } else if (tagged <= FR_TAGGED_BYTES_END) {
+    return FR_TAGGED_BYTES;
+#endif
   } else {
     return FR_TAGGED_RESERVED;
   }
@@ -41,6 +45,10 @@ bool fr_tagged_is_valid(fr_tagged_t tagged) {
            FR_TAGGED_OBJECT_MAX_ID;
 #if FR_FEATURE_HANDLES
   case FR_TAGGED_HANDLE:
+    return true;
+#endif
+#if FR_FEATURE_BYTES
+  case FR_TAGGED_BYTES:
     return true;
 #endif
   case FR_TAGGED_RESERVED:
@@ -306,6 +314,63 @@ fr_err_t fr_tagged_decode_handle_ref(fr_tagged_t tagged,
     out_ref->generation =
         (fr_handle_generation_t)((offset >> FR_TAGGED_HANDLE_GENERATION_SHIFT) &
                                  FR_TAGGED_HANDLE_MAX_GENERATION);
+    return FR_OK;
+  }
+#else
+  (void)tagged;
+#endif
+  return FR_ERR_TYPE;
+}
+
+#if FR_FEATURE_BYTES
+typedef char fr_bytes_count_nonzero[(FR_PROFILE_BYTES_COUNT > 0u) ? 1 : -1];
+typedef char fr_bytes_count_fits_id_field
+    [(FR_PROFILE_BYTES_COUNT <= (FR_TAGGED_BYTES_MAX_ID + 1u)) ? 1 : -1];
+typedef char fr_bytes_offset_fits_reserved_range
+    [((((uint64_t)FR_TAGGED_BYTES_MAX_GENERATION
+        << FR_TAGGED_BYTES_GENERATION_SHIFT) |
+       (uint64_t)(FR_PROFILE_BYTES_COUNT - 1u)) <=
+      ((uint64_t)FR_TAGGED_RESERVED_END - (uint64_t)FR_TAGGED_BYTES_BASE))
+         ? 1
+         : -1];
+#endif
+
+fr_err_t fr_tagged_encode_bytes_ref(fr_bytes_ref_t ref,
+                                    fr_tagged_t *out_tagged) {
+  if (out_tagged == NULL) {
+    return FR_ERR_INVALID;
+  }
+#if FR_FEATURE_BYTES
+  if (ref.id > FR_TAGGED_BYTES_MAX_ID) {
+    return FR_ERR_RANGE;
+  }
+  *out_tagged =
+      (fr_tagged_t)(FR_TAGGED_BYTES_BASE | ref.id |
+                    ((fr_tagged_t)ref.generation
+                     << FR_TAGGED_BYTES_GENERATION_SHIFT));
+  return FR_OK;
+#else
+  (void)ref;
+  return FR_ERR_UNSUPPORTED;
+#endif
+}
+
+fr_err_t fr_tagged_decode_bytes_ref(fr_tagged_t tagged,
+                                    fr_bytes_ref_t *out_ref) {
+  if (out_ref == NULL) {
+    return FR_ERR_INVALID;
+  }
+#if FR_FEATURE_BYTES
+  if (tagged >= FR_TAGGED_BYTES_BASE && tagged <= FR_TAGGED_BYTES_END) {
+    fr_tagged_t offset = (fr_tagged_t)(tagged - FR_TAGGED_BYTES_BASE);
+
+    out_ref->id = (fr_bytes_id_t)(offset & FR_TAGGED_BYTES_MAX_ID);
+    out_ref->generation =
+        (fr_bytes_generation_t)((offset >> FR_TAGGED_BYTES_GENERATION_SHIFT) &
+                                 FR_TAGGED_BYTES_MAX_GENERATION);
+    if (out_ref->id >= FR_PROFILE_BYTES_COUNT) {
+      return FR_ERR_RANGE;
+    }
     return FR_OK;
   }
 #else

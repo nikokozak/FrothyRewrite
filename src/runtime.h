@@ -71,6 +71,28 @@ typedef struct fr_event_table_t {
   uint32_t overflow_count;
 } fr_event_table_t;
 
+#if FR_FEATURE_BYTES
+#define FR_BYTES_TABLE_CAPACITY                                              \
+  (FR_PROFILE_BYTES_COUNT > 0 ? FR_PROFILE_BYTES_COUNT : 1)
+
+typedef struct fr_bytes_entry_t {
+  uint16_t offset;
+  uint16_t length;
+  uint8_t generation;
+  bool in_use;
+  bool retired;
+} fr_bytes_entry_t;
+
+typedef struct fr_bytes_t {
+  fr_bytes_entry_t entries[FR_BYTES_TABLE_CAPACITY];
+  uint8_t arena[FR_PROFILE_BYTES_ARENA_BYTES > 0
+                    ? FR_PROFILE_BYTES_ARENA_BYTES
+                    : 1];
+  uint16_t arena_used;
+  uint16_t eval_depth;
+} fr_bytes_t;
+#endif
+
 #if FR_FEATURE_NET
 /* D5: per-TCP-handle state. The handle table's platform_index for a TCP
  * handle indexes this array. Target-specific OS state (the lwip fd on
@@ -90,6 +112,9 @@ struct fr_runtime_t {
   fr_object_table_t objects;
 #if FR_FEATURE_HANDLES
   fr_handle_table_t handles;
+#endif
+#if FR_FEATURE_BYTES
+  fr_bytes_t bytes;
 #endif
 #if FR_FEATURE_PAD
   fr_pad_t pad;
@@ -115,3 +140,8 @@ void fr_runtime_interrupt(fr_runtime_t *runtime);
 void fr_runtime_clear_interrupt(fr_runtime_t *runtime);
 bool fr_runtime_is_interrupted(const fr_runtime_t *runtime);
 fr_runtime_limits_t fr_runtime_get_limits(void);
+
+#if FR_FEATURE_BYTES
+void fr_bytes_init(fr_runtime_t *runtime);
+void fr_bytes_reset_if_outermost(fr_runtime_t *runtime);
+#endif

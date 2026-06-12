@@ -45,3 +45,4 @@
 
 #define FR_FEATURE_NET 0
 #define FR_FEATURE_POWER 0
+#define FR_FEATURE_BYTES 0

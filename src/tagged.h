@@ -78,6 +78,19 @@ typedef uint32_t fr_tagged_t;
 #endif
 #endif
 
+#if FR_FEATURE_BYTES
+#define FR_TAGGED_BYTES_BASE FR_TAGGED_RESERVED_BASE
+#define FR_TAGGED_BYTES_GENERATION_SHIFT 3u
+#define FR_TAGGED_BYTES_MAX_ID ((fr_tagged_t)0x07u)
+#define FR_TAGGED_BYTES_MAX_GENERATION ((fr_tagged_t)0xFFu)
+#define FR_TAGGED_BYTES_LAST_OFFSET                                            \
+  ((fr_tagged_t)((FR_TAGGED_BYTES_MAX_GENERATION                               \
+                  << FR_TAGGED_BYTES_GENERATION_SHIFT) |                        \
+                 FR_TAGGED_BYTES_MAX_ID))
+#define FR_TAGGED_BYTES_END                                                    \
+  ((fr_tagged_t)(FR_TAGGED_BYTES_BASE + FR_TAGGED_BYTES_LAST_OFFSET))
+#endif
+
 #define FR_TAGGED_NIL FR_TAGGED_SPECIAL_BASE
 #define FR_TAGGED_FALSE ((fr_tagged_t)(FR_TAGGED_SPECIAL_BASE + 1u))
 #define FR_TAGGED_TRUE ((fr_tagged_t)(FR_TAGGED_SPECIAL_BASE + 2u))
@@ -97,6 +110,7 @@ typedef enum fr_tagged_kind_t {
   FR_TAGGED_NATIVE_ID,
   FR_TAGGED_OBJECT_ID,
   FR_TAGGED_HANDLE,
+  FR_TAGGED_BYTES,
   FR_TAGGED_RESERVED
 } fr_tagged_kind_t;
 
@@ -145,6 +159,11 @@ fr_err_t fr_tagged_encode_handle_ref(fr_handle_ref_t ref,
                                      fr_tagged_t *out_tagged);
 fr_err_t fr_tagged_decode_handle_ref(fr_tagged_t tagged,
                                      fr_handle_ref_t *out_ref);
+
+fr_err_t fr_tagged_encode_bytes_ref(fr_bytes_ref_t ref,
+                                    fr_tagged_t *out_tagged);
+fr_err_t fr_tagged_decode_bytes_ref(fr_tagged_t tagged,
+                                    fr_bytes_ref_t *out_ref);
 
 /* Canonical little-endian u32 byte pair. Lives here because tagged.h owns the
  * runtime word byte layout; persist, profile, and instruction call through. */

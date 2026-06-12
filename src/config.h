@@ -99,6 +99,10 @@
 #define FR_FEATURE_PAD 0
 #endif
 
+#ifndef FR_FEATURE_BYTES
+#define FR_FEATURE_BYTES 0
+#endif
+
 #ifndef FR_FEATURE_EVENTS
 #define FR_FEATURE_EVENTS 1
 #endif
@@ -144,6 +148,14 @@
 
 #ifndef FR_PROFILE_MAX_HANDLES
 #define FR_PROFILE_MAX_HANDLES 0
+#endif
+
+#ifndef FR_PROFILE_BYTES_COUNT
+#define FR_PROFILE_BYTES_COUNT 0
+#endif
+
+#ifndef FR_PROFILE_BYTES_ARENA_BYTES
+#define FR_PROFILE_BYTES_ARENA_BYTES 0
 #endif
 
 #ifndef FR_PROFILE_PAD_BYTES
@@ -362,6 +374,19 @@
 #error "FR_PROFILE_MAX_HANDLES requires FR_FEATURE_HANDLES"
 #endif
 
+#if FR_FEATURE_BYTES && FR_PROFILE_BYTES_COUNT == 0
+#error "FR_FEATURE_BYTES requires FR_PROFILE_BYTES_COUNT"
+#endif
+
+#if FR_FEATURE_BYTES && FR_PROFILE_BYTES_ARENA_BYTES == 0
+#error "FR_FEATURE_BYTES requires FR_PROFILE_BYTES_ARENA_BYTES"
+#endif
+
+#if !FR_FEATURE_BYTES &&                                                     \
+    (FR_PROFILE_BYTES_COUNT > 0 || FR_PROFILE_BYTES_ARENA_BYTES > 0)
+#error "bytes profile limits require FR_FEATURE_BYTES"
+#endif
+
 #if FR_FEATURE_UART && !FR_FEATURE_HANDLES
 #error "FR_FEATURE_UART requires FR_FEATURE_HANDLES"
 #endif
@@ -380,6 +405,14 @@
 
 #if FR_FEATURE_I2C && !FR_FEATURE_TEXT
 #error "FR_FEATURE_I2C requires FR_FEATURE_TEXT"
+#endif
+
+#if FR_FEATURE_NET && !FR_FEATURE_BYTES
+#error "FR_FEATURE_NET requires FR_FEATURE_BYTES"
+#endif
+
+#if FR_FEATURE_I2C && !FR_FEATURE_BYTES
+#error "FR_FEATURE_I2C requires FR_FEATURE_BYTES"
 #endif
 
 #if FR_FEATURE_PAD && FR_PROFILE_PAD_BYTES == 0
