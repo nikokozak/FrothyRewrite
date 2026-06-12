@@ -1619,9 +1619,9 @@ fr_repl_eval_value_binding(fr_runtime_t *runtime,
 }
 #endif
 
-static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
-                                            const char *line,
-                                            const fr_repl_writer_t *writer) {
+static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
+                                                  const char *line,
+                                                  const fr_repl_writer_t *writer) {
   fr_repl_command_t command = {0};
   fr_tagged_t result = 0;
   bool matched = false;
@@ -1786,6 +1786,16 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
 #else
   return FR_ERR_UNSUPPORTED;
 #endif
+}
+
+static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
+                                            const char *line,
+                                            const fr_repl_writer_t *writer) {
+  fr_err_t err = fr_repl_eval_line_to_writer_inner(runtime, line, writer);
+#if FR_FEATURE_BYTES
+  fr_bytes_reset_if_outermost(runtime);
+#endif
+  return err;
 }
 
 fr_err_t fr_repl_eval_line(fr_runtime_t *runtime, const char *line, char *out,

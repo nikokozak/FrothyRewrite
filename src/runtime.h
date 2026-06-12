@@ -71,6 +71,27 @@ typedef struct fr_event_table_t {
   uint32_t overflow_count;
 } fr_event_table_t;
 
+#if FR_FEATURE_BYTES && FR_PROFILE_BYTES_COUNT == 0
+#error "FR_FEATURE_BYTES requires FR_PROFILE_BYTES_COUNT"
+#endif
+
+#if FR_FEATURE_BYTES && FR_PROFILE_BYTES_ARENA_BYTES == 0
+#error "FR_FEATURE_BYTES requires FR_PROFILE_BYTES_ARENA_BYTES"
+#endif
+
+#if !FR_FEATURE_BYTES &&                                                     \
+    (FR_PROFILE_BYTES_COUNT > 0 || FR_PROFILE_BYTES_ARENA_BYTES > 0)
+#error "bytes profile limits require FR_FEATURE_BYTES"
+#endif
+
+#if FR_FEATURE_NET && !FR_FEATURE_BYTES
+#error "FR_FEATURE_NET requires FR_FEATURE_BYTES"
+#endif
+
+#if FR_FEATURE_I2C && !FR_FEATURE_BYTES
+#error "FR_FEATURE_I2C requires FR_FEATURE_BYTES"
+#endif
+
 #if FR_FEATURE_BYTES
 #define FR_BYTES_TABLE_CAPACITY                                              \
   (FR_PROFILE_BYTES_COUNT > 0 ? FR_PROFILE_BYTES_COUNT : 1)
