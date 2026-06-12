@@ -122,9 +122,10 @@ static void test_http_get_success_returns_body(void) {
   fr_host_wifi_set_connected(true);
   fr_host_http_queue_response(200, body, 2);
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_repl_eval_line(&s_runtime,
-                                      "http.get: \"http://example.com/\"",
-                                      out, sizeof(out)));
+                    fr_repl_eval_line(
+                        &s_runtime,
+                        "text.pack: http.get: \"http://example.com/\"",
+                        out, sizeof(out)));
   TEST_ASSERT_EQUAL_STRING("\"hi\"\nok\n", out);
 }
 

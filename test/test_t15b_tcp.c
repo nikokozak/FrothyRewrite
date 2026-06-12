@@ -63,7 +63,7 @@ static void test_open_write_read_close_happy_path(void) {
 
   eval_ok("sock is tcp.open: \"example.com\", 80");
   eval_ok("tcp.write: sock, \"GET\"");
-  eval_expect_output("tcp.read: sock, 100", "\"hi\"\nok\n");
+  eval_expect_output("text.pack: tcp.read: sock, 100", "\"hi\"\nok\n");
 
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_host_tcp_drain_writes(0, drained, sizeof(drained),
@@ -98,7 +98,7 @@ static void test_partial_read_returns_available_bytes(void) {
   install_base();
   fr_host_tcp_queue_response(0, body, 3);
   eval_ok("sock is tcp.open: \"example.com\", 80");
-  eval_expect_output("tcp.read: sock, 1024", "\"abc\"\nok\n");
+  eval_expect_output("text.pack: tcp.read: sock, 1024", "\"abc\"\nok\n");
 }
 
 static void test_eof_returns_empty_text(void) {
@@ -107,8 +107,8 @@ static void test_eof_returns_empty_text(void) {
   install_base();
   fr_host_tcp_queue_response(0, body, 2);
   eval_ok("sock is tcp.open: \"example.com\", 80");
-  eval_expect_output("tcp.read: sock, 100", "\"hi\"\nok\n");
-  eval_expect_output("tcp.read: sock, 100", "\"\"\nok\n");
+  eval_expect_output("text.pack: tcp.read: sock, 100", "\"hi\"\nok\n");
+  eval_expect_output("text.pack: tcp.read: sock, 100", "\"\"\nok\n");
 }
 
 static void test_bytes_ready_tracks_queue_drain(void) {
@@ -118,7 +118,7 @@ static void test_bytes_ready_tracks_queue_drain(void) {
   fr_host_tcp_queue_response(0, body, 5);
   eval_ok("sock is tcp.open: \"example.com\", 80");
   eval_expect_output("tcp.bytes-ready?: sock", "5\nok\n");
-  eval_expect_output("tcp.read: sock, 2", "\"ab\"\nok\n");
+  eval_expect_output("text.pack: tcp.read: sock, 2", "\"ab\"\nok\n");
   eval_expect_output("tcp.bytes-ready?: sock", "3\nok\n");
 }
 
@@ -151,7 +151,7 @@ static void test_close_then_reopen_clears_failed(void) {
   fr_host_tcp_queue_response(0, body, 2);
   eval_ok("s2 is tcp.open: \"example.com\", 80");
   TEST_ASSERT_FALSE(s_runtime.tcp_handles[0].failed);
-  eval_expect_output("tcp.read: s2, 100", "\"hi\"\nok\n");
+  eval_expect_output("text.pack: tcp.read: s2, 100", "\"hi\"\nok\n");
   eval_ok("tcp.close: s2");
 }
 
