@@ -503,12 +503,26 @@ static fr_err_t fr_native_i2c_open(fr_runtime_t *runtime,
   return FR_OK;
 }
 
+static fr_err_t fr_native_decode_text_or_bytes_view(
+    const fr_runtime_t *runtime, fr_tagged_t tagged, const uint8_t **out_bytes,
+    uint16_t *out_length) {
+  fr_object_id_t object_id = 0;
+
+  if (fr_tagged_decode_object_id(tagged, &object_id) == FR_OK) {
+    return fr_text_view(runtime, object_id, out_bytes, out_length);
+  }
+  {
+    fr_bytes_ref_t ref = {0};
+    FR_TRY(fr_tagged_decode_bytes_ref(tagged, &ref));
+    return fr_bytes_view(runtime, ref, out_bytes, out_length);
+  }
+}
+
 static fr_err_t fr_native_i2c_write(fr_runtime_t *runtime,
                                     const fr_tagged_t *args, uint8_t arg_count,
                                     fr_tagged_t *out) {
   uint16_t platform_index = 0;
   uint8_t addr = 0;
-  fr_object_id_t object_id = 0;
   const uint8_t *bytes = NULL;
   uint16_t length = 0;
 
@@ -519,8 +533,8 @@ static fr_err_t fr_native_i2c_write(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_i2c_handle(runtime, args, arg_count, 0,
                                      &platform_index));
   FR_TRY(fr_native_decode_i2c_addr(args, arg_count, 1, &addr));
-  FR_TRY(fr_tagged_decode_object_id(args[2], &object_id));
-  FR_TRY(fr_text_view(runtime, object_id, &bytes, &length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
+                                             &length));
   if (length == 0) {
     return FR_ERR_DOMAIN;
   }
@@ -536,7 +550,6 @@ static fr_err_t fr_native_i2c_read(fr_runtime_t *runtime,
   uint8_t addr = 0;
   fr_int_t count = 0;
   uint8_t buffer[FR_PROFILE_MAX_TEXT_LENGTH];
-  fr_object_id_t object_id = 0;
 
   if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
     return FR_ERR_INVALID;
@@ -552,8 +565,7 @@ static fr_err_t fr_native_i2c_read(fr_runtime_t *runtime,
   if (count > 0) {
     FR_TRY(fr_platform_i2c_read(platform_index, addr, buffer, (uint16_t)count));
   }
-  FR_TRY(fr_text_install(runtime, buffer, (uint16_t)count, &object_id));
-  return fr_tagged_encode_object_id(object_id, out);
+  return fr_bytes_install(runtime, buffer, (uint16_t)count, out);
 }
 
 static fr_err_t fr_native_i2c_close(fr_runtime_t *runtime,
@@ -788,7 +800,6 @@ static fr_err_t fr_native_http_get(fr_runtime_t *runtime,
   char url[FR_PROFILE_MAX_TEXT_LENGTH + 1];
   uint8_t body[FR_HTTP_MAX_BODY];
   uint16_t length = 0;
-  fr_object_id_t object_id = 0;
 
   if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
@@ -797,8 +808,7 @@ static fr_err_t fr_native_http_get(fr_runtime_t *runtime,
   FR_TRY(fr_native_copy_text_cstring(runtime, args, arg_count, 0, url,
                                      sizeof url));
   FR_TRY(fr_platform_http_get(url, body, FR_HTTP_MAX_BODY, &length));
-  FR_TRY(fr_text_install(runtime, body, length, &object_id));
-  return fr_tagged_encode_object_id(object_id, out);
+  return fr_bytes_install(runtime, body, length, out);
 }
 
 static fr_err_t fr_native_decode_tcp_handle(fr_runtime_t *runtime,
@@ -863,7 +873,6 @@ static fr_err_t fr_native_tcp_read(fr_runtime_t *runtime,
   fr_int_t count = 0;
   uint8_t buffer[FR_PROFILE_MAX_TEXT_LENGTH];
   uint16_t length = 0;
-  fr_object_id_t object_id = 0;
 
   if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
     return FR_ERR_INVALID;
@@ -880,15 +889,13 @@ static fr_err_t fr_native_tcp_read(fr_runtime_t *runtime,
   }
   FR_TRY(fr_platform_tcp_read(runtime, platform_index, buffer, (uint16_t)count,
                               &length));
-  FR_TRY(fr_text_install(runtime, buffer, length, &object_id));
-  return fr_tagged_encode_object_id(object_id, out);
+  return fr_bytes_install(runtime, buffer, length, out);
 }
 
 static fr_err_t fr_native_tcp_write(fr_runtime_t *runtime,
                                     const fr_tagged_t *args, uint8_t arg_count,
                                     fr_tagged_t *out) {
   uint16_t platform_index = 0;
-  fr_object_id_t object_id = 0;
   const uint8_t *bytes = NULL;
   uint16_t length = 0;
 
@@ -897,8 +904,8 @@ static fr_err_t fr_native_tcp_write(fr_runtime_t *runtime,
   }
   FR_TRY(fr_native_decode_tcp_handle(runtime, args, arg_count, 0,
                                      &platform_index));
-  FR_TRY(fr_tagged_decode_object_id(args[1], &object_id));
-  FR_TRY(fr_text_view(runtime, object_id, &bytes, &length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[1], &bytes,
+                                             &length));
   FR_TRY(fr_platform_tcp_write(runtime, platform_index, bytes, length));
   *out = fr_tagged_nil();
   return FR_OK;
@@ -1032,6 +1039,160 @@ void fr_host_watchdog_force_timeout(void) {
   fr_native_watchdog_armed = false;
 }
 #endif
+#endif
+
+#if FR_FEATURE_BYTES
+static fr_err_t fr_native_bytes_from_text(fr_runtime_t *runtime,
+                                          const fr_tagged_t *args,
+                                          uint8_t arg_count,
+                                          fr_tagged_t *out) {
+  fr_object_id_t object_id = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_object_id(args[0], &object_id));
+  FR_TRY(fr_text_view(runtime, object_id, &bytes, &length));
+  return fr_bytes_install(runtime, bytes, length, out);
+}
+
+static fr_err_t fr_native_bytes_from_byte(fr_runtime_t *runtime,
+                                          const fr_tagged_t *args,
+                                          uint8_t arg_count,
+                                          fr_tagged_t *out) {
+  uint8_t byte = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_byte(args, arg_count, 0, &byte));
+  return fr_bytes_install(runtime, &byte, 1, out);
+}
+
+static fr_err_t fr_native_bytes_from_int(fr_runtime_t *runtime,
+                                         const fr_tagged_t *args,
+                                         uint8_t arg_count, fr_tagged_t *out) {
+  char buffer[12];
+  fr_int_t value = 0;
+  int written = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_int(args[0], &value));
+  written = snprintf(buffer, sizeof(buffer), "%ld", (long)value);
+  if (written <= 0 || (size_t)written >= sizeof(buffer)) {
+    return FR_ERR_RANGE;
+  }
+  return fr_bytes_install(runtime, (const uint8_t *)buffer, (uint16_t)written,
+                          out);
+}
+
+static fr_err_t fr_native_bytes_length(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  fr_bytes_ref_t ref = {0};
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &ref));
+  FR_TRY(fr_bytes_view(runtime, ref, &bytes, &length));
+  return fr_tagged_encode_int((int32_t)length, out);
+}
+
+static fr_err_t fr_native_bytes_at(fr_runtime_t *runtime,
+                                   const fr_tagged_t *args, uint8_t arg_count,
+                                   fr_tagged_t *out) {
+  fr_bytes_ref_t ref = {0};
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+  fr_int_t index = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &ref));
+  FR_TRY(fr_bytes_view(runtime, ref, &bytes, &length));
+  FR_TRY(fr_tagged_decode_int(args[1], &index));
+  if (index < 0 || (uint32_t)index >= length) {
+    return FR_ERR_RANGE;
+  }
+  return fr_tagged_encode_int((int32_t)bytes[index], out);
+}
+
+static fr_err_t fr_native_bytes_equals_p(fr_runtime_t *runtime,
+                                         const fr_tagged_t *args,
+                                         uint8_t arg_count, fr_tagged_t *out) {
+  fr_bytes_ref_t a_ref = {0};
+  fr_bytes_ref_t b_ref = {0};
+  const uint8_t *a_bytes = NULL;
+  const uint8_t *b_bytes = NULL;
+  uint16_t a_length = 0;
+  uint16_t b_length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &a_ref));
+  FR_TRY(fr_tagged_decode_bytes_ref(args[1], &b_ref));
+  FR_TRY(fr_bytes_view(runtime, a_ref, &a_bytes, &a_length));
+  FR_TRY(fr_bytes_view(runtime, b_ref, &b_bytes, &b_length));
+  return fr_tagged_encode_bool(
+      a_length == b_length && memcmp(a_bytes, b_bytes, a_length) == 0, out);
+}
+
+static fr_err_t fr_native_bytes_concat(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  fr_bytes_ref_t a_ref = {0};
+  fr_bytes_ref_t b_ref = {0};
+  const uint8_t *a_bytes = NULL;
+  const uint8_t *b_bytes = NULL;
+  uint16_t a_length = 0;
+  uint16_t b_length = 0;
+  uint8_t joined[FR_PROFILE_MAX_TEXT_LENGTH];
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &a_ref));
+  FR_TRY(fr_tagged_decode_bytes_ref(args[1], &b_ref));
+  FR_TRY(fr_bytes_view(runtime, a_ref, &a_bytes, &a_length));
+  FR_TRY(fr_bytes_view(runtime, b_ref, &b_bytes, &b_length));
+  if ((uint32_t)a_length + (uint32_t)b_length > FR_PROFILE_MAX_TEXT_LENGTH) {
+    return FR_ERR_RANGE;
+  }
+  if (a_length > 0) {
+    memcpy(joined, a_bytes, a_length);
+  }
+  if (b_length > 0) {
+    memcpy(joined + a_length, b_bytes, b_length);
+  }
+  return fr_bytes_install(runtime, joined, (uint16_t)(a_length + b_length),
+                          out);
+}
+
+static fr_err_t fr_native_text_pack(fr_runtime_t *runtime,
+                                    const fr_tagged_t *args, uint8_t arg_count,
+                                    fr_tagged_t *out) {
+  fr_bytes_ref_t ref = {0};
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+  fr_object_id_t object_id = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &ref));
+  FR_TRY(fr_bytes_view(runtime, ref, &bytes, &length));
+  FR_TRY(fr_text_install(runtime, bytes, length, &object_id));
+  return fr_tagged_encode_object_id(object_id, out);
+}
 #endif
 
 #if FR_FEATURE_MATH
@@ -1904,7 +2065,7 @@ static const fr_native_signature_t fr_native_i2c_open_signature = {
 static const fr_native_param_t fr_native_i2c_write_params[] = {
     {"bus", FR_NATIVE_VALUE_HANDLE},
     {"addr", FR_NATIVE_VALUE_INT},
-    {"bytes", FR_NATIVE_VALUE_TEXT},
+    {"bytes", FR_NATIVE_VALUE_TEXT_OR_BYTES},
 };
 static const fr_native_signature_t fr_native_i2c_write_signature = {
     .params = fr_native_i2c_write_params,
@@ -1921,7 +2082,7 @@ static const fr_native_param_t fr_native_i2c_read_params[] = {
 static const fr_native_signature_t fr_native_i2c_read_signature = {
     .params = fr_native_i2c_read_params,
     .arg_count = 3,
-    .result = FR_NATIVE_VALUE_TEXT,
+    .result = FR_NATIVE_VALUE_ANY,
     .help = "read count bytes from a 7-bit i2c address",
 };
 
@@ -2007,7 +2168,7 @@ static const fr_native_param_t fr_native_http_get_params[] = {
 static const fr_native_signature_t fr_native_http_get_signature = {
     .params = fr_native_http_get_params,
     .arg_count = 1,
-    .result = FR_NATIVE_VALUE_TEXT,
+    .result = FR_NATIVE_VALUE_ANY,
     .help = "fetch a url and return the body up to the http body cap",
 };
 
@@ -2029,19 +2190,19 @@ static const fr_native_param_t fr_native_tcp_read_params[] = {
 static const fr_native_signature_t fr_native_tcp_read_signature = {
     .params = fr_native_tcp_read_params,
     .arg_count = 2,
-    .result = FR_NATIVE_VALUE_TEXT,
+    .result = FR_NATIVE_VALUE_ANY,
     .help = "read up to count bytes from a tcp socket",
 };
 
 static const fr_native_param_t fr_native_tcp_write_params[] = {
     {"sock", FR_NATIVE_VALUE_HANDLE},
-    {"bytes", FR_NATIVE_VALUE_TEXT},
+    {"bytes", FR_NATIVE_VALUE_TEXT_OR_BYTES},
 };
 static const fr_native_signature_t fr_native_tcp_write_signature = {
     .params = fr_native_tcp_write_params,
     .arg_count = 2,
     .result = FR_NATIVE_VALUE_NIL,
-    .help = "send the raw bytes of a text to a tcp socket",
+    .help = "send the raw bytes of a text or bytes value to a tcp socket",
 };
 
 static const fr_native_param_t fr_native_tcp_close_params[] = {
@@ -2102,6 +2263,91 @@ static const fr_native_signature_t fr_native_sleep_wake_on_gpio_signature = {
     .arg_count = 2,
     .result = FR_NATIVE_VALUE_NIL,
     .help = "configure ext0 GPIO wake for the next sleep.deep",
+};
+#endif
+
+#if FR_FEATURE_BYTES
+static const fr_native_param_t fr_native_bytes_from_text_params[] = {
+    {"text", FR_NATIVE_VALUE_TEXT},
+};
+static const fr_native_signature_t fr_native_bytes_from_text_signature = {
+    .params = fr_native_bytes_from_text_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "copy a text value into a transient bytes buffer",
+};
+
+static const fr_native_param_t fr_native_bytes_from_byte_params[] = {
+    {"byte", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_bytes_from_byte_signature = {
+    .params = fr_native_bytes_from_byte_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "create a single-byte bytes buffer from a 0-255 int",
+};
+
+static const fr_native_param_t fr_native_bytes_from_int_params[] = {
+    {"n", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_bytes_from_int_signature = {
+    .params = fr_native_bytes_from_int_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "convert an int to its ASCII decimal representation as bytes",
+};
+
+static const fr_native_param_t fr_native_bytes_length_params[] = {
+    {"buf", FR_NATIVE_VALUE_ANY},
+};
+static const fr_native_signature_t fr_native_bytes_length_signature = {
+    .params = fr_native_bytes_length_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the byte count of a bytes buffer",
+};
+
+static const fr_native_param_t fr_native_bytes_at_params[] = {
+    {"buf", FR_NATIVE_VALUE_ANY},
+    {"index", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_bytes_at_signature = {
+    .params = fr_native_bytes_at_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the byte at index as a 0-255 int",
+};
+
+static const fr_native_param_t fr_native_bytes_equals_p_params[] = {
+    {"a", FR_NATIVE_VALUE_ANY},
+    {"b", FR_NATIVE_VALUE_ANY},
+};
+static const fr_native_signature_t fr_native_bytes_equals_p_signature = {
+    .params = fr_native_bytes_equals_p_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "true if two bytes buffers have equal contents",
+};
+
+static const fr_native_param_t fr_native_bytes_concat_params[] = {
+    {"a", FR_NATIVE_VALUE_ANY},
+    {"b", FR_NATIVE_VALUE_ANY},
+};
+static const fr_native_signature_t fr_native_bytes_concat_signature = {
+    .params = fr_native_bytes_concat_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "concatenate two bytes buffers into a new bytes buffer",
+};
+
+static const fr_native_param_t fr_native_text_pack_params[] = {
+    {"buf", FR_NATIVE_VALUE_ANY},
+};
+static const fr_native_signature_t fr_native_text_pack_signature = {
+    .params = fr_native_text_pack_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_TEXT,
+    .help = "copy a bytes buffer into the persistent text pool",
 };
 #endif
 
@@ -2747,6 +2993,104 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 2,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_sleep_wake_on_gpio_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_BYTES
+    {
+        .slot_id = FR_SLOT_BYTES_FROM_TEXT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "bytes.from-text",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_bytes_from_text,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_bytes_from_text_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BYTES_FROM_BYTE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "bytes.from-byte",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_bytes_from_byte,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_bytes_from_byte_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BYTES_FROM_INT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "bytes.from-int",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_bytes_from_int,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_bytes_from_int_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BYTES_LENGTH,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "bytes.length",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_bytes_length,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_bytes_length_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BYTES_AT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "bytes.at",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_bytes_at,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_bytes_at_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BYTES_EQUALS_P,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "bytes.equals?",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_bytes_equals_p,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_bytes_equals_p_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BYTES_CONCAT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "bytes.concat",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_bytes_concat,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_bytes_concat_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TEXT_PACK,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "text.pack",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_text_pack,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_text_pack_signature,
 #endif
     },
 #endif

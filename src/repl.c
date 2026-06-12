@@ -637,6 +637,23 @@ static fr_err_t fr_repl_write_tagged_value(fr_runtime_t *runtime, char *out,
     return fr_repl_append(out, out_cap, &used,
                           fr_handle_kind_name(handle_kind));
   }
+#if FR_FEATURE_BYTES
+  {
+    fr_bytes_ref_t bytes_ref = {0};
+    if (fr_tagged_decode_bytes_ref(tagged, &bytes_ref) == FR_OK) {
+      const uint8_t *bytes_data = NULL;
+      uint16_t bytes_length = 0;
+
+      if (runtime != NULL &&
+          fr_bytes_view(runtime, bytes_ref, &bytes_data, &bytes_length) ==
+              FR_OK) {
+        FR_TRY(fr_repl_append(out, out_cap, &used, "bytes "));
+        return fr_repl_append_u16(out, out_cap, &used, bytes_length);
+      }
+      return fr_repl_append(out, out_cap, &used, "bytes stale");
+    }
+  }
+#endif
   if (fr_tagged_decode_object_id(tagged, &object_id) == FR_OK) {
     uint16_t cell_length = 0;
     const uint8_t *text_bytes = NULL;
@@ -1185,6 +1202,8 @@ static fr_err_t fr_repl_write_value_kind(const fr_repl_writer_t *writer,
     return fr_repl_writer_write(writer, "nil");
   case FR_NATIVE_VALUE_TEXT:
     return fr_repl_writer_write(writer, "text");
+  case FR_NATIVE_VALUE_TEXT_OR_BYTES:
+    return fr_repl_writer_write(writer, "text|bytes");
   }
   return FR_ERR_INVALID;
 }

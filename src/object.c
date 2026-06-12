@@ -1189,3 +1189,30 @@ fr_err_t fr_bytes_install(fr_runtime_t *runtime, const uint8_t *bytes,
   return FR_ERR_UNSUPPORTED;
 #endif
 }
+
+fr_err_t fr_bytes_view(const fr_runtime_t *runtime, fr_bytes_ref_t ref,
+                       const uint8_t **out_bytes, uint16_t *out_length) {
+#if FR_FEATURE_BYTES
+  const fr_bytes_entry_t *entry = NULL;
+
+  if (runtime == NULL || out_bytes == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (ref.id >= FR_PROFILE_BYTES_COUNT) {
+    return FR_ERR_VOLATILE;
+  }
+  entry = &runtime->bytes.entries[ref.id];
+  if (!entry->in_use || entry->generation != ref.generation) {
+    return FR_ERR_VOLATILE;
+  }
+  *out_bytes = &runtime->bytes.arena[entry->offset];
+  *out_length = entry->length;
+  return FR_OK;
+#else
+  (void)runtime;
+  (void)ref;
+  (void)out_bytes;
+  (void)out_length;
+  return FR_ERR_UNSUPPORTED;
+#endif
+}

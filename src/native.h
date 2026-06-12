@@ -13,6 +13,7 @@ typedef enum fr_native_value_kind_t {
   FR_NATIVE_VALUE_HANDLE,
   FR_NATIVE_VALUE_NIL,
   FR_NATIVE_VALUE_TEXT,
+  FR_NATIVE_VALUE_TEXT_OR_BYTES,
 } fr_native_value_kind_t;
 
 typedef struct fr_native_param_t {
