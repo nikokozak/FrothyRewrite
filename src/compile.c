@@ -743,6 +743,9 @@ static fr_err_t fr_compile_emit_repeat(const fr_compile_context_t *ctx,
   FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[1],
                               instruction_bytes, offset));
   FR_TRY(fr_compile_emit_drop(instruction_bytes, offset));
+#if FR_FEATURE_BYTES
+  FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_BYTES_RESET));
+#endif
   FR_TRY(fr_compile_emit_jump_target(instruction_bytes, offset,
                                      FR_OP_REPEAT_NEXT, body_offset));
   FR_TRY(fr_compile_patch_u16(instruction_bytes, done_target_operand, *offset));
@@ -770,6 +773,9 @@ static fr_err_t fr_compile_emit_while(const fr_compile_context_t *ctx,
   FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[1],
                               instruction_bytes, offset));
   FR_TRY(fr_compile_emit_drop(instruction_bytes, offset));
+#if FR_FEATURE_BYTES
+  FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_BYTES_RESET));
+#endif
   FR_TRY(fr_compile_emit_jump_target(instruction_bytes, offset, FR_OP_JUMP,
                                      cond_offset));
   FR_TRY(fr_compile_patch_u16(instruction_bytes, done_target_operand, *offset));
@@ -885,6 +891,9 @@ static fr_err_t fr_compile_emit_forever(const fr_compile_context_t *ctx,
   FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
                               instruction_bytes, offset));
   FR_TRY(fr_compile_emit_drop(instruction_bytes, offset));
+#if FR_FEATURE_BYTES
+  FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_BYTES_RESET));
+#endif
   FR_TRY(fr_compile_emit_jump_target(instruction_bytes, offset, FR_OP_JUMP,
                                      body_offset));
   return fr_compile_emit_push_nil(instruction_bytes, offset);

@@ -133,6 +133,11 @@ fr_err_t fr_text_check_install(const fr_runtime_t *runtime,
                                const uint8_t *bytes, uint16_t length);
 fr_err_t fr_text_install(fr_runtime_t *runtime, const uint8_t *bytes,
                          uint16_t length, fr_object_id_t *out_object_id);
+
+fr_err_t fr_bytes_install(fr_runtime_t *runtime, const uint8_t *bytes,
+                          uint16_t length, fr_tagged_t *out_tagged);
+fr_err_t fr_bytes_view(const fr_runtime_t *runtime, fr_bytes_ref_t ref,
+                       const uint8_t **out_bytes, uint16_t *out_length);
 fr_err_t fr_text_install_since(fr_runtime_t *runtime, const uint8_t *bytes,
                                uint16_t length,
                                fr_object_id_t first_object_id,

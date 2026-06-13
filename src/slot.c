@@ -110,11 +110,16 @@ fr_err_t fr_slot_read(fr_runtime_t *runtime, fr_slot_id_t slot_id,
 
 fr_err_t fr_slot_write(fr_runtime_t *runtime, fr_slot_id_t slot_id,
                        fr_tagged_t tagged) {
+  fr_bytes_ref_t bytes_ref = {0};
+
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
   if (slot_id >= FR_PROFILE_MAX_SLOTS) {
     return FR_ERR_RANGE;
+  }
+  if (fr_tagged_decode_bytes_ref(tagged, &bytes_ref) == FR_OK) {
+    return FR_ERR_VOLATILE;
   }
   runtime->slots.current[slot_id] = tagged;
   runtime->slots.overlay[slot_id] = tagged != runtime->slots.base[slot_id];
@@ -125,6 +130,7 @@ fr_err_t fr_slot_write(fr_runtime_t *runtime, fr_slot_id_t slot_id,
 fr_err_t fr_slot_set_base(fr_runtime_t *runtime, fr_slot_id_t slot_id,
                           fr_tagged_t tagged) {
   fr_handle_ref_t handle_ref = {0};
+  fr_bytes_ref_t bytes_ref = {0};
 
   if (runtime == NULL) {
     return FR_ERR_INVALID;
@@ -133,6 +139,9 @@ fr_err_t fr_slot_set_base(fr_runtime_t *runtime, fr_slot_id_t slot_id,
     return FR_ERR_RANGE;
   }
   if (fr_tagged_decode_handle_ref(tagged, &handle_ref) == FR_OK) {
+    return FR_ERR_VOLATILE;
+  }
+  if (fr_tagged_decode_bytes_ref(tagged, &bytes_ref) == FR_OK) {
     return FR_ERR_VOLATILE;
   }
   runtime->slots.base[slot_id] = tagged;

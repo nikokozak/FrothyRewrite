@@ -227,6 +227,9 @@ fr_err_t fr_event_dispatch(fr_runtime_t *runtime) {
     return FR_OK;
   }
   runtime->dispatching_event = true;
+#if FR_FEATURE_BYTES
+  runtime->bytes.eval_depth++;
+#endif
 
   for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
     fr_event_binding_t *entry = &runtime->events.entries[i];
@@ -262,6 +265,9 @@ fr_err_t fr_event_dispatch(fr_runtime_t *runtime) {
     }
   }
 
+#if FR_FEATURE_BYTES
+  runtime->bytes.eval_depth--;
+#endif
   runtime->dispatching_event = false;
   return first_err;
 }

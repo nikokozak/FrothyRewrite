@@ -408,10 +408,14 @@ fr_err_t fr_cells_read(const fr_runtime_t *runtime, fr_object_id_t object_id,
 fr_err_t fr_cells_write(fr_runtime_t *runtime, fr_object_id_t object_id,
                         uint16_t index, fr_tagged_t tagged) {
   const fr_object_entry_t *entry = NULL;
+  fr_bytes_ref_t bytes_ref = {0};
 
   FR_TRY(fr_object_entry_of_kind(runtime, object_id, FR_OBJECT_CELLS, &entry));
   if (index >= entry->length) {
     return FR_ERR_RANGE;
+  }
+  if (fr_tagged_decode_bytes_ref(tagged, &bytes_ref) == FR_OK) {
+    return FR_ERR_VOLATILE;
   }
   if (!fr_cells_value_allowed(runtime, tagged)) {
     return FR_ERR_TYPE;
@@ -1094,6 +1098,7 @@ fr_err_t fr_record_write_field(fr_runtime_t *runtime,
   fr_object_id_t shape_object_id = 0;
   uint16_t field_count = 0;
   uint16_t field_index = 0;
+  fr_bytes_ref_t bytes_ref = {0};
 
   FR_TRY(fr_object_entry_of_kind(runtime, object_id, FR_OBJECT_RECORD,
                                  &entry));
@@ -1102,6 +1107,9 @@ fr_err_t fr_record_write_field(fr_runtime_t *runtime,
   (void)field_count;
   FR_TRY(fr_record_shape_field_index(runtime, shape_object_id, field,
                                      &field_index));
+  if (fr_tagged_decode_bytes_ref(tagged, &bytes_ref) == FR_OK) {
+    return FR_ERR_VOLATILE;
+  }
   if (!fr_record_field_value_allowed(runtime, tagged)) {
     return FR_ERR_TYPE;
   }
@@ -1131,5 +1139,80 @@ bool fr_object_is_overlay(const fr_runtime_t *runtime,
     return false;
   }
   return runtime->objects.overlay[object_id];
+#endif
+}
+
+fr_err_t fr_bytes_install(fr_runtime_t *runtime, const uint8_t *bytes,
+                          uint16_t length, fr_tagged_t *out_tagged) {
+#if FR_FEATURE_BYTES
+  if (runtime == NULL || out_tagged == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (length > 0 && bytes == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if ((uint32_t)runtime->bytes.arena_used + length >
+      FR_PROFILE_BYTES_ARENA_BYTES) {
+    return FR_ERR_CAPACITY;
+  }
+
+  for (fr_bytes_id_t i = 0; i < FR_PROFILE_BYTES_COUNT; i++) {
+    fr_bytes_entry_t *entry = &runtime->bytes.entries[i];
+
+    if (entry->in_use || entry->retired) {
+      continue;
+    }
+    if (entry->generation == FR_TAGGED_BYTES_MAX_GENERATION) {
+      entry->retired = true;
+      continue;
+    }
+
+    entry->generation = (fr_bytes_generation_t)(entry->generation + 1u);
+    entry->offset = runtime->bytes.arena_used;
+    entry->length = length;
+    entry->in_use = true;
+    if (length > 0) {
+      memcpy(&runtime->bytes.arena[runtime->bytes.arena_used], bytes, length);
+    }
+    runtime->bytes.arena_used =
+        (uint16_t)(runtime->bytes.arena_used + length);
+
+    fr_bytes_ref_t ref = {.id = i, .generation = entry->generation};
+    return fr_tagged_encode_bytes_ref(ref, out_tagged);
+  }
+  return FR_ERR_CAPACITY;
+#else
+  (void)runtime;
+  (void)bytes;
+  (void)length;
+  (void)out_tagged;
+  return FR_ERR_UNSUPPORTED;
+#endif
+}
+
+fr_err_t fr_bytes_view(const fr_runtime_t *runtime, fr_bytes_ref_t ref,
+                       const uint8_t **out_bytes, uint16_t *out_length) {
+#if FR_FEATURE_BYTES
+  const fr_bytes_entry_t *entry = NULL;
+
+  if (runtime == NULL || out_bytes == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (ref.id >= FR_PROFILE_BYTES_COUNT) {
+    return FR_ERR_VOLATILE;
+  }
+  entry = &runtime->bytes.entries[ref.id];
+  if (!entry->in_use || entry->generation != ref.generation) {
+    return FR_ERR_VOLATILE;
+  }
+  *out_bytes = &runtime->bytes.arena[entry->offset];
+  *out_length = entry->length;
+  return FR_OK;
+#else
+  (void)runtime;
+  (void)ref;
+  (void)out_bytes;
+  (void)out_length;
+  return FR_ERR_UNSUPPORTED;
 #endif
 }

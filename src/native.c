@@ -70,6 +70,28 @@ static bool fr_native_value_matches(const fr_runtime_t *runtime,
 #endif
   case FR_NATIVE_VALUE_NIL:
     return fr_tagged_is_nil(value);
+  case FR_NATIVE_VALUE_TEXT_OR_BYTES: {
+#if FR_FEATURE_TEXT
+    fr_object_id_t text_id = 0;
+    const uint8_t *ignored_bytes = NULL;
+    uint16_t ignored_length = 0;
+
+    if (runtime != NULL &&
+        fr_tagged_decode_object_id(value, &text_id) == FR_OK &&
+        fr_text_view(runtime, text_id, &ignored_bytes, &ignored_length) ==
+            FR_OK) {
+      return true;
+    }
+#endif
+#if FR_FEATURE_BYTES
+    {
+      fr_bytes_ref_t bytes_ref = {0};
+      return fr_tagged_decode_bytes_ref(value, &bytes_ref) == FR_OK;
+    }
+#else
+    return false;
+#endif
+  }
   }
 
   return false;

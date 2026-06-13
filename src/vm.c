@@ -664,6 +664,12 @@ static fr_err_t fr_vm_step(fr_runtime_t *runtime,
     return fr_vm_repeat_begin(view, state);
   case FR_OP_REPEAT_NEXT:
     return fr_vm_repeat_next(view, state);
+  case FR_OP_BYTES_RESET:
+#if FR_FEATURE_BYTES
+    fr_bytes_reset_if_outermost(runtime);
+#endif
+    state->ip++;
+    return FR_OK;
   default:
     return FR_ERR_INVALID;
   }
@@ -745,5 +751,11 @@ fr_err_t fr_vm_run_boot(fr_runtime_t *runtime, fr_tagged_t *out_tagged) {
     return FR_OK;
   }
 
-  return fr_vm_run_slot(runtime, FR_SLOT_BOOT, out_tagged);
+  {
+    fr_err_t err = fr_vm_run_slot(runtime, FR_SLOT_BOOT, out_tagged);
+#if FR_FEATURE_BYTES
+    fr_bytes_reset_if_outermost(runtime);
+#endif
+    return err;
+  }
 }
