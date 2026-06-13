@@ -345,7 +345,8 @@ fr_err_t fr_tagged_encode_bytes_ref(fr_bytes_ref_t ref,
     return FR_ERR_RANGE;
   }
   *out_tagged =
-      (fr_tagged_t)(FR_TAGGED_BYTES_BASE | ref.id |
+      (fr_tagged_t)(FR_TAGGED_BYTES_BASE +
+                    (fr_tagged_t)ref.id +
                     ((fr_tagged_t)ref.generation
                      << FR_TAGGED_BYTES_GENERATION_SHIFT));
   return FR_OK;

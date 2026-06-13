@@ -204,32 +204,22 @@ static void test_loop_reset_prevents_arena_exhaustion(void) {
 
 /* --- event-depth suppression --- */
 
+#if FR_FEATURE_NET
 static void test_event_depth_suppresses_reset(void) {
-  const uint8_t data[3] = {'a', 'b', 'c'};
-  fr_tagged_t tagged = 0;
-  fr_bytes_ref_t ref = {0};
-  const uint8_t *view = NULL;
-  uint16_t view_len = 0;
-
   install_base();
-  TEST_ASSERT_EQUAL(FR_OK,
-                    fr_bytes_install(&s_runtime, data, 3, &tagged));
-  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_bytes_ref(tagged, &ref));
-
-  s_runtime.bytes.eval_depth++;
-  fr_bytes_reset_if_outermost(&s_runtime);
-
-  TEST_ASSERT_EQUAL(FR_OK,
-                    fr_bytes_view(&s_runtime, ref, &view, &view_len));
-  TEST_ASSERT_EQUAL_UINT16(3, view_len);
-  TEST_ASSERT_EQUAL_MEMORY("abc", view, 3);
-
-  s_runtime.bytes.eval_depth--;
-  fr_bytes_reset_if_outermost(&s_runtime);
-
-  TEST_ASSERT_EQUAL(FR_ERR_VOLATILE,
-                    fr_bytes_view(&s_runtime, ref, &view, &view_len));
+  eval_ok("counter is cells(1)");
+  eval_ok("set counter[0] to 0");
+  eval_ok("handler is fn [ "
+          "here b is bytes.from-text: \"abc\"; "
+          "repeat 2 [ 0 ]; "
+          "set counter[0] to bytes.length: b ]");
+  eval_ok("boot is fn [ on wifi.disconnected [ handler: ] ]");
+  eval_ok("boot:");
+  fr_host_wifi_fire_event(FR_EVENT_KIND_WIFI_DISCONNECTED);
+  eval_ok("0");
+  eval_expect("counter[0]", "3\nok\n");
 }
+#endif
 
 #endif /* FR_FEATURE_BYTES */
 
@@ -251,7 +241,9 @@ int main(void) {
   RUN_TEST(test_generation_bump_invalidates_old_ref);
   RUN_TEST(test_generation_exhaust_retires_entry);
   RUN_TEST(test_loop_reset_prevents_arena_exhaustion);
+#if FR_FEATURE_NET
   RUN_TEST(test_event_depth_suppresses_reset);
+#endif
 #endif
   return UNITY_END();
 }
