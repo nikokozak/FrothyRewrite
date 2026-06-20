@@ -1,0 +1,19 @@
+{
+  "name": "@frothy/repl",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "test": "tsc --noEmit && node --import tsx --test test/*.test.ts",
+    "build": "tsup src/index.ts --format esm --dts --clean"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsup": "^8",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}
