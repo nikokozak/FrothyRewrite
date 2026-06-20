@@ -33,10 +33,13 @@ class Connector implements ReplConnector {
         if (this.closed) break;
         this.feed(chunk);
       }
-      if (!this.closed) {
+      const wasClosed = this.closed;
+      this.closed = true; // read ended: no pump left to settle future sends
+      if (!wasClosed) {
         this.failPending(new TransportError("transport closed while awaiting response"));
       }
     } catch (err) {
+      this.closed = true;
       this.failPending(new TransportError("transport read failed", { cause: err }));
     }
   }
@@ -94,6 +97,9 @@ class Connector implements ReplConnector {
 
   private send(line: string): Promise<Response> {
     const run = (): Promise<Response> => {
+      if (this.closed) {
+        return Promise.reject(new TransportError("connector is closed"));
+      }
       const result = new Promise<Response>((resolve, reject) => {
         this.pending = { lines: [], terminator: null, resolve, reject };
       });

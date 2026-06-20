@@ -8,6 +8,7 @@ import type { Transport } from "./types.ts";
 export class FakeTransport implements Transport {
   readonly writes: string[] = [];
   failWrite = false;
+  closeCount = 0;
 
   private readonly queue: Uint8Array[] = [];
   private readonly encoder = new TextEncoder();
@@ -43,6 +44,7 @@ export class FakeTransport implements Transport {
   }
 
   async close(): Promise<void> {
+    this.closeCount += 1;
     this.closed = true;
     const wake = this.resolveNext;
     this.resolveNext = null;
