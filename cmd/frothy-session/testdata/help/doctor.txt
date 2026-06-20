@@ -1,0 +1,9 @@
+frothy doctor — check the host's compile, flash, and serial setup
+
+Doctor runs a short list of health checks for the host setup that send, flash, and connect rely on. Each check reports ok or fail with a short detail. Run it once after cloning, and again whenever a verb starts failing for unclear reasons. It does not modify anything; it only inspects.
+
+Examples:
+  frothy doctor
+      run every check and print the results
+
+Flags:

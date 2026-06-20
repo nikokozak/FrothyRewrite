@@ -31,6 +31,10 @@ func runBuildCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	projectDir := fs.String("project", ".", "project directory containing frothy.toml")
 	skipMake := fs.Bool("no-make", false, "stop after generator emission; do not invoke make")
+	if helpRequested(args) {
+		printVerbHelp(stdout, helpFor("build"), fs)
+		return 0
+	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0

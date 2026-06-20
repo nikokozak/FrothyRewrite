@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,7 +48,7 @@ func TestRunInstallSendsLibraryThenExitsZero(t *testing.T) {
 
 	code := runInstallCommand(
 		[]string{"--port", "/dev/cu.usbserial-0001", "--project", projectDir},
-		&stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeInstallFactory(dev),
+		io.Discard, &stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeInstallFactory(dev),
 		115200, time.Second, 0,
 	)
 	if code != 0 {
@@ -76,7 +77,7 @@ func TestRunInstallReportsMissingLibraryFr(t *testing.T) {
 
 	code := runInstallCommand(
 		[]string{"--port", "/dev/cu.usbserial-0001", "--project", projectDir},
-		&stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeInstallFactory(dev),
+		io.Discard, &stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeInstallFactory(dev),
 		115200, time.Second, 0,
 	)
 	if code != 1 {
@@ -104,7 +105,7 @@ func TestRunInstallSurfacesDeviceErrorMidPipe(t *testing.T) {
 
 	code := runInstallCommand(
 		[]string{"--port", "/dev/cu.usbserial-0001", "--project", projectDir},
-		&stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeInstallFactory(dev),
+		io.Discard, &stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeInstallFactory(dev),
 		115200, time.Second, 0,
 	)
 	if code != 1 {
@@ -137,7 +138,7 @@ func TestRunInstallReportsOpenFailure(t *testing.T) {
 
 	code := runInstallCommand(
 		[]string{"--port", "/dev/cu.usbserial-0001", "--project", projectDir},
-		&stderr, singlePortLister("/dev/cu.usbserial-0001"), factory,
+		io.Discard, &stderr, singlePortLister("/dev/cu.usbserial-0001"), factory,
 		115200, time.Second, 0,
 	)
 	if code != 1 {
@@ -154,7 +155,7 @@ func TestRunInstallRejectsPositionalArgs(t *testing.T) {
 
 	code := runInstallCommand(
 		[]string{"library", "--port", "/dev/cu.usbserial-0001"},
-		&stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeInstallFactory(dev),
+		io.Discard, &stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeInstallFactory(dev),
 		115200, time.Second, 0,
 	)
 	if code != 2 {

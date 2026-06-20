@@ -518,7 +518,7 @@ func TestFrothyFlashBuildsMakeArgvWithDiscoveredPort(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	code := runFlashCommand([]string{"esp32_devkit_v1"}, &stderr, known, list, runner)
+	code := runFlashCommand([]string{"esp32_devkit_v1"}, io.Discard, &stderr, known, list, runner)
 	if code != 0 {
 		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
 	}
@@ -544,7 +544,7 @@ func TestFrothyFlashPortOverrideSkipsDiscovery(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	code := runFlashCommand([]string{"--port", "/dev/cu.usbmodem999", "esp32_devkit_v1"}, &stderr, known, list, runner)
+	code := runFlashCommand([]string{"--port", "/dev/cu.usbmodem999", "esp32_devkit_v1"}, io.Discard, &stderr, known, list, runner)
 	if code != 0 {
 		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
 	}
@@ -565,7 +565,7 @@ func TestFrothyFlashErrorsOnUnknownBoardBeforeInvokingMake(t *testing.T) {
 	known := func(string) bool { return false }
 
 	var stderr bytes.Buffer
-	code := runFlashCommand([]string{"made_up_board"}, &stderr, known, list, runner)
+	code := runFlashCommand([]string{"made_up_board"}, io.Discard, &stderr, known, list, runner)
 	if code == 0 {
 		t.Fatal("exit code 0, want non-zero")
 	}
@@ -585,7 +585,7 @@ func TestFrothyFlashErrorsWhenNoSerialPortFound(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	code := runFlashCommand([]string{"esp32_devkit_v1"}, &stderr, known, list, runner)
+	code := runFlashCommand([]string{"esp32_devkit_v1"}, io.Discard, &stderr, known, list, runner)
 	if code == 0 {
 		t.Fatal("exit code 0, want non-zero")
 	}
@@ -605,7 +605,7 @@ func TestFrothyFlashErrorsWhenMultipleSerialPortsFound(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	code := runFlashCommand([]string{"esp32_devkit_v1"}, &stderr, known, list, runner)
+	code := runFlashCommand([]string{"esp32_devkit_v1"}, io.Discard, &stderr, known, list, runner)
 	if code == 0 {
 		t.Fatal("exit code 0, want non-zero")
 	}
@@ -681,8 +681,8 @@ func TestFrothyWipeCommand(t *testing.T) {
 				return []string{"/dev/null", "/dev/cu.usbserial-0001"}, nil
 			}
 
-			var stderr bytes.Buffer
-			code := runWipeCommand(c.args, &stderr, list, runner)
+			var stdout, stderr bytes.Buffer
+			code := runWipeCommand(c.args, &stdout, &stderr, list, runner)
 			if code != c.wantExit {
 				t.Fatalf("exit code %d, want %d; stderr=%q", code, c.wantExit, stderr.String())
 			}

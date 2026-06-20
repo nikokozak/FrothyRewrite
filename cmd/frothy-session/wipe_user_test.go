@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func TestRunWipeUserSendsCommandAndExitsZero(t *testing.T) {
 
 	code := runWipeUserCommand(
 		[]string{"--port", "/dev/cu.usbserial-0001"},
-		&stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeWipeUserFactory(dev),
+		io.Discard, &stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeWipeUserFactory(dev),
 		115200, time.Second, 0,
 	)
 	if code != 0 {
@@ -46,7 +47,7 @@ func TestRunWipeUserSurfacesDeviceErrorLine(t *testing.T) {
 
 	code := runWipeUserCommand(
 		[]string{"--port", "/dev/cu.usbserial-0001"},
-		&stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeWipeUserFactory(dev),
+		io.Discard, &stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeWipeUserFactory(dev),
 		115200, time.Second, 0,
 	)
 	if code == 0 {
@@ -63,7 +64,7 @@ func TestRunWipeUserRejectsPositionalArgs(t *testing.T) {
 
 	code := runWipeUserCommand(
 		[]string{"esp32_devkit_v1", "--port", "/dev/cu.usbserial-0001"},
-		&stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeWipeUserFactory(dev),
+		io.Discard, &stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeWipeUserFactory(dev),
 		115200, time.Second, 0,
 	)
 	if code != 2 {
@@ -83,7 +84,7 @@ func TestRunWipeUserReportsOpenFailure(t *testing.T) {
 
 	code := runWipeUserCommand(
 		[]string{"--port", "/dev/cu.usbserial-0001"},
-		&stderr, singlePortLister("/dev/cu.usbserial-0001"), factory,
+		io.Discard, &stderr, singlePortLister("/dev/cu.usbserial-0001"), factory,
 		115200, time.Second, 0,
 	)
 	if code != 1 {

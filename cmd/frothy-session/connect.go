@@ -34,6 +34,10 @@ func runConnectCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 		noHistory   = fs.Bool("no-history", false, "disable history read/write")
 		historyFile = fs.String("history-file", "", "override history file path (default $XDG_DATA_HOME/frothy/history)")
 	)
+	if helpRequested(args) {
+		printVerbHelp(stdout, helpFor("connect"), fs)
+		return 0
+	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0

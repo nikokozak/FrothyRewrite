@@ -22,6 +22,10 @@ func runFetchCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("frothy fetch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	_ = fs.String("project", ".", "project directory containing frothy.toml")
+	if helpRequested(args) {
+		printVerbHelp(stdout, helpFor("fetch"), fs)
+		return 0
+	}
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

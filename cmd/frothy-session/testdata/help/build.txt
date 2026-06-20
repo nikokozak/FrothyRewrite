@@ -1,0 +1,13 @@
+frothy build — resolve libraries and build the project's firmware
+
+Build resolves the project's libraries from frothy.toml, generates the target sources, and runs make to produce the firmware image for the target named in the manifest. Use it when you have changed library code or board settings and want to produce a flashable artifact without flashing it.
+
+Examples:
+  frothy build
+      build the project in the current directory
+
+Flags:
+  -no-make
+    	stop after generator emission; do not invoke make
+  -project string
+    	project directory containing frothy.toml (default ".")

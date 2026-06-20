@@ -31,6 +31,10 @@ func runInitMain() int {
 func runInitCommand(args []string, dir string, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("frothy init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	if helpRequested(args) {
+		printVerbHelp(stdout, helpFor("init"), fs)
+		return 0
+	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
