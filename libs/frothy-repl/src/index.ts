@@ -1,5 +1,7 @@
 export { createConnector } from "./connector.ts";
 export { FakeTransport } from "./fake.ts";
+export { WebSerialTransport, type WebSerialPort } from "./web-serial.ts";
+export { NodeSerialTransport, type NodeSerialPort } from "./node-serial.ts";
 export {
   TransportError,
   WireFormatError,

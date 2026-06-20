@@ -161,6 +161,9 @@ class Connector implements ReplConnector {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    // Settle any in-flight request now: the read pump may be parked in read()
+    // and will not run failPending once close() has set `closed`.
+    this.failPending(new TransportError("connector closed while awaiting response"));
     await this.transport.close();
   }
 }
