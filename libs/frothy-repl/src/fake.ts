@@ -15,8 +15,11 @@ export class FakeTransport implements Transport {
   private readonly decoder = new TextDecoder();
   private resolveNext: (() => void) | null = null;
   private closed = false;
+  private readonly responder?: (line: string) => string;
 
-  constructor(private readonly responder?: (line: string) => string) {}
+  constructor(responder?: (line: string) => string) {
+    this.responder = responder;
+  }
 
   /** Push raw device bytes for the connector to read. */
   emit(text: string): void {

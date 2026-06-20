@@ -22,8 +22,10 @@ class Connector implements ReplConnector {
   private queue: Promise<unknown> = Promise.resolve();
   private applyBytes: number | null = null;
   private closed = false;
+  private readonly transport: Transport;
 
-  constructor(private readonly transport: Transport) {
+  constructor(transport: Transport) {
+    this.transport = transport;
     void this.pump();
   }
 
@@ -51,7 +53,7 @@ class Connector implements ReplConnector {
       if (nl >= 0) {
         const line = this.buf.slice(0, nl);
         this.buf = this.buf.slice(nl + 1);
-        this.onLine(line);
+        this.acceptLine(line);
         continue;
       }
       // No complete line buffered. A lone "> " is the wire prompt, but only
@@ -70,7 +72,7 @@ class Connector implements ReplConnector {
     return p === null || p.terminator !== null;
   }
 
-  private onLine(line: string): void {
+  private acceptLine(line: string): void {
     this.lines.push(line);
     for (const cb of this.subscribers) cb(line);
 

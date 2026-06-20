@@ -8,7 +8,11 @@ export interface NodeSerialPort extends AsyncIterable<Uint8Array> {
 
 /** Wraps an already-open `serialport` instance as a {@link Transport}. */
 export class NodeSerialTransport implements Transport {
-  constructor(private readonly port: NodeSerialPort) {}
+  private readonly port: NodeSerialPort;
+
+  constructor(port: NodeSerialPort) {
+    this.port = port;
+  }
 
   write(bytes: Uint8Array): Promise<void> {
     return new Promise((resolve, reject) => {

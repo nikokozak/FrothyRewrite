@@ -10,8 +10,12 @@ export interface WebSerialPort {
 /** Wraps an already-open Web Serial `SerialPort` as a {@link Transport}. */
 export class WebSerialTransport implements Transport {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  private released: Promise<void> | null = null;
+  private readonly port: WebSerialPort;
 
-  constructor(private readonly port: WebSerialPort) {}
+  constructor(port: WebSerialPort) {
+    this.port = port;
+  }
 
   async write(bytes: Uint8Array): Promise<void> {
     const writable = this.port.writable;
@@ -29,6 +33,8 @@ export class WebSerialTransport implements Transport {
     if (!readable) return;
     const reader = readable.getReader();
     this.reader = reader;
+    let release!: () => void;
+    this.released = new Promise<void>((r) => (release = r));
     try {
       for (;;) {
         const { value, done } = await reader.read();
@@ -38,12 +44,17 @@ export class WebSerialTransport implements Transport {
     } finally {
       reader.releaseLock();
       this.reader = null;
+      release();
     }
   }
 
   async close(): Promise<void> {
-    // Cancel the parked read so the reader releases its lock before close.
-    if (this.reader) await this.reader.cancel();
+    // Cancel the parked read, then wait for the generator's finally to run
+    // releaseLock() before closing the port, so the port lock is provably free.
+    if (this.reader) {
+      await this.reader.cancel();
+      await this.released;
+    }
     await this.port.close();
   }
 }
