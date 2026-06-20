@@ -1,0 +1,13 @@
+frothy install — send the project's library source to a device under install-library mode
+
+Install sends the project's library source to a connected device under install-library mode, persisting the library tier on the board. Use it after build to deliver the library code your project depends on to the device. The user tier is untouched.
+
+Examples:
+  frothy install --port /dev/cu.usbserial-0001
+      send the project's library source to the board on that port
+
+Flags:
+  -port string
+    	serial port, for example /dev/cu.usbserial-0001
+  -project string
+    	project directory containing frothy.toml (default ".")

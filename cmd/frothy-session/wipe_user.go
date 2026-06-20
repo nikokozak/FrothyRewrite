@@ -26,16 +26,20 @@ func defaultWipeUserDeviceFactory(port string, baud int) (sessionDevice, func(),
 }
 
 func runWipeUserMain() int {
-	return runWipeUserCommand(os.Args[1:], os.Stderr, defaultPortLister, defaultWipeUserDeviceFactory,
+	return runWipeUserCommand(os.Args[1:], os.Stdout, os.Stderr, defaultPortLister, defaultWipeUserDeviceFactory,
 		wipeUserBaud, wipeUserTimeout, wipeUserSettle)
 }
 
-func runWipeUserCommand(args []string, stderr io.Writer, list portLister, openDev wipeUserDeviceFactory,
+func runWipeUserCommand(args []string, stdout io.Writer, stderr io.Writer, list portLister, openDev wipeUserDeviceFactory,
 	baud int, timeout time.Duration, settle time.Duration) int {
 	fs := flag.NewFlagSet("frothy wipe-user", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.String("port", "", "serial port, for example /dev/cu.usbserial-0001")
 
+	if helpRequested(args) {
+		printVerbHelp(stdout, helpFor("wipe-user"), fs)
+		return 0
+	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0

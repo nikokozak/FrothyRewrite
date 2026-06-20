@@ -27,16 +27,21 @@ func defaultInstallDeviceFactory(port string, baud int) (sessionDevice, func(), 
 }
 
 func runInstallMain() int {
-	return runInstallCommand(os.Args[1:], os.Stderr, defaultPortLister, defaultInstallDeviceFactory,
+	return runInstallCommand(os.Args[1:], os.Stdout, os.Stderr, defaultPortLister, defaultInstallDeviceFactory,
 		installBaud, installTimeout, installSettle)
 }
 
-func runInstallCommand(args []string, stderr io.Writer, list portLister, openDev installDeviceFactory,
+func runInstallCommand(args []string, stdout io.Writer, stderr io.Writer, list portLister, openDev installDeviceFactory,
 	baud int, timeout time.Duration, settle time.Duration) int {
 	fs := flag.NewFlagSet("frothy install", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.String("port", "", "serial port, for example /dev/cu.usbserial-0001")
 	projectDir := fs.String("project", ".", "project directory containing frothy.toml")
+
+	if helpRequested(args) {
+		printVerbHelp(stdout, helpFor("install"), fs)
+		return 0
+	}
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

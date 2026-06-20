@@ -1937,7 +1937,14 @@ type verb struct {
 
 func availableVerbs() []verb {
 	return []verb{
-		{name: "session", summary: "open an interactive REPL session over serial", run: runSessionMain},
+		{name: "session", summary: "open an interactive REPL session over serial", run: runSessionMain,
+			longDesc: "Session opens a richer interactive REPL than connect: it can compile " +
+				"Frothy source on the host when the device advertises host-optional mode, " +
+				"replay a recorded transcript, or record one to NDJSON. Use it when connect " +
+				"is too thin for what you need; for a basic interactive REPL, connect is " +
+				"smaller and faster.",
+			examples: "  frothy session --port /dev/cu.usbserial-0001\n" +
+				"      open an interactive REPL on that port, with host compile when offered"},
 		{name: "send", summary: "compile a source file and apply or run each line", run: runSendMain,
 			longDesc: "Send compiles a Frothy source file and applies each definition to a " +
 				"connected board over serial, then runs any bare expressions line by line. " +
@@ -1950,15 +1957,75 @@ func availableVerbs() []verb {
 				"      compile blink.fr and apply each line to the board on that port\n\n" +
 				"  frothy send blink.fr --dry-run\n" +
 				"      compile and print each line without opening serial"},
-		{name: "flash", summary: "build the board firmware and flash it over serial", run: runFlashMain},
-		{name: "wipe", summary: "erase persisted device state on a wedged board (NVS only)", run: runWipeMain},
-		{name: "wipe-user", summary: "clear user-tier definitions on a running device; library tier survives", run: runWipeUserMain},
-		{name: "doctor", summary: "check the host's compile, flash, and serial setup", run: runDoctorMain},
-		{name: "connect", summary: "connect to a device's REPL", run: runConnectMain},
-		{name: "init", summary: "scaffold a new Frothy project in the current directory", run: runInitMain},
-		{name: "build", summary: "resolve libraries and build the project's firmware", run: runBuildMain},
-		{name: "fetch", summary: "resolve git deps into the local cache (stub; not yet wired)", run: runFetchMain},
-		{name: "install", summary: "send the project's library source to a device under install-library mode", run: runInstallMain},
+		{name: "flash", summary: "build the board firmware and flash it over serial", run: runFlashMain,
+			longDesc: "Flash builds the board firmware from source and writes it to a connected " +
+				"device over serial, replacing whatever was on the chip. Use it once per board " +
+				"to install Frothy itself, before send or connect can talk to a running device. " +
+				"It takes the board name as its only argument and drives the build through make. " +
+				"The serial port is discovered automatically when one device is attached, or " +
+				"named explicitly with --port when several are.",
+			examples: "  frothy flash esp32_devkit_v1 --port /dev/cu.usbserial-0001\n" +
+				"      build the firmware and flash it to the board on that port"},
+		{name: "wipe", summary: "erase persisted device state on a wedged board (NVS only)", run: runWipeMain,
+			longDesc: "Wipe erases the persisted device state on a board wedged by a bad save, " +
+				"leaving the firmware in place. It rewrites the NVS partition only and requires " +
+				"--force so it cannot run by accident. Use it when a board refuses to boot the " +
+				"REPL because of corrupt persisted state; for a clean reset of user definitions " +
+				"on a running device, prefer wipe-user.",
+			examples: "  frothy wipe esp32_devkit_v1 --force --port /dev/cu.usbserial-0001\n" +
+				"      erase the NVS region on the board on that port"},
+		{name: "wipe-user", summary: "clear user-tier definitions on a running device; library tier survives", run: runWipeUserMain,
+			longDesc: "Wipe-user clears the user-tier definitions on a running device, leaving " +
+				"the library tier and the firmware in place. Use it when you want to start with " +
+				"a clean slate of your own definitions without touching library code the " +
+				"project installed. It opens the serial port and asks the device to drop its " +
+				"user overlay.",
+			examples: "  frothy wipe-user --port /dev/cu.usbserial-0001\n" +
+				"      clear user-tier definitions on the board on that port"},
+		{name: "doctor", summary: "check the host's compile, flash, and serial setup", run: runDoctorMain,
+			longDesc: "Doctor runs a short list of health checks for the host setup that send, " +
+				"flash, and connect rely on. Each check reports ok or fail with a short detail. " +
+				"Run it once after cloning, and again whenever a verb starts failing for " +
+				"unclear reasons. It does not modify anything; it only inspects.",
+			examples: "  frothy doctor\n" +
+				"      run every check and print the results"},
+		{name: "connect", summary: "connect to a device's REPL", run: runConnectMain,
+			longDesc: "Connect opens an interactive REPL session against a running device over " +
+				"serial. It is the simplest way to type Frothy at a board and read what it " +
+				"prints back, with line history and a sensible default settle time for ESP32. " +
+				"For one-shot delivery of a file, use send instead; for a richer session that " +
+				"can compile on the host, use session.",
+			examples: "  frothy connect --port /dev/cu.usbserial-0001\n" +
+				"      open an interactive REPL against the board on that port"},
+		{name: "init", summary: "scaffold a new Frothy project in the current directory", run: runInitMain,
+			longDesc: "Init scaffolds a new Frothy project in the current directory: a " +
+				"frothy.toml with the project name and target, a main.fr with a starter " +
+				"definition, and a .gitignore that excludes the local cache. It refuses to " +
+				"overwrite existing files, so it is safe to run by accident.",
+			examples: "  frothy init\n" +
+				"      create frothy.toml, main.fr, and .gitignore in the current directory"},
+		{name: "build", summary: "resolve libraries and build the project's firmware", run: runBuildMain,
+			longDesc: "Build resolves the project's libraries from frothy.toml, generates the " +
+				"target sources, and runs make to produce the firmware image for the target " +
+				"named in the manifest. Use it when you have changed library code or board " +
+				"settings and want to produce a flashable artifact without flashing it.",
+			examples: "  frothy build\n" +
+				"      build the project in the current directory"},
+		{name: "fetch", summary: "resolve git deps into the local cache (stub; not yet wired)", run: runFetchMain,
+			longDesc: "Fetch resolves git dependencies declared in frothy.toml into the local " +
+				"cache so build can find them offline. It is a stub today: the dependency " +
+				"resolver is not yet wired, and running it prints a message saying so. The " +
+				"verb exists so projects that depend on it can be written against the final " +
+				"shape.",
+			examples: "  frothy fetch\n" +
+				"      attempt to resolve git deps (prints not-wired notice today)"},
+		{name: "install", summary: "send the project's library source to a device under install-library mode", run: runInstallMain,
+			longDesc: "Install sends the project's library source to a connected device under " +
+				"install-library mode, persisting the library tier on the board. Use it after " +
+				"build to deliver the library code your project depends on to the device. The " +
+				"user tier is untouched.",
+			examples: "  frothy install --port /dev/cu.usbserial-0001\n" +
+				"      send the project's library source to the board on that port"},
 	}
 }
 
@@ -2082,15 +2149,20 @@ func defaultCommandRunner(name string, args []string) error {
 }
 
 func runFlashMain() int {
-	return runFlashCommand(os.Args[1:], os.Stderr,
+	return runFlashCommand(os.Args[1:], os.Stdout, os.Stderr,
 		defaultBoardKnown, defaultPortLister, defaultCommandRunner)
 }
 
-func runFlashCommand(args []string, stderr io.Writer,
+func runFlashCommand(args []string, stdout io.Writer, stderr io.Writer,
 	known boardKnown, list portLister, run commandRunner) int {
 	fs := flag.NewFlagSet("frothy flash", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.String("port", "", "serial port, for example /dev/cu.usbmodem101")
+
+	if helpRequested(args) {
+		printVerbHelp(stdout, helpFor("flash"), fs)
+		return 0
+	}
 
 	var positional []string
 	remaining := args
@@ -2133,14 +2205,19 @@ func runFlashCommand(args []string, stderr io.Writer,
 }
 
 func runWipeMain() int {
-	return runWipeCommand(os.Args[1:], os.Stderr, defaultPortLister, defaultCommandRunner)
+	return runWipeCommand(os.Args[1:], os.Stdout, os.Stderr, defaultPortLister, defaultCommandRunner)
 }
 
-func runWipeCommand(args []string, stderr io.Writer, list portLister, run commandRunner) int {
+func runWipeCommand(args []string, stdout io.Writer, stderr io.Writer, list portLister, run commandRunner) int {
 	fs := flag.NewFlagSet("frothy wipe", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.String("port", "", "serial port, for example /dev/cu.usbserial-0001")
 	force := fs.Bool("force", false, "required: erase persisted state on the board")
+
+	if helpRequested(args) {
+		printVerbHelp(stdout, helpFor("wipe"), fs)
+		return 0
+	}
 
 	var positional []string
 	remaining := args
@@ -2258,6 +2335,10 @@ func runDoctorMain() int {
 func runDoctorCommand(args []string, stdout io.Writer, stderr io.Writer, checks []doctorCheck) int {
 	fs := flag.NewFlagSet("frothy doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	if helpRequested(args) {
+		printVerbHelp(stdout, helpFor("doctor"), fs)
+		return 0
+	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -2391,6 +2472,10 @@ func runSessionMain() int {
 		timeout      = flag.Duration("timeout", 3*time.Second, "serial prompt timeout")
 		settle       = flag.Duration("settle", 2*time.Second, "delay after opening serial")
 	)
+	if helpRequested(os.Args[1:]) {
+		printVerbHelp(os.Stdout, helpFor("session"), flag.CommandLine)
+		return 0
+	}
 	flag.Parse()
 
 	if exitCode, err := validateSessionOptions(*filePath, *dryRun, *records, *transcript, *replay); err != nil {

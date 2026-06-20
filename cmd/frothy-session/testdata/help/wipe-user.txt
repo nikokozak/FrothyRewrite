@@ -1,0 +1,11 @@
+frothy wipe-user — clear user-tier definitions on a running device; library tier survives
+
+Wipe-user clears the user-tier definitions on a running device, leaving the library tier and the firmware in place. Use it when you want to start with a clean slate of your own definitions without touching library code the project installed. It opens the serial port and asks the device to drop its user overlay.
+
+Examples:
+  frothy wipe-user --port /dev/cu.usbserial-0001
+      clear user-tier definitions on the board on that port
+
+Flags:
+  -port string
+    	serial port, for example /dev/cu.usbserial-0001

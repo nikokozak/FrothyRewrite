@@ -1,0 +1,11 @@
+frothy fetch — resolve git deps into the local cache (stub; not yet wired)
+
+Fetch resolves git dependencies declared in frothy.toml into the local cache so build can find them offline. It is a stub today: the dependency resolver is not yet wired, and running it prints a message saying so. The verb exists so projects that depend on it can be written against the final shape.
+
+Examples:
+  frothy fetch
+      attempt to resolve git deps (prints not-wired notice today)
+
+Flags:
+  -project string
+    	project directory containing frothy.toml (default ".")
