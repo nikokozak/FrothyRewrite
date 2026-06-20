@@ -9,15 +9,13 @@ import { FakeTransport } from "../src/fake.ts";
 const STATUS_LINE =
   "frothy status v1 profile=esp32_plain profile_hash=a1b2c3d4 compiler=device names=device storage=eeprom interrupt=cooperative word_size=32 int_min=-1073741824 int_max=1073741823 apply_bytes=2048";
 
-test("status round-trip: parsed fields equal the wire-protocol status line", async () => {
-  const fake = new FakeTransport((line) =>
+test("status round-trip: parsed fields equal the line, malformed fields reject", async () => {
+  const good = new FakeTransport((line) =>
     line === "status" ? `${STATUS_LINE}\nok\n> ` : "ok\n> ",
   );
-  const repl = await createConnector(fake);
+  const repl = await createConnector(good);
 
-  const status = await repl.status();
-
-  assert.deepEqual(status, {
+  assert.deepEqual(await repl.status(), {
     version: 1,
     profile: "esp32_plain",
     profile_hash: "a1b2c3d4",
@@ -32,9 +30,9 @@ test("status round-trip: parsed fields equal the wire-protocol status line", asy
   });
 
   await repl.close();
-});
 
-test("status round-trip: a malformed enum or numeric field rejects, not leaks", async () => {
+  // A bad enum or a non-integer numeric must reject as WireFormatError, never
+  // leak through as a typed status — the host must not misread the profile.
   for (const bad of [
     STATUS_LINE.replace("storage=eeprom", "storage=flash"),
     STATUS_LINE.replace("apply_bytes=2048", "apply_bytes=lots"),
@@ -42,10 +40,10 @@ test("status round-trip: a malformed enum or numeric field rejects, not leaks", 
     const fake = new FakeTransport((line) =>
       line === "status" ? `${bad}\nok\n> ` : "ok\n> ",
     );
-    const repl = await createConnector(fake);
+    const conn = await createConnector(fake);
 
-    await assert.rejects(repl.status(), (e) => e instanceof WireFormatError);
+    await assert.rejects(conn.status(), (e) => e instanceof WireFormatError);
 
-    await repl.close();
+    await conn.close();
   }
 });
