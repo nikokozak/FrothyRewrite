@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createConnector } from "../src/connector.ts";
+import { createConnector, WireFormatError } from "../src/index.ts";
 import { FakeTransport } from "../src/fake.ts";
 
 // Invariant 1 (SPEC §"Test discipline"): the status-line parser tracks the
@@ -30,6 +30,18 @@ test("status round-trip: parsed fields equal the wire-protocol status line", asy
     int_max: 1073741823,
     apply_bytes: 2048,
   });
+
+  await repl.close();
+});
+
+test("status round-trip: a malformed enum or numeric field rejects, not leaks", async () => {
+  const bad = STATUS_LINE.replace("storage=eeprom", "storage=flash");
+  const fake = new FakeTransport((line) =>
+    line === "status" ? `${bad}\nok\n> ` : "ok\n> ",
+  );
+  const repl = await createConnector(fake);
+
+  await assert.rejects(repl.status(), (e) => e instanceof WireFormatError);
 
   await repl.close();
 });

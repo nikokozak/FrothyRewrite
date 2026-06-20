@@ -33,6 +33,9 @@ class Connector implements ReplConnector {
         if (this.closed) break;
         this.feed(chunk);
       }
+      if (!this.closed) {
+        this.failPending(new TransportError("transport closed while awaiting response"));
+      }
     } catch (err) {
       this.failPending(new TransportError("transport read failed", { cause: err }));
     }
@@ -40,23 +43,28 @@ class Connector implements ReplConnector {
 
   private feed(chunk: Uint8Array): void {
     this.buf += this.decoder.decode(chunk, { stream: true });
-    // buf[0] is always a line start: complete lines are consumed with their LF.
-    // A bare "> " at a line start is the prompt; value text is quoted, so no
-    // value line begins with a bare "> ".
-    // ponytail: this also strips a leading "> " from words/see output if a word
-    // is literally named ">". Those commands are out of TR's strict contract.
     for (;;) {
-      if (this.buf.startsWith(PROMPT)) {
-        this.buf = this.buf.slice(PROMPT.length);
-        this.onPrompt();
+      const nl = this.buf.indexOf("\n");
+      if (nl >= 0) {
+        const line = this.buf.slice(0, nl);
+        this.buf = this.buf.slice(nl + 1);
+        this.onLine(line);
         continue;
       }
-      const nl = this.buf.indexOf("\n");
-      if (nl < 0) break;
-      const line = this.buf.slice(0, nl);
-      this.buf = this.buf.slice(nl + 1);
-      this.onLine(line);
+      // No complete line buffered. A lone "> " is the wire prompt, but only
+      // when no response body is mid-flight: prompt-shaped body text always
+      // arrives with its trailing LF and is consumed as a line above.
+      if (this.buf === PROMPT && this.promptExpected()) {
+        this.buf = "";
+        this.onPrompt();
+      }
+      break;
     }
+  }
+
+  private promptExpected(): boolean {
+    const p = this.pending;
+    return p === null || p.terminator !== null;
   }
 
   private onLine(line: string): void {
@@ -189,7 +197,7 @@ function parseStatus(lines: string[]): Status {
     if (v === undefined) throw new WireFormatError(`status missing field: ${key}`);
     return v;
   };
-  const wordSize = Number(get("word_size"));
+  const wordSize = int("word_size", get("word_size"));
   if (wordSize !== 16 && wordSize !== 32) {
     throw new WireFormatError(`bad word_size: ${get("word_size")}`);
   }
@@ -197,15 +205,27 @@ function parseStatus(lines: string[]): Status {
     version: 1,
     profile: get("profile"),
     profile_hash: get("profile_hash"),
-    compiler: get("compiler") as Status["compiler"],
-    names: get("names") as Status["names"],
-    storage: get("storage") as Status["storage"],
+    compiler: oneOf(["device", "host-required", "unknown"], "compiler", get("compiler")),
+    names: oneOf(["device", "host", "none"], "names", get("names")),
+    storage: oneOf(["eeprom", "volatile"], "storage", get("storage")),
     interrupt: get("interrupt"),
     word_size: wordSize,
-    int_min: Number(get("int_min")),
-    int_max: Number(get("int_max")),
-    apply_bytes: Number(get("apply_bytes")),
+    int_min: int("int_min", get("int_min")),
+    int_max: int("int_max", get("int_max")),
+    apply_bytes: int("apply_bytes", get("apply_bytes")),
   };
+}
+
+function oneOf<T extends string>(allowed: readonly T[], key: string, value: string): T {
+  if ((allowed as readonly string[]).includes(value)) return value as T;
+  throw new WireFormatError(`status field ${key} has unknown value: ${value}`);
+}
+
+function int(key: string, value: string): number {
+  if (!/^-?\d+$/.test(value)) {
+    throw new WireFormatError(`status field ${key} is not an integer: ${value}`);
+  }
+  return Number(value);
 }
 
 export function createConnector(transport: Transport): Promise<ReplConnector> {
