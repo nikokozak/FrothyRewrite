@@ -1928,15 +1928,28 @@ func pickPort(override string, list portLister) (string, error) {
 }
 
 type verb struct {
-	name    string
-	summary string
-	run     func() int
+	name     string
+	summary  string
+	longDesc string
+	examples string
+	run      func() int
 }
 
 func availableVerbs() []verb {
 	return []verb{
 		{name: "session", summary: "open an interactive REPL session over serial", run: runSessionMain},
-		{name: "send", summary: "compile a source file and apply or run each line", run: runSendMain},
+		{name: "send", summary: "compile a source file and apply or run each line", run: runSendMain,
+			longDesc: "Send compiles a Frothy source file and applies each definition to a " +
+				"connected board over serial, then runs any bare expressions line by line. " +
+				"Use it for one-shot delivery of a file you have already written, as opposed " +
+				"to session or connect, which keep an interactive prompt open. It talks to the " +
+				"device through the serial port named by --port, at the baud rate given by " +
+				"--baud. With --dry-run it compiles and prints each line without opening serial, " +
+				"so you can check a file before a board is attached.",
+			examples: "  frothy send blink.fr --port /dev/cu.usbserial-0001\n" +
+				"      compile blink.fr and apply each line to the board on that port\n\n" +
+				"  frothy send blink.fr --dry-run\n" +
+				"      compile and print each line without opening serial"},
 		{name: "flash", summary: "build the board firmware and flash it over serial", run: runFlashMain},
 		{name: "wipe", summary: "erase persisted device state on a wedged board (NVS only)", run: runWipeMain},
 		{name: "wipe-user", summary: "clear user-tier definitions on a running device; library tier survives", run: runWipeUserMain},
@@ -1975,6 +1988,10 @@ func runSendCommand(args []string, stdout io.Writer, stderr io.Writer, newCompil
 		timeout      = fs.Duration("timeout", 3*time.Second, "serial prompt timeout")
 		settle       = fs.Duration("settle", 2*time.Second, "delay after opening serial")
 	)
+	if helpRequested(args) {
+		printVerbHelp(stdout, helpFor("send"), fs)
+		return 0
+	}
 	var positional []string
 	remaining := args
 	for {
@@ -2269,6 +2286,42 @@ func runDoctorCommand(args []string, stdout io.Writer, stderr io.Writer, checks 
 		return 1
 	}
 	return 0
+}
+
+// helpRequested reports whether the args ask for help. The flag package would
+// treat -h/--help as a help request, but it prints to stderr and gives no
+// description; we intercept first so help is curated and goes to stdout.
+func helpRequested(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "-h" || a == "-help" || a == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+// helpFor returns the verb metadata so a run function can print its own help
+// without restating its summary. availableVerbs is the single source of truth.
+func helpFor(name string) verb {
+	for _, v := range availableVerbs() {
+		if v.name == name {
+			return v
+		}
+	}
+	return verb{name: name}
+}
+
+// printVerbHelp renders a verb's curated --help in the shape every verb shares:
+// summary line, prose description, worked examples, then the verb's own flag
+// list. The flags are taken straight from fs so they cannot drift from reality.
+func printVerbHelp(out io.Writer, v verb, fs *flag.FlagSet) {
+	fmt.Fprintf(out, "frothy %s — %s\n\n%s\n\nExamples:\n%s\n\nFlags:\n",
+		v.name, v.summary, strings.TrimSpace(v.longDesc), strings.TrimRight(v.examples, "\n"))
+	fs.SetOutput(out)
+	fs.PrintDefaults()
 }
 
 func printFrothyUsage(out io.Writer, verbs []verb) {
