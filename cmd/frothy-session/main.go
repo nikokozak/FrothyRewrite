@@ -2026,6 +2026,14 @@ func availableVerbs() []verb {
 				"user tier is untouched.",
 			examples: "  frothy install --port /dev/cu.usbserial-0001\n" +
 				"      send the project's library source to the board on that port"},
+		{name: "bootstrap", summary: "fetch and install the ESP-IDF SDK under ~/.froth/sdk/", run: runBootstrapMain,
+			longDesc: "Bootstrap fetches and installs the ESP-IDF SDK that flash, build, and " +
+				"web-bins depend on, placing it under ~/.froth/sdk/esp-idf/ (or under $FROTH_HOME " +
+				"if set). It uses no sudo, never writes outside that tree, and is idempotent: a " +
+				"successful install drops a marker file, and a re-run exits 0 with \"already " +
+				"installed.\" Pass --force to reinstall from scratch.",
+			examples: "  frothy bootstrap\n" +
+				"      install ESP-IDF v5.5 under ~/.froth/sdk/ (skip if already installed)"},
 	}
 }
 
@@ -2323,6 +2331,20 @@ func defaultDoctorChecks() []doctorCheck {
 					return false, fmt.Sprintf("silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s", port)
 				}
 				return true, port
+			},
+		},
+		{
+			name: "esp-idf-installed",
+			run: func() (bool, string) {
+				home := os.Getenv("FROTH_HOME")
+				if home == "" {
+					home = filepath.Join(os.Getenv("HOME"), ".froth")
+				}
+				marker := filepath.Join(home, "sdk", "esp-idf", ".froth-install-complete")
+				if _, err := os.Stat(marker); err != nil {
+					return false, "not installed; run frothy bootstrap"
+				}
+				return true, filepath.Join(home, "sdk", "esp-idf")
 			},
 		},
 	}
