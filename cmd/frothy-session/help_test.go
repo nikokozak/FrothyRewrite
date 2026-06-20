@@ -33,6 +33,33 @@ func checkGolden(t *testing.T, verb string, got []byte) {
 	}
 }
 
+// frothy help with no verb prints top-level usage on stdout and exits 0;
+// an unknown verb reports "no such verb" on stderr and exits 2. The verb
+// dispatch path (frothy help <verb>) is exercised by each verb's snapshot.
+func TestHelpAliasRouting(t *testing.T) {
+	verbs := availableVerbs()
+
+	var out, errBuf bytes.Buffer
+	if code := runFrothyCommand([]string{"frothy", "help"}, &out, &errBuf, verbs); code != 0 {
+		t.Fatalf("help (no verb) exit = %d, want 0", code)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("usage: frothy")) {
+		t.Errorf("help (no verb) stdout = %q, want top-level usage", out.String())
+	}
+
+	out.Reset()
+	errBuf.Reset()
+	if code := runFrothyCommand([]string{"frothy", "help", "nonexistent"}, &out, &errBuf, verbs); code != 2 {
+		t.Fatalf("help nonexistent exit = %d, want 2", code)
+	}
+	if !bytes.Contains(errBuf.Bytes(), []byte("no such verb: nonexistent")) {
+		t.Errorf("help nonexistent stderr = %q, want \"no such verb\"", errBuf.String())
+	}
+	if !bytes.Contains(out.Bytes(), []byte("usage: frothy")) {
+		t.Errorf("help nonexistent stdout = %q, want top-level usage", out.String())
+	}
+}
+
 func TestSendHelpSnapshot(t *testing.T) {
 	var out bytes.Buffer
 	if code := runSendCommand([]string{"--help"}, &out, io.Discard, nil); code != 0 {

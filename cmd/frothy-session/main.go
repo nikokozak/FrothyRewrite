@@ -2348,9 +2348,23 @@ func runFrothyCommand(args []string, stdout io.Writer, stderr io.Writer, verbs [
 		return 2
 	}
 	switch args[1] {
-	case "help", "--help", "-h":
+	case "--help", "-h":
 		printFrothyUsage(stdout, verbs)
 		return 0
+	case "help":
+		if len(args) < 3 {
+			printFrothyUsage(stdout, verbs)
+			return 0
+		}
+		for _, v := range verbs {
+			if v.name == args[2] {
+				os.Args = []string{args[0] + " " + v.name, "--help"}
+				return v.run()
+			}
+		}
+		fmt.Fprintf(stderr, "no such verb: %s\n", args[2])
+		printFrothyUsage(stdout, verbs)
+		return 2
 	}
 	for _, v := range verbs {
 		if v.name == args[1] {
