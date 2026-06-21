@@ -4,6 +4,12 @@ import { appendChunk, appendLine, flushPartial, show } from './output';
 
 let child: ChildProcess | undefined;
 let onConnectionChanged: (() => void) | undefined;
+// Re-entrancy guard. Edges this prevents:
+//  - spam-clicking Connect / the status bar item spawning two children
+//  - autoConnect firing concurrently for several .fr files opened at once
+//  - palette-triggered connect racing a sidebar-triggered connect
+// Concurrent callers all await the same in-flight promise.
+let connecting: Promise<void> | undefined;
 
 export function isConnected(): boolean {
   return child !== undefined && child.exitCode === null && !child.killed;
@@ -17,7 +23,15 @@ function fireConnectionChanged(): void {
   if (onConnectionChanged) onConnectionChanged();
 }
 
-export async function connect(): Promise<void> {
+export function connect(): Promise<void> {
+  if (connecting) return connecting;
+  connecting = doConnect().finally(() => {
+    connecting = undefined;
+  });
+  return connecting;
+}
+
+async function doConnect(): Promise<void> {
   await teardown();
 
   const cfg = vscode.workspace.getConfiguration('frothy');
@@ -57,16 +71,30 @@ export async function connect(): Promise<void> {
   });
 }
 
+// Catch EPIPE / "write after end" / destroyed-stream errors that fire
+// when the child dies between isConnected() and write(). The caller
+// gets `false` so it can surface a "not connected" warning, same as a
+// genuine disconnect.
 export function writeLine(text: string): boolean {
-  if (!isConnected() || !child?.stdin) return false;
-  child.stdin.write(text + '\n');
-  return true;
+  if (!isConnected() || !child?.stdin || child.stdin.destroyed) return false;
+  try {
+    child.stdin.write(text + '\n');
+    return true;
+  } catch (err) {
+    appendLine(`write: ${(err as Error).message}`);
+    return false;
+  }
 }
 
 export function writeByte(b: number): boolean {
-  if (!isConnected() || !child?.stdin) return false;
-  child.stdin.write(Buffer.from([b]));
-  return true;
+  if (!isConnected() || !child?.stdin || child.stdin.destroyed) return false;
+  try {
+    child.stdin.write(Buffer.from([b]));
+    return true;
+  } catch (err) {
+    appendLine(`write: ${(err as Error).message}`);
+    return false;
+  }
 }
 
 // D14: SIGINT, wait up to 1 s, then SIGKILL. The child treats SIGINT as a

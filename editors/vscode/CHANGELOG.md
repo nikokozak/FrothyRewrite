@@ -39,6 +39,21 @@ giving up the small CLI-subprocess backbone.
 - The "not connected" warning surfaces via `window.showWarningMessage`
   instead of writing to the output channel where it scrolled past.
 
+### Fixed
+
+- **Spam-clicking Connect or the status bar item** no longer spawns
+  multiple concurrent `frothy connect` subprocesses. A re-entrancy
+  guard returns the in-flight promise to repeat callers.
+- **`autoConnect` race when several `.fr` files open at once** —
+  same guard, no churn.
+- **`writeLine` / `writeByte` no longer throw on EPIPE** when the
+  child dies between `isConnected()` and the actual stdin write.
+  The write returns `false` and callers (`runLine`, `sendSelection`,
+  `runLast`) surface the disconnect warning.
+- **`sendSelection` stops on first failed write** instead of dropping
+  the rest of the selection silently. `lastForm` reflects the last
+  line that actually went out.
+
 ## 0.1.0
 
 First sideload release. Eight palette commands over a single

@@ -42,12 +42,17 @@ export function runLine(): void {
   }
   const line = currentLineText(editor);
   if (!line) return;
+  if (!proc.writeLine(line)) {
+    notConnectedHint();
+    return;
+  }
   setLastForm(line);
-  proc.writeLine(line);
 }
 
 // Send every non-empty line in the selection, in order. Updates lastForm
-// to the last line sent so runLast can repeat.
+// to the last line sent so runLast can repeat. If the connection drops
+// part-way through, stop and surface the warning rather than dropping
+// the rest of the lines silently.
 export function sendSelection(): void {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
@@ -61,8 +66,15 @@ export function sendSelection(): void {
   if (!text) return;
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   if (lines.length === 0) return;
-  for (const line of lines) proc.writeLine(line);
-  setLastForm(lines[lines.length - 1]);
+  let sent: string | undefined;
+  for (const line of lines) {
+    if (!proc.writeLine(line)) {
+      notConnectedHint();
+      break;
+    }
+    sent = line;
+  }
+  if (sent) setLastForm(sent);
 }
 
 // Repeat whatever runLine / sendSelection last sent.
@@ -72,7 +84,7 @@ export function runLast(): void {
     return;
   }
   if (!lastForm) return;
-  proc.writeLine(lastForm);
+  if (!proc.writeLine(lastForm)) notConnectedHint();
 }
 
 // One-shot `frothy send <path> [--port] --baud`. Save the buffer first so
