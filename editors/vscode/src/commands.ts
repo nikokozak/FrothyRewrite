@@ -53,6 +53,10 @@ export function runLine(): void {
 // to the last line sent so runLast can repeat. If the connection drops
 // part-way through, stop and surface the warning rather than dropping
 // the rest of the lines silently.
+//
+// For multi-line batches, drop a "[run selection: N lines]" header into
+// the transcript so the per-line echoes that follow have context — at
+// 30+ lines the bare echoes blur together otherwise.
 export function sendSelection(): void {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
@@ -66,6 +70,9 @@ export function sendSelection(): void {
   if (!text) return;
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   if (lines.length === 0) return;
+  if (lines.length > 1) {
+    appendLine(`> [run selection: ${lines.length} lines]`);
+  }
   let sent: string | undefined;
   for (const line of lines) {
     if (!proc.writeLine(line)) {
@@ -115,8 +122,15 @@ export async function sendFile(): Promise<void> {
   }
 
   const args = ['send', doc.fileName, '--port', port, '--baud', String(baud)];
+  const basename = doc.fileName.split(/[/\\]/).pop() ?? doc.fileName;
+  const lineCount = doc.lineCount;
 
   show();
+  // Bookend the subprocess so the user sees a clear marker for the batch.
+  // `frothy send` doesn't echo source lines into its stdout — without
+  // these headers, a 50-line file produces a stream of responses with
+  // no indication of which file produced them.
+  appendLine(`> [send file: ${basename} · ${lineCount} lines]`);
   appendLine(`$ ${bin} ${args.join(' ')}`);
 
   let c;
@@ -131,7 +145,8 @@ export async function sendFile(): Promise<void> {
   c.on('error', (err) => appendLine(`send: ${err.message}`));
   c.on('exit', (code, signal) => {
     flushPartial();
-    appendLine(`send: exited (code=${code ?? '-'}, signal=${signal ?? '-'})`);
+    const label = code === 0 ? 'ok' : `exit ${code ?? '-'}${signal ? ` signal ${signal}` : ''}`;
+    appendLine(`> [send file: ${basename} · ${label}]`);
   });
 }
 

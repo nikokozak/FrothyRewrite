@@ -18,12 +18,24 @@ Polish pass on serial reply rendering.
 - **Auto-reveal on send.** The output channel becomes visible
   whenever the extension writes to the device. `preserveFocus: true`
   keeps the cursor in the editor.
+- **Batch headers** for multi-line work, so the per-line echo doesn't
+  blur together at scale:
+  - Multi-line **Send Selection** prepends
+    `> [run selection: N lines]`.
+  - **Send File** brackets the subprocess with
+    `> [send file: foo.fr · 12 lines]` before, and
+    `> [send file: foo.fr · ok]` (or `exit N` on failure) after.
+  Single-line runs keep their bare `> <text>` echo — bookends only
+  kick in when there's actually a batch to bracket.
 
 ### Fixed
 
 - The output channel was effectively write-only and invisible by
   default. Pairing user input with device output in one panel closes
   that gap.
+- `Send File` previously emitted no marker into the transcript — a
+  50-line file produced a stream of device responses with no hint of
+  which file caused them. Header/footer markers fix this.
 
 ## 0.2.0 — 2026-06-20
 
