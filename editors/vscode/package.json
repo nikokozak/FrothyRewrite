@@ -2,7 +2,7 @@
   "name": "frothy",
   "displayName": "Frothy",
   "description": "Live Frothy workflow inside VS Code: connect to a board, run lines and selections, inspect slots, save and restore.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "frothy",
   "engines": {
     "vscode": "^1.74.0"
@@ -23,6 +23,11 @@
         "aliases": ["Frothy"],
         "extensions": [".fr", ".frothy"],
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "frothy-transcript",
+        "aliases": ["Frothy Transcript"],
+        "mimetypes": ["text/x-frothy-transcript"]
       }
     ],
     "grammars": [
@@ -30,6 +35,11 @@
         "language": "frothy",
         "scopeName": "source.frothy",
         "path": "./syntaxes/frothy.tmLanguage.json"
+      },
+      {
+        "language": "frothy-transcript",
+        "scopeName": "source.frothy.transcript",
+        "path": "./syntaxes/frothy-transcript.tmLanguage.json"
       }
     ],
     "commands": [

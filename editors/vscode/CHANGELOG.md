@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.1 — 2026-06-20
+
+Polish pass on serial reply rendering.
+
+### Added
+
+- **Echo of what was sent.** Every line the extension writes to the
+  device first appears in the Frothy output channel as `> <text>`,
+  so the user sees their command paired with the device's reply.
+  Reads as a real transcript instead of a stream of device-only bytes.
+- **Frothy Transcript grammar** for the output channel. The channel
+  now uses its own language ID (`frothy-transcript`) with a TextMate
+  grammar that colors errors red, `ok` green, status lines italic
+  grey, sent lines bold blue, and `mem` key/value pairs paired.
+  Themes the user already has do all the styling — no theme overrides.
+- **Auto-reveal on send.** The output channel becomes visible
+  whenever the extension writes to the device. `preserveFocus: true`
+  keeps the cursor in the editor.
+
+### Fixed
+
+- The output channel was effectively write-only and invisible by
+  default. Pairing user input with device output in one panel closes
+  that gap.
+
 ## 0.2.0 — 2026-06-20
 
 A real polish pass. The extension was thin to the point of clunky; this
