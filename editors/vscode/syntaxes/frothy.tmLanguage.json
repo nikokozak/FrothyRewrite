@@ -3,6 +3,7 @@
   "name": "Frothy",
   "scopeName": "source.frothy",
   "patterns": [
+    { "include": "#comment" },
     { "include": "#string" },
     { "include": "#number" },
     { "include": "#keyword" },
@@ -14,6 +15,10 @@
     { "include": "#identifier" }
   ],
   "repository": {
+    "comment": {
+      "name": "comment.line.double-slash.frothy",
+      "match": "//.*$"
+    },
     "string": {
       "name": "string.quoted.double.frothy",
       "begin": "\"",
@@ -28,7 +33,7 @@
     },
     "keyword": {
       "name": "keyword.control.frothy",
-      "match": "(?<![A-Za-z0-9_.?\\-$])(to|with|if|else|repeat)(?![A-Za-z0-9_.?\\-$])"
+      "match": "(?<![A-Za-z0-9_.?\\-$])(to|is|fn|with|set|if|else|repeat|forever|on|every|boot|rising|falling|changes)(?![A-Za-z0-9_.?\\-$])"
     },
     "repl-command": {
       "name": "keyword.other.repl.frothy",

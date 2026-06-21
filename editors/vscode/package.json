@@ -1,8 +1,8 @@
 {
   "name": "frothy",
   "displayName": "Frothy",
-  "description": "Per-line Frothy workflow inside VS Code: connect, send, see, save.",
-  "version": "0.1.0",
+  "description": "Live Frothy workflow inside VS Code: connect to a board, run lines and selections, inspect slots, save and restore.",
+  "version": "0.2.0",
   "publisher": "frothy",
   "engines": {
     "vscode": "^1.74.0"
@@ -12,18 +12,74 @@
     "Other"
   ],
   "main": "./out/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguage:frothy"
+  ],
   "contributes": {
-    "commands": [
-      { "command": "frothy.connect",       "title": "Frothy: Connect" },
-      { "command": "frothy.sendSelection", "title": "Frothy: Send Selection" },
-      { "command": "frothy.sendFile",      "title": "Frothy: Send File" },
-      { "command": "frothy.see",           "title": "Frothy: See" },
-      { "command": "frothy.words",         "title": "Frothy: Words" },
-      { "command": "frothy.save",          "title": "Frothy: Save" },
-      { "command": "frothy.restore",       "title": "Frothy: Restore" },
-      { "command": "frothy.interrupt",     "title": "Frothy: Interrupt" }
+    "languages": [
+      {
+        "id": "frothy",
+        "aliases": ["Frothy"],
+        "extensions": [".fr", ".frothy"],
+        "configuration": "./language-configuration.json"
+      }
     ],
+    "grammars": [
+      {
+        "language": "frothy",
+        "scopeName": "source.frothy",
+        "path": "./syntaxes/frothy.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      { "command": "frothy.connect",       "title": "Frothy: Connect",          "icon": "$(plug)" },
+      { "command": "frothy.disconnect",    "title": "Frothy: Disconnect",       "icon": "$(debug-disconnect)" },
+      { "command": "frothy.runLine",       "title": "Frothy: Run Line",         "icon": "$(play)" },
+      { "command": "frothy.sendSelection", "title": "Frothy: Send Selection",   "icon": "$(run-all)" },
+      { "command": "frothy.runLast",       "title": "Frothy: Run Last Form",    "icon": "$(debug-rerun)" },
+      { "command": "frothy.sendFile",      "title": "Frothy: Send File",        "icon": "$(file-code)" },
+      { "command": "frothy.see",           "title": "Frothy: See Word",         "icon": "$(symbol-field)" },
+      { "command": "frothy.words",         "title": "Frothy: List Words",       "icon": "$(list-unordered)" },
+      { "command": "frothy.status",        "title": "Frothy: Show Status",     "icon": "$(info)" },
+      { "command": "frothy.mem",           "title": "Frothy: Memory",          "icon": "$(graph)" },
+      { "command": "frothy.save",          "title": "Frothy: Save Overlay",     "icon": "$(save)" },
+      { "command": "frothy.restore",       "title": "Frothy: Restore Overlay",  "icon": "$(history)" },
+      { "command": "frothy.interrupt",     "title": "Frothy: Interrupt",        "icon": "$(debug-stop)" },
+      { "command": "frothy.showOutput",    "title": "Frothy: Show Output",      "icon": "$(terminal)" }
+    ],
+    "keybindings": [
+      { "command": "frothy.runLine",       "key": "shift+enter",      "mac": "shift+enter",   "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected" },
+      { "command": "frothy.sendSelection", "key": "ctrl+enter",       "mac": "cmd+enter",     "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected" },
+      { "command": "frothy.runLast",       "key": "ctrl+alt+r",       "mac": "cmd+alt+r",     "when": "editorTextFocus && editorLangId == frothy && frothy.hasLastForm" },
+      { "command": "frothy.sendFile",      "key": "ctrl+shift+enter", "mac": "cmd+shift+enter","when": "editorTextFocus && editorLangId == frothy" },
+      { "command": "frothy.see",           "key": "ctrl+alt+b",       "mac": "cmd+alt+b",     "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected" },
+      { "command": "frothy.interrupt",     "key": "ctrl+alt+.",       "mac": "cmd+alt+.",     "when": "frothy.isConnected" }
+    ],
+    "menus": {
+      "editor/title": [
+        { "command": "frothy.connect",       "when": "editorLangId == frothy && !frothy.isConnected", "group": "navigation@1" },
+        { "command": "frothy.runLine",       "when": "editorLangId == frothy &&  frothy.isConnected", "group": "navigation@1" },
+        { "command": "frothy.sendSelection", "when": "editorLangId == frothy &&  frothy.isConnected", "group": "navigation@2" },
+        { "command": "frothy.runLast",       "when": "editorLangId == frothy &&  frothy.hasLastForm",  "group": "navigation@3" },
+        { "command": "frothy.sendFile",      "when": "editorLangId == frothy",                         "group": "navigation@4" },
+        { "command": "frothy.disconnect",    "when": "editorLangId == frothy &&  frothy.isConnected", "group": "navigation@5" }
+      ],
+      "editor/context": [
+        { "command": "frothy.runLine",       "when": "editorLangId == frothy &&  frothy.isConnected", "group": "frothy@1" },
+        { "command": "frothy.sendSelection", "when": "editorLangId == frothy &&  frothy.isConnected && editorHasSelection", "group": "frothy@2" },
+        { "command": "frothy.see",           "when": "editorLangId == frothy &&  frothy.isConnected", "group": "frothy@3" }
+      ],
+      "commandPalette": [
+        { "command": "frothy.runLine",       "when": "editorLangId == frothy" },
+        { "command": "frothy.sendSelection", "when": "editorLangId == frothy" },
+        { "command": "frothy.runLast",       "when": "frothy.hasLastForm" },
+        { "command": "frothy.sendFile",      "when": "editorLangId == frothy" },
+        { "command": "frothy.see",           "when": "editorLangId == frothy" },
+        { "command": "frothy.disconnect",    "when": "frothy.isConnected" },
+        { "command": "frothy.interrupt",     "when": "frothy.isConnected" }
+      ]
+    },
     "configuration": {
       "title": "Frothy",
       "properties": {
@@ -35,29 +91,20 @@
         "frothy.port": {
           "type": "string",
           "default": "",
-          "description": "Serial port for the Frothy device. Empty uses the CLI's port discovery."
+          "description": "Serial port for the Frothy device. Empty asks the CLI to auto-discover."
         },
         "frothy.baud": {
           "type": "integer",
           "default": 115200,
           "description": "Serial baud rate."
+        },
+        "frothy.autoConnect": {
+          "type": "boolean",
+          "default": false,
+          "description": "Connect automatically when a Frothy file is opened."
         }
       }
-    },
-    "languages": [
-      {
-        "id": "frothy",
-        "aliases": ["Frothy"],
-        "extensions": [".frothy"]
-      }
-    ],
-    "grammars": [
-      {
-        "language": "frothy",
-        "scopeName": "source.frothy",
-        "path": "./syntaxes/frothy.tmLanguage.json"
-      }
-    ]
+    }
   },
   "scripts": {
     "build": "tsc --noEmit && esbuild src/extension.ts --bundle --platform=node --target=node18 --external:vscode --format=cjs --outfile=out/extension.js",
