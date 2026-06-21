@@ -12,17 +12,30 @@ const FLUSH_DEBOUNCE_MS = 150;
 
 export function getChannel(): vscode.OutputChannel {
   if (!channel) {
-    channel = vscode.window.createOutputChannel('Frothy');
+    // The "frothy-transcript" language ID + the matching TextMate grammar
+    // (syntaxes/frothy-transcript.tmLanguage.json) drive the colors: errors
+    // red, `ok` green, status lines italic-grey, echoed input bold blue,
+    // bare prompts dim. No work in TS — the user's theme styles all of it.
+    channel = vscode.window.createOutputChannel('Frothy', 'frothy-transcript');
   }
   return channel;
 }
 
 export function show(): void {
+  // preserveFocus=true: the channel becomes visible but the user's cursor
+  // stays in the editor, so Run Line + look-at-output is one motion.
   getChannel().show(true);
 }
 
 export function appendLine(text: string): void {
   getChannel().appendLine(text);
+}
+
+// Echo a line the user (or extension) is about to send to the device, so
+// the transcript reads as a real conversation. The "> " prefix matches the
+// device's own prompt — the transcript grammar colors it bold blue.
+export function appendSent(text: string): void {
+  getChannel().appendLine(`> ${text}`);
 }
 
 // Split incoming child-process bytes on '\n' so each device line lands as

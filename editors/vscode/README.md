@@ -9,7 +9,7 @@ channel named **Frothy**.
 
 ```sh
 make vsix
-code --install-extension editors/vscode/frothy-0.2.0.vsix
+code --install-extension editors/vscode/frothy-0.2.1.vsix
 ```
 
 The extension expects `frothy` on `PATH`, or set `frothy.binaryPath`.
@@ -44,7 +44,11 @@ On Linux and Windows, swap <kbd>⌘</kbd> for <kbd>Ctrl</kbd>.
   focused.
 - **Editor context menu.** Run line, Run selection, See word — when right-clicking
   inside a Frothy file with a connection open.
-- **Output channel "Frothy".** Subprocess output and device responses.
+- **Output channel "Frothy".** Reads as a transcript — every line you
+  send appears as `> <text>` paired with the device's reply. Errors are
+  red, `ok` is green, status lines are italic-grey, sent lines are bold
+  blue, `mem` key/value pairs are paired. Auto-reveals when you run a
+  command (cursor stays in the editor).
 
 ## Settings
 

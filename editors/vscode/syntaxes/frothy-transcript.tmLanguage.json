@@ -1,0 +1,63 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Frothy Transcript",
+  "scopeName": "source.frothy.transcript",
+  "patterns": [
+    { "include": "#extension-line" },
+    { "include": "#sent-line" },
+    { "include": "#error-line" },
+    { "include": "#legacy-error-line" },
+    { "include": "#ok-line" },
+    { "include": "#status-line" },
+    { "include": "#mem-pair" },
+    { "include": "#prompt-only" },
+    { "include": "#string" },
+    { "include": "#number" }
+  ],
+  "repository": {
+    "extension-line": {
+      "name": "comment.line.shell.frothy-transcript",
+      "match": "^\\$.*$"
+    },
+    "sent-line": {
+      "name": "markup.heading.host.frothy-transcript",
+      "match": "^>\\s+.*$"
+    },
+    "error-line": {
+      "name": "invalid.illegal.frothy-transcript",
+      "match": "^error:.*$"
+    },
+    "legacy-error-line": {
+      "name": "invalid.illegal.frothy-transcript",
+      "match": "^err\\s+\\d+\\s*$"
+    },
+    "ok-line": {
+      "name": "support.constant.ok.frothy-transcript",
+      "match": "^ok\\s*$"
+    },
+    "status-line": {
+      "name": "comment.block.status.frothy-transcript",
+      "match": "^frothy status v\\d+.*$"
+    },
+    "mem-pair": {
+      "match": "^([A-Za-z_][A-Za-z0-9_.]*)\\s+(-?\\d+)\\s*$",
+      "captures": {
+        "1": { "name": "variable.other.member.frothy-transcript" },
+        "2": { "name": "constant.numeric.frothy-transcript" }
+      }
+    },
+    "prompt-only": {
+      "name": "comment.line.prompt.frothy-transcript",
+      "match": "^>\\s*$"
+    },
+    "string": {
+      "name": "string.quoted.double.frothy-transcript",
+      "begin": "\"",
+      "end": "\""
+    },
+    "number": {
+      "name": "constant.numeric.frothy-transcript",
+      "match": "(?<![A-Za-z_])-?\\d+(?![A-Za-z_])"
+    }
+  }
+}

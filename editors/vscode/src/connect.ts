@@ -1,6 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
 import * as vscode from 'vscode';
-import { appendChunk, appendLine, flushPartial, show } from './output';
+import { appendChunk, appendLine, appendSent, flushPartial, show } from './output';
 
 let child: ChildProcess | undefined;
 let onConnectionChanged: (() => void) | undefined;
@@ -75,9 +75,15 @@ async function doConnect(): Promise<void> {
 // when the child dies between isConnected() and write(). The caller
 // gets `false` so it can surface a "not connected" warning, same as a
 // genuine disconnect.
+//
+// Every successful write echoes the line into the transcript first
+// ("> text"), so the user sees what they sent paired with the device's
+// reply. The transcript grammar colors the "> " prefix bold blue.
 export function writeLine(text: string): boolean {
   if (!isConnected() || !child?.stdin || child.stdin.destroyed) return false;
   try {
+    appendSent(text);
+    show();
     child.stdin.write(text + '\n');
     return true;
   } catch (err) {
