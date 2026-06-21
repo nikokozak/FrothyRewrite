@@ -3,9 +3,18 @@ import * as vscode from 'vscode';
 import { appendChunk, appendLine, flushPartial, show } from './output';
 
 let child: ChildProcess | undefined;
+let onConnectionChanged: (() => void) | undefined;
 
 export function isConnected(): boolean {
   return child !== undefined && child.exitCode === null && !child.killed;
+}
+
+export function setOnConnectionChanged(cb: () => void): void {
+  onConnectionChanged = cb;
+}
+
+function fireConnectionChanged(): void {
+  if (onConnectionChanged) onConnectionChanged();
 }
 
 export async function connect(): Promise<void> {
@@ -33,6 +42,7 @@ export async function connect(): Promise<void> {
     return;
   }
   child = c;
+  fireConnectionChanged();
 
   c.stdout?.on('data', (data: Buffer) => appendChunk(data.toString('utf8')));
   c.stderr?.on('data', (data: Buffer) => appendChunk(data.toString('utf8')));
@@ -42,6 +52,7 @@ export async function connect(): Promise<void> {
     appendLine(`connect: exited (code=${code ?? '-'}, signal=${signal ?? '-'})`);
     if (child === c) {
       child = undefined;
+      fireConnectionChanged();
     }
   });
 }
@@ -72,6 +83,7 @@ export async function teardown(): Promise<void> {
   }
   if (child === c) {
     child = undefined;
+    fireConnectionChanged();
   }
 }
 
