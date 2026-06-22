@@ -435,15 +435,27 @@ static fr_err_t fr_source_render_if(fr_source_render_t *r,
   return FR_OK;
 }
 
-/* cond JUMP_IF_FALSY(done) <body> DROP JUMP(cond) done:PUSH_NIL — the loop's
- * value is that nil, so skip it and let the while text stand in its place. */
+/* When bytes scratch is enabled the compiler emits one FR_OP_BYTES_RESET byte
+ * at each loop back-edge, between the body's trailing DROP and the
+ * REPEAT_NEXT/JUMP (src/compile.c). The back-edge op stays a fixed distance
+ * before the done target, so only the DROP sits one byte earlier. */
+#if FR_FEATURE_BYTES
+#define FR_SOURCE_LOOP_RESET 1u
+#else
+#define FR_SOURCE_LOOP_RESET 0u
+#endif
+
+/* cond JUMP_IF_FALSY(done) <body> DROP [BYTES_RESET] JUMP(cond) done:PUSH_NIL —
+ * the loop's value is that nil, so skip it and let the while text stand in its
+ * place. */
 static fr_err_t fr_source_render_while(fr_source_render_t *r,
                                        const fr_instruction_stream_t *view,
                                        const char *names, uint16_t names_len,
                                        fr_code_offset_t ip,
                                        fr_code_offset_t false_target,
                                        fr_code_offset_t *out_ip) {
-  fr_code_offset_t drop_ip = (fr_code_offset_t)(false_target - 4u);
+  fr_code_offset_t drop_ip =
+      (fr_code_offset_t)(false_target - 4u - FR_SOURCE_LOOP_RESET);
   fr_source_frag_t cond;
   uint16_t body_start = 0;
 
@@ -465,8 +477,9 @@ static fr_err_t fr_source_render_while(fr_source_render_t *r,
   return FR_OK;
 }
 
-/* count REPEAT_BEGIN(done) <body> DROP REPEAT_NEXT(body) done:PUSH_NIL — same
- * shape as while, with the count already on the stack as the operand. */
+/* count REPEAT_BEGIN(done) <body> DROP [BYTES_RESET] REPEAT_NEXT(body)
+ * done:PUSH_NIL — same shape as while, with the count already on the stack as
+ * the operand. */
 static fr_err_t fr_source_render_repeat(fr_source_render_t *r,
                                         const fr_instruction_stream_t *view,
                                         const char *names, uint16_t names_len,
@@ -487,7 +500,7 @@ static fr_err_t fr_source_render_repeat(fr_source_render_t *r,
   if (done_target < (fr_code_offset_t)(ip + 8u)) {
     return FR_ERR_UNSUPPORTED;
   }
-  drop_ip = (fr_code_offset_t)(done_target - 4u);
+  drop_ip = (fr_code_offset_t)(done_target - 4u - FR_SOURCE_LOOP_RESET);
   next_ip = (fr_code_offset_t)(done_target - 3u);
   if ((fr_opcode_t)view->bytes[drop_ip] != FR_OP_DROP ||
       (fr_opcode_t)view->bytes[next_ip] != FR_OP_REPEAT_NEXT ||

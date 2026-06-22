@@ -225,6 +225,17 @@ enum {
 #define FR_TEST_SYNTHETIC_HANDLE_KIND FR_HANDLE_KIND_PWM
 #define FR_TEST_SYNTHETIC_HANDLE_NAME "pwm"
 
+/* Each loop back-edge emits one FR_OP_BYTES_RESET byte between the body's
+   trailing DROP and the REPEAT_NEXT/JUMP when bytes scratch is enabled
+   (src/compile.c repeat/while/forever). That shifts the compiled-loop layout
+   by one byte under FR_FEATURE_BYTES; the assertions below add this offset to
+   lengths, forward jump targets, and every position from the back-edge on. */
+#if FR_FEATURE_BYTES
+#define FR_TEST_LOOP_RESET 1u
+#else
+#define FR_TEST_LOOP_RESET 0u
+#endif
+
 #define FR_TEST_INT_BYTE0(value)                                             \
   ((uint8_t)((uint32_t)(int32_t)(value) & 0xffu))
 #define FR_TEST_INT_BYTE1(value)                                             \
@@ -6505,16 +6516,19 @@ static void test_compile(void) {
             fr_compile_overlay_update(
                 "boot is fn with count [ repeat count [ ms: 1 ] ]",
                 &update) == FR_OK &&
-            update.code_object.instructions.length == 17u + push_size &&
+            update.code_object.instructions.length ==
+                17u + push_size + FR_TEST_LOOP_RESET &&
             update.instruction_bytes[1] == FR_INSTRUCTION_ARITY_HEADER_SIZE &&
             update.instruction_bytes[2] == 1 &&
             update.instruction_bytes[3] == FR_OP_LOAD_ARG &&
             update.instruction_bytes[4] == 0 &&
             update.instruction_bytes[5] == FR_OP_REPEAT_BEGIN &&
-            update.instruction_bytes[6] == 15u + push_size &&
-            update.instruction_bytes[12u + push_size] ==
+            update.instruction_bytes[6] == 15u + push_size + FR_TEST_LOOP_RESET &&
+            (FR_TEST_LOOP_RESET == 0u ||
+             update.instruction_bytes[12u + push_size] == FR_OP_BYTES_RESET) &&
+            update.instruction_bytes[12u + push_size + FR_TEST_LOOP_RESET] ==
                 FR_OP_REPEAT_NEXT &&
-            update.instruction_bytes[13u + push_size] == 8);
+            update.instruction_bytes[13u + push_size + FR_TEST_LOOP_RESET] == 8);
 
   CHECK("compiled function owns instruction bytes",
         fr_compile_overlay_update("boot is fn [ 1 ]", &update) == FR_OK &&
@@ -7195,25 +7209,33 @@ static void test_compile(void) {
   CHECK("compiled repeat uses loop opcodes",
         fr_compile_overlay_update("boot is fn [ repeat 2 [ ms: 1 ] ]",
                                   &update) == FR_OK &&
-            update.code_object.instructions.length == 14u + (push_size * 2u) &&
+            update.code_object.instructions.length ==
+                14u + (push_size * 2u) + FR_TEST_LOOP_RESET &&
             update.instruction_bytes[2] == FR_OP_PUSH_INT &&
             update.instruction_bytes[3] == 2 &&
             update.instruction_bytes[2u + push_size] == FR_OP_REPEAT_BEGIN &&
             update.instruction_bytes[3u + push_size] ==
-                12u + (push_size * 2u) &&
+                12u + (push_size * 2u) + FR_TEST_LOOP_RESET &&
             update.instruction_bytes[5u + push_size] == FR_OP_PUSH_INT &&
             update.instruction_bytes[6u + push_size] == 1 &&
             update.instruction_bytes[5u + (push_size * 2u)] ==
                 FR_OP_CALL_NATIVE_SLOT &&
             update.instruction_bytes[6u + (push_size * 2u)] == FR_SLOT_MS &&
             update.instruction_bytes[8u + (push_size * 2u)] == FR_OP_DROP &&
-            update.instruction_bytes[9u + (push_size * 2u)] ==
+            (FR_TEST_LOOP_RESET == 0u ||
+             update.instruction_bytes[9u + (push_size * 2u)] ==
+                 FR_OP_BYTES_RESET) &&
+            update.instruction_bytes[9u + (push_size * 2u) +
+                                     FR_TEST_LOOP_RESET] ==
                 FR_OP_REPEAT_NEXT &&
-            update.instruction_bytes[10u + (push_size * 2u)] ==
+            update.instruction_bytes[10u + (push_size * 2u) +
+                                     FR_TEST_LOOP_RESET] ==
                 5u + push_size &&
-            update.instruction_bytes[12u + (push_size * 2u)] ==
+            update.instruction_bytes[12u + (push_size * 2u) +
+                                     FR_TEST_LOOP_RESET] ==
                 FR_OP_PUSH_NIL &&
-            update.instruction_bytes[13u + (push_size * 2u)] ==
+            update.instruction_bytes[13u + (push_size * 2u) +
+                                     FR_TEST_LOOP_RESET] ==
                 FR_OP_RETURN);
   CHECK("compiled repeat returns nil",
         fr_base_image_install(&runtime) == FR_OK &&
@@ -7225,30 +7247,41 @@ static void test_compile(void) {
   CHECK("compiled zero repeat returns nil",
         fr_compile_overlay_update("boot is fn [ repeat 0 [ one ] ]",
                                   &update) == FR_OK &&
-            update.code_object.instructions.length == 14u + push_size &&
+            update.code_object.instructions.length ==
+                14u + push_size + FR_TEST_LOOP_RESET &&
             update.instruction_bytes[2] == FR_OP_PUSH_INT &&
             update.instruction_bytes[3] == 0 &&
             update.instruction_bytes[2u + push_size] == FR_OP_REPEAT_BEGIN &&
-            update.instruction_bytes[3u + push_size] == 12u + push_size &&
+            update.instruction_bytes[3u + push_size] ==
+                12u + push_size + FR_TEST_LOOP_RESET &&
             update.instruction_bytes[5u + push_size] == FR_OP_LOAD_SLOT &&
             update.instruction_bytes[6u + push_size] == FR_SLOT_ONE &&
             update.instruction_bytes[8u + push_size] == FR_OP_DROP &&
-            update.instruction_bytes[9u + push_size] == FR_OP_REPEAT_NEXT &&
-            update.instruction_bytes[10u + push_size] == 5u + push_size &&
-            update.instruction_bytes[12u + push_size] == FR_OP_PUSH_NIL &&
-            update.instruction_bytes[13u + push_size] == FR_OP_RETURN);
+            (FR_TEST_LOOP_RESET == 0u ||
+             update.instruction_bytes[9u + push_size] == FR_OP_BYTES_RESET) &&
+            update.instruction_bytes[9u + push_size + FR_TEST_LOOP_RESET] ==
+                FR_OP_REPEAT_NEXT &&
+            update.instruction_bytes[10u + push_size + FR_TEST_LOOP_RESET] ==
+                5u + push_size &&
+            update.instruction_bytes[12u + push_size + FR_TEST_LOOP_RESET] ==
+                FR_OP_PUSH_NIL &&
+            update.instruction_bytes[13u + push_size + FR_TEST_LOOP_RESET] ==
+                FR_OP_RETURN);
   CHECK("compiled repeat accepts dynamic count",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ repeat one [ ms: 1 ] ]",
                                       &update) == FR_OK &&
-            update.code_object.instructions.length == 17u + push_size &&
+            update.code_object.instructions.length ==
+                17u + push_size + FR_TEST_LOOP_RESET &&
             update.instruction_bytes[2] == FR_OP_LOAD_SLOT &&
             update.instruction_bytes[3] == FR_SLOT_ONE &&
             update.instruction_bytes[5] == FR_OP_REPEAT_BEGIN &&
-            update.instruction_bytes[6] == 15u + push_size &&
-            update.instruction_bytes[12u + push_size] ==
+            update.instruction_bytes[6] == 15u + push_size + FR_TEST_LOOP_RESET &&
+            (FR_TEST_LOOP_RESET == 0u ||
+             update.instruction_bytes[12u + push_size] == FR_OP_BYTES_RESET) &&
+            update.instruction_bytes[12u + push_size + FR_TEST_LOOP_RESET] ==
                 FR_OP_REPEAT_NEXT &&
-            update.instruction_bytes[13u + push_size] == 8 &&
+            update.instruction_bytes[13u + push_size + FR_TEST_LOOP_RESET] == 8 &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
@@ -7269,21 +7302,28 @@ static void test_compile(void) {
         fr_compile_overlay_update("boot is fn [ while 0 [ 1 ] ]",
                                   &update) == FR_OK &&
             update.code_object.instructions.length ==
-                11u + (push_size * 2u) &&
+                11u + (push_size * 2u) + FR_TEST_LOOP_RESET &&
             update.instruction_bytes[2] == FR_OP_PUSH_INT &&
             update.instruction_bytes[3] == 0 &&
             update.instruction_bytes[2u + push_size] ==
                 FR_OP_JUMP_IF_FALSY &&
             update.instruction_bytes[3u + push_size] ==
-                9u + (push_size * 2u) &&
+                9u + (push_size * 2u) + FR_TEST_LOOP_RESET &&
             update.instruction_bytes[5u + push_size] == FR_OP_PUSH_INT &&
             update.instruction_bytes[6u + push_size] == 1 &&
             update.instruction_bytes[5u + (push_size * 2u)] == FR_OP_DROP &&
-            update.instruction_bytes[6u + (push_size * 2u)] == FR_OP_JUMP &&
-            update.instruction_bytes[7u + (push_size * 2u)] == 2 &&
-            update.instruction_bytes[9u + (push_size * 2u)] ==
+            (FR_TEST_LOOP_RESET == 0u ||
+             update.instruction_bytes[6u + (push_size * 2u)] ==
+                 FR_OP_BYTES_RESET) &&
+            update.instruction_bytes[6u + (push_size * 2u) +
+                                     FR_TEST_LOOP_RESET] == FR_OP_JUMP &&
+            update.instruction_bytes[7u + (push_size * 2u) +
+                                     FR_TEST_LOOP_RESET] == 2 &&
+            update.instruction_bytes[9u + (push_size * 2u) +
+                                     FR_TEST_LOOP_RESET] ==
                 FR_OP_PUSH_NIL &&
-            update.instruction_bytes[10u + (push_size * 2u)] ==
+            update.instruction_bytes[10u + (push_size * 2u) +
+                                     FR_TEST_LOOP_RESET] ==
                 FR_OP_RETURN);
   CHECK("compiled while false skips body and yields nil",
         fr_runtime_init(&runtime) == FR_OK &&
@@ -7333,17 +7373,23 @@ static void test_compile(void) {
   CHECK("compiled forever uses jump loop",
         fr_compile_overlay_update("boot is fn [ forever [ ms: 1 ] ]",
                                   &update) == FR_OK &&
-            update.code_object.instructions.length == 11u + push_size &&
+            update.code_object.instructions.length ==
+                11u + push_size + FR_TEST_LOOP_RESET &&
             update.instruction_bytes[2] == FR_OP_PUSH_INT &&
             update.instruction_bytes[3] == 1 &&
             update.instruction_bytes[2u + push_size] ==
                 FR_OP_CALL_NATIVE_SLOT &&
             update.instruction_bytes[3u + push_size] == FR_SLOT_MS &&
             update.instruction_bytes[5u + push_size] == FR_OP_DROP &&
-            update.instruction_bytes[6u + push_size] == FR_OP_JUMP &&
-            update.instruction_bytes[7u + push_size] == 2 &&
-            update.instruction_bytes[9u + push_size] == FR_OP_PUSH_NIL &&
-            update.instruction_bytes[10u + push_size] == FR_OP_RETURN);
+            (FR_TEST_LOOP_RESET == 0u ||
+             update.instruction_bytes[6u + push_size] == FR_OP_BYTES_RESET) &&
+            update.instruction_bytes[6u + push_size + FR_TEST_LOOP_RESET] ==
+                FR_OP_JUMP &&
+            update.instruction_bytes[7u + push_size + FR_TEST_LOOP_RESET] == 2 &&
+            update.instruction_bytes[9u + push_size + FR_TEST_LOOP_RESET] ==
+                FR_OP_PUSH_NIL &&
+            update.instruction_bytes[10u + push_size + FR_TEST_LOOP_RESET] ==
+                FR_OP_RETURN);
   CHECK("compiled pure forever sees pending interrupt",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
