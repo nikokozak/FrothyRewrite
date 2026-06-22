@@ -302,7 +302,9 @@ static void test_base_def_contract(void) {
   uint16_t expected_native_count =
       (FR_FEATURE_PERSISTENCE ? 10 : 7) + (FR_FEATURE_UART ? 6 : 0) +
       (FR_FEATURE_RANDOM ? 3 : 0) + (FR_FEATURE_PWM ? 3 : 0) +
-      (FR_FEATURE_I2C ? 4 : 0) + (FR_FEATURE_MATH ? 6 : 0) +
+      (FR_FEATURE_I2C ? 8 : 0) + (FR_FEATURE_NET ? 9 : 0) +
+      (FR_FEATURE_POWER ? 4 : 0) + (FR_FEATURE_BYTES ? 8 : 0) +
+      (FR_FEATURE_MATH ? 6 : 0) +
       FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT +
       FR_TEST_EVENT_REGISTER_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT;
   uint16_t global_index = 0;
@@ -327,8 +329,8 @@ static void test_base_def_contract(void) {
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("fire-event slot follows event cancel slot",
-        FR_SLOT_FIRE_EVENT == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("fire-event slot follows bytes block",
+        FR_SLOT_FIRE_EVENT == FR_SLOT_AFTER_BYTES);
   CHECK("board local slot ids follow fire-event slot",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_FIRE_EVENT + 1);
 #else
