@@ -51,8 +51,11 @@ static int failures = 0;
 #endif
 
 #if FR_FEATURE_I2C
+/* T12i added register helpers; slot block grew from 4 to 8. The WORDS
+ * string here drives `repl words` assertions and is fixed in the repl
+ * slice; the slot count is what FR_TEST_BASE_SLOT_COUNT consumes. */
 #define FR_TEST_I2C_WORDS " i2c.open i2c.write i2c.read i2c.close"
-#define FR_TEST_I2C_SLOT_COUNT 4
+#define FR_TEST_I2C_SLOT_COUNT 8
 #else
 #define FR_TEST_I2C_WORDS ""
 #define FR_TEST_I2C_SLOT_COUNT 0
@@ -105,6 +108,26 @@ static int failures = 0;
 #define FR_TEST_EVENT_TEST_SLOT_COUNT 0
 #endif
 
+/* T15 wifi/http/tcp, T14 power, T16 bytes — slot blocks sized to match
+ * src/base_defs.h FR_SLOT_AFTER_NET / _AFTER_POWER / _AFTER_BYTES. */
+#if FR_FEATURE_NET
+#define FR_TEST_NET_SLOT_COUNT 9
+#else
+#define FR_TEST_NET_SLOT_COUNT 0
+#endif
+
+#if FR_FEATURE_POWER
+#define FR_TEST_POWER_SLOT_COUNT 4
+#else
+#define FR_TEST_POWER_SLOT_COUNT 0
+#endif
+
+#if FR_FEATURE_BYTES
+#define FR_TEST_BYTES_SLOT_COUNT 8
+#else
+#define FR_TEST_BYTES_SLOT_COUNT 0
+#endif
+
 enum {
   FR_TEST_PERSIST_RECORD_BIND = 2,
   FR_TEST_PERSIST_RECORD_NAME = 3,
@@ -152,7 +175,8 @@ enum {
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
-   FR_TEST_EVENT_TEST_SLOT_COUNT)
+   FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
+   FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -180,7 +204,8 @@ enum {
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
-   FR_TEST_EVENT_TEST_SLOT_COUNT)
+   FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
+   FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT)
 #endif
 
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
