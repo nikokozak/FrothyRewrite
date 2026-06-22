@@ -2222,7 +2222,7 @@ static void test_i2c(void) {
         test_i2c_read_call(&runtime, read_entry, handle, 0x42,
                            FR_PROFILE_MAX_TEXT_LENGTH + 1,
                            &result) == FR_ERR_RANGE);
-  CHECK("i2c read with count zero returns empty text",
+  CHECK("i2c read with count zero returns empty bytes",
         test_i2c_read_call(&runtime, read_entry, handle, 0x42, 0, &result) ==
                 FR_OK &&
             fr_tagged_decode_bytes_ref(result, &read_ref) == FR_OK &&
