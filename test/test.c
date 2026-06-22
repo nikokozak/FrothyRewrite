@@ -2149,14 +2149,14 @@ static void test_i2c(void) {
         fr_repl_eval_line(&runtime, "see i2c.write", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out,
-                   "i2c.write(bus: handle, addr: int, bytes: text) -> nil\n"
+                   "i2c.write(bus: handle, addr: int, bytes: text|bytes) -> nil\n"
                    "write bytes to a 7-bit i2c address\n"
                    "ok\n") == 0);
   CHECK("i2c see read renders signature",
         fr_repl_eval_line(&runtime, "see i2c.read", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out,
-                   "i2c.read(bus: handle, addr: int, count: int) -> text\n"
+                   "i2c.read(bus: handle, addr: int, count: int) -> any\n"
                    "read count bytes from a 7-bit i2c address\n"
                    "ok\n") == 0);
   CHECK("i2c see close renders signature",
