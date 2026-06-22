@@ -2120,7 +2120,7 @@ static void test_i2c(void) {
   const uint8_t payload[] = {0xDE, 0xAD, 0xBE};
   fr_object_id_t payload_id = 0;
   fr_object_id_t empty_id = 0;
-  fr_object_id_t read_id = 0;
+  fr_bytes_ref_t read_ref = {0};
   fr_tagged_t handle = 0;
   fr_tagged_t second_handle = 0;
   fr_tagged_t result = 0;
@@ -2177,8 +2177,8 @@ static void test_i2c(void) {
             fr_tagged_is_nil(result) &&
             test_i2c_read_call(&runtime, read_entry, handle, 0x42, 3,
                                &result) == FR_OK &&
-            fr_tagged_decode_object_id(result, &read_id) == FR_OK &&
-            fr_text_view(&runtime, read_id, &bytes, &length) == FR_OK &&
+            fr_tagged_decode_bytes_ref(result, &read_ref) == FR_OK &&
+            fr_bytes_view(&runtime, read_ref, &bytes, &length) == FR_OK &&
             length == 3 && bytes[0] == 0x42 && bytes[1] == 0x43 &&
             bytes[2] == 0x44 &&
             test_i2c_close_call(&runtime, close_entry, handle, &result) ==
@@ -2225,8 +2225,8 @@ static void test_i2c(void) {
   CHECK("i2c read with count zero returns empty text",
         test_i2c_read_call(&runtime, read_entry, handle, 0x42, 0, &result) ==
                 FR_OK &&
-            fr_tagged_decode_object_id(result, &read_id) == FR_OK &&
-            fr_text_view(&runtime, read_id, &bytes, &length) == FR_OK &&
+            fr_tagged_decode_bytes_ref(result, &read_ref) == FR_OK &&
+            fr_bytes_view(&runtime, read_ref, &bytes, &length) == FR_OK &&
             length == 0);
   /* Host platform write returns OK for zero-length, so DOMAIN here proves
    * the wrapper rejected before the platform call. */
