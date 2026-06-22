@@ -666,8 +666,13 @@ static void test_tagged_bands(void) {
         fr_tagged_kind(FR_TAGGED_HANDLE_BASE) == FR_TAGGED_HANDLE);
   CHECK("handle band end",
         fr_tagged_kind(FR_TAGGED_HANDLE_END) == FR_TAGGED_HANDLE);
-  CHECK("reserved band start",
-        fr_tagged_kind(FR_TAGGED_RESERVED_BASE) == FR_TAGGED_RESERVED);
+#endif
+#if FR_FEATURE_BYTES
+  /* T16: bytes kind aliases the lower portion of the reserved band
+     (tagged.h:82). FR_TAGGED_RESERVED_BASE is now classified as BYTES;
+     only FR_TAGGED_RESERVED_END remains reserved (checked just below). */
+  CHECK("bytes band start aliases reserved base",
+        fr_tagged_kind(FR_TAGGED_RESERVED_BASE) == FR_TAGGED_BYTES);
 #else
   CHECK("reserved band start",
         fr_tagged_kind(FR_TAGGED_RESERVED_BASE) == FR_TAGGED_RESERVED);
@@ -677,7 +682,12 @@ static void test_tagged_bands(void) {
 
 #if FR_FEATURE_HANDLES
   CHECK("handle is valid", fr_tagged_is_valid(FR_TAGGED_HANDLE_BASE));
-  CHECK("reserved is invalid", !fr_tagged_is_valid(FR_TAGGED_RESERVED_BASE));
+#endif
+#if FR_FEATURE_BYTES
+  /* Same T16 aliasing: a fresh bytes ref at offset 0 is valid (tagged.c
+     fr_tagged_is_valid case FR_TAGGED_BYTES). RESERVED_END stays invalid. */
+  CHECK("reserved end is invalid",
+        !fr_tagged_is_valid(FR_TAGGED_RESERVED_END));
 #else
   CHECK("reserved is invalid", !fr_tagged_is_valid(FR_TAGGED_RESERVED_BASE));
 #endif
