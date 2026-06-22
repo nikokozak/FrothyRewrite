@@ -7882,7 +7882,12 @@ static void test_persist(void) {
             decoded == 100000);
   {
     /* Drive payload well past the 16-bit profile 512-byte ceiling so the
-       uint16_t writer/reader cursors are exercised at 32-bit-profile scale. */
+       uint16_t writer/reader cursors are exercised at 32-bit-profile scale.
+       Mirror the REPL's per-overlay tier stamp (repl.c): without it these
+       directly-applied overlays stay tier-unset and the USER-tier-filtered
+       fr_persist_save drops them, leaving the payload under the ceiling. */
+    extern void fr_persist_session_install_tier_stamp_overlay(
+        const fr_runtime_t *runtime, const fr_overlay_update_t *update);
     char line[40];
     uint16_t saturated_bytes = 0;
     fr_base_image_install(&runtime);
@@ -7896,6 +7901,8 @@ static void test_persist(void) {
       if (fr_overlay_apply(&runtime, &update.overlay_update) != FR_OK) {
         break;
       }
+      fr_persist_session_install_tier_stamp_overlay(&runtime,
+                                                    &update.overlay_update);
     }
     CHECK("persist 32-bit saturated payload cursor stays bounded",
           fr_persist_save(&runtime) == FR_OK &&

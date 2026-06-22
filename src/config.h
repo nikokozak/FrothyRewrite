@@ -103,6 +103,10 @@
 #define FR_FEATURE_EVENTS 1
 #endif
 
+#ifndef FR_FEATURE_BYTES
+#define FR_FEATURE_BYTES 0
+#endif
+
 #define FR_FEATURE_OBJECTS                                                   \
   (FR_FEATURE_CELLS || FR_FEATURE_TEXT || FR_FEATURE_RECORDS)
 
