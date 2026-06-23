@@ -39,8 +39,7 @@ frothy bootstrap
 # 4. Check the host setup.
 frothy doctor
 
-# 5. Build and flash a board.
-make web-bins
+# 5. Flash a board (builds the firmware from source, then writes it over serial).
 frothy flash esp32_devkit_v1 --port /dev/cu.usbserial-0001
 
 # 6. Talk to the board.
