@@ -51,10 +51,12 @@ static int failures = 0;
 #endif
 
 #if FR_FEATURE_I2C
-/* T12i added register helpers; slot block grew from 4 to 8. The WORDS
- * string here drives `repl words` assertions and is fixed in the repl
- * slice; the slot count is what FR_TEST_BASE_SLOT_COUNT consumes. */
-#define FR_TEST_I2C_WORDS " i2c.open i2c.write i2c.read i2c.close"
+/* T12i added the register helpers; the slot block and the `words` listing
+ * both grew from 4 to 8. FR_TEST_I2C_WORDS drives the `repl words`
+ * assertions and FR_TEST_I2C_SLOT_COUNT feeds FR_TEST_BASE_SLOT_COUNT. */
+#define FR_TEST_I2C_WORDS                                                    \
+  " i2c.open i2c.write i2c.read i2c.close i2c.read-reg i2c.read-reg16 "       \
+  "i2c.write-reg i2c.write-reg16"
 #define FR_TEST_I2C_SLOT_COUNT 8
 #else
 #define FR_TEST_I2C_WORDS ""
@@ -111,20 +113,31 @@ static int failures = 0;
 /* T15 wifi/http/tcp, T14 power, T16 bytes — slot blocks sized to match
  * src/base_defs.h FR_SLOT_AFTER_NET / _AFTER_POWER / _AFTER_BYTES. */
 #if FR_FEATURE_NET
+#define FR_TEST_NET_WORDS                                                    \
+  " wifi.save wifi.connect wifi.ready? http.get tcp.open tcp.read "          \
+  "tcp.write tcp.close tcp.bytes-ready?"
 #define FR_TEST_NET_SLOT_COUNT 9
 #else
+#define FR_TEST_NET_WORDS ""
 #define FR_TEST_NET_SLOT_COUNT 0
 #endif
 
 #if FR_FEATURE_POWER
+#define FR_TEST_POWER_WORDS                                                  \
+  " watchdog.arm watchdog.feed sleep.deep sleep.wake-on-gpio"
 #define FR_TEST_POWER_SLOT_COUNT 4
 #else
+#define FR_TEST_POWER_WORDS ""
 #define FR_TEST_POWER_SLOT_COUNT 0
 #endif
 
 #if FR_FEATURE_BYTES
+#define FR_TEST_BYTES_WORDS                                                  \
+  " bytes.from-text bytes.from-byte bytes.from-int bytes.length bytes.at "   \
+  "bytes.equals? bytes.concat text.pack"
 #define FR_TEST_BYTES_SLOT_COUNT 8
 #else
+#define FR_TEST_BYTES_WORDS ""
 #define FR_TEST_BYTES_SLOT_COUNT 0
 #endif
 
@@ -142,10 +155,12 @@ enum {
   FR_TEST_PERSIST_VALUE_OBJECT = 6,
 };
 
+/* Must equal src/persist_payload.c FR_PERSIST_PAYLOAD_VERSION; the decoder
+   rejects any other version as corrupt before reading records. */
 #if FR_WORD_SIZE == 16
-#define FR_TEST_PERSIST_PAYLOAD_VERSION 2
-#else
 #define FR_TEST_PERSIST_PAYLOAD_VERSION 3
+#else
+#define FR_TEST_PERSIST_PAYLOAD_VERSION 4
 #endif
 
 #if FR_FEATURE_PERSISTENCE
@@ -154,6 +169,7 @@ enum {
   "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
               FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
@@ -161,6 +177,7 @@ enum {
   "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
               FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
@@ -168,6 +185,7 @@ enum {
   "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
               FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
@@ -183,6 +201,7 @@ enum {
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
               FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
@@ -190,6 +209,7 @@ enum {
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
               FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
@@ -197,6 +217,7 @@ enum {
   "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+              FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
               FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
@@ -10152,7 +10173,7 @@ static void test_err_name(void) {
 
 static void test_repl_pump(void) {
   fr_runtime_t runtime;
-  char out[1024] = {0};
+  char out[2048] = {0};
 #if FR_FEATURE_COMPILER
   const char *lines[] = {
       "words",
