@@ -656,6 +656,20 @@ host-overlay-compiler-tiny-host-names:
 frothy-host-command: host-overlay-compiler
 	GOCACHE=$(GO_CACHE) go build -o $(FROTHY_HOST_COMMAND_BINARY) ./cmd/frothy-session
 
+# Build the user-facing `frothy` CLI for local use without a system install.
+# It lands next to its frothy-compile-overlay helper (resolved as a sibling),
+# so the only step left is putting that directory on PATH — which the recipe
+# prints. No symlinking required.
+cli: frothy-host-command
+	@bindir='$(abspath $(dir $(FROTHY_HOST_COMMAND_BINARY)))'; \
+	printf '\n  \033[32m✓\033[0m Built the frothy CLI  ->  %s/frothy\n\n' "$$bindir"; \
+	printf '  Add it to your PATH for this shell:\n\n'; \
+	printf '      \033[1mexport PATH="%s:$$PATH"\033[0m\n\n' "$$bindir"; \
+	printf '  To keep it, append that line to your shell profile\n'; \
+	printf '  (~/.zshrc or ~/.bashrc), then restart your terminal or run:\n\n'; \
+	printf '      \033[1msource ~/.zshrc\033[0m\n\n'; \
+	printf '  Then run \033[1mfrothy --help\033[0m from anywhere.\n\n'
+
 frothy-session: host-overlay-compiler
 	GOCACHE=$(GO_CACHE) go build -o $(FROTHY_SESSION_BINARY) ./cmd/frothy-session
 
@@ -805,4 +819,4 @@ vsix:
 clean:
 	rm -rf build frothy test/test test/test-tiny-328 test/test-tiny-328-volatile test/test-tiny-328-tethered test/test-tiny-328-tethered-host-names test/test-tiny-328-tethered-host-names-persist test/test-host-normal
 
-.PHONY: test test-unity artifacts flash wipe-nvs web-bins test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session install-host test-install-host test-helper-targets print-config vsix clean
+.PHONY: test test-unity artifacts flash wipe-nvs web-bins test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session cli install-host test-install-host test-helper-targets print-config vsix clean

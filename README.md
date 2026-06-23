@@ -28,21 +28,23 @@ deeper inspection, file editing, and CI:
 git clone https://github.com/nikokozak/FrothyRewrite
 cd FrothyRewrite
 
-# 2. Build the host CLI.
-make frothy-session
+# 2. Build the host CLI and put it on your PATH.
+#    `make cli` prints the exact export line for your machine; add it to
+#    ~/.zshrc (or ~/.bashrc) and restart the terminal to make it stick.
+make cli
 
 # 3. Install ESP-IDF (one-time, ~20 min, no sudo).
-./frothy bootstrap
+frothy bootstrap
 
 # 4. Check the host setup.
-./frothy doctor
+frothy doctor
 
 # 5. Build and flash a board.
 make web-bins
-./frothy flash esp32_devkit_v1 --port /dev/cu.usbserial-0001
+frothy flash esp32_devkit_v1 --port /dev/cu.usbserial-0001
 
 # 6. Talk to the board.
-./frothy connect --port /dev/cu.usbserial-0001
+frothy connect --port /dev/cu.usbserial-0001
 ```
 
 Every verb prints `--help` with description, examples, and flags.
@@ -53,10 +55,10 @@ Every verb prints `--help` with description, examples, and flags.
 ## Write your first Frothy program
 
 ```sh
-./frothy init my-sketch
+frothy init my-sketch
 cd my-sketch
 # Edit main.fr in your favorite editor.
-./frothy send main.fr --port /dev/cu.usbserial-0001
+frothy send main.fr --port /dev/cu.usbserial-0001
 ```
 
 Or stay interactive — `frothy connect` opens a REPL where you type

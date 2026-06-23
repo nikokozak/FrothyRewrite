@@ -155,7 +155,7 @@ func (b *lockedBuffer) Snapshot() string {
 
 func startCompiler(path string, isolateInterrupt bool) (*compiler, error) {
 	if path == "" {
-		return nil, errors.New("cannot find frothy-compile-overlay; pass --compiler or run make frothy-session")
+		return nil, errors.New("cannot find frothy-compile-overlay; pass --compiler or run make cli")
 	}
 
 	cmd := exec.Command(path)
@@ -2289,7 +2289,7 @@ func defaultDoctorChecks() []doctorCheck {
 			run: func() (bool, string) {
 				path := defaultCompilerPath()
 				if path == "" {
-					return false, "frothy-compile-overlay not found; run make frothy-session"
+					return false, "frothy-compile-overlay not found; run make cli"
 				}
 				return true, path
 			},
