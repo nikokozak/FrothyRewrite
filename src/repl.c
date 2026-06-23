@@ -15,6 +15,7 @@
 #include "object.h"
 #if FR_FEATURE_PERSISTENCE
 #include "persist.h"
+#include "persist_payload.h"
 #endif
 #include "platform.h"
 #include "profile.h"
@@ -24,39 +25,6 @@
 #include "vm.h"
 
 #include <string.h>
-
-#if FR_FEATURE_PERSISTENCE
-/* Defined in persist_payload.c. Both helpers tag slot(s) with the runtime's
- * current install tier so subsequent encodes emit the right BIND tier byte
- * without rewriting pre-existing slots. stamp_overlay covers the overlay-apply
- * path (literal definitions); stamp_slot covers the runtime value-binding path
- * (`foo is <call>`), which writes one slot at a time without producing an
- * overlay update. The session tier itself lives on runtime->install_tier
- * (T12L-7 D3); the install-library and install-user REPL commands set it. */
-extern void fr_persist_session_install_tier_stamp_overlay(
-    const fr_runtime_t *runtime, const fr_overlay_update_t *update);
-extern void fr_persist_session_install_tier_stamp_slot(
-    const fr_runtime_t *runtime, fr_slot_id_t slot_id);
-/* Defined in persist.c. Drops every L2 overlay binding from the runtime and
- * saves so NVS only retains L1 records. */
-extern fr_err_t fr_persist_wipe_user(fr_runtime_t *runtime);
-/* Defined in persist.c — D10 install-library implicit L1 wipe. Drops L1
- * from the runtime and commits the post-wipe runtime (L2 only) to NVS
- * before the handler flips the session install tier. */
-extern fr_err_t fr_persist_install_library(fr_runtime_t *runtime);
-/* Defined in persist.c — D3 says definitions arriving after install-library
- * are persisted to NVS with tier tag L1; the L1-mode compile path calls this
- * after every successful overlay-apply / value-binding so the new library
- * word lands in NVS as it is typed (not just in the runtime overlay). */
-extern fr_err_t fr_persist_save_full(const fr_runtime_t *runtime);
-/* Defined in persist.c — D6 boot two-call sequence. fr_persist_restore_library
- * applies L1 records from NVS onto a freshly-reset runtime; per-bind failures
- * within L1 log a warning and the walk continues. fr_persist_restore_user
- * must follow within the same boot; it applies L2 records onto the runtime
- * L1 left behind without resetting it. */
-extern fr_err_t fr_persist_restore_library(fr_runtime_t *runtime);
-extern fr_err_t fr_persist_restore_user(fr_runtime_t *runtime);
-#endif
 
 typedef struct fr_repl_writer_t {
   void *ctx;

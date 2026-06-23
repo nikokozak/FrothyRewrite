@@ -1,8 +1,24 @@
 #pragma once
 
+#include "image.h"
 #include "runtime.h"
 
 #if FR_FEATURE_PERSISTENCE
+
+/*
+ * 16-bit and 32-bit each carry their own version because int value fields
+ * are wider on 32-bit. Independent from the overlay update version in
+ * config.h. Project policy is no backwards compatibility (D7 in T12L-7);
+ * the decoder only accepts the current version. Older payloads are
+ * invalid and the recovery path is dangerous.wipe + re-install.
+ */
+enum {
+#if FR_WORD_SIZE == 16
+  FR_PERSIST_PAYLOAD_VERSION = 3,
+#else
+  FR_PERSIST_PAYLOAD_VERSION = 4,
+#endif
+};
 
 fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
                                    uint16_t cap, uint16_t *out_length);
@@ -23,5 +39,17 @@ fr_err_t fr_persist_payload_save_encode(const fr_runtime_t *runtime,
                                         uint16_t library_prefix_length,
                                         uint8_t *bytes, uint16_t cap,
                                         uint16_t *out_length);
+
+/* Wipe the module-global per-slot tier stamps. Called when a fresh base image
+ * is installed so stamps from a prior runtime cannot leak across. */
+void fr_persist_session_reset(void);
+
+/* Stamp the slot(s) changed by the current install tier. The overlay helper
+ * mirrors the REPL apply path; the slot helper covers value bindings that write
+ * one slot without producing an overlay update. */
+void fr_persist_session_install_tier_stamp_slot(const fr_runtime_t *runtime,
+                                                fr_slot_id_t slot_id);
+void fr_persist_session_install_tier_stamp_overlay(
+    const fr_runtime_t *runtime, const fr_overlay_update_t *update);
 
 #endif

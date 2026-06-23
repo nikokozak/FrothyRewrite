@@ -6,6 +6,10 @@
 #include "slot.h"
 #include "tagged.h"
 
+#if FR_FEATURE_PERSISTENCE
+#include "persist_payload.h"
+#endif
+
 #include <stdlib.h>
 
 #if FR_FEATURE_SOURCE_BASE
@@ -200,6 +204,9 @@ fr_err_t fr_base_image_install(fr_runtime_t *runtime) {
   fr_base_source_record_reset();
 #endif
   fr_lib_native_records_reset();
+#if FR_FEATURE_PERSISTENCE
+  fr_persist_session_reset();
+#endif
   err = fr_runtime_init(next);
   if (err != FR_OK) { free(next); return err; }
 

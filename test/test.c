@@ -24,6 +24,15 @@
 
 static int failures = 0;
 
+#if FR_FEATURE_PERSISTENCE && FR_FEATURE_COMPILER
+static fr_err_t test_persist_apply_user_overlay(
+    fr_runtime_t *runtime, const fr_overlay_update_t *update) {
+  FR_TRY(fr_overlay_apply(runtime, update));
+  fr_persist_session_install_tier_stamp_overlay(runtime, update);
+  return FR_OK;
+}
+#endif
+
 #if FR_FEATURE_UART
 #define FR_TEST_UART_WORDS                                                   \
   " uart.open uart.open-on uart.write-byte uart.read-byte uart.available "   \
@@ -154,14 +163,6 @@ enum {
   FR_TEST_PERSIST_VALUE_INT = 3,
   FR_TEST_PERSIST_VALUE_OBJECT = 6,
 };
-
-/* Must equal src/persist_payload.c FR_PERSIST_PAYLOAD_VERSION; the decoder
-   rejects any other version as corrupt before reading records. */
-#if FR_WORD_SIZE == 16
-#define FR_TEST_PERSIST_PAYLOAD_VERSION 3
-#else
-#define FR_TEST_PERSIST_PAYLOAD_VERSION 4
-#endif
 
 #if FR_FEATURE_PERSISTENCE
 #define FR_TEST_WORDS                                                        \
@@ -596,6 +597,8 @@ static void test_persist_code_id_round_trip(void) {
         fr_tagged_encode_code_object_id(outer_id, &outer_tagged) == FR_OK &&
             fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, outer_tagged) ==
                 FR_OK);
+  fr_persist_session_install_tier_stamp_slot(&runtime,
+                                             FR_TEST_FIRST_USER_SLOT);
   CHECK("code-id round-trip save", fr_persist_save(&runtime) == FR_OK);
   CHECK("code-id round-trip restore",
         fr_base_image_install(&runtime) == FR_OK &&
@@ -1925,6 +1928,8 @@ static void test_uart(void) {
         test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
                             &handle) == FR_OK &&
             fr_slot_write(&runtime, FR_SLOT_BOOT, handle) == FR_OK &&
+            (fr_persist_session_install_tier_stamp_slot(&runtime, FR_SLOT_BOOT),
+             true) &&
             fr_persist_save(&runtime) == FR_ERR_VOLATILE &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
@@ -2096,6 +2101,8 @@ static void test_pwm(void) {
   CHECK("pwm save rejects live handle",
         test_pwm_open_call(&runtime, open_entry, 8, 1000, &handle) == FR_OK &&
             fr_slot_write(&runtime, FR_SLOT_BOOT, handle) == FR_OK &&
+            (fr_persist_session_install_tier_stamp_slot(&runtime, FR_SLOT_BOOT),
+             true) &&
             fr_persist_save(&runtime) == FR_ERR_VOLATILE &&
             test_pwm_close_call(&runtime, close_entry, handle, &result) ==
                 FR_OK &&
@@ -2304,6 +2311,8 @@ static void test_i2c(void) {
         test_i2c_open_call(&runtime, open_entry, 0, 21, 22, 100000,
                            &handle) == FR_OK &&
             fr_slot_write(&runtime, FR_SLOT_BOOT, handle) == FR_OK &&
+            (fr_persist_session_install_tier_stamp_slot(&runtime, FR_SLOT_BOOT),
+             true) &&
             fr_persist_save(&runtime) == FR_ERR_VOLATILE &&
             test_i2c_close_call(&runtime, close_entry, handle, &result) ==
                 FR_OK &&
@@ -7687,10 +7696,11 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_BIND,
       0,
       0,
+      FR_INSTALL_TIER_USER,
       FR_TEST_PERSIST_VALUE_INT,
       0,
       0,
@@ -7703,7 +7713,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_CELLS,
       0,
       0,
@@ -7721,7 +7731,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_TEXT,
       0,
       0,
@@ -7737,7 +7747,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_RECORD_SHAPE,
       0,
       0,
@@ -7758,7 +7768,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_RECORD,
       0,
       0,
@@ -7774,7 +7784,7 @@ static void test_persist(void) {
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_WORD_SIZE == 16
   write_u16_little_endian(&name_free_payload[6],
                           FR_TEST_FIRST_USER_SLOT);
-  write_u16_little_endian(&name_free_payload[9], (uint16_t)(int16_t)13);
+  write_u16_little_endian(&name_free_payload[10], (uint16_t)(int16_t)13);
 #endif
 #if !FR_FEATURE_CELLS
   write_u16_little_endian(&cell_payload[8], 1);
@@ -7838,7 +7848,8 @@ static void test_persist(void) {
             "boot is fn [ pin: $led_builtin, 1; ms: 100; "
             "pin: $led_builtin, 0; ms: 100 ]",
             &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged) &&
             fr_persist_save(&runtime) == FR_OK &&
@@ -7863,7 +7874,8 @@ static void test_persist(void) {
             fr_tagged_is_nil(tagged));
   CHECK("persist saves newer generation",
         fr_compile_overlay_update("boot is fn [ one ]", &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK &&
             fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_OK &&
@@ -7894,7 +7906,8 @@ static void test_persist(void) {
 #if FR_WORD_SIZE == 32
   CHECK("persist saves roomier int",
         fr_compile_overlay_update("boot is 100000", &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK &&
             fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_OK &&
@@ -7904,11 +7917,8 @@ static void test_persist(void) {
   {
     /* Drive payload well past the 16-bit profile 512-byte ceiling so the
        uint16_t writer/reader cursors are exercised at 32-bit-profile scale.
-       Mirror the REPL's per-overlay tier stamp (repl.c): without it these
-       directly-applied overlays stay tier-unset and the USER-tier-filtered
-       fr_persist_save drops them, leaving the payload under the ceiling. */
-    extern void fr_persist_session_install_tier_stamp_overlay(
-        const fr_runtime_t *runtime, const fr_overlay_update_t *update);
+       Mirror the REPL's per-overlay tier stamp: without it these
+       directly-applied overlays are dropped by the USER-tier save filter. */
     char line[40];
     uint16_t saturated_bytes = 0;
     fr_base_image_install(&runtime);
@@ -7919,11 +7929,10 @@ static void test_persist(void) {
           FR_OK) {
         break;
       }
-      if (fr_overlay_apply(&runtime, &update.overlay_update) != FR_OK) {
+      if (test_persist_apply_user_overlay(&runtime, &update.overlay_update) !=
+          FR_OK) {
         break;
       }
-      fr_persist_session_install_tier_stamp_overlay(&runtime,
-                                                    &update.overlay_update);
     }
     CHECK("persist 32-bit saturated payload cursor stays bounded",
           fr_persist_save(&runtime) == FR_OK &&
@@ -7939,10 +7948,12 @@ static void test_persist(void) {
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime, "led is $led_builtin", &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime, "boot is fn [ pin: led, 1 ]", &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK &&
             fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_OK &&
@@ -7966,10 +7977,12 @@ static void test_persist(void) {
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime, "led is $led_builtin", &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime, "boot is fn [ led ]", &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK &&
             fr_runtime_clear_project(&runtime) == FR_OK &&
             fr_slot_id_for_name(&runtime, "led", &slot_id) ==
@@ -7993,13 +8006,16 @@ static void test_persist(void) {
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime, "led is $led_builtin", &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime, "boot is fn [ pin: led, 1 ]", &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime, "myblink is fn [ pin: led, 1 ]", &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK &&
             fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_OK &&
@@ -8013,7 +8029,8 @@ static void test_persist(void) {
             fr_compile_overlay_update(
                 "boot is fn [ if 1 [ repeat 2 [ ms: 1 ]; one ] else [ nil ] ]",
                 &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
   CHECK("persist saves control flow code", fr_persist_save(&runtime) == FR_OK);
@@ -8027,10 +8044,12 @@ static void test_persist(void) {
             fr_compile_overlay_update_for_runtime(
                 &runtime, "echo is fn with value [ value ]", &update) ==
                 FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime, "boot is fn [ echo: 7 ]", &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK &&
             fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_OK &&
@@ -8051,7 +8070,8 @@ static void test_persist(void) {
                                                   "message is \"ready\"",
                                                   &update) == FR_OK &&
             (slot_id = update.slot_inits[0].slot_id, true) &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK &&
             fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_OK &&
@@ -8086,7 +8106,8 @@ static void test_persist(void) {
                                                   "status is cells(1)",
                                                   &update) == FR_OK &&
             (slot_id = update.slot_inits[0].slot_id, true) &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
             fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
             fr_text_install(&runtime, binary_text,
@@ -8131,7 +8152,8 @@ static void test_persist(void) {
             fr_compile_overlay_update_for_runtime(&runtime,
                                                   "counter is cells(2)",
                                                   &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_compile_expression_for_runtime(&runtime,
                                               "set counter[0] to "
                                               FR_TEST_PERSIST_INT_SOURCE,
@@ -8163,12 +8185,14 @@ static void test_persist(void) {
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime, "record Point [ x, label ]", &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime, FR_TEST_PERSIST_RECORD_INIT, &update) ==
                 FR_OK &&
             (slot_id = update.slot_inits[0].slot_id, true) &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_compile_expression_for_runtime(&runtime,
                                               FR_TEST_PERSIST_RECORD_SET,
                                               &expression) == FR_OK &&
@@ -8199,7 +8223,8 @@ static void test_persist(void) {
         fr_compile_overlay_update_for_runtime(&runtime,
                                               "holder is cells(1)",
                                               &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
             fr_slot_id_for_name(&runtime, "holder", &slot_id) == FR_OK &&
             fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
             fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
@@ -8244,7 +8269,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_NAME,
       0,
       0,
@@ -8259,7 +8284,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_CELLS,
       0,
       0,
@@ -8277,7 +8302,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_TEXT,
       0,
       0,
@@ -8293,7 +8318,7 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_RECORD_SHAPE,
       0,
       0,
@@ -8380,7 +8405,7 @@ static void test_persist_payload_rejects_event_record(void) {
       'R',
       'P',
       'O',
-      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_PERSIST_PAYLOAD_VERSION,
       FR_TEST_PERSIST_RECORD_EVENT,
       FR_EVENT_KIND_GPIO_RISING,
       0, 0,
@@ -8406,7 +8431,7 @@ static void test_persist_payload_rejects_seventeenth_event_record(void) {
      17th EVENT record before runtime reset or platform install. */
   uint8_t payload[] = {
       'F', 'R', 'P', 'O',
-      FR_TEST_PERSIST_PAYLOAD_VERSION,
+      FR_PERSIST_PAYLOAD_VERSION,
       0x01, 0, 0, 3, 0, 0, 0, 0,
       FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
       FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,

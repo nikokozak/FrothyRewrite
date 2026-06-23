@@ -19,18 +19,6 @@
 #include <string.h>
 
 enum {
-  /*
-   * 16-bit and 32-bit each carry their own version because int value fields
-   * are wider on 32-bit. Independent from the overlay update version in
-   * config.h. Project policy is no backwards compatibility (D7 in T12L-7);
-   * the decoder only accepts the current version. Older payloads are
-   * invalid and the recovery path is dangerous.wipe + re-install.
-   */
-#if FR_WORD_SIZE == 16
-  FR_PERSIST_PAYLOAD_VERSION = 3,
-#else
-  FR_PERSIST_PAYLOAD_VERSION = 4,
-#endif
   FR_PERSIST_RECORD_CODE = 1,
   FR_PERSIST_RECORD_BIND = 2,
   FR_PERSIST_RECORD_NAME = 3,
@@ -79,6 +67,14 @@ static fr_code_object_id_t
     fr_persist_boot_code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
 static fr_object_id_t fr_persist_boot_object_map[FR_OBJECT_TABLE_CAPACITY];
 static bool fr_persist_boot_maps_valid;
+
+/* Clear the per-slot tier stamps for a fresh image. The table is module-global
+ * session state, not per-runtime, so installing a new base image must wipe it
+ * or stamps from a prior runtime leak across (restore re-derives tiers from the
+ * payload's BIND records, and the REPL re-stamps on each apply). */
+void fr_persist_session_reset(void) {
+  memset(fr_persist_slot_tier, 0, sizeof(fr_persist_slot_tier));
+}
 
 void fr_persist_session_install_tier_stamp_slot(const fr_runtime_t *runtime,
                                                  fr_slot_id_t slot_id) {
@@ -2784,6 +2780,7 @@ fr_persist_install_resources(fr_runtime_t *runtime,
   return FR_OK;
 }
 
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
 /* Tier of the bind record that owns this slot in this payload. Names carry
  * no tier on the wire (P1), so we read it from the matching bind. Returns 0
  * if no bind matches — the validate step rules that out, so this only happens
@@ -2798,6 +2795,7 @@ fr_persist_name_slot_tier(const fr_persist_decoded_payload_t *decoded,
   }
   return 0;
 }
+#endif
 
 /* Applies overlay name bindings filtered by the bind tier of each name's
  * slot. tier_filter == 0 applies every name (FULL restore). The two-call
