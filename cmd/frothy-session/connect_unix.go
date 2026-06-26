@@ -20,6 +20,12 @@ const idleFlushDelay = 50 * time.Millisecond
 // to exit the client.
 const doubleInterruptWindow = time.Second
 
+// terminalLineBreak is emitted by the host-side editor while stdin is in raw
+// mode. A bare "\n" would move down without returning to column 0.
+const terminalLineBreak = "\r\n"
+
+const plainLineBreak = "\n"
+
 func runConnect() int {
 	return runConnectCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, defaultPortLister, defaultConnectDeviceFactory, runConnectInteractiveWithCleanup)
 }
@@ -55,12 +61,17 @@ func runConnectInteractiveTermios(dev *serialDevice, stdin io.Reader, stdout io.
 			state = s
 		}
 	}
-	_, _ = io.WriteString(stdout, bracketedPasteOn)
+	terminal := state != nil && writerIsTerminal(stdout)
+	if terminal {
+		_, _ = io.WriteString(stdout, bracketedPasteOn)
+	}
 
 	var cleanupOnce sync.Once
 	cleanup := func() {
 		cleanupOnce.Do(func() {
-			_, _ = io.WriteString(stdout, bracketedPasteOff)
+			if terminal {
+				_, _ = io.WriteString(stdout, bracketedPasteOff)
+			}
 			if state != nil {
 				_ = state.restore()
 			}
@@ -79,7 +90,7 @@ func runConnectInteractiveTermios(dev *serialDevice, stdin io.Reader, stdout io.
 		}
 	}()
 
-	return runConnectInteractiveBase(dev, stdin, stdout, hist, shutdown)
+	return runConnectInteractiveBase(dev, stdin, stdout, hist, terminal, shutdown)
 }
 
 // signalExitCode follows the conventional 128+signum mapping. Decision 9
@@ -93,10 +104,10 @@ func signalExitCode(sig os.Signal) int {
 }
 
 func runConnectInteractive(dev *serialDevice, stdin io.Reader, stdout io.Writer, hist connectHistory) int {
-	return runConnectInteractiveBase(dev, stdin, stdout, hist, nil)
+	return runConnectInteractiveBase(dev, stdin, stdout, hist, true, nil)
 }
 
-func runConnectInteractiveBase(dev *serialDevice, stdin io.Reader, stdout io.Writer, hist connectHistory, shutdown <-chan int) int {
+func runConnectInteractiveBase(dev *serialDevice, stdin io.Reader, stdout io.Writer, hist connectHistory, terminal bool, shutdown <-chan int) int {
 	inputs := make(chan inputEvent, 64)
 	devices := make(chan deviceEvent, 64)
 	stop := make(chan struct{})
@@ -113,6 +124,7 @@ func runConnectInteractiveBase(dev *serialDevice, stdin io.Reader, stdout io.Wri
 	go runSerialEventPump(dev.readCh, dev.errCh, devices, stop)
 
 	c := newConnectController(stdout, dev.writeBytes)
+	c.terminal = terminal
 	c.sendInterrupt = dev.sendInterrupt
 	if hist.enabled {
 		c.historyOn = true
@@ -126,28 +138,49 @@ func runConnectInteractiveBase(dev *serialDevice, stdin io.Reader, stdout io.Wri
 }
 
 type connectController struct {
-	out             io.Writer
-	sendLine        func([]byte) error
-	sendInterrupt   func() error
-	now             func() time.Time
-	historyOn       bool
-	history         []string
-	histIdx         int // -1 = editing current line; >=0 = replayed entry index
-	savedLine       []byte
-	savedCur        int
-	buf             []byte
-	cursor          int
-	form            sourceFormState
-	pending         []byte
-	idleArmed       bool
-	lastInterruptAt time.Time
-	hasInterrupt    bool
-	awaitingPrompt  bool
+	out                    io.Writer
+	sendLine               func([]byte) error
+	sendInterrupt          func() error
+	now                    func() time.Time
+	terminal               bool
+	historyOn              bool
+	history                []string
+	histIdx                int // -1 = editing current line; >=0 = replayed entry index
+	savedLine              []byte
+	savedCur               int
+	buf                    []byte
+	cursor                 int
+	form                   sourceFormState
+	pending                []byte
+	idleArmed              bool
+	lastInterruptAt        time.Time
+	hasInterrupt           bool
+	awaitingPrompt         bool
+	redrawOnPrompt         bool
+	deviceTextSincePrompt  bool
+	expectedEchoes         []expectedDeviceEcho
+	resolvedExpectedEchoes int
 }
 
 func newConnectController(out io.Writer, sendLine func([]byte) error) *connectController {
-	return &connectController{out: out, sendLine: sendLine, now: time.Now, histIdx: -1}
+	return &connectController{out: out, sendLine: sendLine, now: time.Now, terminal: true, histIdx: -1}
 }
+
+type expectedDeviceEcho struct {
+	bytes      []byte
+	pos        int
+	sawNewline bool
+	trailingCR bool
+}
+
+type echoConsumeAction int
+
+const (
+	echoConsumed echoConsumeAction = iota
+	echoConsumedAndDone
+	echoDoneBeforeByte
+	echoMismatch
+)
 
 func (c *connectController) writePrompt() {
 	prompt := promptPrimary
@@ -158,13 +191,16 @@ func (c *connectController) writePrompt() {
 	if len(c.buf) > 0 {
 		_, _ = c.out.Write(c.buf)
 	}
-	if back := len(c.buf) - c.cursor; back > 0 {
+	if back := len(c.buf) - c.cursor; c.terminal && back > 0 {
 		fmt.Fprintf(c.out, "\x1b[%dD", back)
 	}
+	c.deviceTextSincePrompt = false
 }
 
 func (c *connectController) redrawLine() {
-	_, _ = io.WriteString(c.out, "\r\x1b[K")
+	if c.terminal {
+		_, _ = io.WriteString(c.out, "\r\x1b[K")
+	}
 	c.writePrompt()
 }
 
@@ -173,7 +209,7 @@ func (c *connectController) flushPending() {
 		c.idleArmed = false
 		return
 	}
-	if len(c.buf) > 0 {
+	if c.terminal && len(c.buf) > 0 {
 		_, _ = io.WriteString(c.out, "\r\x1b[K")
 	}
 	_, _ = c.out.Write(c.pending)
@@ -182,6 +218,97 @@ func (c *connectController) flushPending() {
 	if len(c.buf) > 0 {
 		c.writePrompt()
 	}
+}
+
+func (c *connectController) lineBreak() string {
+	if c.terminal {
+		return terminalLineBreak
+	}
+	return plainLineBreak
+}
+
+func (c *connectController) recordExpectedEcho(sent []byte) {
+	line := append([]byte(nil), sent...)
+	for len(line) > 0 && (line[len(line)-1] == '\n' || line[len(line)-1] == '\r') {
+		line = line[:len(line)-1]
+	}
+	if len(line) == 0 {
+		return
+	}
+	c.expectedEchoes = append(c.expectedEchoes, expectedDeviceEcho{bytes: line})
+}
+
+func (e *expectedDeviceEcho) consume(b byte) echoConsumeAction {
+	if e.pos < len(e.bytes) {
+		if b != e.bytes[e.pos] {
+			return echoMismatch
+		}
+		e.pos++
+		return echoConsumed
+	}
+	if e.sawNewline {
+		if e.trailingCR && b == '\n' {
+			e.trailingCR = false
+			return echoConsumedAndDone
+		}
+		return echoDoneBeforeByte
+	}
+	switch b {
+	case '\r':
+		e.sawNewline = true
+		e.trailingCR = true
+		return echoConsumed
+	case '\n':
+		e.sawNewline = true
+		return echoConsumedAndDone
+	default:
+		return echoMismatch
+	}
+}
+
+func (c *connectController) finishExpectedEcho() {
+	if len(c.expectedEchoes) == 0 {
+		return
+	}
+	c.expectedEchoes = c.expectedEchoes[1:]
+	c.resolvedExpectedEchoes++
+}
+
+func (c *connectController) finishExpectedEchoForPrompt() {
+	if c.resolvedExpectedEchoes > 0 {
+		c.resolvedExpectedEchoes--
+		return
+	}
+	if len(c.expectedEchoes) > 0 {
+		c.expectedEchoes = c.expectedEchoes[1:]
+	}
+}
+
+func (c *connectController) swallowExpectedEcho(b []byte) []byte {
+	if len(c.expectedEchoes) == 0 || len(b) == 0 {
+		return b
+	}
+	var out []byte
+	for i := 0; i < len(b); {
+		if len(c.expectedEchoes) == 0 {
+			out = append(out, b[i:]...)
+			break
+		}
+		switch c.expectedEchoes[0].consume(b[i]) {
+		case echoConsumed:
+			i++
+		case echoConsumedAndDone:
+			i++
+			c.finishExpectedEcho()
+		case echoDoneBeforeByte:
+			c.finishExpectedEcho()
+		case echoMismatch:
+			c.finishExpectedEcho()
+			out = append(out, b[i:]...)
+			i = len(b)
+		}
+	}
+	return out
 }
 
 func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
@@ -207,7 +334,7 @@ func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
 	case inputHistoryDown:
 		c.historyDown()
 	case inputSubmit:
-		_, _ = io.WriteString(c.out, "\n")
+		_, _ = io.WriteString(c.out, c.lineBreak())
 		if len(c.pending) > 0 {
 			_, _ = c.out.Write(c.pending)
 			c.pending = c.pending[:0]
@@ -223,7 +350,13 @@ func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
 			if c.historyOn {
 				c.history = appendHistory(c.history, source)
 			}
-			_ = c.sendLine([]byte(source + "\n"))
+			sent := []byte(source + "\n")
+			if err := c.sendLine(sent); err == nil {
+				c.recordExpectedEcho(sent)
+				c.awaitingPrompt = true
+				c.redrawOnPrompt = false
+				return false, 0
+			}
 		}
 		c.writePrompt()
 	case inputInterrupt:
@@ -266,6 +399,7 @@ func (c *connectController) onInterrupt() (exit bool, code int) {
 	if c.sendInterrupt != nil {
 		_ = c.sendInterrupt()
 		c.awaitingPrompt = true
+		c.redrawOnPrompt = true
 		return false, 0
 	}
 	c.redrawLine()
@@ -363,6 +497,11 @@ func (c *connectController) historyDown() {
 }
 
 func (c *connectController) writeDeviceText(b []byte) {
+	b = c.swallowExpectedEcho(b)
+	if len(b) == 0 {
+		return
+	}
+	c.deviceTextSincePrompt = true
 	if len(c.buf) == 0 {
 		_, _ = c.out.Write(b)
 		return
@@ -376,13 +515,21 @@ func (c *connectController) onDevice(ev deviceEvent) (exit bool, code int) {
 	case deviceBytes:
 		c.writeDeviceText(e.Bytes)
 	case deviceResetStart:
-		c.writeDeviceText([]byte("-- device reset detected; waiting for prompt --\r\n"))
+		c.writeDeviceText([]byte("-- device reset detected; waiting for prompt --" + c.lineBreak()))
 	case deviceResetEnd:
-		c.writeDeviceText([]byte("-- prompt restored --\r\n"))
+		c.writeDeviceText([]byte("-- prompt restored --" + c.lineBreak()))
 	case devicePrompt:
+		c.finishExpectedEchoForPrompt()
 		if c.awaitingPrompt {
 			c.awaitingPrompt = false
-			c.redrawLine()
+			if c.redrawOnPrompt {
+				c.redrawLine()
+			} else {
+				c.writePrompt()
+			}
+			c.redrawOnPrompt = false
+		} else if c.deviceTextSincePrompt && len(c.buf) == 0 {
+			c.writePrompt()
 		}
 	case deviceError:
 		_ = e

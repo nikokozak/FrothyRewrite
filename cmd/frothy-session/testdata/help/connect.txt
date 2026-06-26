@@ -17,5 +17,7 @@ Flags:
     	serial port, for example /dev/cu.usbmodem101
   -settle duration
     	delay after opening serial (default 4s)
+  -takeover
+    	stop another frothy holding the port before connecting
   -timeout duration
     	serial prompt timeout (default 5s)

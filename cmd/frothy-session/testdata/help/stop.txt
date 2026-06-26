@@ -1,0 +1,9 @@
+frothy stop — stop Frothy sessions that are holding serial ports
+
+Stop finds Frothy processes that are holding serial ports and asks them to exit so another command can use the board. It uses the system's process and open-file tables, not a Frothy registry, and it never stops non-Frothy processes.
+
+Examples:
+  frothy stop
+      stop Frothy serial sessions so their ports can be reopened
+
+Flags:

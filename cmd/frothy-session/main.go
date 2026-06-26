@@ -294,7 +294,11 @@ func configureSerial(file *os.File, baud int) error {
 func openSerial(port string, baud int) (*serialDevice, error) {
 	file, err := os.OpenFile(port, os.O_RDWR, 0)
 	if err != nil {
-		return nil, err
+		return nil, decorateSerialOpenError(port, err)
+	}
+	if err := setSerialExclusive(file); err != nil {
+		_ = file.Close()
+		return nil, decorateSerialOpenError(port, err)
 	}
 	if err := configureSerial(file, baud); err != nil {
 		_ = file.Close()
@@ -1997,6 +2001,13 @@ func availableVerbs() []verb {
 				"can compile on the host, use session.",
 			examples: "  frothy connect --port /dev/cu.usbserial-0001\n" +
 				"      open an interactive REPL against the board on that port"},
+		{name: "stop", summary: "stop Frothy sessions that are holding serial ports", run: runStopMain,
+			longDesc: "Stop finds Frothy processes that are holding serial ports and asks them " +
+				"to exit so another command can use the board. It uses the system's process " +
+				"and open-file tables, not a Frothy registry, and it never stops non-Frothy " +
+				"processes.",
+			examples: "  frothy stop\n" +
+				"      stop Frothy serial sessions so their ports can be reopened"},
 		{name: "init", summary: "scaffold a new Frothy project in the current directory", run: runInitMain,
 			longDesc: "Init scaffolds a new Frothy project in the current directory: a " +
 				"frothy.toml with the project name and target, a main.fr with a starter " +

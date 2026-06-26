@@ -38,18 +38,159 @@ func runSerialEventPump(readCh <-chan byte, errCh <-chan error, events chan<- de
 		}
 	}
 
-	var prev byte
 	var lineBuf []byte
 	inReset := false
+	promptLineStart := true
+	heldPromptGT := false
+
+	emitPrompt := func() bool {
+		if inReset {
+			inReset = false
+			if !emit(deviceResetEnd{}) {
+				return false
+			}
+		}
+		promptLineStart = false
+		return emit(devicePrompt{})
+	}
+
+	emitBytes := func(chunk []byte) bool {
+		if len(chunk) == 0 {
+			return true
+		}
+
+		// Scan completed lines for the banner. A reset session opens at
+		// the first matching line and closes at the next prompt. The
+		// split index is the byte right after the \n that closed the
+		// matched line: the reset notice has to land before any further
+		// device bytes reach the user.
+		splitAt := -1
+		for i, bb := range chunk {
+			switch bb {
+			case '\n':
+				if !inReset && isResetBannerLine(string(lineBuf)) {
+					inReset = true
+					splitAt = i + 1
+				}
+				lineBuf = lineBuf[:0]
+				promptLineStart = true
+			case '\r':
+				promptLineStart = true
+			default:
+				promptLineStart = false
+				if len(lineBuf) < resetLineCap {
+					lineBuf = append(lineBuf, bb)
+				}
+			}
+		}
+
+		if splitAt >= 0 {
+			if splitAt > 0 {
+				if !emit(deviceBytes{Bytes: chunk[:splitAt]}) {
+					return false
+				}
+			}
+			if !emit(deviceResetStart{}) {
+				return false
+			}
+			if splitAt < len(chunk) {
+				if !emit(deviceBytes{Bytes: chunk[splitAt:]}) {
+					return false
+				}
+			}
+			return true
+		}
+		return emit(deviceBytes{Bytes: chunk})
+	}
+
+	flushHeldPromptGT := func() bool {
+		if !heldPromptGT {
+			return true
+		}
+		heldPromptGT = false
+		return emitBytes([]byte{'>'})
+	}
+
+	processChunk := func(chunk []byte) bool {
+		if heldPromptGT {
+			heldPromptGT = false
+			if len(chunk) > 0 && chunk[0] == ' ' {
+				if !emitPrompt() {
+					return false
+				}
+				chunk = chunk[1:]
+			} else {
+				prefixed := make([]byte, 0, len(chunk)+1)
+				prefixed = append(prefixed, '>')
+				prefixed = append(prefixed, chunk...)
+				chunk = prefixed
+			}
+		}
+
+		if len(chunk) == 0 {
+			return true
+		}
+
+		for len(chunk) > 0 {
+			promptAt := -1
+			for i := 0; i+1 < len(chunk); i++ {
+				if chunk[i] != '>' || chunk[i+1] != ' ' {
+					continue
+				}
+				if i == 0 {
+					if promptLineStart {
+						promptAt = i
+						break
+					}
+					continue
+				}
+				prev := chunk[i-1]
+				if prev == '\n' || prev == '\r' {
+					promptAt = i
+					break
+				}
+			}
+			if promptAt >= 0 {
+				if !emitBytes(chunk[:promptAt]) {
+					return false
+				}
+				if !emitPrompt() {
+					return false
+				}
+				chunk = chunk[promptAt+2:]
+				continue
+			}
+
+			if chunk[len(chunk)-1] == '>' {
+				atPromptStart := len(chunk) == 1 && promptLineStart
+				if len(chunk) > 1 {
+					prev := chunk[len(chunk)-2]
+					atPromptStart = prev == '\n' || prev == '\r'
+				}
+				if atPromptStart {
+					heldPromptGT = true
+					chunk = chunk[:len(chunk)-1]
+				}
+			}
+
+			return emitBytes(chunk)
+		}
+		return true
+	}
+
 	for {
 		var b byte
 		select {
 		case bb, ok := <-readCh:
 			if !ok {
+				_ = flushHeldPromptGT()
 				return
 			}
 			b = bb
 		case err := <-errCh:
+			if !flushHeldPromptGT() {
+				return
+			}
 			_ = emit(deviceError{Err: err})
 			return
 		case <-stop:
@@ -70,64 +211,8 @@ func runSerialEventPump(readCh <-chan byte, errCh <-chan error, events chan<- de
 			}
 		}
 
-		// Detect "> " prompt tail, including the case where '>' was the
-		// last byte of the previous chunk and ' ' is the first of this one.
-		n := len(chunk)
-		last := chunk[n-1]
-		promptTail := last == ' ' && ((n >= 2 && chunk[n-2] == '>') || (n == 1 && prev == '>'))
-		prev = last
-
-		// Scan completed lines for the banner. A reset session opens at
-		// the first matching line and closes at the next prompt. The
-		// split index is the byte right after the \n that closed the
-		// matched line: the reset notice has to land before any further
-		// device bytes (especially the recovery `> `) reach the user.
-		splitAt := -1
-		for i, bb := range chunk {
-			switch bb {
-			case '\n':
-				if !inReset && isResetBannerLine(string(lineBuf)) {
-					inReset = true
-					splitAt = i + 1
-				}
-				lineBuf = lineBuf[:0]
-			case '\r':
-			default:
-				if len(lineBuf) < resetLineCap {
-					lineBuf = append(lineBuf, bb)
-				}
-			}
-		}
-
-		if splitAt >= 0 {
-			if splitAt > 0 {
-				if !emit(deviceBytes{Bytes: chunk[:splitAt]}) {
-					return
-				}
-			}
-			if !emit(deviceResetStart{}) {
-				return
-			}
-			if splitAt < len(chunk) {
-				if !emit(deviceBytes{Bytes: chunk[splitAt:]}) {
-					return
-				}
-			}
-		} else {
-			if !emit(deviceBytes{Bytes: chunk}) {
-				return
-			}
-		}
-		if promptTail {
-			if inReset {
-				inReset = false
-				if !emit(deviceResetEnd{}) {
-					return
-				}
-			}
-			if !emit(devicePrompt{}) {
-				return
-			}
+		if !processChunk(chunk) {
+			return
 		}
 	}
 }

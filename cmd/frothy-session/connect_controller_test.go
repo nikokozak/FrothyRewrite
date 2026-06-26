@@ -6,11 +6,12 @@ import (
 	"bytes"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestConnectControllerSubmitFlushesPending(t *testing.T) {
+func TestConnectControllerSubmitFlushesPendingAndWaitsForDevicePrompt(t *testing.T) {
 	var out bytes.Buffer
 	var sent [][]byte
 	c := newConnectController(&out, func(b []byte) error {
@@ -32,15 +33,29 @@ func TestConnectControllerSubmitFlushesPending(t *testing.T) {
 		t.Fatal("early exit on submit")
 	}
 
-	want := promptPrimary + "foo\nnotice\r\n" + promptPrimary
+	want := promptPrimary + "foo" + terminalLineBreak + "notice\r\n"
 	if got := out.String(); got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if len(sent) != 1 || string(sent[0]) != "foo\n" {
 		t.Fatalf("sent = %q, want [\"foo\\n\"]", sent)
 	}
+	if !c.awaitingPrompt {
+		t.Fatal("submit should wait for the device prompt before drawing the next host prompt")
+	}
 	if c.idleArmed {
 		t.Fatal("idle should be cleared after submit consumed pending")
+	}
+
+	if exit, _ := c.onDevice(deviceBytes{Bytes: []byte("foo\r\n3\r\nok\r\n")}); exit {
+		t.Fatal("early exit on device bytes")
+	}
+	if exit, _ := c.onDevice(devicePrompt{}); exit {
+		t.Fatal("early exit on device prompt")
+	}
+	want = promptPrimary + "foo" + terminalLineBreak + "notice\r\n3\r\nok\r\n" + promptPrimary
+	if got := out.String(); got != want {
+		t.Fatalf("stdout after device response = %q, want %q", got, want)
 	}
 }
 
@@ -57,6 +72,95 @@ func TestConnectControllerDeviceBytesWithEmptyBuf(t *testing.T) {
 	}
 	if got := out.String(); got != promptPrimary+"hello\r\n" {
 		t.Fatalf("stdout = %q", got)
+	}
+}
+
+func TestConnectControllerPlainModeUsesLFForHostNotices(t *testing.T) {
+	var out bytes.Buffer
+	c := newConnectController(&out, func([]byte) error { return nil })
+	c.terminal = false
+	c.writePrompt()
+
+	if exit, _ := c.onDevice(deviceResetStart{}); exit {
+		t.Fatal("early exit on reset start")
+	}
+	if exit, _ := c.onDevice(deviceResetEnd{}); exit {
+		t.Fatal("early exit on reset end")
+	}
+
+	got := out.String()
+	want := promptPrimary +
+		"-- device reset detected; waiting for prompt --\n" +
+		"-- prompt restored --\n"
+	if got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "\r\n") || strings.Contains(got, "\x1b[") {
+		t.Fatalf("plain-mode host notice contains terminal output: %q", got)
+	}
+}
+
+func TestConnectControllerSwallowsExpectedEchoAcrossChunks(t *testing.T) {
+	var out bytes.Buffer
+	c := newConnectController(&out, func([]byte) error { return nil })
+	c.writePrompt()
+	c.onInput(inputPrintable{Bytes: []byte("1 + 2")})
+	c.onInput(inputSubmit{})
+
+	c.onDevice(deviceBytes{Bytes: []byte("1 +")})
+	c.onDevice(deviceBytes{Bytes: []byte(" 2\r")})
+	c.onDevice(deviceBytes{Bytes: []byte("\n3\r\nok\r\n")})
+	c.onDevice(devicePrompt{})
+
+	want := promptPrimary + "1 + 2" + terminalLineBreak + "3\r\nok\r\n" + promptPrimary
+	if got := out.String(); got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if len(c.expectedEchoes) != 0 || c.resolvedExpectedEchoes != 0 {
+		t.Fatalf("echo queue not drained: expected=%d resolved=%d", len(c.expectedEchoes), c.resolvedExpectedEchoes)
+	}
+}
+
+func TestConnectControllerEchoMismatchStopsSwallowing(t *testing.T) {
+	var out bytes.Buffer
+	c := newConnectController(&out, func([]byte) error { return nil })
+	c.writePrompt()
+	c.onInput(inputPrintable{Bytes: []byte("foo")})
+	c.onInput(inputSubmit{})
+
+	c.onDevice(deviceBytes{Bytes: []byte("food\r\nok\r\n")})
+	c.onDevice(devicePrompt{})
+
+	want := promptPrimary + "foo" + terminalLineBreak + "d\r\nok\r\n" + promptPrimary
+	if got := out.String(); got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestConnectControllerSwallowsMultipleExpectedEchoes(t *testing.T) {
+	var out bytes.Buffer
+	var sent [][]byte
+	c := newConnectController(&out, func(b []byte) error {
+		sent = append(sent, append([]byte(nil), b...))
+		return nil
+	})
+	c.writePrompt()
+	c.onInput(inputPrintable{Bytes: []byte("foo")})
+	c.onInput(inputSubmit{})
+	c.onInput(inputPrintable{Bytes: []byte("bar")})
+	c.onInput(inputSubmit{})
+
+	c.onDevice(deviceBytes{Bytes: []byte("foo\r\nbar\r\nok\r\n")})
+
+	if len(sent) != 2 || string(sent[0]) != "foo\n" || string(sent[1]) != "bar\n" {
+		t.Fatalf("sent = %q, want foo and bar", sent)
+	}
+	want := promptPrimary + "foo" + terminalLineBreak + "bar" + terminalLineBreak + "ok\r\n"
+	if got := out.String(); got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if len(c.expectedEchoes) != 0 {
+		t.Fatalf("expected echo queue length = %d, want 0", len(c.expectedEchoes))
 	}
 }
 
@@ -122,12 +226,12 @@ func TestConnectControllerCursorHomeEnd(t *testing.T) {
 
 func TestConnectControllerErase(t *testing.T) {
 	cases := []struct {
-		name           string
-		seed           string
-		seedCursor     int
-		kind           eraseKind
-		wantBuf        string
-		wantCursor     int
+		name       string
+		seed       string
+		seedCursor int
+		kind       eraseKind
+		wantBuf    string
+		wantCursor int
 	}{
 		{"backspace mid", "abc", 2, eraseCharBack, "ac", 1},
 		{"backspace at zero", "abc", 0, eraseCharBack, "abc", 0},

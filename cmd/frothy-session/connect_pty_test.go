@@ -91,9 +91,205 @@ func TestConnectRedrawAfterDeviceOutputMidTyping(t *testing.T) {
 	if !strings.Contains(out[:noticeIdx], "\r\x1b[K") {
 		t.Fatalf("input line not erased before notice: %q", out)
 	}
-	// "foo" must appear twice: once when echoed, once when redrawn.
+	// "foo" must appear twice: once when typed locally, once when redrawn.
 	if strings.Count(out, "foo") < 2 {
-		t.Fatalf("expected 'foo' twice (echo + redraw), got: %q", out)
+		t.Fatalf("expected 'foo' twice (local type + redraw), got: %q", out)
+	}
+}
+
+func TestConnectSubmitSwallowsDeviceEchoAndGatesPrompt(t *testing.T) {
+	master, slave, _, err := testpty.Open()
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := configureSerial(slave, 115200); err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer slave.Close()
+
+	dev := &serialDevice{
+		file:   slave,
+		readCh: make(chan byte, 256),
+		errCh:  make(chan error, 1),
+	}
+	go dev.readLoop()
+
+	stdinR, stdinW := io.Pipe()
+	defer stdinR.Close()
+
+	var stdoutMu sync.Mutex
+	var stdout bytes.Buffer
+	syncedStdout := &lockedWriter{w: &stdout, mu: &stdoutMu}
+
+	done := make(chan int, 1)
+	go func() {
+		done <- runConnectInteractive(dev, stdinR, syncedStdout, connectHistory{})
+	}()
+
+	waitForStdoutContains(t, &stdoutMu, &stdout, promptPrimary, time.Second)
+
+	deviceRx := readChan(master)
+	if _, err := stdinW.Write([]byte("1 + 2\r")); err != nil {
+		t.Fatal(err)
+	}
+
+	wantSent := []byte("1 + 2\n")
+	gotSent := make([]byte, 0, len(wantSent))
+	deadline := time.After(2 * time.Second)
+	for len(gotSent) < len(wantSent) {
+		select {
+		case b := <-deviceRx:
+			gotSent = append(gotSent, b)
+		case <-deadline:
+			t.Fatalf("device received %q, want %q", gotSent, wantSent)
+		}
+	}
+	if !bytes.Equal(gotSent, wantSent) {
+		t.Fatalf("device received %q, want %q", gotSent, wantSent)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	stdoutMu.Lock()
+	beforeDevice := stdout.String()
+	stdoutMu.Unlock()
+	if strings.Count(beforeDevice, promptPrimary) != 1 {
+		t.Fatalf("host drew prompt before device was ready: %q", beforeDevice)
+	}
+	if !strings.Contains(beforeDevice, promptPrimary+"1 + 2"+terminalLineBreak) {
+		t.Fatalf("submit did not emit host CRLF before device response: %q", beforeDevice)
+	}
+
+	if _, err := master.Write([]byte("1 + 2\r\n3\r\nok\r\n> ")); err != nil {
+		t.Fatal(err)
+	}
+	waitForStdoutMatches(t, &stdoutMu, &stdout, func(s string) bool {
+		return strings.HasSuffix(s, promptPrimary)
+	}, time.Second)
+
+	stdoutMu.Lock()
+	out := stdout.String()
+	stdoutMu.Unlock()
+	if strings.Count(out, "1 + 2") != 1 {
+		t.Fatalf("submitted source rendered more than once: %q", out)
+	}
+	wantRendered := promptPrimary + "1 + 2" + terminalLineBreak + "3\r\nok\r\n" + promptPrimary
+	if !strings.Contains(out, wantRendered) {
+		t.Fatalf("response did not start at column 0 after host CRLF: %q", out)
+	}
+	sourceIdx := strings.Index(out, "1 + 2")
+	resultIdx := strings.Index(out, "3\r\nok\r\n")
+	if sourceIdx < 0 || resultIdx < 0 || sourceIdx >= resultIdx {
+		t.Fatalf("source/result order wrong: %q", out)
+	}
+	between := out[sourceIdx+len("1 + 2") : resultIdx]
+	if strings.Contains(between, promptPrimary) {
+		t.Fatalf("host prompt appeared before device result: %q", out)
+	}
+	if strings.Contains(out, "\r\n> ") {
+		t.Fatalf("raw device prompt rendered: %q", out)
+	}
+
+	if _, err := stdinW.Write([]byte{0x04}); err != nil {
+		t.Fatal(err)
+	}
+	_ = stdinW.Close()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runConnectInteractive did not return")
+	}
+}
+
+func TestConnectPipedOutputUsesPlainText(t *testing.T) {
+	master, slave, _, err := testpty.Open()
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := configureSerial(slave, 115200); err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer slave.Close()
+
+	dev := &serialDevice{
+		file:   slave,
+		readCh: make(chan byte, 256),
+		errCh:  make(chan error, 1),
+	}
+	go dev.readLoop()
+
+	stdinR, stdinW := io.Pipe()
+	defer stdinR.Close()
+
+	var stdoutMu sync.Mutex
+	var stdout bytes.Buffer
+	syncedStdout := &lockedWriter{w: &stdout, mu: &stdoutMu}
+
+	done := make(chan int, 1)
+	go func() {
+		done <- runConnectInteractiveTermios(dev, stdinR, syncedStdout, connectHistory{}, nil)
+	}()
+
+	waitForStdoutContains(t, &stdoutMu, &stdout, promptPrimary, time.Second)
+
+	deviceRx := readChan(master)
+	if _, err := stdinW.Write([]byte("1 + 2\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	wantSent := []byte("1 + 2\n")
+	gotSent := make([]byte, 0, len(wantSent))
+	deadline := time.After(2 * time.Second)
+	for len(gotSent) < len(wantSent) {
+		select {
+		case b := <-deviceRx:
+			gotSent = append(gotSent, b)
+		case <-deadline:
+			t.Fatalf("device received %q, want %q", gotSent, wantSent)
+		}
+	}
+	if !bytes.Equal(gotSent, wantSent) {
+		t.Fatalf("device received %q, want %q", gotSent, wantSent)
+	}
+
+	if _, err := master.Write([]byte("1 + 2\n3\nok\n> ")); err != nil {
+		t.Fatal(err)
+	}
+	waitForStdoutMatches(t, &stdoutMu, &stdout, func(s string) bool {
+		return strings.HasSuffix(s, promptPrimary)
+	}, time.Second)
+
+	stdoutMu.Lock()
+	out := stdout.String()
+	stdoutMu.Unlock()
+	if strings.Contains(out, "\x1b[") {
+		t.Fatalf("piped output contains terminal escape sequence: %q", out)
+	}
+	if strings.Contains(out, "\r\n") {
+		t.Fatalf("piped output contains terminal CRLF: %q", out)
+	}
+	want := promptPrimary + "1 + 2\n3\nok\n" + promptPrimary
+	if !strings.Contains(out, want) {
+		t.Fatalf("piped output = %q, want substring %q", out, want)
+	}
+
+	if _, err := stdinW.Write([]byte{0x04}); err != nil {
+		t.Fatal(err)
+	}
+	_ = stdinW.Close()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runConnectInteractiveTermios did not return")
 	}
 }
 
@@ -355,7 +551,7 @@ func TestConnectResetDetectionRendersNotices(t *testing.T) {
 	if _, err := master.Write([]byte(negatives)); err != nil {
 		t.Fatal(err)
 	}
-	waitForStdoutContains(t, &stdoutMu, &stdout, "value is 42\r\n> ", time.Second)
+	waitForStdoutContains(t, &stdoutMu, &stdout, "value is 42\r\n"+promptPrimary, time.Second)
 
 	stdoutMu.Lock()
 	before := stdout.String()
@@ -390,13 +586,13 @@ func TestConnectResetDetectionRendersNotices(t *testing.T) {
 	noticeIdx := strings.Index(resetTail, "-- device reset detected; waiting for prompt --")
 	restoredIdx := strings.Index(resetTail, "-- prompt restored --")
 	entryIdx := strings.Index(resetTail, "entry 0x400805f0")
-	recoveryPromptIdx := strings.Index(resetTail, "> ")
+	recoveryPromptIdx := strings.Index(resetTail, promptPrimary)
 	if noticeIdx < 0 || restoredIdx < 0 || entryIdx < 0 || recoveryPromptIdx < 0 {
 		t.Fatalf("reset segments missing: notice=%d restored=%d entry=%d recoveryPrompt=%d in %q",
 			noticeIdx, restoredIdx, entryIdx, recoveryPromptIdx, resetTail)
 	}
 	if noticeIdx >= recoveryPromptIdx {
-		t.Fatalf("reset notice did not precede recovery `> ` prompt: notice=%d recoveryPrompt=%d in %q",
+		t.Fatalf("reset notice did not precede recovery host prompt: notice=%d recoveryPrompt=%d in %q",
 			noticeIdx, recoveryPromptIdx, resetTail)
 	}
 	if noticeIdx >= entryIdx {
@@ -500,6 +696,11 @@ func TestConnectMultiLineContinuationSubmitsOneForm(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("device received %q, want %q", got, want)
+	}
+
+	deviceEcho := strings.TrimSuffix(string(want), "\n") + "\r\nok\r\n> "
+	if _, err := master.Write([]byte(deviceEcho)); err != nil {
+		t.Fatal(err)
 	}
 
 	waitForStdoutMatches(t, &stdoutMu, &stdout, func(s string) bool {

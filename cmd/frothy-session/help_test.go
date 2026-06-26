@@ -130,6 +130,14 @@ func TestConnectHelpSnapshot(t *testing.T) {
 	checkGolden(t, "connect", out.Bytes())
 }
 
+func TestStopHelpSnapshot(t *testing.T) {
+	var out bytes.Buffer
+	if code := runStopCommand([]string{"--help"}, &out, io.Discard, defaultSerialStopper()); code != 0 {
+		t.Fatalf("stop --help exit = %d, want 0", code)
+	}
+	checkGolden(t, "stop", out.Bytes())
+}
+
 func TestInitHelpSnapshot(t *testing.T) {
 	var out bytes.Buffer
 	if code := runInitCommand([]string{"--help"}, ".", &out, io.Discard); code != 0 {
