@@ -1,6 +1,6 @@
 frothy connect — connect to a device's REPL
 
-Connect opens an interactive REPL session against a running device over serial. It is the simplest way to type Frothy at a board and read what it prints back, with line history and a sensible default settle time for ESP32. For one-shot delivery of a file, use send instead; for a richer session that can compile on the host, use session.
+Connect opens an interactive REPL session against a running device over serial. It is the simplest way to type Frothy at a board and read what it prints back, with line history and a status probe that retries while the board is waking. For one-shot delivery of a file, use send instead; for a richer session that can compile on the host, use session.
 
 Examples:
   frothy connect --port /dev/cu.usbserial-0001
@@ -16,7 +16,7 @@ Flags:
   -port string
     	serial port, for example /dev/cu.usbmodem101
   -settle duration
-    	delay after opening serial (default 4s)
+    	delay after opening serial
   -takeover
     	stop another frothy holding the port before connecting
   -timeout duration

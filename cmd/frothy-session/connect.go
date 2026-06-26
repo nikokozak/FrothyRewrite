@@ -29,14 +29,11 @@ func runConnectCommandWithStopper(args []string, stdin io.Reader, stdout io.Writ
 		port     = fs.String("port", "", "serial port, for example /dev/cu.usbmodem101")
 		baud     = fs.Int("baud", 115200, "serial baud rate")
 		takeover = fs.Bool("takeover", false, "stop another frothy holding the port before connecting")
-		// Defaults sized for ESP32-class boards: opening the port can
-		// trigger a CP2102 auto-reset, and the chip needs ~500 ms to boot
-		// past ROM + app init before the REPL accepts input. The settle
-		// covers that boot; the timeout covers a slow syncPrompt round
-		// (first read times out on a quiet chip, then \n + echo). Faster
-		// targets like tiny_328 still complete well inside these budgets.
+		// Connect probes immediately. Boards that reset on serial open are
+		// covered by the status retry window; --settle remains an escape hatch
+		// for unusual adapters that need a fixed quiet window after open.
 		timeout     = fs.Duration("timeout", 5*time.Second, "serial prompt timeout")
-		settle      = fs.Duration("settle", 4*time.Second, "delay after opening serial")
+		settle      = fs.Duration("settle", 0, "delay after opening serial")
 		noHistory   = fs.Bool("no-history", false, "disable history read/write")
 		historyFile = fs.String("history-file", "", "override history file path (default $XDG_DATA_HOME/frothy/history)")
 	)

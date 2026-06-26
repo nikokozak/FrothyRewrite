@@ -705,16 +705,29 @@ func verifyCompilerTarget(comp sessionCompiler, status deviceStatus) error {
 
 func readDeviceStatus(dev sessionDevice, timeout time.Duration) (deviceStatus, error) {
 	var lastErr error
+	deadline := time.Now().Add(timeout)
 
-	if err := dev.syncPrompt(timeout); err != nil {
-		return deviceStatus{}, err
-	}
-
-	for attempt := 0; attempt < 3; attempt++ {
-		response, err := dev.sendLine("status", timeout, nil)
+	for attempt := 0; attempt < 3; {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			if lastErr != nil {
+				return deviceStatus{}, lastErr
+			}
+			return deviceStatus{}, errPromptTimeout
+		}
+		attemptTimeout := remaining
+		if attemptTimeout > 300*time.Millisecond {
+			attemptTimeout = 300 * time.Millisecond
+		}
+		response, err := dev.sendLine("status", attemptTimeout, nil)
 		if err != nil {
+			lastErr = err
+			if errors.Is(err, errPromptTimeout) {
+				continue
+			}
 			return deviceStatus{}, err
 		}
+		attempt++
 
 		status, err := parseDeviceStatus(response)
 		if err == nil {
@@ -723,9 +736,6 @@ func readDeviceStatus(dev sessionDevice, timeout time.Duration) (deviceStatus, e
 		lastErr = err
 		if !retryableStatusResponse(response) || attempt == 2 {
 			return deviceStatus{}, err
-		}
-		if err := dev.syncPrompt(timeout); err != nil {
-			return deviceStatus{}, lastErr
 		}
 	}
 
@@ -1996,9 +2006,9 @@ func availableVerbs() []verb {
 		{name: "connect", summary: "connect to a device's REPL", run: runConnectMain,
 			longDesc: "Connect opens an interactive REPL session against a running device over " +
 				"serial. It is the simplest way to type Frothy at a board and read what it " +
-				"prints back, with line history and a sensible default settle time for ESP32. " +
-				"For one-shot delivery of a file, use send instead; for a richer session that " +
-				"can compile on the host, use session.",
+				"prints back, with line history and a status probe that retries while the " +
+				"board is waking. For one-shot delivery of a file, use send instead; for a " +
+				"richer session that can compile on the host, use session.",
 			examples: "  frothy connect --port /dev/cu.usbserial-0001\n" +
 				"      open an interactive REPL against the board on that port"},
 		{name: "stop", summary: "stop Frothy sessions that are holding serial ports", run: runStopMain,

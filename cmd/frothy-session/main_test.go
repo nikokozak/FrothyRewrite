@@ -55,6 +55,7 @@ type fakeDevice struct {
 	interruptResponses []string
 	interruptReadErrs  []error
 	interruptErrs      []error
+	syncErrs           []error
 	sent               []string
 	interrupts         int
 	syncs              int
@@ -65,7 +66,12 @@ type fakeDevice struct {
 func (d *fakeDevice) syncPrompt(timeout time.Duration) error {
 	_ = timeout
 	d.syncs += 1
-	return nil
+	if len(d.syncErrs) == 0 {
+		return nil
+	}
+	err := d.syncErrs[0]
+	d.syncErrs = d.syncErrs[1:]
+	return err
 }
 
 func (d *fakeDevice) sendLine(line string, timeout time.Duration, promptSeen func()) (string, error) {
@@ -901,8 +907,8 @@ func TestReadDeviceStatusRetriesPromptOnlyResponse(t *testing.T) {
 	if got, want := strings.Join(dev.sent, "\n"), "status\nstatus"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
-	if dev.syncs != 2 {
-		t.Fatalf("syncs=%d, want 2", dev.syncs)
+	if dev.syncs != 0 {
+		t.Fatalf("syncs=%d, want 0", dev.syncs)
 	}
 }
 
@@ -919,8 +925,29 @@ func TestReadDeviceStatusRetriesBareOKWithoutStatusLine(t *testing.T) {
 	if got, want := strings.Join(dev.sent, "\n"), "status\nstatus"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
-	if dev.syncs != 2 {
-		t.Fatalf("syncs=%d, want 2", dev.syncs)
+	if dev.syncs != 0 {
+		t.Fatalf("syncs=%d, want 0", dev.syncs)
+	}
+}
+
+func TestReadDeviceStatusDoesNotRequirePassivePromptSync(t *testing.T) {
+	dev := &fakeDevice{
+		responses: []string{statusResponse("device")},
+		syncErrs:  []error{errPromptTimeout},
+	}
+
+	status, err := readDeviceStatus(dev, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.compiler != compilerDevice {
+		t.Fatalf("compiler = %s, want %s", status.compiler, compilerDevice)
+	}
+	if got, want := strings.Join(dev.sent, "\n"), "status"; got != want {
+		t.Fatalf("sent %q, want %q", got, want)
+	}
+	if dev.syncs != 0 {
+		t.Fatalf("syncs=%d, want 0", dev.syncs)
 	}
 }
 
@@ -934,8 +961,8 @@ func TestReadDeviceStatusDoesNotRetryDeviceError(t *testing.T) {
 	if got, want := strings.Join(dev.sent, "\n"), "status"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
-	if dev.syncs != 1 {
-		t.Fatalf("syncs=%d, want 1", dev.syncs)
+	if dev.syncs != 0 {
+		t.Fatalf("syncs=%d, want 0", dev.syncs)
 	}
 }
 
