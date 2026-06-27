@@ -873,16 +873,29 @@ func sourceNeedsContinuation(source string) bool {
 }
 
 type sourceFormReader struct {
-	scanner *bufio.Scanner
-	state   sourceFormState
+	scanner           *bufio.Scanner
+	state             sourceFormState
+	queued            []string
+	allowSourceBlocks bool
 }
 
 func newSourceFormReader(input io.Reader) *sourceFormReader {
 	return &sourceFormReader{scanner: bufio.NewScanner(input)}
 }
 
+func newSessionSourceFormReader(input io.Reader) *sourceFormReader {
+	reader := newSourceFormReader(input)
+	reader.allowSourceBlocks = true
+	return reader
+}
+
 func (r *sourceFormReader) next(prompt io.Writer, interrupts *interruptTracker) (string, bool, error) {
 	for {
+		if len(r.queued) > 0 {
+			source := r.queued[0]
+			r.queued = r.queued[1:]
+			return source, true, nil
+		}
 		if prompt != nil {
 			if r.state.hasPending() {
 				fmt.Fprint(prompt, promptContinuation)
@@ -905,10 +918,70 @@ func (r *sourceFormReader) next(prompt io.Writer, interrupts *interruptTracker) 
 			r.state.reset()
 		}
 
+		if r.allowSourceBlocks && !r.state.hasPending() {
+			path, isSourceBlock := sourceBlockPath(r.scanner.Text())
+			if isSourceBlock {
+				forms, err := r.readSourceBlock(path)
+				if err != nil {
+					return "", false, err
+				}
+				r.queued = forms
+				continue
+			}
+		}
+
 		if source, complete := r.state.appendLine(r.scanner.Text()); complete {
 			return source, true, nil
 		}
 	}
+}
+
+func sourceBlockPath(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == ".source" {
+		return "", true
+	}
+	if !strings.HasPrefix(trimmed, ".source ") && !strings.HasPrefix(trimmed, ".source\t") {
+		return "", false
+	}
+	return strings.TrimSpace(trimmed[len(".source"):]), true
+}
+
+func sourceBlockEnds(line string) bool {
+	return strings.TrimSpace(line) == ".end-source"
+}
+
+func (r *sourceFormReader) readSourceBlock(path string) ([]string, error) {
+	var text strings.Builder
+	for r.scanner.Scan() {
+		line := r.scanner.Text()
+		if sourceBlockEnds(line) {
+			return sourceFormsFromBlock(text.String(), path)
+		}
+		text.WriteString(line)
+		text.WriteByte('\n')
+	}
+	if err := r.scanner.Err(); err != nil {
+		return nil, err
+	}
+	return nil, errors.New(".source block missing .end-source")
+}
+
+func sourceFormsFromBlock(text string, path string) ([]string, error) {
+	if path == "" {
+		return sourceFormsFromText(text)
+	}
+	root := filepath.Clean(path)
+	expanded, err := preprocessInclude(root, func(path string) (string, error) {
+		if filepath.Clean(path) == root {
+			return text, nil
+		}
+		return sourceLoader(path)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sourceFormsFromText(expanded)
 }
 
 func collectSourceForms(input io.Reader) ([]string, error) {
@@ -931,14 +1004,8 @@ func isBootDefinition(line string) bool {
 	return len(fields) >= 2 && fields[0] == "boot" && fields[1] == "is"
 }
 
-func readFileLines(path string) ([]string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	forms, err := collectSourceForms(file)
+func sourceFormsFromText(text string) ([]string, error) {
+	forms, err := collectSourceForms(strings.NewReader(text))
 	if err != nil {
 		return nil, err
 	}
@@ -953,6 +1020,14 @@ func readFileLines(path string) ([]string, error) {
 		}
 	}
 	return append(nonBoot, boot...), nil
+}
+
+func readFileLines(path string) ([]string, error) {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return sourceFormsFromBlock(string(bytes), path)
 }
 
 func readerFromLines(lines []string) io.Reader {
@@ -1302,6 +1377,7 @@ const (
 const (
 	recordErrorStatusFailed    = "status_failed"
 	recordErrorHelperFailed    = "helper_failed"
+	recordErrorSourceFailed    = "source_failed"
 	recordErrorDeviceLost      = "device_lost"
 	recordErrorInterruptFailed = "interrupt_failed"
 	recordErrorMirrorStale     = "mirror_stale"
@@ -1515,7 +1591,7 @@ func (t *interruptTracker) consumeIdle() bool {
 }
 
 func runDry(input io.Reader, output io.Writer, comp sessionCompiler) error {
-	reader := newSourceFormReader(input)
+	reader := newSessionSourceFormReader(input)
 	for {
 		source, ok, err := reader.next(nil, nil)
 		if err != nil {
@@ -1576,7 +1652,7 @@ func runSerialWithModeAndInterrupts(input io.Reader, output io.Writer, comp sess
 		return errors.New("host compiler is required by device status")
 	}
 
-	reader := newSourceFormReader(input)
+	reader := newSessionSourceFormReader(input)
 	for {
 		source, ok, err := reader.next(output, interrupts)
 		if err != nil {
@@ -1671,11 +1747,11 @@ func runSerialRecordsWithMode(input io.Reader, records *recordWriter, comp sessi
 	}
 
 	mirror := initialMirror(useCompiler)
-	reader := newSourceFormReader(input)
+	reader := newSessionSourceFormReader(input)
 	for {
 		source, ok, err := reader.next(nil, interrupts)
 		if err != nil {
-			_ = records.sessionError(recordStateError, mirror, recordErrorDeviceLost, err.Error())
+			_ = records.sessionError(recordStateError, mirror, recordErrorSourceFailed, err.Error())
 			return err
 		}
 		if !ok {
@@ -1941,6 +2017,10 @@ func pickPort(override string, list portLister) (string, error) {
 	}
 }
 
+func pickSessionPort(override string, list portLister) (string, error) {
+	return pickPort(override, list)
+}
+
 type verb struct {
 	name     string
 	summary  string
@@ -1954,11 +2034,14 @@ func availableVerbs() []verb {
 		{name: "session", summary: "open an interactive REPL session over serial", run: runSessionMain,
 			longDesc: "Session opens a richer interactive REPL than connect: it can compile " +
 				"Frothy source on the host when the device advertises host-optional mode, " +
-				"replay a recorded transcript, or record one to NDJSON. Use it when connect " +
+				"accept .source/.end-source blocks from editor clients, replay a recorded " +
+				"transcript, or record one to NDJSON. Use it when connect " +
 				"is too thin for what you need; for a basic interactive REPL, connect is " +
 				"smaller and faster.",
 			examples: "  frothy session --port /dev/cu.usbserial-0001\n" +
-				"      open an interactive REPL on that port, with host compile when offered"},
+				"      open an interactive REPL on that port, with host compile when offered\n\n" +
+				"  printf '.source main.fr\\ninclude \"helper.fr\"\\nmain:\\n.end-source\\n' | frothy session --port /dev/cu.usbserial-0001\n" +
+				"      send unsaved source text as one editor-owned block"},
 		{name: "send", summary: "compile a source file and apply or run each line", run: runSendMain,
 			longDesc: "Send compiles a Frothy source file and applies each definition to a " +
 				"connected board over serial, then runs any bare expressions line by line. " +
@@ -2558,12 +2641,13 @@ func runSessionMain() int {
 		return 0
 	}
 
-	if *port == "" {
-		fmt.Fprintln(os.Stderr, "--port is required unless --dry-run is set")
+	chosen, err := pickSessionPort(*port, defaultPortLister)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "session: %v\n", err)
 		os.Exit(2)
 	}
 
-	dev, err := openSerial(*port, *baud)
+	dev, err := openSerial(chosen, *baud)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "serial: %v\n", err)
 		os.Exit(1)
@@ -2599,7 +2683,7 @@ func runSessionMain() int {
 		if recordOutput != nil {
 			_ = recordOutput.sessionError(recordStateError, recordMirrorNone, recordErrorStatusFailed, err.Error())
 		}
-		fmt.Fprintf(os.Stderr, "status: device silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s: %v\n", *port, err)
+		fmt.Fprintf(os.Stderr, "status: device silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s: %v\n", chosen, err)
 		os.Exit(1)
 	}
 

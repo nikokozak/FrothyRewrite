@@ -452,6 +452,19 @@ func TestFrothySendErrorsWhenPortMissingWithoutDryRun(t *testing.T) {
 	}
 }
 
+func TestPickPortChoosesSessionPortWhenUnset(t *testing.T) {
+	list := func() ([]string, error) {
+		return []string{"/dev/cu.usbserial-0001"}, nil
+	}
+	got, err := pickSessionPort("", list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/dev/cu.usbserial-0001" {
+		t.Fatalf("pickSessionPort() = %q, want discovered port", got)
+	}
+}
+
 func TestPickPortOverrideSkipsDiscovery(t *testing.T) {
 	list := func() ([]string, error) {
 		t.Fatal("lister must not run when --port is set")
@@ -1177,6 +1190,49 @@ func TestReadFileLinesMovesMultilineBootDefinitionLast(t *testing.T) {
 	}
 }
 
+func TestReadFileLinesExpandsIncludesBeforeGrouping(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.fr")
+	if err := os.WriteFile(filepath.Join(dir, "helper.fr"), []byte("helper is fn [ 1 ]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("include \"helper.fr\"\nmain is fn [ helper: ]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	lines, err := readFileLines(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"helper is fn [ 1 ]",
+		"main is fn [ helper: ]",
+	}
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("readFileLines() = %#v, want %#v", lines, want)
+	}
+}
+
+func TestReadFileLinesDoesNotInterpretSourceBlockCommands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "main.fr")
+	if err := os.WriteFile(path, []byte(".source other.fr\nmain is fn [ 1 ]\n.end-source\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	lines, err := readFileLines(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		".source other.fr",
+		"main is fn [ 1 ]",
+		".end-source",
+	}
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("readFileLines() = %#v, want %#v", lines, want)
+	}
+}
+
 func TestSerialCompilesMultilineTopFormOnce(t *testing.T) {
 	comp := &fakeCompiler{
 		target: targetProfile("1234abcd"),
@@ -1202,6 +1258,101 @@ func TestSerialCompilesMultilineTopFormOnce(t *testing.T) {
 	}
 	if got, want := out.String(), "frothy> .. .. ok\nfrothy> "; got != want {
 		t.Fatalf("output %q, want %q", got, want)
+	}
+}
+
+func TestSerialSourceBlockCompilesBufferedFormsInSession(t *testing.T) {
+	comp := &fakeCompiler{
+		target: targetProfile("1234abcd"),
+		results: []compileResult{
+			{action: actionApply, line: "apply 0102"},
+			{action: actionApply, line: "apply 0304"},
+		},
+	}
+	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "ok\n", "ok\n"}}
+	var out strings.Builder
+
+	input := strings.NewReader(strings.Join([]string{
+		".source playground.fr",
+		"boot is fn [",
+		"  blink:",
+		"]",
+		"led is $led_builtin",
+		".end-source",
+		"",
+	}, "\n"))
+	err := runSerial(input, &out, comp, dev, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(comp.lines, "\n"), "led is $led_builtin\nboot is fn [ blink: ]"; got != want {
+		t.Fatalf("compiled %q, want %q", got, want)
+	}
+	if got, want := strings.Join(dev.sent, "\n"), "status\napply 0102\napply 0304"; got != want {
+		t.Fatalf("sent %q, want %q", got, want)
+	}
+}
+
+func TestSerialSourceBlockUsesPathForIncludesWithoutSavingRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "helper.fr"), []byte("helper is fn [ 1 ]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rootPath := filepath.Join(dir, "unsaved-main.fr")
+	comp := &fakeCompiler{
+		target: targetProfile("1234abcd"),
+		results: []compileResult{
+			{action: actionApply, line: "apply 0102"},
+			{action: actionApply, line: "apply 0304"},
+		},
+	}
+	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "ok\n", "ok\n"}}
+	var out strings.Builder
+
+	input := strings.NewReader(strings.Join([]string{
+		".source " + rootPath,
+		"include \"helper.fr\"",
+		"main is fn [ helper: ]",
+		".end-source",
+		"",
+	}, "\n"))
+	err := runSerial(input, &out, comp, dev, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(comp.lines, "\n"), "helper is fn [ 1 ]\nmain is fn [ helper: ]"; got != want {
+		t.Fatalf("compiled %q, want %q", got, want)
+	}
+}
+
+func TestSerialSourceBlockPathMayContainSpaces(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "project with spaces")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "helper.fr"), []byte("helper is fn [ 1 ]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rootPath := filepath.Join(dir, "main.fr")
+	comp := &fakeCompiler{
+		target:  targetProfile("1234abcd"),
+		results: []compileResult{{action: actionApply, line: "apply 0102"}},
+	}
+	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "ok\n"}}
+	var out strings.Builder
+
+	input := strings.NewReader(strings.Join([]string{
+		".source " + rootPath,
+		"include \"helper.fr\"",
+		".end-source",
+		"",
+	}, "\n"))
+	err := runSerial(input, &out, comp, dev, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(comp.lines, "\n"), "helper is fn [ 1 ]"; got != want {
+		t.Fatalf("compiled %q, want %q", got, want)
 	}
 }
 
@@ -2237,6 +2388,25 @@ func TestRecordsGroupMultilineTopForm(t *testing.T) {
 	}
 	if got, want := strings.Join(comp.lines, "\n"), "boot is fn [ one ]"; got != want {
 		t.Fatalf("compiled %q, want %q", got, want)
+	}
+}
+
+func TestRecordsSourceBlockInputErrorIsNotDeviceLost(t *testing.T) {
+	dev := &fakeDevice{responses: []string{statusResponse("device")}}
+	var out strings.Builder
+
+	err := runRecordsTestSession(t, strings.NewReader(".source main.fr\nmissing end\n"), &out, nil, dev, time.Second, false, &interruptTracker{})
+	if err == nil {
+		t.Fatal("runRecordsTestSession accepted unterminated source block")
+	}
+
+	records := decodeRecords(t, out.String())
+	if got, want := recordKinds(records), "session_start,status,session_error"; got != want {
+		t.Fatalf("record kinds %q, want %q", got, want)
+	}
+	sessionError := recordWithKind(records, "session_error")
+	if sessionError["code"] != "source_failed" || sessionError["message"] != ".source block missing .end-source" {
+		t.Fatalf("session_error record = %#v", sessionError)
 	}
 }
 

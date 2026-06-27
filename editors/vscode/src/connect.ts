@@ -1,9 +1,10 @@
 import { ChildProcess, spawn } from 'child_process';
 import * as vscode from 'vscode';
-import { appendChunk, appendLine, appendSent, flushPartial, show } from './output';
+import { appendChunk, appendLine, flushPartial, show } from './output';
 
 let child: ChildProcess | undefined;
 let onConnectionChanged: (() => void) | undefined;
+let intentionalExit = false;
 // Re-entrancy guard. Edges this prevents:
 //  - spam-clicking Connect / the status bar item spawning two children
 //  - autoConnect firing concurrently for several .fr files opened at once
@@ -39,11 +40,11 @@ async function doConnect(): Promise<void> {
   const port = cfg.get<string>('port', '');
   const baud = cfg.get<number>('baud', 115200);
 
-  const args = ['connect'];
+  const args = ['session'];
   if (port) {
     args.push('--port', port);
   }
-  args.push('--baud', String(baud));
+  args.push('--baud', String(baud), '--settle', '0s');
 
   show();
   appendLine(`$ ${bin} ${args.join(' ')}`);
@@ -52,22 +53,32 @@ async function doConnect(): Promise<void> {
   try {
     c = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (err) {
-    appendLine(`connect: spawn failed: ${(err as Error).message}`);
+    appendLine(`session: spawn failed: ${(err as Error).message}`);
     return;
   }
   child = c;
+  intentionalExit = false;
   fireConnectionChanged();
 
   c.stdout?.on('data', (data: Buffer) => appendChunk(data.toString('utf8')));
   c.stderr?.on('data', (data: Buffer) => appendChunk(data.toString('utf8')));
-  c.on('error', (err) => appendLine(`connect: ${err.message}`));
-  c.on('exit', (code, signal) => {
-    flushPartial();
-    appendLine(`connect: exited (code=${code ?? '-'}, signal=${signal ?? '-'})`);
+  c.on('error', (err) => {
+    appendLine(`session: ${err.message}`);
     if (child === c) {
       child = undefined;
       fireConnectionChanged();
     }
+  });
+  c.on('exit', (code, signal) => {
+    if (child !== c) return;
+    flushPartial();
+    if (intentionalExit) {
+      appendLine('session: disconnected');
+    } else {
+      appendLine(`session: exited (code=${code ?? '-'}, signal=${signal ?? '-'})`);
+    }
+    child = undefined;
+    fireConnectionChanged();
   });
 }
 
@@ -76,13 +87,9 @@ async function doConnect(): Promise<void> {
 // gets `false` so it can surface a "not connected" warning, same as a
 // genuine disconnect.
 //
-// Every successful write echoes the line into the transcript first
-// ("> text"), so the user sees what they sent paired with the device's
-// reply. The transcript grammar colors the "> " prefix bold blue.
 export function writeLine(text: string): boolean {
   if (!isConnected() || !child?.stdin || child.stdin.destroyed) return false;
   try {
-    appendSent(text);
     show();
     child.stdin.write(text + '\n');
     return true;
@@ -92,10 +99,12 @@ export function writeLine(text: string): boolean {
   }
 }
 
-export function writeByte(b: number): boolean {
+export function writeSourceBlock(text: string, path?: string): boolean {
   if (!isConnected() || !child?.stdin || child.stdin.destroyed) return false;
+  const header = path ? `.source ${path}` : '.source';
   try {
-    child.stdin.write(Buffer.from([b]));
+    show();
+    child.stdin.write(`${header}\n${text}\n.end-source\n`);
     return true;
   } catch (err) {
     appendLine(`write: ${(err as Error).message}`);
@@ -103,14 +112,34 @@ export function writeByte(b: number): boolean {
   }
 }
 
-// D14: SIGINT, wait up to 1 s, then SIGKILL. The child treats SIGINT as a
-// shutdown signal (connect_unix.go:41-46); device-interrupt (byte 0x03) goes
-// through writeByte instead.
+export function interrupt(): boolean {
+  if (!isConnected() || !child) return false;
+  try {
+    return child.kill('SIGINT');
+  } catch (err) {
+    appendLine(`interrupt: ${(err as Error).message}`);
+    return false;
+  }
+}
+
+// Close stdin first: an idle `frothy session` exits on EOF. If it is stuck in a
+// foreground device command, SIGINT asks the session to send a device interrupt;
+// SIGKILL is only the last resort.
 export async function teardown(): Promise<void> {
   if (!child) return;
   const c = child;
+  intentionalExit = true;
+  c.stdin?.end();
+  let exited = await waitForExit(c, 1000);
+  if (exited) {
+    if (child === c) {
+      child = undefined;
+      fireConnectionChanged();
+    }
+    return;
+  }
   c.kill('SIGINT');
-  const exited = await waitForExit(c, 1000);
+  exited = await waitForExit(c, 1000);
   if (!exited) {
     c.kill('SIGKILL');
     await waitForExit(c, 1000);

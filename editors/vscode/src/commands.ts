@@ -1,7 +1,6 @@
-import { spawn } from 'child_process';
 import * as vscode from 'vscode';
 import * as proc from './connect';
-import { appendChunk, appendLine, flushPartial, show } from './output';
+import { appendLine, show } from './output';
 
 // Frothy identifiers may contain `.`, `?`, `_`, `-`, and `$name` constants
 // start with `$` (parse.c:235-257, 262-364).
@@ -55,8 +54,8 @@ export function runLine(): void {
 // the rest of the lines silently.
 //
 // For multi-line batches, drop a "[run selection: N lines]" header into
-// the transcript so the per-line echoes that follow have context — at
-// 30+ lines the bare echoes blur together otherwise.
+// the transcript so the device/session echoes that follow have context — at
+// 30+ lines the bare replies blur together otherwise.
 export function sendSelection(): void {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
@@ -94,60 +93,25 @@ export function runLast(): void {
   if (!proc.writeLine(lastForm)) notConnectedHint();
 }
 
-// One-shot `frothy send <path> [--port] --baud`. Save the buffer first so
-// the on-disk file matches what the user sees.
+// Send the current buffer through the open `frothy session` process. The
+// optional path is only for include resolution; the source itself is the
+// unsaved editor text.
 export async function sendFile(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
+  if (!proc.isConnected()) {
+    notConnectedHint();
+    return;
+  }
   const doc = editor.document;
-  if (doc.isUntitled) {
-    appendLine('send: save the file first.');
-    show();
-    return;
-  }
-  if (doc.isDirty) await doc.save();
 
-  const cfg = vscode.workspace.getConfiguration('frothy');
-  const bin = cfg.get<string>('binaryPath', 'frothy');
-  const port = cfg.get<string>('port', '');
-  const baud = cfg.get<number>('baud', 115200);
-
-  // `frothy send` requires --port unless --dry-run is set
-  // (cmd/frothy-session/main.go:2000-2002). Refuse rather than spawn a child
-  // that will exit 2 with an unfamiliar error.
-  if (!port) {
-    appendLine('send: set frothy.port in workspace settings first.');
-    show();
-    return;
-  }
-
-  const args = ['send', doc.fileName, '--port', port, '--baud', String(baud)];
-  const basename = doc.fileName.split(/[/\\]/).pop() ?? doc.fileName;
+  const path = doc.isUntitled ? undefined : doc.fileName;
+  const basename = path ? path.split(/[/\\]/).pop() ?? path : 'untitled buffer';
   const lineCount = doc.lineCount;
 
   show();
-  // Bookend the subprocess so the user sees a clear marker for the batch.
-  // `frothy send` doesn't echo source lines into its stdout — without
-  // these headers, a 50-line file produces a stream of responses with
-  // no indication of which file produced them.
   appendLine(`> [send file: ${basename} · ${lineCount} lines]`);
-  appendLine(`$ ${bin} ${args.join(' ')}`);
-
-  let c;
-  try {
-    c = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (err) {
-    appendLine(`send: spawn failed: ${(err as Error).message}`);
-    return;
-  }
-  c.stdout?.on('data', (d: Buffer) => appendChunk(d.toString('utf8')));
-  c.stderr?.on('data', (d: Buffer) => appendChunk(d.toString('utf8')));
-  c.on('error', (err) => appendLine(`send: ${err.message}`));
-  c.on('exit', (code, signal) => {
-    flushPartial();
-    const label = code === 0 ? 'ok' : `exit ${code ?? '-'}${signal ? ` signal ${signal}` : ''}`;
-    appendLine(`> [send file: ${basename} · ${label}]`);
-  });
+  if (!proc.writeSourceBlock(doc.getText(), path)) notConnectedHint();
 }
 
 // `see <word>` for the symbol under the cursor (or the active selection).
@@ -179,10 +143,10 @@ export function restore(): void {
   if (!proc.writeLine('restore')) notConnectedHint();
 }
 
-// Byte 0x03 on the child's stdin. The CLI input parser turns it into
-// inputInterrupt (connect_input.go:119-121).
+// SIGINT to the `frothy session` child. The session turns that into a device
+// interrupt while a foreground command is running.
 export function interrupt(): void {
-  if (!proc.writeByte(0x03)) notConnectedHint();
+  if (!proc.interrupt()) notConnectedHint();
 }
 
 function currentLineText(editor: vscode.TextEditor): string {

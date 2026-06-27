@@ -62,7 +62,7 @@
       { "command": "frothy.runLine",       "key": "shift+enter",      "mac": "shift+enter",   "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected" },
       { "command": "frothy.sendSelection", "key": "ctrl+enter",       "mac": "cmd+enter",     "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected" },
       { "command": "frothy.runLast",       "key": "ctrl+alt+r",       "mac": "cmd+alt+r",     "when": "editorTextFocus && editorLangId == frothy && frothy.hasLastForm" },
-      { "command": "frothy.sendFile",      "key": "ctrl+shift+enter", "mac": "cmd+shift+enter","when": "editorTextFocus && editorLangId == frothy" },
+      { "command": "frothy.sendFile",      "key": "ctrl+shift+enter", "mac": "cmd+shift+enter","when": "editorTextFocus && editorLangId == frothy && frothy.isConnected" },
       { "command": "frothy.see",           "key": "ctrl+alt+b",       "mac": "cmd+alt+b",     "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected" },
       { "command": "frothy.interrupt",     "key": "ctrl+alt+.",       "mac": "cmd+alt+.",     "when": "frothy.isConnected" }
     ],
@@ -72,7 +72,7 @@
         { "command": "frothy.runLine",       "when": "editorLangId == frothy &&  frothy.isConnected", "group": "navigation@1" },
         { "command": "frothy.sendSelection", "when": "editorLangId == frothy &&  frothy.isConnected", "group": "navigation@2" },
         { "command": "frothy.runLast",       "when": "editorLangId == frothy &&  frothy.hasLastForm",  "group": "navigation@3" },
-        { "command": "frothy.sendFile",      "when": "editorLangId == frothy",                         "group": "navigation@4" },
+        { "command": "frothy.sendFile",      "when": "editorLangId == frothy &&  frothy.isConnected", "group": "navigation@4" },
         { "command": "frothy.disconnect",    "when": "editorLangId == frothy &&  frothy.isConnected", "group": "navigation@5" }
       ],
       "editor/context": [
@@ -84,7 +84,7 @@
         { "command": "frothy.runLine",       "when": "editorLangId == frothy" },
         { "command": "frothy.sendSelection", "when": "editorLangId == frothy" },
         { "command": "frothy.runLast",       "when": "frothy.hasLastForm" },
-        { "command": "frothy.sendFile",      "when": "editorLangId == frothy" },
+        { "command": "frothy.sendFile",      "when": "editorLangId == frothy && frothy.isConnected" },
         { "command": "frothy.see",           "when": "editorLangId == frothy" },
         { "command": "frothy.disconnect",    "when": "frothy.isConnected" },
         { "command": "frothy.interrupt",     "when": "frothy.isConnected" }
