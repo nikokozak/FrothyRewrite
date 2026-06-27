@@ -82,5 +82,6 @@ func runWipeUserCommand(args []string, stdout io.Writer, stderr io.Writer, list 
 		fmt.Fprintf(stderr, "wipe-user: device returned %s\n", responseStatus(response))
 		return 1
 	}
+	fmt.Fprintf(stdout, "wiped user definitions on %s\n", chosen)
 	return 0
 }

@@ -819,6 +819,19 @@ fr_err_t fr_platform_write_text(const char *text) {
   }
   return FR_OK;
 }
+
+#if FR_FEATURE_PAD
+fr_err_t fr_platform_write_bytes(const uint8_t *bytes, uint16_t length) {
+  if (bytes == NULL && length > 0) {
+    return FR_ERR_INVALID;
+  }
+  if (length > 0 &&
+      uart_write_bytes(FR_BOARD_UART_PORT, bytes, length) != length) {
+    return FR_ERR_IO;
+  }
+  return FR_OK;
+}
+#endif
 #endif
 
 #if FR_FEATURE_RANDOM

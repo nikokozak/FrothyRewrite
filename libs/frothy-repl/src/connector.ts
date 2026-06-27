@@ -130,13 +130,23 @@ class Connector implements ReplConnector {
   }
 
   async status(): Promise<Status> {
-    const res = await this.send("status");
-    if (res.kind !== "value") {
-      throw new WireFormatError("status did not return a status line");
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const res = await this.send("status");
+      if (res.kind !== "value") {
+        lastError = statusResponseError(res);
+      } else {
+        try {
+          const status = parseStatus(res.lines);
+          this.applyBytes = status.apply_bytes;
+          return status;
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error(String(err));
+        }
+      }
+      if (!retryableStatusError(lastError)) break;
     }
-    const status = parseStatus(res.lines);
-    this.applyBytes = status.apply_bytes;
-    return status;
+    throw lastError ?? new WireFormatError("status did not return a status line");
   }
 
   apply(bytes: Uint8Array): Promise<Response> {
@@ -195,12 +205,18 @@ function parseStatus(lines: string[]): Status {
   const line = lines.find((l) => l.startsWith("frothy status"));
   if (!line) throw new WireFormatError("no status line in response");
   const parts = line.split(" ");
+  if (parts.length < 4 || parts[0] !== "frothy" || parts[1] !== "status") {
+    throw new WireFormatError(`malformed status line: ${line}`);
+  }
   if (parts[2] !== "v1") {
     throw new WireFormatError(`unsupported status version: ${parts[2] ?? "<none>"}`);
   }
   const fields = new Map<string, string>();
   for (const part of parts.slice(3)) {
     const eq = part.indexOf("=");
+    if (eq <= 0 || eq === part.length - 1) {
+      throw new WireFormatError(`malformed status field: ${part}`);
+    }
     if (eq > 0) fields.set(part.slice(0, eq), part.slice(eq + 1));
   }
   const get = (key: string): string => {
@@ -225,6 +241,21 @@ function parseStatus(lines: string[]): Status {
     int_max: int("int_max", get("int_max")),
     apply_bytes: int("apply_bytes", get("apply_bytes")),
   };
+}
+
+function statusResponseError(res: Response): WireFormatError {
+  if (res.kind === "error") {
+    const detail = res.phrase === null ? String(res.code) : `${res.phrase} (${res.code})`;
+    return new WireFormatError(`status failed: ${detail}`);
+  }
+  return new WireFormatError("status did not return a status line");
+}
+
+function retryableStatusError(err: Error): boolean {
+  return err instanceof WireFormatError &&
+    (err.message === "status did not return a status line" ||
+      err.message === "no status line in response" ||
+      err.message.startsWith("malformed status "));
 }
 
 function oneOf<T extends string>(allowed: readonly T[], key: string, value: string): T {

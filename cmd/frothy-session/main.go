@@ -667,15 +667,15 @@ func parseCompilerTarget(response string) (compilerTarget, error) {
 	return target, nil
 }
 
-func retryableStatusResponse(response string) bool {
-	text := strings.ReplaceAll(response, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	if strings.Contains(text, "frothy status ") {
-		return false
-	}
-
+func retryableStatusResponse(response string, err error) bool {
 	status := responseStatus(response)
-	return status == "" || status == "ok"
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	return status == "" ||
+		status == "ok" && (errText == "status response missing frothy status line" ||
+			strings.HasPrefix(errText, "malformed status "))
 }
 
 func verifyCompilerTarget(comp sessionCompiler, status deviceStatus) error {
@@ -734,7 +734,7 @@ func readDeviceStatus(dev sessionDevice, timeout time.Duration) (deviceStatus, e
 			return status, nil
 		}
 		lastErr = err
-		if !retryableStatusResponse(response) || attempt == 2 {
+		if !retryableStatusResponse(response, err) || attempt == 2 {
 			return deviceStatus{}, err
 		}
 	}
@@ -2252,12 +2252,35 @@ func defaultBoardKnown(board string) bool {
 // the make argv instead of executing make.
 type commandRunner func(name string, args []string) error
 
+type commandOutputError struct {
+	err    error
+	output string
+}
+
+func (e commandOutputError) Error() string { return e.err.Error() }
+
+func (e commandOutputError) Unwrap() error { return e.err }
+
+func commandErrorText(err error) string {
+	text := err.Error()
+	var outputErr commandOutputError
+	if errors.As(err, &outputErr) && outputErr.output != "" {
+		text += "\n" + outputErr.output
+	}
+	return text
+}
+
 func defaultCommandRunner(name string, args []string) error {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
 	cmd := exec.Command(name, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = io.MultiWriter(os.Stdout, &stdout)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 	cmd.Stdin = os.Stdin
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return commandOutputError{err: err, output: stdout.String() + stderr.String()}
+	}
+	return nil
 }
 
 func runFlashMain() int {
@@ -2311,6 +2334,9 @@ func runFlashCommand(args []string, stdout io.Writer, stderr io.Writer,
 
 	if err := run("make", []string{"flash", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
 		fmt.Fprintf(stderr, "flash: %v\n", err)
+		if strings.Contains(strings.ToLower(commandErrorText(err)), "busy") {
+			fmt.Fprintln(stderr, "flash: port is busy; try: frothy stop")
+		}
 		return 1
 	}
 	return 0
@@ -2386,6 +2412,10 @@ type doctorCheck struct {
 	run  func() (bool, string)
 }
 
+func formatDoctorDeviceFailure(port string, err error) string {
+	return fmt.Sprintf("no status from %s: %v", port, err)
+}
+
 func defaultDoctorChecks() []doctorCheck {
 	return []doctorCheck{
 		{
@@ -2427,12 +2457,12 @@ func defaultDoctorChecks() []doctorCheck {
 				}
 				dev, err := openSerial(port, 115200)
 				if err != nil {
-					return false, fmt.Sprintf("silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s", port)
+					return false, formatDoctorDeviceFailure(port, err)
 				}
 				defer dev.close()
 				time.Sleep(2 * time.Second)
 				if _, err := readDeviceStatus(dev, 3*time.Second); err != nil {
-					return false, fmt.Sprintf("silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s", port)
+					return false, formatDoctorDeviceFailure(port, err)
 				}
 				return true, port
 			},

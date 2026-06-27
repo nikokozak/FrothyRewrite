@@ -47,3 +47,65 @@ test("status round-trip: parsed fields equal the line, malformed fields reject",
     await conn.close();
   }
 });
+
+test("status retry: framing-shaped first response retries once", async () => {
+  let attempts = 0;
+  const fake = new FakeTransport((line) => {
+    if (line !== "status") return "ok\n> ";
+    attempts += 1;
+    return attempts === 1 ? "frothy status v1 profilestatus\nok\n> " : `${STATUS_LINE}\nok\n> `;
+  });
+  const conn = await createConnector(fake);
+
+  const status = await conn.status();
+
+  assert.equal(status.profile, "esp32_plain");
+  assert.equal(attempts, 2);
+  await conn.close();
+});
+
+test("status retry: truncated first status line retries once", async () => {
+  let attempts = 0;
+  const fake = new FakeTransport((line) => {
+    if (line !== "status") return "ok\n> ";
+    attempts += 1;
+    return attempts === 1 ? "frothy status v1\nok\n> " : `${STATUS_LINE}\nok\n> `;
+  });
+  const conn = await createConnector(fake);
+
+  const status = await conn.status();
+
+  assert.equal(status.profile, "esp32_plain");
+  assert.equal(attempts, 2);
+  await conn.close();
+});
+
+test("status retry: semantic bad status does not retry", async () => {
+  let attempts = 0;
+  const fake = new FakeTransport((line) => {
+    if (line !== "status") return "ok\n> ";
+    attempts += 1;
+    return `${STATUS_LINE.replace("storage=eeprom", "storage=flash")}\nok\n> `;
+  });
+  const conn = await createConnector(fake);
+
+  await assert.rejects(conn.status(), (e) => e instanceof WireFormatError);
+
+  assert.equal(attempts, 1);
+  await conn.close();
+});
+
+test("status retry: device error does not retry", async () => {
+  let attempts = 0;
+  const fake = new FakeTransport((line) => {
+    if (line !== "status") return "ok\n> ";
+    attempts += 1;
+    return "error: unsupported (9)\n> ";
+  });
+  const conn = await createConnector(fake);
+
+  await assert.rejects(conn.status(), /status failed: unsupported \(9\)/);
+
+  assert.equal(attempts, 1);
+  await conn.close();
+});

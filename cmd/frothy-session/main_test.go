@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -572,6 +573,25 @@ func TestFrothyFlashPortOverrideSkipsDiscovery(t *testing.T) {
 	}
 }
 
+func TestFrothyFlashSuggestsStopWhenPortLooksBusy(t *testing.T) {
+	runner := func(string, []string) error {
+		return commandOutputError{err: errors.New("exit status 2"), output: "serial port is busy"}
+	}
+	known := func(string) bool { return true }
+	list := func() ([]string, error) {
+		return []string{"/dev/cu.usbserial-0001"}, nil
+	}
+
+	var stderr bytes.Buffer
+	code := runFlashCommand([]string{"esp32_devkit_v1"}, io.Discard, &stderr, known, list, runner)
+	if code != 1 {
+		t.Fatalf("exit code %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "frothy stop") {
+		t.Fatalf("stderr missing frothy stop hint: %q", stderr.String())
+	}
+}
+
 func TestFrothyFlashErrorsOnUnknownBoardBeforeInvokingMake(t *testing.T) {
 	runner := func(string, []string) error {
 		t.Fatal("runner must not run when the board is unknown")
@@ -788,6 +808,16 @@ func TestFrothyDoctorExitsNonZeroWhenAnyCheckFails(t *testing.T) {
 	}
 }
 
+func TestDoctorDeviceFailureReportsProbeErrorWithoutWipeAdvice(t *testing.T) {
+	detail := formatDoctorDeviceFailure("/dev/cu.usbserial-0001", errors.New("malformed status field: profilestatus"))
+	if !strings.Contains(detail, "malformed status field: profilestatus") {
+		t.Fatalf("detail missing probe error: %q", detail)
+	}
+	if strings.Contains(detail, "wipe") {
+		t.Fatalf("detail should not suggest wipe for a failed probe: %q", detail)
+	}
+}
+
 func TestParseDeviceStatus(t *testing.T) {
 	status, err := parseDeviceStatus(statusResponse("host-required"))
 	if err != nil {
@@ -940,6 +970,36 @@ func TestReadDeviceStatusRetriesBareOKWithoutStatusLine(t *testing.T) {
 	}
 	if dev.syncs != 0 {
 		t.Fatalf("syncs=%d, want 0", dev.syncs)
+	}
+}
+
+func TestReadDeviceStatusRetriesMalformedFirstStatusLine(t *testing.T) {
+	dev := &fakeDevice{responses: []string{
+		"frothy status v1 profilestatus\nok\n",
+		statusResponse("device"),
+	}}
+
+	status, err := readDeviceStatus(dev, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.compiler != compilerDevice {
+		t.Fatalf("compiler = %s, want %s", status.compiler, compilerDevice)
+	}
+	if got, want := strings.Join(dev.sent, "\n"), "status\nstatus"; got != want {
+		t.Fatalf("sent %q, want %q", got, want)
+	}
+}
+
+func TestReadDeviceStatusDoesNotRetrySemanticBadStatus(t *testing.T) {
+	dev := &fakeDevice{responses: []string{statusResponse("bogus"), statusResponse("device")}}
+
+	_, err := readDeviceStatus(dev, time.Second)
+	if err == nil {
+		t.Fatal("readDeviceStatus accepted bad compiler mode")
+	}
+	if got, want := strings.Join(dev.sent, "\n"), "status"; got != want {
+		t.Fatalf("sent %q, want %q", got, want)
 	}
 }
 
