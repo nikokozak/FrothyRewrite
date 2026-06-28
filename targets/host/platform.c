@@ -717,7 +717,6 @@ fr_err_t fr_platform_i2c_close(uint16_t platform_index) {
 }
 #endif
 
-#if FR_FEATURE_PAD
 fr_err_t fr_platform_write_bytes(const uint8_t *bytes, uint16_t length) {
   if (bytes == NULL && length > 0) {
     return FR_ERR_INVALID;
@@ -730,7 +729,6 @@ fr_err_t fr_platform_write_bytes(const uint8_t *bytes, uint16_t length) {
   }
   return FR_OK;
 }
-#endif
 
 #if FR_FEATURE_PERSISTENCE
 enum {

@@ -371,6 +371,19 @@ fr_err_t fr_platform_write_text(const char *text) {
 }
 #endif
 
+#if FR_FEATURE_REPL || FR_FEATURE_PAD
+fr_err_t fr_platform_write_bytes(const uint8_t *bytes, uint16_t length) {
+  if (bytes == NULL && length > 0) {
+    return FR_ERR_INVALID;
+  }
+
+  for (uint16_t i = 0; i < length; i++) {
+    fr_avr_uart_put((char)bytes[i]);
+  }
+  return FR_OK;
+}
+#endif
+
 #if FR_FEATURE_PERSISTENCE
 enum {
   FR_PLATFORM_STORAGE_SLOT_COUNT = 2,

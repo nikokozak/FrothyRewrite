@@ -88,7 +88,7 @@ fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof);
 fr_err_t fr_platform_write_text(const char *text);
 #endif
 
-#if FR_FEATURE_PAD
+#if FR_FEATURE_REPL || FR_FEATURE_PAD
 fr_err_t fr_platform_write_bytes(const uint8_t *bytes, uint16_t length);
 #endif
 

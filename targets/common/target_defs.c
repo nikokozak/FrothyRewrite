@@ -423,6 +423,23 @@ static fr_err_t fr_native_pwm_close(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_TEXT || FR_FEATURE_I2C || FR_FEATURE_NET
+static fr_err_t fr_native_decode_text_or_bytes_view(
+    const fr_runtime_t *runtime, fr_tagged_t tagged, const uint8_t **out_bytes,
+    uint16_t *out_length) {
+  fr_object_id_t object_id = 0;
+
+  if (fr_tagged_decode_object_id(tagged, &object_id) == FR_OK) {
+    return fr_text_view(runtime, object_id, out_bytes, out_length);
+  }
+  {
+    fr_bytes_ref_t ref = {0};
+    FR_TRY(fr_tagged_decode_bytes_ref(tagged, &ref));
+    return fr_bytes_view(runtime, ref, out_bytes, out_length);
+  }
+}
+#endif
+
 #if FR_FEATURE_I2C
 enum {
   FR_NATIVE_I2C_ADDR_MAX = 0x7F,
@@ -501,21 +518,6 @@ static fr_err_t fr_native_i2c_open(fr_runtime_t *runtime,
 
   *out = handle;
   return FR_OK;
-}
-
-static fr_err_t fr_native_decode_text_or_bytes_view(
-    const fr_runtime_t *runtime, fr_tagged_t tagged, const uint8_t **out_bytes,
-    uint16_t *out_length) {
-  fr_object_id_t object_id = 0;
-
-  if (fr_tagged_decode_object_id(tagged, &object_id) == FR_OK) {
-    return fr_text_view(runtime, object_id, out_bytes, out_length);
-  }
-  {
-    fr_bytes_ref_t ref = {0};
-    FR_TRY(fr_tagged_decode_bytes_ref(tagged, &ref));
-    return fr_bytes_view(runtime, ref, out_bytes, out_length);
-  }
 }
 
 static fr_err_t fr_native_i2c_write(fr_runtime_t *runtime,
@@ -1192,6 +1194,23 @@ static fr_err_t fr_native_text_pack(fr_runtime_t *runtime,
   FR_TRY(fr_bytes_view(runtime, ref, &bytes, &length));
   FR_TRY(fr_text_install(runtime, bytes, length, &object_id));
   return fr_tagged_encode_object_id(object_id, out);
+}
+#endif
+
+#if FR_FEATURE_TEXT && FR_FEATURE_REPL
+static fr_err_t fr_native_print(fr_runtime_t *runtime, const fr_tagged_t *args,
+                                uint8_t arg_count, fr_tagged_t *out) {
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[0], &bytes,
+                                             &length));
+  FR_TRY(fr_platform_write_bytes(bytes, length));
+  *out = fr_tagged_nil();
+  return FR_OK;
 }
 #endif
 
@@ -2351,6 +2370,18 @@ static const fr_native_signature_t fr_native_text_pack_signature = {
 };
 #endif
 
+#if FR_FEATURE_TEXT && FR_FEATURE_REPL
+static const fr_native_param_t fr_native_print_params[] = {
+    {"value", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+};
+static const fr_native_signature_t fr_native_print_signature = {
+    .params = fr_native_print_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "write raw text or bytes to the console output",
+};
+#endif
+
 #if FR_FEATURE_MATH
 static const fr_native_param_t fr_native_abs_params[] = {
     {"x", FR_NATIVE_VALUE_INT},
@@ -3305,6 +3336,20 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_signature = &fr_native_text_from_int_signature,
 #endif
     },
+#if FR_FEATURE_REPL
+    {
+        .slot_id = FR_SLOT_PRINT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "print",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_print,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_print_signature,
+#endif
+    },
+#endif
 #endif
     {
         .slot_id = FR_SLOT_EVENT_REGISTER,

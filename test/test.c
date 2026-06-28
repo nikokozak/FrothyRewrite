@@ -100,9 +100,17 @@ static fr_err_t test_persist_apply_user_overlay(
 #endif
 
 #if FR_FEATURE_TEXT
+#if FR_FEATURE_REPL
+#define FR_TEST_PRINT_WORD " print"
+#define FR_TEST_PRINT_SLOT_COUNT 1
+#else
+#define FR_TEST_PRINT_WORD ""
+#define FR_TEST_PRINT_SLOT_COUNT 0
+#endif
 #define FR_TEST_TEXT_WORDS                                                    \
-  " text.length text.equals? text.concat text.at text.from-int"
-#define FR_TEST_TEXT_SLOT_COUNT 5
+  " text.length text.equals? text.concat text.at text.from-int"              \
+      FR_TEST_PRINT_WORD
+#define FR_TEST_TEXT_SLOT_COUNT (5 + FR_TEST_PRINT_SLOT_COUNT)
 #else
 #define FR_TEST_TEXT_WORDS ""
 #define FR_TEST_TEXT_SLOT_COUNT 0
@@ -382,8 +390,13 @@ static void test_base_def_contract(void) {
 #if FR_FEATURE_TEXT
   CHECK("text slot ids follow pad block",
         FR_SLOT_TEXT_LENGTH == FR_SLOT_AFTER_PAD);
+#if FR_FEATURE_REPL
+  CHECK("event register slot follows text ids",
+        FR_SLOT_EVENT_REGISTER == FR_SLOT_PRINT + 1);
+#else
   CHECK("event register slot follows text ids",
         FR_SLOT_EVENT_REGISTER == FR_SLOT_TEXT_FROM_INT + 1);
+#endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
@@ -2841,6 +2854,15 @@ static void test_text_natives(void) {
                    "text.from-int(n: int) -> text\n"
                    "render an int as decimal text\n"
                    "ok\n") == 0);
+  CHECK("print renders signature",
+        fr_repl_eval_line(&runtime, "see print", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "print(value: text|bytes) -> nil\n"
+                   "write raw text or bytes to the console output\n"
+                   "ok\n") == 0);
+  CHECK("print rejects int arg",
+        fr_repl_eval_line(&runtime, "print: 7", out, sizeof(out)) ==
+            FR_ERR_TYPE);
 
   CHECK("text.length on bare literal evaluates",
         fr_repl_eval_line(&runtime, "text.length: \"hello\"", out,
@@ -5060,6 +5082,11 @@ static void test_image(void) {
             fr_base_slot_id_for_name("$led_builtin", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_LED_BUILTIN &&
             fr_base_slot_id_for_name("missing", &slot_id) == FR_ERR_NOT_FOUND);
+#if FR_FEATURE_TEXT && FR_FEATURE_REPL
+  CHECK("base image looks up print slot name",
+        fr_base_slot_id_for_name("print", &slot_id) == FR_OK &&
+            slot_id == FR_SLOT_PRINT);
+#endif
 #if FR_FEATURE_UART
   CHECK("base image looks up uart slot names",
         fr_base_slot_id_for_name("uart.open", &slot_id) == FR_OK &&

@@ -474,6 +474,10 @@ test-host-normal-transcript: host-normal
 		'pad.emit-byte: 10' \
 		'pad.len:' \
 		'pad.type' \
+		'say_ready is fn [ print: "inner"; print: "\\n" ]' \
+		'say_ready:' \
+		'say_bytes is fn [ print: bytes.from-text: "bytes\\n" ]' \
+		'say_bytes:' \
 		'status is cells(1)' \
 		'set status[0] to message' \
 		'status[0]' \
@@ -489,7 +493,7 @@ test-host-normal-transcript: host-normal
 		'words' \
 		| build/host/frothy-host-normal); \
 	ok_count=$$(printf '%s\n' "$$out" | grep -c 'ok$$'); \
-	if [ "$$ok_count" != 50 ]; then \
+	if [ "$$ok_count" != 54 ]; then \
 		printf '%s\n' "$$out"; \
 		exit 1; \
 	fi; \
@@ -504,6 +508,8 @@ test-host-normal-transcript: host-normal
 		'overlay text 5' \
 		'pad.emit-byte' \
 		'> A' \
+		'> inner' \
+		'> bytes' \
 		'2' \
 		'overlay code' \
 		'1001' \
