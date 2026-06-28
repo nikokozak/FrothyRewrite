@@ -178,6 +178,14 @@ func TestBootstrapHelpSnapshot(t *testing.T) {
 	checkGolden(t, "bootstrap", out.Bytes())
 }
 
+func TestMenuHelpSnapshot(t *testing.T) {
+	var out bytes.Buffer
+	if code := runMenuCommand([]string{"--help"}, strings.NewReader(""), &out, io.Discard, menuContext{}, nil); code != 0 {
+		t.Fatalf("menu --help exit = %d, want 0", code)
+	}
+	checkGolden(t, "menu", out.Bytes())
+}
+
 // TestHelpShapeConsistency asserts every verb in availableVerbs() prints help
 // in the documented template: a "frothy <verb> —" summary line, an "Examples:"
 // section, and a "Flags:" section. User-model corruption it prevents:

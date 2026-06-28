@@ -1,0 +1,9 @@
+frothy menu — choose common Frothy workflows from a numbered terminal menu
+
+Menu is a small numbered guide for common Frothy workflows. It does not own device, build, flash, or serial behavior; it prints the equivalent command and runs the existing verb. Use it when you want help choosing the next step, then graduate to the verbs it shows.
+
+Examples:
+  frothy menu
+      open the numbered setup, connect, and recovery menu
+
+Flags:

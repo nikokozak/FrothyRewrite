@@ -2031,6 +2031,13 @@ type verb struct {
 
 func availableVerbs() []verb {
 	return []verb{
+		{name: "menu", summary: "choose common Frothy workflows from a numbered terminal menu", run: runMenuMain,
+			longDesc: "Menu is a small numbered guide for common Frothy workflows. It does " +
+				"not own device, build, flash, or serial behavior; it prints the equivalent " +
+				"command and runs the existing verb. Use it when you want help choosing the " +
+				"next step, then graduate to the verbs it shows.",
+			examples: "  frothy menu\n" +
+				"      open the numbered setup, connect, and recovery menu"},
 		{name: "session", summary: "open an interactive REPL session over serial", run: runSessionMain,
 			longDesc: "Session opens a richer interactive REPL than connect: it can compile " +
 				"Frothy source on the host when the device advertises host-optional mode, " +
@@ -2574,6 +2581,10 @@ func printFrothyUsage(out io.Writer, verbs []verb) {
 
 func main() {
 	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "frothy" {
+		frothySelfPath = resolveMenuExecutable(os.Args[0])
+		if interactiveFrothyMenu(os.Args, os.Stdin, os.Stdout) {
+			os.Args = append(os.Args, "menu")
+		}
 		os.Exit(runFrothyCommand(os.Args, os.Stdout, os.Stderr, availableVerbs()))
 	}
 	runSessionMain()
