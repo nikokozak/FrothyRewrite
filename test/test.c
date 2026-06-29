@@ -5263,6 +5263,21 @@ static void test_parse(void) {
             parsed.expr_count == 1 &&
             fr_parse_span_equals(parsed.definition.name, "boot") &&
             parsed.exprs[parsed.definition.value].kind == FR_PARSE_EXPR_NIL);
+  CHECK("parse skips line comment",
+        fr_parse_line("boot is nil -- keep boot empty", &parsed) == FR_OK &&
+            parsed.expr_count == 1 &&
+            fr_parse_span_equals(parsed.definition.name, "boot") &&
+            parsed.exprs[parsed.definition.value].kind == FR_PARSE_EXPR_NIL);
+  CHECK("parse skips whole line comment",
+        fr_parse_expression_line("-- just a note", &parsed, &expr_id) ==
+            FR_ERR_INVALID);
+  CHECK("parse skips block comment",
+        fr_parse_line("boot is -* ignored [ ] *- nil", &parsed) == FR_OK &&
+            parsed.expr_count == 1 &&
+            fr_parse_span_equals(parsed.definition.name, "boot") &&
+            parsed.exprs[parsed.definition.value].kind == FR_PARSE_EXPR_NIL);
+  CHECK("parse rejects open block comment",
+        fr_parse_line("boot is -* unfinished", &parsed) == FR_ERR_INVALID);
   CHECK("parse definition trailing semicolon",
         fr_parse_line("boot is nil;", &parsed) == FR_OK &&
             parsed.expr_count == 1 &&

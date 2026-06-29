@@ -759,12 +759,14 @@ func (s deviceStatus) useHostCompiler(hostCompile bool) (bool, error) {
 }
 
 type sourceFormState struct {
-	lines        []string
-	parenDepth   int
-	bracketDepth int
-	braceDepth   int
-	inString     bool
-	escaped      bool
+	lines          []string
+	codeLines      []string
+	parenDepth     int
+	bracketDepth   int
+	braceDepth     int
+	inString       bool
+	escaped        bool
+	inBlockComment bool
 }
 
 func (s *sourceFormState) hasPending() bool {
@@ -773,25 +775,30 @@ func (s *sourceFormState) hasPending() bool {
 
 func (s *sourceFormState) reset() {
 	s.lines = nil
+	s.codeLines = nil
 	s.parenDepth = 0
 	s.bracketDepth = 0
 	s.braceDepth = 0
 	s.inString = false
 	s.escaped = false
+	s.inBlockComment = false
 }
 
 func (s *sourceFormState) appendLine(line string) (string, bool) {
 	trimmed := strings.TrimSpace(line)
-	if !s.hasPending() && trimmed == "" {
+	code := s.scan(line)
+	codeTrimmed := strings.TrimSpace(code)
+	if !s.hasPending() && codeTrimmed == "" {
 		return "", false
 	}
 
 	s.lines = append(s.lines, trimmed)
-	s.scan(line)
+	s.codeLines = append(s.codeLines, codeTrimmed)
 
 	source := s.source()
+	codeSource := s.codeSource()
 	if s.parenDepth == 0 && s.bracketDepth == 0 && s.braceDepth == 0 &&
-		!s.inString && !sourceNeedsContinuation(source) {
+		!s.inString && !s.inBlockComment && !sourceNeedsContinuation(codeSource) {
 		s.reset()
 		return source, true
 	}
@@ -808,10 +815,30 @@ func (s *sourceFormState) source() string {
 	return strings.Join(parts, " ")
 }
 
-func (s *sourceFormState) scan(line string) {
+func (s *sourceFormState) codeSource() string {
+	parts := make([]string, 0, len(s.codeLines))
+	for _, line := range s.codeLines {
+		if line != "" {
+			parts = append(parts, line)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func (s *sourceFormState) scan(line string) string {
+	var code strings.Builder
+
 	for i := 0; i < len(line); i++ {
 		ch := line[i]
+		if s.inBlockComment {
+			if ch == '*' && i+1 < len(line) && line[i+1] == '-' {
+				s.inBlockComment = false
+				i++
+			}
+			continue
+		}
 		if s.inString {
+			code.WriteByte(ch)
 			if s.escaped {
 				s.escaped = false
 				continue
@@ -824,6 +851,16 @@ func (s *sourceFormState) scan(line string) {
 				s.inString = false
 			}
 			continue
+		}
+		if ch == '-' && i+1 < len(line) && frothyCommentCanStart(line, i) {
+			if line[i+1] == '-' {
+				break
+			}
+			if line[i+1] == '*' {
+				s.inBlockComment = true
+				i++
+				continue
+			}
 		}
 
 		switch ch {
@@ -848,7 +885,9 @@ func (s *sourceFormState) scan(line string) {
 				s.braceDepth--
 			}
 		}
+		code.WriteByte(ch)
 	}
+	return code.String()
 }
 
 func sourceNeedsContinuation(source string) bool {
@@ -1000,7 +1039,8 @@ func collectSourceForms(input io.Reader) ([]string, error) {
 }
 
 func isBootDefinition(line string) bool {
-	fields := strings.Fields(line)
+	inBlockComment := false
+	fields := strings.Fields(stripFrothyComments(line, &inBlockComment))
 	return len(fields) >= 2 && fields[0] == "boot" && fields[1] == "is"
 }
 

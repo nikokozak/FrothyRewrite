@@ -45,6 +45,21 @@ func TestPreprocessIncludeSplicesSibling(t *testing.T) {
 	}
 }
 
+func TestPreprocessIncludeIgnoresComments(t *testing.T) {
+	files := map[string]string{
+		"proj/main.fr": "-- header\ninclude \"pins.fr\" -- board pins\n-* ignored include \"ghost.fr\" *-\nto main [ ]\n",
+		"proj/pins.fr": "led is 13\n",
+	}
+	got, err := preprocessInclude("proj/main.fr", mapLoad(files))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "-- header\nled is 13\n-* ignored include \"ghost.fr\" *-\nto main [ ]\n"
+	if got != want {
+		t.Fatalf("mismatch:\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
 func TestPreprocessIncludeNested(t *testing.T) {
 	files := map[string]string{
 		"libs/x/lib.fr": "include \"a.fr\"\nto x.tail [ ]\n",
@@ -151,6 +166,8 @@ func TestMatchInclude(t *testing.T) {
 		ok   bool
 	}{
 		{"include \"helpers.fr\"\n", "helpers.fr", true},
+		{"include \"helpers.fr\" -- helper words\n", "helpers.fr", true},
+		{"include \"helpers.fr\" -* helper words *-\n", "helpers.fr", true},
 		{"include \"a.fr\"", "a.fr", true},
 		{"  include \"a.fr\"\n", "a.fr", true},
 		{"\tinclude \"a.fr\"\n", "a.fr", true},
@@ -166,6 +183,8 @@ func TestMatchInclude(t *testing.T) {
 		{"include \"\"\n", "", false},
 		{"include \"a.fr\" extra\n", "", false},
 		{"include \"a.fr\n", "", false},
+		{"-- include \"a.fr\"\n", "", false},
+		{"-* include \"a.fr\" *-\n", "", false},
 		{"iinclude \"a.fr\"\n", "", false},
 		{"included \"a.fr\"\n", "", false},
 	}

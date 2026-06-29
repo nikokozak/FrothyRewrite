@@ -1185,6 +1185,22 @@ func TestSourceFormReaderPromptsAndGroupsMultilineTopForms(t *testing.T) {
 	}
 }
 
+func TestSourceFormReaderIgnoresCommentBrackets(t *testing.T) {
+	reader := newSourceFormReader(strings.NewReader("-- header\nboot is fn [\n  -* ignored [ [\n  ] *-\n  one\n]\n"))
+	var out strings.Builder
+
+	source, ok, err := reader.next(&out, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || source != "boot is fn [ -* ignored [ [ ] *- one ]" {
+		t.Fatalf("source=%q ok=%v, want grouped form with comments ignored", source, ok)
+	}
+	if got, want := out.String(), "frothy> frothy> .. .. .. .. "; got != want {
+		t.Fatalf("prompts %q, want %q", got, want)
+	}
+}
+
 type chunkReader struct {
 	chunks []string
 	before []func()

@@ -36,8 +36,10 @@ func preprocessIncludeAt(path string, load func(string) (string, error), stack [
 	stack = append(stack, path)
 	dir := filepath.Dir(path)
 	var b strings.Builder
+	inBlockComment := false
 	for _, line := range strings.SplitAfter(src, "\n") {
-		target, ok := matchInclude(line)
+		directiveLine := stripFrothyComments(line, &inBlockComment)
+		target, ok := matchInclude(directiveLine)
 		if !ok {
 			b.WriteString(line)
 			continue
@@ -55,12 +57,72 @@ func preprocessIncludeAt(path string, load func(string) (string, error), stack [
 	return b.String(), nil
 }
 
+func frothyCommentCanStart(line string, i int) bool {
+	if i == 0 {
+		return true
+	}
+	prev := line[i-1]
+	return prev == ' ' || prev == '\t' || prev == '\n' || prev == '\r' ||
+		prev == '[' || prev == '(' || prev == ':' || prev == ',' || prev == ';'
+}
+
+func stripFrothyComments(line string, inBlockComment *bool) string {
+	var b strings.Builder
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		if *inBlockComment {
+			if ch == '*' && i+1 < len(line) && line[i+1] == '-' {
+				*inBlockComment = false
+				i++
+			}
+			continue
+		}
+		if inString {
+			b.WriteByte(ch)
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		if ch == '"' {
+			inString = true
+			b.WriteByte(ch)
+			continue
+		}
+		if ch == '-' && i+1 < len(line) && frothyCommentCanStart(line, i) {
+			if line[i+1] == '-' {
+				break
+			}
+			if line[i+1] == '*' {
+				*inBlockComment = true
+				i++
+				continue
+			}
+		}
+		b.WriteByte(ch)
+	}
+	return b.String()
+}
+
 // One line, one directive: `include "<path>"` with optional surrounding
 // whitespace. Anything else passes through verbatim so the Frothy
 // parser handles it. Refusing malformed directives here would compete
 // with the parser's error reporting; the splice runs only when the
 // shape is unambiguous.
 func matchInclude(line string) (string, bool) {
+	inBlockComment := false
+	line = stripFrothyComments(line, &inBlockComment)
 	s := strings.TrimSpace(line)
 	const kw = "include"
 	if !strings.HasPrefix(s, kw) {
