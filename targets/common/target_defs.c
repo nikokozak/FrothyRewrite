@@ -65,7 +65,8 @@ static fr_err_t fr_native_ms(fr_runtime_t *runtime, const fr_tagged_t *args,
 
 static fr_err_t fr_native_millis(fr_runtime_t *runtime, const fr_tagged_t *args,
                                  uint8_t arg_count, fr_tagged_t *out) {
-  uint16_t ms = 0;
+  uint32_t ms = 0;
+  uint32_t shown_ms = 0;
 
   (void)runtime;
   if (args == NULL && arg_count > 0) {
@@ -76,7 +77,10 @@ static fr_err_t fr_native_millis(fr_runtime_t *runtime, const fr_tagged_t *args,
   }
 
   FR_TRY(fr_platform_millis(&ms));
-  return fr_tagged_encode_int((int32_t)ms, out);
+  /* The tagged-int band is the user-visible clock ceiling: millis wraps after
+   * FR_TAGGED_INT_MAX + 1 ms, about 12.4 days on the 32-bit runtime. */
+  shown_ms = ms % ((uint32_t)FR_TAGGED_INT_MAX + 1u);
+  return fr_tagged_encode_int((int32_t)shown_ms, out);
 }
 
 static fr_err_t fr_native_gpio_mode(fr_runtime_t *runtime,
@@ -1740,7 +1744,7 @@ static fr_err_t fr_native_fire_event(fr_runtime_t *runtime,
   bool edge_is_rising = false;
   bool edge_is_falling = false;
   fr_event_kind_t timer_kind = FR_EVENT_KIND_NONE;
-  uint16_t now_ms = 0;
+  uint32_t now_ms = 0;
 
   if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
     return FR_ERR_INVALID;
@@ -1807,7 +1811,7 @@ static fr_err_t fr_native_fire_event(fr_runtime_t *runtime,
     if (matches) {
       FR_TRY(fr_platform_millis(&now_ms));
       FR_TRY(fr_platform_event_post_test_candidate(i, entry->generation,
-                                                   (uint32_t)now_ms));
+                                                   now_ms));
       *out = fr_tagged_nil();
       return FR_OK;
     }
@@ -1841,7 +1845,7 @@ static const fr_native_signature_t fr_native_millis_signature = {
     .params = NULL,
     .arg_count = 0,
     .result = FR_NATIVE_VALUE_INT,
-    .help = "read the millisecond clock since boot",
+    .help = "read milliseconds since boot, wrapped to int range",
 };
 
 #if FR_FEATURE_PAD

@@ -69,6 +69,7 @@ typedef struct fr_event_binding_t {
 typedef struct fr_event_table_t {
   fr_event_binding_t entries[FR_EVENT_BINDING_COUNT];
   uint32_t overflow_count;
+  uint32_t overflow_reported_count;
 } fr_event_table_t;
 
 #if FR_FEATURE_BYTES && FR_PROFILE_BYTES_COUNT == 0

@@ -3549,9 +3549,17 @@ static void test_event_drain_dispatch(void) {
         fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
             fr_tagged_decode_int(slot_value, &decoded) != FR_OK);
 
+  gpio_entry->registered_at_ms = UINT32_MAX - 4u;
+  CHECK("post candidate before wrapped registration",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation,
+                                              UINT32_MAX - 8u) == FR_OK);
+  CHECK("drain before wrapped registration", fr_event_drain(&runtime) == FR_OK);
+  CHECK("wrapped stale leaves pending false", gpio_entry->pending == false);
+  CHECK("wrapped stale leaves last fire zero", gpio_entry->last_fire_ms == 0);
+
   /* Fresh candidate fires the body. */
   CHECK("post fresh candidate",
-        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 50) ==
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 3) ==
             FR_OK);
   CHECK("drain fresh", fr_event_drain(&runtime) == FR_OK);
   CHECK("dispatch fresh", fr_event_dispatch(&runtime) == FR_OK);
@@ -3559,7 +3567,7 @@ static void test_event_drain_dispatch(void) {
         fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
             fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
             decoded == 42);
-  CHECK("last fire stamped", gpio_entry->last_fire_ms == 50);
+  CHECK("last fire stamped", gpio_entry->last_fire_ms == 3);
   CHECK("pending cleared after run", gpio_entry->pending == false);
   CHECK("binding still registered after fire",
         gpio_entry->kind == FR_EVENT_KIND_GPIO_RISING);
@@ -3653,6 +3661,9 @@ static void test_event_debounce_drops_within_window(void) {
   fr_tagged_t slot_value = 0;
   fr_tagged_t zero = 0;
   fr_int_t decoded = 0;
+  const uint32_t first_ms = UINT32_MAX - 10u;
+  const uint32_t within_ms = 9u;
+  const uint32_t after_ms = 24u;
   uint8_t body_bytes[] = {0x00, 0x00,
                           FR_OP_LOAD_SLOT, 0x00, 0x00,
                           FR_TEST_PUSH_INT(1),
@@ -3683,37 +3694,39 @@ static void test_event_debounce_drops_within_window(void) {
         fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 30,
                           body_id) == FR_OK);
   gpio_entry = &runtime.events.entries[0];
+  gpio_entry->registered_at_ms = first_ms - 5u;
 
-  CHECK("debounce post first at t=50",
-        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 50) ==
-            FR_OK);
+  CHECK("debounce post first near u32 wrap",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation,
+                                              first_ms) == FR_OK);
   CHECK("debounce drain first", fr_event_drain(&runtime) == FR_OK);
   CHECK("debounce dispatch first", fr_event_dispatch(&runtime) == FR_OK);
   CHECK("debounce counter is one after first",
         fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
             fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
             decoded == 1);
-  CHECK("debounce last_fire stamped at 50", gpio_entry->last_fire_ms == 50);
+  CHECK("debounce last_fire stamped near wrap",
+        gpio_entry->last_fire_ms == first_ms);
 
-  /* 20ms after the first fire sits inside the 30ms window; drop it. */
-  CHECK("debounce post second at t=70 (within window)",
-        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 70) ==
-            FR_OK);
+  /* 20ms after the first fire crosses uint32 wrap and stays inside the window. */
+  CHECK("debounce post wrapped second within window",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation,
+                                              within_ms) == FR_OK);
   CHECK("debounce drain within window", fr_event_drain(&runtime) == FR_OK);
   CHECK("debounce within-window leaves pending false",
         gpio_entry->pending == false);
   CHECK("debounce within-window leaves last_fire untouched",
-        gpio_entry->last_fire_ms == 50);
+        gpio_entry->last_fire_ms == first_ms);
   CHECK("debounce dispatch is a no-op", fr_event_dispatch(&runtime) == FR_OK);
   CHECK("debounce counter still one",
         fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
             fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
             decoded == 1);
 
-  /* 35ms after the first fire sits past the window; accept it. */
-  CHECK("debounce post third at t=85 (past window)",
-        fr_platform_event_post_test_candidate(0, gpio_entry->generation, 85) ==
-            FR_OK);
+  /* 35ms after the first fire crosses uint32 wrap and sits past the window. */
+  CHECK("debounce post wrapped third past window",
+        fr_platform_event_post_test_candidate(0, gpio_entry->generation,
+                                              after_ms) == FR_OK);
   CHECK("debounce drain past window", fr_event_drain(&runtime) == FR_OK);
   CHECK("debounce past-window pends", gpio_entry->pending == true);
   CHECK("debounce dispatch second", fr_event_dispatch(&runtime) == FR_OK);
@@ -3721,7 +3734,8 @@ static void test_event_debounce_drops_within_window(void) {
         fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
             fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
             decoded == 2);
-  CHECK("debounce last_fire stamped at 85", gpio_entry->last_fire_ms == 85);
+  CHECK("debounce last_fire stamped after wrap",
+        gpio_entry->last_fire_ms == after_ms);
 }
 
 /* A first accepted fire at t=0 must still arm the window. Without a separate
@@ -9078,8 +9092,10 @@ static void test_repl(void) {
 #endif
   char out[1024];
 #if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS
-  uint16_t before_ms = 0;
-  uint16_t after_ms = 0;
+  uint32_t before_ms = 0;
+  uint32_t after_ms = 0;
+  const uint32_t millis_period = (uint32_t)FR_TAGGED_INT_MAX + 1u;
+  const uint32_t millis_wrap_probe = (uint32_t)FR_TAGGED_INT_MAX - 5u;
 #if FR_TAGGED_INT_MAX > 65535
   uint16_t gpio_value = 0;
 #endif
@@ -9298,7 +9314,7 @@ static void test_repl(void) {
         fr_repl_eval_line(&runtime, "see millis", out, sizeof(out)) == FR_OK &&
             strcmp(out,
                    "millis() -> int\n"
-                   "read the millisecond clock since boot\n"
+                   "read milliseconds since boot, wrapped to int range\n"
                    "ok\n") == 0);
   CHECK("repl see ms renders signature",
         fr_repl_eval_line(&runtime, "see ms", out, sizeof(out)) == FR_OK &&
@@ -9388,9 +9404,35 @@ static void test_repl(void) {
   CHECK("repl reads millis",
         fr_repl_eval_line(&runtime, "millis:", out, sizeof(out)) == FR_OK &&
             strcmp(out, expected_ms) == 0);
-  after_ms = (uint16_t)((before_ms + 10u) % 16384u);
+  after_ms = before_ms + 10u;
   snprintf(expected_ms, sizeof(expected_ms), "%u\nok\n", (unsigned)after_ms);
   CHECK("repl advances millis during ms",
+        fr_repl_eval_line(&runtime, "ms: 10", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "millis:", out, sizeof(out)) == FR_OK &&
+            strcmp(out, expected_ms) == 0);
+  {
+    uint32_t shown_ms = after_ms % millis_period;
+    uint32_t advance_ms =
+        millis_wrap_probe >= shown_ms
+            ? millis_wrap_probe - shown_ms
+            : millis_period - shown_ms + millis_wrap_probe;
+
+    while (advance_ms > 0) {
+      uint16_t step = advance_ms > UINT16_MAX ? UINT16_MAX
+                                              : (uint16_t)advance_ms;
+      CHECK("repl advances simulated millis toward tagged ceiling",
+            fr_platform_delay_ms(step) == FR_OK);
+      advance_ms -= step;
+    }
+  }
+  snprintf(expected_ms, sizeof(expected_ms), "%u\nok\n",
+           (unsigned)millis_wrap_probe);
+  CHECK("repl millis reaches tagged ceiling",
+        fr_repl_eval_line(&runtime, "millis:", out, sizeof(out)) == FR_OK &&
+            strcmp(out, expected_ms) == 0);
+  snprintf(expected_ms, sizeof(expected_ms), "4\nok\n");
+  CHECK("repl millis wraps at tagged ceiling",
         fr_repl_eval_line(&runtime, "ms: 10", out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "millis:", out, sizeof(out)) == FR_OK &&
