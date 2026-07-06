@@ -7956,6 +7956,10 @@ static void test_persist(void) {
             fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
             decoded == 100000);
+  /* The saturated-cursor test needs a payload above 1024 bytes, which needs
+     both a roomy persistence image and many overlay-name slots. Skip it on
+     small-pressure profiles that have neither. */
+#if FR_PROFILE_PERSISTENCE_BYTES > 1024
   {
     /* Drive payload well past the 16-bit profile 512-byte ceiling so the
        uint16_t writer/reader cursors are exercised at 32-bit-profile scale.
@@ -7985,6 +7989,7 @@ static void test_persist(void) {
           fr_base_image_install(&runtime) == FR_OK &&
               fr_persist_restore(&runtime) == FR_OK);
   }
+#endif
 #endif
   CHECK("persist restores dynamic slot ids",
         fr_base_image_install(&runtime) == FR_OK &&
