@@ -73,6 +73,7 @@ fr_err_t fr_instruction_stream_init(fr_instruction_stream_t *view,
                                     const uint8_t *bytes, uint16_t length);
 fr_err_t fr_instruction_read_header(const fr_instruction_stream_t *view,
                                     fr_instruction_header_t *header);
+fr_err_t fr_verify_code_object(const fr_instruction_stream_t *view);
 fr_err_t fr_instruction_read_slot_operand(const fr_instruction_stream_t *view,
                                           fr_code_offset_t ip,
                                           fr_slot_id_t *out_slot_id);
