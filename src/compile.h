@@ -5,8 +5,8 @@
 
 #include <stdbool.h>
 
-typedef char fr_compile_assert_overlay_text_cap_matches_parse_body
-    [(FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS == FR_PARSE_MAX_BODY_EXPRS)
+typedef char fr_compile_assert_overlay_text_cap_fits_parse_body
+    [(FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS <= FR_PARSE_MAX_BODY_EXPRS)
          ? 1
          : -1];
 
@@ -30,7 +30,8 @@ typedef struct fr_compile_overlay_update_t {
   fr_image_code_object_t code_objects_storage[2];
   fr_image_cell_object_t cell_object;
   fr_image_text_object_t text_object;
-  fr_image_text_object_t text_objects[FR_PARSE_MAX_BODY_EXPRS];
+  fr_image_text_object_t
+      text_objects[FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS];
   fr_image_record_shape_object_t record_shape_object;
   fr_image_record_object_t record_object;
   fr_record_name_t record_fields[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
@@ -43,7 +44,7 @@ typedef struct fr_compile_overlay_update_t {
                          : 1];
   /* Scratch for text bytes collected from one line, either record-field
    * defaults or function-body literals. Both paths feed text_objects[]. */
-  uint8_t body_text_bytes[FR_PARSE_MAX_BODY_EXPRS]
+  uint8_t body_text_bytes[FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS]
                          [FR_PROFILE_MAX_TEXT_LENGTH > 0
                               ? FR_PROFILE_MAX_TEXT_LENGTH
                               : 1];

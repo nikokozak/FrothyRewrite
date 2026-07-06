@@ -1512,7 +1512,7 @@ static fr_err_t fr_compile_record_field_ref(
   if (expr->kind == FR_PARSE_EXPR_TEXT) {
     uint16_t copied_length = 0;
 
-    if (*text_count >= FR_PARSE_MAX_BODY_EXPRS ||
+    if (*text_count >= FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS ||
         (!expr->text_has_escapes &&
          expr->text.length > FR_PROFILE_MAX_TEXT_LENGTH)) {
       return FR_ERR_RANGE;
@@ -1601,7 +1601,7 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
   fr_compile_body_texts_t body_texts = {
       .objects = out->text_objects,
       .storage = out->body_text_bytes,
-      .capacity = FR_PARSE_MAX_BODY_EXPRS,
+      .capacity = FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS,
       .count = 0,
   };
   fr_compile_locals_t locals = {0};

@@ -158,6 +158,30 @@
 #define FR_PROFILE_MAX_NAME_BYTES 32
 #endif
 
+#ifndef FR_PROFILE_PARSE_MAX_TOKEN_BYTES
+#define FR_PROFILE_PARSE_MAX_TOKEN_BYTES 32
+#endif
+
+#ifndef FR_PROFILE_PARSE_MAX_EXPR_DEPTH
+#define FR_PROFILE_PARSE_MAX_EXPR_DEPTH 8
+#endif
+
+#ifndef FR_PROFILE_PARSE_MAX_EXPR_NODES
+#define FR_PROFILE_PARSE_MAX_EXPR_NODES 32
+#endif
+
+#ifndef FR_PROFILE_PARSE_MAX_BODY_EXPRS
+#define FR_PROFILE_PARSE_MAX_BODY_EXPRS 8
+#endif
+
+#ifndef FR_PROFILE_PARSE_MAX_PARAMS
+#define FR_PROFILE_PARSE_MAX_PARAMS 4
+#endif
+
+#ifndef FR_PROFILE_PARSE_MAX_LOCALS
+#define FR_PROFILE_PARSE_MAX_LOCALS 4
+#endif
+
 /* Optional on-device names for live project overlay slots. */
 #ifndef FR_PROFILE_MAX_OVERLAY_NAMES
 #define FR_PROFILE_MAX_OVERLAY_NAMES 0
@@ -198,8 +222,8 @@
 #define FR_PROFILE_OVERLAY_UPDATE_VERSION 3
 #endif
 
-/* Must equal FR_PARSE_MAX_BODY_EXPRS; static-asserted in compile.h. The literal
- * is repeated here because config.h sits below parse.h in the include order. */
+/* Separate from FR_PROFILE_PARSE_MAX_BODY_EXPRS: this is the number of
+ * max-length text literals one overlay compile/decode scratch can carry. */
 #ifndef FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS
 #define FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS 8
 #endif
@@ -242,6 +266,46 @@
 
 #if FR_PROFILE_MAX_NAME_BYTES == 0
 #error "FR_PROFILE_MAX_NAME_BYTES must be greater than zero"
+#endif
+
+#if FR_PROFILE_PARSE_MAX_TOKEN_BYTES == 0
+#error "FR_PROFILE_PARSE_MAX_TOKEN_BYTES must be greater than zero"
+#endif
+
+#if FR_PROFILE_PARSE_MAX_EXPR_DEPTH == 0 ||                                   \
+    FR_PROFILE_PARSE_MAX_EXPR_DEPTH > 64
+#error "FR_PROFILE_PARSE_MAX_EXPR_DEPTH must be between 1 and 64"
+#endif
+
+#if FR_PROFILE_PARSE_MAX_EXPR_NODES == 0 ||                                   \
+    FR_PROFILE_PARSE_MAX_EXPR_NODES > 255
+#error "FR_PROFILE_PARSE_MAX_EXPR_NODES must fit the uint8_t expression id"
+#endif
+
+#if FR_PROFILE_PARSE_MAX_BODY_EXPRS == 0 ||                                    \
+    FR_PROFILE_PARSE_MAX_BODY_EXPRS > 255
+#error "FR_PROFILE_PARSE_MAX_BODY_EXPRS must fit the uint8_t child count"
+#endif
+
+#if FR_PROFILE_PARSE_MAX_PARAMS > 255
+#error "FR_PROFILE_PARSE_MAX_PARAMS must fit the one-byte arity field"
+#endif
+
+#if FR_PROFILE_PARSE_MAX_LOCALS > 255
+#error "FR_PROFILE_PARSE_MAX_LOCALS must fit the one-byte local field"
+#endif
+
+#if FR_PROFILE_PARSE_MAX_PARAMS > FR_PROFILE_MAX_STACK_DEPTH
+#error "FR_PROFILE_PARSE_MAX_PARAMS cannot exceed FR_PROFILE_MAX_STACK_DEPTH"
+#endif
+
+#if FR_PROFILE_PARSE_MAX_LOCALS > FR_PROFILE_MAX_STACK_DEPTH
+#error "FR_PROFILE_PARSE_MAX_LOCALS cannot exceed FR_PROFILE_MAX_STACK_DEPTH"
+#endif
+
+#if FR_PROFILE_PARSE_MAX_PARAMS + FR_PROFILE_PARSE_MAX_LOCALS >                \
+    FR_PROFILE_MAX_STACK_DEPTH
+#error "FR_PROFILE_PARSE_MAX_PARAMS plus FR_PROFILE_PARSE_MAX_LOCALS cannot exceed FR_PROFILE_MAX_STACK_DEPTH"
 #endif
 
 #if FR_PROFILE_REPL_LINE_BYTES == 0
