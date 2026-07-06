@@ -76,6 +76,39 @@ static fr_err_t fr_source_put_int(fr_source_render_t *r, fr_int_t value) {
   return FR_OK;
 }
 
+static fr_err_t fr_source_put_hex_byte(fr_source_render_t *r, uint8_t byte) {
+  static const char digits[] = "0123456789abcdef";
+
+  FR_TRY(fr_source_puts(r, "\\x"));
+  FR_TRY(fr_source_putc(r, digits[byte >> 4]));
+  return fr_source_putc(r, digits[byte & 0x0fu]);
+}
+
+static fr_err_t fr_source_put_quoted_text(fr_source_render_t *r,
+                                          const uint8_t *bytes,
+                                          uint16_t length) {
+  FR_TRY(fr_source_putc(r, '"'));
+  for (uint16_t i = 0; i < length; i++) {
+    uint8_t byte = bytes[i];
+
+    if (byte == '"' || byte == '\\') {
+      FR_TRY(fr_source_putc(r, '\\'));
+      FR_TRY(fr_source_putc(r, (char)byte));
+    } else if (byte == '\n') {
+      FR_TRY(fr_source_puts(r, "\\n"));
+    } else if (byte == '\r') {
+      FR_TRY(fr_source_puts(r, "\\r"));
+    } else if (byte == '\t') {
+      FR_TRY(fr_source_puts(r, "\\t"));
+    } else if (byte >= 0x20u && byte <= 0x7eu) {
+      FR_TRY(fr_source_putc(r, (char)byte));
+    } else {
+      FR_TRY(fr_source_put_hex_byte(r, byte));
+    }
+  }
+  return fr_source_putc(r, '"');
+}
+
 /* Step past the trailing NUL, then record the fragment on the stack. */
 static fr_err_t fr_source_seal(fr_source_render_t *r, uint16_t start,
                                bool parenthesize) {
@@ -565,11 +598,7 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
 
       FR_TRY(fr_instruction_read_object_id_operand(view, ip, &object_id));
       FR_TRY(fr_text_view(r->runtime, object_id, &bytes, &length));
-      FR_TRY(fr_source_putc(r, '"'));
-      for (uint16_t i = 0; i < length; i++) {
-        FR_TRY(fr_source_putc(r, (char)bytes[i]));
-      }
-      FR_TRY(fr_source_putc(r, '"'));
+      FR_TRY(fr_source_put_quoted_text(r, bytes, length));
       FR_TRY(fr_source_seal(r, start, false));
       ip = (fr_code_offset_t)(ip + FR_INSTRUCTION_PUSH_OBJECT_ID_SIZE);
       break;

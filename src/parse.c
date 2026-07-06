@@ -37,6 +37,7 @@ typedef struct fr_token_t {
   fr_parse_span_t span;
   fr_int_t int_value;
   bool leading_space;
+  bool text_has_escapes;
 } fr_token_t;
 
 typedef struct fr_parser_t {
@@ -58,6 +59,13 @@ static bool fr_parse_is_space(char c) {
 }
 
 static bool fr_parse_is_digit(char c) { return c >= '0' && c <= '9'; }
+
+#if FR_FEATURE_TEXT
+static bool fr_parse_is_hex_digit(char c) {
+  return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+         (c >= 'A' && c <= 'F');
+}
+#endif
 
 static bool fr_parse_is_punctuation(char c) {
   return c == '[' || c == ']' || c == '(' || c == ')' || c == ':' ||
@@ -250,6 +258,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
   bool leading_space = false;
   fr_token_kind_t prev_kind = parser->token.kind;
 
+  parser->token.text_has_escapes = false;
   FR_TRY(fr_parse_skip_space_and_comments(parser, prev_kind, &leading_space));
   c = *parser->cursor;
   span.start = parser->cursor;
@@ -272,25 +281,55 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
 #if !FR_FEATURE_TEXT
     return FR_ERR_UNSUPPORTED;
 #else
+    bool has_escape = false;
+    uint16_t decoded_length = 0;
+
     parser->cursor += 1;
     span.start = parser->cursor;
-    span.length = 0;
     while (*parser->cursor != '\0' && *parser->cursor != '"') {
       if (*parser->cursor == '\n' || *parser->cursor == '\r') {
         return FR_ERR_INVALID;
       }
-      if (span.length >= FR_PROFILE_MAX_TEXT_LENGTH) {
+      if (decoded_length >= FR_PROFILE_MAX_TEXT_LENGTH) {
         return FR_ERR_RANGE;
       }
-      span.length += 1;
-      parser->cursor += 1;
+      if (*parser->cursor == '\\') {
+        char escape = '\0';
+
+        has_escape = true;
+        parser->cursor += 1;
+        escape = *parser->cursor;
+        if (escape == 'n' || escape == 'r' || escape == 't' ||
+            escape == '"' || escape == '\\') {
+          parser->cursor += 1;
+        } else if (escape == 'x') {
+          if (parser->cursor[1] == '\0' || parser->cursor[2] == '\0' ||
+              !fr_parse_is_hex_digit(parser->cursor[1]) ||
+              !fr_parse_is_hex_digit(parser->cursor[2])) {
+            return FR_ERR_INVALID;
+          }
+          parser->cursor += 3;
+        } else {
+          return FR_ERR_INVALID;
+        }
+      } else {
+        parser->cursor += 1;
+      }
+      decoded_length += 1;
     }
     if (*parser->cursor != '"') {
       return FR_ERR_INVALID;
     }
+    if ((uint32_t)(parser->cursor - span.start) > UINT16_MAX) {
+      return FR_ERR_RANGE;
+    }
+    span.length = (uint16_t)(parser->cursor - span.start);
     parser->cursor += 1;
     parser->token = (fr_token_t){
-        .kind = FR_TOKEN_TEXT, .span = span, .leading_space = leading_space};
+        .kind = FR_TOKEN_TEXT,
+        .span = span,
+        .leading_space = leading_space,
+        .text_has_escapes = has_escape};
     return FR_OK;
 #endif
   }
@@ -481,6 +520,9 @@ static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
          fr_parse_span_equals(name, "is") ||
          fr_parse_span_equals(name, "if") ||
          fr_parse_span_equals(name, "else") ||
+         fr_parse_span_equals(name, "and") ||
+         fr_parse_span_equals(name, "or") ||
+         fr_parse_span_equals(name, "not") ||
          fr_parse_span_equals(name, "when") ||
          fr_parse_span_equals(name, "unless") ||
          fr_parse_span_equals(name, "repeat") ||
@@ -1026,11 +1068,33 @@ static bool fr_parse_compare_token_kind(fr_token_kind_t kind,
   }
 }
 
+static bool fr_parse_name_token_is(fr_parser_t *parser, const char *word) {
+  return parser->token.kind == FR_TOKEN_NAME &&
+         fr_parse_span_equals(parser->token.span, word);
+}
+
+static fr_err_t fr_parse_unary(fr_parser_t *parser,
+                               fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_id_t child = 0;
+
+  if (fr_parse_name_token_is(parser, "not")) {
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_unary(parser, &child));
+    return fr_parse_add_expr(
+        parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_NOT,
+                                  .child = child,
+                                  .children = {child},
+                                  .child_count = 1},
+        out_id);
+  }
+  return fr_parse_expression_inner(parser, out_id);
+}
+
 static fr_err_t fr_parse_multiplicative(fr_parser_t *parser,
                                         fr_parse_expr_id_t *out_id) {
   fr_parse_expr_id_t lhs = 0;
 
-  FR_TRY(fr_parse_expression_inner(parser, &lhs));
+  FR_TRY(fr_parse_unary(parser, &lhs));
   while (parser->token.kind == FR_TOKEN_STAR ||
          parser->token.kind == FR_TOKEN_SLASH ||
          parser->token.kind == FR_TOKEN_PERCENT) {
@@ -1043,7 +1107,7 @@ static fr_err_t fr_parse_multiplicative(fr_parser_t *parser,
     fr_parse_expr_t binop = {.kind = op_kind, .child_count = 2};
 
     FR_TRY(fr_parse_advance(parser));
-    FR_TRY(fr_parse_expression_inner(parser, &rhs));
+    FR_TRY(fr_parse_unary(parser, &rhs));
     binop.children[0] = lhs;
     binop.children[1] = rhs;
     binop.child = lhs;
@@ -1098,6 +1162,44 @@ static fr_err_t fr_parse_comparison(fr_parser_t *parser,
   return FR_OK;
 }
 
+static fr_err_t fr_parse_and(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_id_t lhs = 0;
+
+  FR_TRY(fr_parse_comparison(parser, &lhs));
+  while (fr_parse_name_token_is(parser, "and")) {
+    fr_parse_expr_id_t rhs = 0;
+    fr_parse_expr_t binop = {.kind = FR_PARSE_EXPR_AND, .child_count = 2};
+
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_comparison(parser, &rhs));
+    binop.children[0] = lhs;
+    binop.children[1] = rhs;
+    binop.child = lhs;
+    FR_TRY(fr_parse_add_expr(parser, binop, &lhs));
+  }
+  *out_id = lhs;
+  return FR_OK;
+}
+
+static fr_err_t fr_parse_or(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_id_t lhs = 0;
+
+  FR_TRY(fr_parse_and(parser, &lhs));
+  while (fr_parse_name_token_is(parser, "or")) {
+    fr_parse_expr_id_t rhs = 0;
+    fr_parse_expr_t binop = {.kind = FR_PARSE_EXPR_OR, .child_count = 2};
+
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_and(parser, &rhs));
+    binop.children[0] = lhs;
+    binop.children[1] = rhs;
+    binop.child = lhs;
+    FR_TRY(fr_parse_add_expr(parser, binop, &lhs));
+  }
+  *out_id = lhs;
+  return FR_OK;
+}
+
 static fr_err_t fr_parse_expression(fr_parser_t *parser,
                                     fr_parse_expr_id_t *out_id) {
   fr_err_t err = FR_OK;
@@ -1110,7 +1212,7 @@ static fr_err_t fr_parse_expression(fr_parser_t *parser,
   }
 
   parser->expr_depth += 1;
-  err = fr_parse_comparison(parser, out_id);
+  err = fr_parse_or(parser, out_id);
   parser->expr_depth -= 1;
   return err;
 }
@@ -1139,10 +1241,13 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
 
   if (parser->token.kind == FR_TOKEN_TEXT) {
     fr_parse_span_t text = parser->token.span;
+    bool text_has_escapes = parser->token.text_has_escapes;
 
     FR_TRY(fr_parse_advance(parser));
     return fr_parse_add_expr(
-        parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_TEXT, .text = text},
+        parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_TEXT,
+                                  .text = text,
+                                  .text_has_escapes = text_has_escapes},
         out_id);
   }
 
@@ -1356,6 +1461,9 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
         fr_parse_span_equals(parser.token.span, "with") ||
         fr_parse_span_equals(parser.token.span, "true") ||
         fr_parse_span_equals(parser.token.span, "false") ||
+        fr_parse_span_equals(parser.token.span, "and") ||
+        fr_parse_span_equals(parser.token.span, "or") ||
+        fr_parse_span_equals(parser.token.span, "not") ||
         fr_parse_is_event_keyword(parser.token.span)) {
       return FR_ERR_INVALID;
     }
@@ -1368,6 +1476,9 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
       fr_parse_span_equals(parser.token.span, "is") ||
       fr_parse_span_equals(parser.token.span, "true") ||
       fr_parse_span_equals(parser.token.span, "false") ||
+      fr_parse_span_equals(parser.token.span, "and") ||
+      fr_parse_span_equals(parser.token.span, "or") ||
+      fr_parse_span_equals(parser.token.span, "not") ||
       fr_parse_is_event_keyword(parser.token.span)) {
     return FR_ERR_INVALID;
   }

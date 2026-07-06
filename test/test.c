@@ -787,18 +787,9 @@ static void test_specials(void) {
   CHECK("false is falsy", fr_tagged_is_falsy(fr_tagged_false()));
   CHECK("true is truthy", !fr_tagged_is_falsy(fr_tagged_true()));
   CHECK("zero is falsy", fr_tagged_encode_int(0, &tagged) == FR_OK &&
-                             fr_tagged_is_falsy(tagged));
-  CHECK("one is truthy", fr_tagged_encode_int(1, &tagged) == FR_OK &&
-                             !fr_tagged_is_falsy(tagged));
-  CHECK("minus one is truthy", fr_tagged_encode_int(-1, &tagged) == FR_OK &&
-                                   !fr_tagged_is_falsy(tagged));
-  CHECK("slot id is truthy", fr_tagged_encode_slot_id(0, &tagged) == FR_OK &&
-                                 !fr_tagged_is_falsy(tagged));
-  CHECK("code-tagged is truthy",
-        fr_tagged_encode_code_object_id(0, &tagged) == FR_OK &&
-            !fr_tagged_is_falsy(tagged));
-  CHECK("native-tagged is truthy",
-        fr_tagged_encode_native_id(0, &tagged) == FR_OK &&
+                              fr_tagged_is_falsy(tagged));
+  CHECK("non-zero int is truthy",
+        fr_tagged_encode_int(1, &tagged) == FR_OK &&
             !fr_tagged_is_falsy(tagged));
 }
 
@@ -2860,6 +2851,65 @@ static void test_text_natives(void) {
                    "to greet with x [ text.concat: \"led=\", "
                    "text.from-int: x ]\n"
                    "ok\n") == 0);
+  CHECK("function body with escaped text literal evaluates decoded bytes",
+        fr_repl_eval_line(&runtime, "to escapedText [ \"a\\tb\\nc\" ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "escapedValue is escapedText:", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            test_text_bytes_match(&runtime, "escapedValue", "a\tb\nc"));
+  CHECK("see renders escaped text literal as escaped source",
+        fr_repl_eval_line(&runtime, "see escapedText", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "overlay code\n"
+                   "to escapedText [ \"a\\tb\\nc\" ]\n"
+                   "ok\n") == 0);
+  CHECK("re-evaluated escaped source keeps decoded bytes",
+        fr_repl_eval_line(&runtime, "to escapedAgain [ \"a\\tb\\nc\" ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "escapedAgainValue is escapedAgain:",
+                              out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            test_text_bytes_match(&runtime, "escapedAgainValue", "a\tb\nc"));
+  CHECK("function body with nul escape keeps byte length",
+        fr_repl_eval_line(&runtime, "to zeroText [ \"\\x00A\" ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "zeroValue is zeroText:", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "text.length: zeroValue", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "2\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "text.at: zeroValue, 0", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "0\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "text.at: zeroValue, 1", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "65\nok\n") == 0);
+  CHECK("see renders nul escape as hex source",
+        fr_repl_eval_line(&runtime, "see zeroText", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "overlay code\n"
+                   "to zeroText [ \"\\x00A\" ]\n"
+                   "ok\n") == 0);
+  CHECK("re-evaluated nul escape source keeps bytes",
+        fr_repl_eval_line(&runtime, "to zeroAgain [ \"\\x00A\" ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "zeroAgainValue is zeroAgain:", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "text.at: zeroAgainValue, 0", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "0\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "text.at: zeroAgainValue, 1", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "65\nok\n") == 0);
   {
     const uint8_t marker[] = {'i', 'n', 't', 'e', 'r', 'n', 'e', 'd'};
     fr_object_id_t first_id = 0;
@@ -5304,14 +5354,32 @@ static void test_parse(void) {
         fr_parse_line("to f with true [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse false rejects as parameter",
         fr_parse_line("to f with false [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse and rejects as parameter",
+        fr_parse_line("to f with and [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse or rejects as parameter",
+        fr_parse_line("to f with or [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse not rejects as parameter",
+        fr_parse_line("to f with not [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse true rejects as is-definition name",
         fr_parse_line("true is 1", &parsed) == FR_ERR_INVALID);
   CHECK("parse false rejects as is-definition name",
         fr_parse_line("false is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse and rejects as is-definition name",
+        fr_parse_line("and is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse or rejects as is-definition name",
+        fr_parse_line("or is 1", &parsed) == FR_ERR_INVALID);
+  CHECK("parse not rejects as is-definition name",
+        fr_parse_line("not is 1", &parsed) == FR_ERR_INVALID);
   CHECK("parse true rejects as to-definition name",
         fr_parse_line("to true [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse false rejects as to-definition name",
         fr_parse_line("to false [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse and rejects as to-definition name",
+        fr_parse_line("to and [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse or rejects as to-definition name",
+        fr_parse_line("to or [ 1 ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse not rejects as to-definition name",
+        fr_parse_line("to not [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse on rejects as parameter",
         fr_parse_line("to f with on [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse every rejects as parameter",
@@ -5582,12 +5650,25 @@ static void test_parse(void) {
             parsed.exprs[parsed.definition.value].text.length == 5 &&
             memcmp(parsed.exprs[parsed.definition.value].text.start, "ready",
                    5) == 0);
+  CHECK("parse text escape marks escaped source",
+        fr_parse_line("message is \"a\\tb\"", &parsed) == FR_OK &&
+            parsed.exprs[parsed.definition.value].kind == FR_PARSE_EXPR_TEXT &&
+            parsed.exprs[parsed.definition.value].text.length == 4 &&
+            parsed.exprs[parsed.definition.value].text_has_escapes);
   CHECK("parse empty text expression",
         fr_parse_expression_line("\"\"", &parsed, &expr_id) == FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_TEXT &&
             parsed.exprs[expr_id].text.length == 0);
   CHECK("parse rejects unterminated text",
         fr_parse_line("message is \"ready", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rejects unknown text escape",
+        fr_parse_line("message is \"\\q\"", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rejects incomplete hex text escape",
+        fr_parse_line("message is \"\\x1\"", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rejects bad hex text escape",
+        fr_parse_line("message is \"\\x1g\"", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rejects literal newline in text",
+        fr_parse_line("message is \"a\nb\"", &parsed) == FR_ERR_INVALID);
 #else
   CHECK("parse text unsupported without feature",
         fr_parse_line("message is \"ready\"", &parsed) ==
@@ -5884,6 +5965,33 @@ static void test_parse(void) {
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_MUL &&
             parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
                 FR_PARSE_EXPR_MOD);
+  CHECK("parse and sits below comparison",
+        fr_parse_expression_line("1 < 2 and 3 < 4", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_AND &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_LT &&
+            parsed.exprs[parsed.exprs[expr_id].children[1]].kind ==
+                FR_PARSE_EXPR_LT);
+  CHECK("parse or sits below and",
+        fr_parse_expression_line("true or false and true", &parsed,
+                                 &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_OR &&
+            parsed.exprs[parsed.exprs[expr_id].children[1]].kind ==
+                FR_PARSE_EXPR_AND);
+  CHECK("parse not sits above comparison",
+        fr_parse_expression_line("not true = false", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_EQ &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_NOT);
+  CHECK("parse double not",
+        fr_parse_expression_line("not not true", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_NOT &&
+            parsed.exprs[parsed.exprs[expr_id].child].kind ==
+                FR_PARSE_EXPR_NOT);
+  CHECK("parse not rejects missing operand",
+        fr_parse_expression_line("not", &parsed, &expr_id) == FR_ERR_INVALID);
   CHECK("parse hex literal lowercase",
         fr_parse_expression_line("0xff", &parsed, &expr_id) == FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
@@ -6079,6 +6187,19 @@ static void test_compile(void) {
             fr_text_view(&text_runtime, object_id, &text_bytes, &text_length) ==
                 FR_OK &&
             text_length == 5 && memcmp(text_bytes, "ready", 5) == 0);
+  CHECK("compile text escapes store decoded bytes",
+        fr_compile_overlay_update_for_runtime(
+            &text_runtime, "escaped is \"a\\tb\\nc\\r\\\"\\\\\\x21\"",
+            &update) == FR_OK &&
+            update.text_object.length == 9 &&
+            memcmp(update.text_object.bytes, "a\tb\nc\r\"\\!", 9) == 0 &&
+            fr_overlay_apply(&text_runtime, &update.overlay_update) == FR_OK &&
+            fr_slot_id_for_name(&text_runtime, "escaped", &slot_id) == FR_OK &&
+            fr_slot_read(&text_runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+            fr_text_view(&text_runtime, object_id, &text_bytes, &text_length) ==
+                FR_OK &&
+            text_length == 9 && memcmp(text_bytes, "a\tb\nc\r\"\\!", 9) == 0);
   CHECK("compile text expression pushes object id",
         fr_compile_expression_for_runtime(&text_runtime, "\"ready\"",
                                           &expression) == FR_OK &&
@@ -6766,6 +6887,90 @@ static void test_compile(void) {
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
+  CHECK("compiled and with comparisons returns true",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ 1 < 2 and 3 < 4 ]",
+                                      &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_true(tagged));
+  CHECK("compiled not over comparison returns false",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ not (1 < 2) ]",
+                                      &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_false(tagged));
+  CHECK("compiled loose not treats non-zero int as truthy",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ not 5 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_false(tagged));
+  CHECK("compiled double not returns original bool",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ not not true ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_true(tagged));
+  CHECK("compiled and short-circuits right side",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(&runtime, "flag is false",
+                                                  &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "to hit [ set flag to true ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "boot is fn [ false and hit: ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_false(tagged) &&
+            fr_slot_id_for_name(&runtime, "flag", &slot_id) == FR_OK &&
+            fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_is_false(tagged));
+  CHECK("compiled or short-circuits right side",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(&runtime, "flag is false",
+                                                  &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "to hit [ set flag to true ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "boot is fn [ true or hit: ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_true(tagged) &&
+            fr_slot_id_for_name(&runtime, "flag", &slot_id) == FR_OK &&
+            fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_is_false(tagged));
+  CHECK("compiled loose and returns true for truthy ints",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ 5 and 3 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_true(tagged));
+  CHECK("compiled loose and returns false for zero left side",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ 0 and 3 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_false(tagged));
+  CHECK("compiled loose or returns true for truthy right side",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ nil or 4 ]", &update) ==
+                FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_true(tagged));
   CHECK("compiled addition",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ 2 + 3 ]", &update) ==
@@ -7057,37 +7262,49 @@ static void test_compile(void) {
   CHECK("compiled native call rejects missing arg",
         fr_compile_overlay_update("boot is fn [ ms: ]", &update) == FR_ERR_INVALID);
   CHECK("compiled if else owns jumps",
-        fr_compile_overlay_update("boot is fn [ if 1 [ one ] else [ nil ] ]",
+        fr_compile_overlay_update("boot is fn [ if true [ one ] else [ nil ] ]",
                                   &update) == FR_OK &&
-            update.code_object.instructions.length == 13u + push_size &&
-            update.instruction_bytes[2] == FR_OP_PUSH_INT &&
-            update.instruction_bytes[3] == 1 &&
-            update.instruction_bytes[2u + push_size] ==
-                FR_OP_JUMP_IF_FALSY &&
-            update.instruction_bytes[3u + push_size] == 11u + push_size &&
-            update.instruction_bytes[5u + push_size] == FR_OP_LOAD_SLOT &&
-            update.instruction_bytes[6u + push_size] == FR_SLOT_ONE &&
-            update.instruction_bytes[8u + push_size] == FR_OP_JUMP &&
-            update.instruction_bytes[9u + push_size] == 12u + push_size &&
-            update.instruction_bytes[11u + push_size] == FR_OP_PUSH_NIL &&
-            update.instruction_bytes[12u + push_size] == FR_OP_RETURN);
+            update.code_object.instructions.length == 14u &&
+            update.instruction_bytes[2] == FR_OP_PUSH_TRUE &&
+            update.instruction_bytes[3] == FR_OP_JUMP_IF_FALSY &&
+            update.instruction_bytes[4] == 12u &&
+            update.instruction_bytes[6] == FR_OP_LOAD_SLOT &&
+            update.instruction_bytes[7] == FR_SLOT_ONE &&
+            update.instruction_bytes[9] == FR_OP_JUMP &&
+            update.instruction_bytes[10] == 13u &&
+            update.instruction_bytes[12] == FR_OP_PUSH_NIL &&
+            update.instruction_bytes[13] == FR_OP_RETURN);
   CHECK("compiled if else returns selected branch",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update(
-                "boot is fn [ if 1 [ one ] else [ nil ] ]", &update) ==
+                "boot is fn [ if true [ one ] else [ nil ] ]", &update) ==
                 FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
   CHECK("compiled if without else returns nil when false",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_compile_overlay_update("boot is fn [ if 0 [ one ] ]",
+            fr_compile_overlay_update("boot is fn [ if false [ one ] ]",
                                       &update) == FR_OK &&
-            update.code_object.instructions.length == 13u + push_size &&
-            update.instruction_bytes[11u + push_size] == FR_OP_PUSH_NIL &&
+            update.code_object.instructions.length == 14u &&
+            update.instruction_bytes[12] == FR_OP_PUSH_NIL &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
+  CHECK("compiled loose if picks truthy int branch",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ if 5 [ 1 ] else [ 2 ] ]",
+                                      &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
+  CHECK("compiled loose if skips nil branch",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ if nil [ 1 ] else [ 2 ] ]",
+                                      &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 2);
   CHECK("compiled chained else if first arm",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update(
@@ -8003,7 +8220,7 @@ static void test_persist(void) {
   CHECK("persist prepares control flow code",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update(
-                "boot is fn [ if 1 [ repeat 2 [ ms: 1 ]; one ] else [ nil ] ]",
+                "boot is fn [ if true [ repeat 2 [ ms: 1 ]; one ] else [ nil ] ]",
                 &update) == FR_OK &&
             test_persist_apply_user_overlay(&runtime,
                                             &update.overlay_update) == FR_OK &&
@@ -9438,11 +9655,11 @@ static void test_repl(void) {
             fr_repl_eval_line(&runtime, "millis:", out, sizeof(out)) == FR_OK &&
             strcmp(out, expected_ms) == 0);
   CHECK("repl runs if expression",
-        fr_repl_eval_line(&runtime, "if one [ one ] else [ nil ]", out,
+        fr_repl_eval_line(&runtime, "if true [ one ] else [ nil ]", out,
                           sizeof(out)) == FR_OK &&
             strcmp(out, "1\nok\n") == 0);
   CHECK("repl runs false if expression",
-        fr_repl_eval_line(&runtime, "if 0 [ one ]", out, sizeof(out)) ==
+        fr_repl_eval_line(&runtime, "if false [ one ]", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("repl runs repeat expression",
