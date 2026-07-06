@@ -286,6 +286,18 @@ fr_err_t fr_platform_millis(uint32_t *out_ms) {
   return FR_OK;
 }
 
+fr_err_t fr_platform_micros(uint32_t *out_us) {
+  int64_t us = 0;
+
+  if (out_us == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  us = esp_timer_get_time();
+  *out_us = (uint32_t)us;
+  return FR_OK;
+}
+
 void fr_platform_yield(void) {
   int64_t now_us = esp_timer_get_time();
 

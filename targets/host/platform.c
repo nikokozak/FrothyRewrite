@@ -198,6 +198,15 @@ fr_err_t fr_platform_millis(uint32_t *out_ms) {
   return FR_OK;
 }
 
+fr_err_t fr_platform_micros(uint32_t *out_us) {
+  if (out_us == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  *out_us = fr_host_millis * 1000u;
+  return FR_OK;
+}
+
 void fr_platform_yield(void) {}
 
 fr_err_t fr_platform_gpio_mode(uint16_t pin, uint16_t mode) {

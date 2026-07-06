@@ -175,30 +175,33 @@ enum {
 #if FR_FEATURE_PERSISTENCE
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
-  "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
-      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+  "gpio.read adc.read adc.above millis micros" FR_TEST_UART_WORDS             \
+      FR_TEST_RANDOM_WORDS FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS                \
+          FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
+              FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
               FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
-  "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
-      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+  "gpio.read adc.read adc.above millis micros" FR_TEST_UART_WORDS             \
+      FR_TEST_RANDOM_WORDS FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS                \
+          FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
+              FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
               FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
-  "gpio.read adc.read adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS  \
-      FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
-          FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
+  "gpio.read adc.read adc.above millis micros" FR_TEST_UART_WORDS             \
+      FR_TEST_RANDOM_WORDS FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS                \
+          FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
+              FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
               FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
-  (13 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
+  (14 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
@@ -207,7 +210,7 @@ enum {
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
-  "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
+  "adc.above millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
@@ -215,7 +218,7 @@ enum {
               FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
-  "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
+  "adc.above millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
@@ -223,14 +226,14 @@ enum {
               FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
-  "adc.above millis" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS                 \
+  "adc.above millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
               FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
-  (10 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
+  (11 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
@@ -353,7 +356,7 @@ static void test_base_def_contract(void) {
   bool seen_slots[FR_PROFILE_MAX_SLOTS] = {0};
   uint16_t expected_layer_count = FR_FEATURE_PERSISTENCE ? 4 : 3;
   uint16_t expected_native_count =
-      (FR_FEATURE_PERSISTENCE ? 10 : 7) + (FR_FEATURE_UART ? 6 : 0) +
+      (FR_FEATURE_PERSISTENCE ? 11 : 8) + (FR_FEATURE_UART ? 6 : 0) +
       (FR_FEATURE_RANDOM ? 3 : 0) + (FR_FEATURE_PWM ? 3 : 0) +
       (FR_FEATURE_I2C ? 8 : 0) + (FR_FEATURE_NET ? 9 : 0) +
       (FR_FEATURE_POWER ? 4 : 0) + (FR_FEATURE_BYTES ? 8 : 0) +
@@ -4997,6 +5000,11 @@ static void test_image(void) {
             fr_tagged_decode_native_id(tagged, &native_id) == FR_OK &&
             fr_native_get(&runtime, native_id, &entry) == FR_OK &&
             entry->arity == 0);
+  CHECK("base image installs micros native",
+        fr_slot_read(&runtime, FR_SLOT_MICROS, &tagged) == FR_OK &&
+            fr_tagged_decode_native_id(tagged, &native_id) == FR_OK &&
+            fr_native_get(&runtime, native_id, &entry) == FR_OK &&
+            entry->arity == 0);
 #if FR_FEATURE_UART
   CHECK("base image installs uart.open native",
         fr_slot_read(&runtime, FR_SLOT_UART_OPEN, &tagged) == FR_OK &&
@@ -5055,6 +5063,7 @@ static void test_image(void) {
             strcmp(fr_base_slot_name(FR_SLOT_ADC_READ), "adc.read") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_ADC_ABOVE), "adc.above") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_MILLIS), "millis") == 0 &&
+            strcmp(fr_base_slot_name(FR_SLOT_MICROS), "micros") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_LED_BUILTIN), "$led_builtin") ==
                 0);
 #if FR_FEATURE_SOURCE_BASE
@@ -5066,17 +5075,17 @@ static void test_image(void) {
 #endif
 #if FR_FEATURE_UART
   CHECK("base image exposes uart slot names",
-        strcmp(fr_base_slot_name_at(13), "uart.open") == 0 &&
-            strcmp(fr_base_slot_name_at(14), "uart.open-on") == 0 &&
-            strcmp(fr_base_slot_name_at(15), "uart.write-byte") == 0 &&
-            strcmp(fr_base_slot_name_at(16), "uart.read-byte") == 0 &&
-            strcmp(fr_base_slot_name_at(17), "uart.available") == 0 &&
-            strcmp(fr_base_slot_name_at(18), "uart.close") == 0 &&
-            strcmp(fr_base_slot_name_at(19), "$baud_9600") == 0 &&
-            strcmp(fr_base_slot_name_at(20), "$baud_19200") == 0 &&
-            strcmp(fr_base_slot_name_at(21), "$baud_38400") == 0 &&
-            strcmp(fr_base_slot_name_at(22), "$baud_57600") == 0 &&
-            strcmp(fr_base_slot_name_at(23), "$baud_115200") == 0 &&
+        strcmp(fr_base_slot_name_at(14), "uart.open") == 0 &&
+            strcmp(fr_base_slot_name_at(15), "uart.open-on") == 0 &&
+            strcmp(fr_base_slot_name_at(16), "uart.write-byte") == 0 &&
+            strcmp(fr_base_slot_name_at(17), "uart.read-byte") == 0 &&
+            strcmp(fr_base_slot_name_at(18), "uart.available") == 0 &&
+            strcmp(fr_base_slot_name_at(19), "uart.close") == 0 &&
+            strcmp(fr_base_slot_name_at(20), "$baud_9600") == 0 &&
+            strcmp(fr_base_slot_name_at(21), "$baud_19200") == 0 &&
+            strcmp(fr_base_slot_name_at(22), "$baud_38400") == 0 &&
+            strcmp(fr_base_slot_name_at(23), "$baud_57600") == 0 &&
+            strcmp(fr_base_slot_name_at(24), "$baud_115200") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_UART_OPEN), "uart.open") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_UART_OPEN_ON),
                    "uart.open-on") == 0 &&
@@ -5101,6 +5110,7 @@ static void test_image(void) {
             strcmp(fr_base_slot_name_at(10), "adc.read") == 0 &&
             strcmp(fr_base_slot_name_at(11), "adc.above") == 0 &&
             strcmp(fr_base_slot_name_at(12), "millis") == 0 &&
+            strcmp(fr_base_slot_name_at(13), "micros") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_SAVE), "save") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_RESTORE), "restore") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_WIPE), "dangerous.wipe") == 0);
@@ -5113,7 +5123,8 @@ static void test_image(void) {
             strcmp(fr_base_slot_name_at(6), "gpio.read") == 0 &&
             strcmp(fr_base_slot_name_at(7), "adc.read") == 0 &&
             strcmp(fr_base_slot_name_at(8), "adc.above") == 0 &&
-            strcmp(fr_base_slot_name_at(9), "millis") == 0);
+            strcmp(fr_base_slot_name_at(9), "millis") == 0 &&
+            strcmp(fr_base_slot_name_at(10), "micros") == 0);
 #endif
   CHECK("base image looks up host slot names",
         fr_base_slot_id_for_name("boot", &slot_id) == FR_OK &&
@@ -5136,6 +5147,8 @@ static void test_image(void) {
             slot_id == FR_SLOT_ADC_ABOVE &&
             fr_base_slot_id_for_name("millis", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_MILLIS &&
+            fr_base_slot_id_for_name("micros", &slot_id) == FR_OK &&
+            slot_id == FR_SLOT_MICROS &&
             fr_base_slot_id_for_name("$led_builtin", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_LED_BUILTIN &&
             fr_base_slot_id_for_name("missing", &slot_id) == FR_ERR_NOT_FOUND);
@@ -5198,6 +5211,8 @@ static void test_image(void) {
             fr_base_slot_layer(FR_SLOT_ADC_ABOVE, &layer) == FR_OK &&
             layer == FR_BASE_LAYER_TARGET &&
             fr_base_slot_layer(FR_SLOT_MILLIS, &layer) == FR_OK &&
+            layer == FR_BASE_LAYER_TARGET &&
+            fr_base_slot_layer(FR_SLOT_MICROS, &layer) == FR_OK &&
             layer == FR_BASE_LAYER_TARGET &&
             fr_base_slot_layer(FR_SLOT_LED_BUILTIN, &layer) == FR_OK &&
             layer == FR_BASE_LAYER_BOARD &&
@@ -9683,16 +9698,20 @@ static void test_repl(void) {
   const fr_code_offset_t run_gpio_write_call_ip =
       2u + (FR_INSTRUCTION_PUSH_INT_SIZE * 2u);
 #endif
-  char out[1024];
+  char out[2048];
 #if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS
   uint32_t before_ms = 0;
   uint32_t after_ms = 0;
+  uint32_t before_us = 0;
+  uint32_t after_us = 0;
   const uint32_t millis_period = (uint32_t)FR_TAGGED_INT_MAX + 1u;
+  const uint32_t micros_period = (uint32_t)FR_TAGGED_INT_MAX + 1u;
   const uint32_t millis_wrap_probe = (uint32_t)FR_TAGGED_INT_MAX - 5u;
 #if FR_TAGGED_INT_MAX > 65535
   uint16_t gpio_value = 0;
 #endif
   char expected_ms[16];
+  char expected_us[16];
 #endif
 
 #if FR_FEATURE_OVERLAY_APPLY_COMMAND
@@ -9909,6 +9928,12 @@ static void test_repl(void) {
                    "millis() -> int\n"
                    "read milliseconds since boot, wrapped to int range\n"
                    "ok\n") == 0);
+  CHECK("repl see micros renders signature",
+        fr_repl_eval_line(&runtime, "see micros", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "micros() -> int\n"
+                   "read microseconds since boot, wrapped to int range\n"
+                   "ok\n") == 0);
   CHECK("repl see ms renders signature",
         fr_repl_eval_line(&runtime, "see ms", out, sizeof(out)) == FR_OK &&
             strcmp(out,
@@ -10004,6 +10029,25 @@ static void test_repl(void) {
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "millis:", out, sizeof(out)) == FR_OK &&
             strcmp(out, expected_ms) == 0);
+  CHECK("repl samples micros before delay",
+        fr_platform_micros(&before_us) == FR_OK);
+  snprintf(expected_us, sizeof(expected_us), "%u\nok\n",
+           (unsigned)(before_us % micros_period));
+  CHECK("repl reads micros",
+        fr_repl_eval_line(&runtime, "micros:", out, sizeof(out)) == FR_OK &&
+            strcmp(out, expected_us) == 0);
+  CHECK("repl advances micros during ms",
+        fr_repl_eval_line(&runtime, "ms: 2", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_platform_micros(&after_us) == FR_OK &&
+            after_us > before_us &&
+            after_us - before_us >= 2000u);
+  after_ms += 2u;
+  snprintf(expected_us, sizeof(expected_us), "%u\nok\n",
+           (unsigned)(after_us % micros_period));
+  CHECK("repl reads advanced micros",
+        fr_repl_eval_line(&runtime, "micros:", out, sizeof(out)) == FR_OK &&
+            strcmp(out, expected_us) == 0);
   {
     uint32_t shown_ms = after_ms % millis_period;
     uint32_t advance_ms =
