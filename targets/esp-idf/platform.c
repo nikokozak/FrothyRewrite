@@ -41,8 +41,8 @@ enum {
   FR_ESP_CTRL_C = 3,
   FR_ESP_BACKSPACE = 8,
   FR_ESP_DELETE = 127,
-  FR_ESP_MILLIS_WRAP = 16384,
   FR_ESP_STORAGE_SLOT_COUNT = 2,
+  FR_ESP_VM_YIELD_INTERVAL_US = 250000,
 };
 
 #if FR_FEATURE_UART
@@ -174,6 +174,7 @@ static bool fr_esp_pending_byte_valid;
 static uint8_t fr_esp_pending_byte;
 static adc_oneshot_unit_handle_t fr_esp_adc1;
 static bool fr_esp_adc1_initialized;
+static int64_t fr_esp_last_vm_yield_us;
 
 static fr_err_t fr_esp_err(esp_err_t err) {
   switch (err) {
@@ -273,7 +274,7 @@ fr_err_t fr_platform_delay_ms(uint16_t ms) {
   return FR_OK;
 }
 
-fr_err_t fr_platform_millis(uint16_t *out_ms) {
+fr_err_t fr_platform_millis(uint32_t *out_ms) {
   int64_t ms = 0;
 
   if (out_ms == NULL) {
@@ -281,8 +282,23 @@ fr_err_t fr_platform_millis(uint16_t *out_ms) {
   }
 
   ms = esp_timer_get_time() / 1000;
-  *out_ms = (uint16_t)(ms % FR_ESP_MILLIS_WRAP);
+  *out_ms = (uint32_t)ms;
   return FR_OK;
+}
+
+void fr_platform_yield(void) {
+  int64_t now_us = esp_timer_get_time();
+
+  if (fr_esp_last_vm_yield_us == 0) {
+    fr_esp_last_vm_yield_us = now_us;
+    return;
+  }
+  if (now_us - fr_esp_last_vm_yield_us < FR_ESP_VM_YIELD_INTERVAL_US) {
+    return;
+  }
+
+  fr_esp_last_vm_yield_us = now_us;
+  vTaskDelay(1);
 }
 
 static bool fr_esp_gpio_pin_valid(uint16_t pin) {
@@ -1221,7 +1237,7 @@ static bool fr_esp_isr_service_installed;
 static esp_timer_handle_t fr_esp_event_timer_handles[FR_EVENT_BINDING_COUNT];
 
 static uint32_t fr_esp_event_millis_now(void) {
-  return (uint32_t)((esp_timer_get_time() / 1000) % FR_ESP_MILLIS_WRAP);
+  return (uint32_t)(esp_timer_get_time() / 1000);
 }
 
 static fr_err_t fr_esp_event_queue_ensure(void) {
@@ -1256,7 +1272,9 @@ static void fr_esp_event_gpio_isr(void *arg) {
   };
   BaseType_t woken = pdFALSE;
   if (xQueueSendFromISR(fr_esp_event_queue, &candidate, &woken) != pdTRUE) {
+    portENTER_CRITICAL_ISR(&fr_esp_event_overflow_mux);
     fr_esp_event_overflow++;
+    portEXIT_CRITICAL_ISR(&fr_esp_event_overflow_mux);
   }
   portYIELD_FROM_ISR(woken);
 }
@@ -1272,7 +1290,9 @@ static void fr_esp_event_timer_callback(void *arg) {
       .timestamp_ms = fr_esp_event_millis_now(),
   };
   if (xQueueSend(fr_esp_event_queue, &candidate, 0) != pdTRUE) {
+    portENTER_CRITICAL(&fr_esp_event_overflow_mux);
     fr_esp_event_overflow++;
+    portEXIT_CRITICAL(&fr_esp_event_overflow_mux);
   }
 }
 
@@ -1448,9 +1468,7 @@ fr_err_t fr_platform_event_drain(fr_event_candidate_t *out_events,
     return FR_OK;
   }
 
-  /* The ISR writes to fr_esp_event_overflow with a plain ++ to stay on the
-   * allowed-call list; drain runs in task context, so the read-and-zero pair
-   * goes under the mux to keep them atomic with respect to each other. */
+  /* Writers and drain share one mux so the drained delta is exact. */
   portENTER_CRITICAL(&fr_esp_event_overflow_mux);
   *overflow_delta = fr_esp_event_overflow;
   fr_esp_event_overflow = 0;
@@ -1563,7 +1581,9 @@ static void fr_esp_wifi_enqueue(fr_event_kind_t kind) {
   candidate.generation = slot->generation;
   candidate.timestamp_ms = fr_esp_event_millis_now();
   if (xQueueSend(fr_esp_event_queue, &candidate, 0) != pdTRUE) {
+    portENTER_CRITICAL(&fr_esp_event_overflow_mux);
     fr_esp_event_overflow++;
+    portEXIT_CRITICAL(&fr_esp_event_overflow_mux);
   }
 }
 

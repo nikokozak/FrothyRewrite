@@ -6,6 +6,22 @@
 #include <stdbool.h>
 #include <string.h>
 
+#if FR_FEATURE_REPL
+/* Avoid pulling stdio formatting into the event path for one async counter. */
+static void fr_event_write_u32(uint32_t value) {
+  char digits[11];
+  uint8_t pos = (uint8_t)(sizeof(digits) - 1u);
+
+  digits[pos] = '\0';
+  do {
+    pos--;
+    digits[pos] = (char)('0' + (value % 10u));
+    value /= 10u;
+  } while (value > 0);
+  (void)fr_platform_write_text(&digits[pos]);
+}
+#endif
+
 static bool fr_event_kind_is_gpio(fr_event_kind_t kind) {
   return kind == FR_EVENT_KIND_GPIO_RISING ||
          kind == FR_EVENT_KIND_GPIO_FALLING ||
@@ -34,9 +50,9 @@ static bool fr_event_entry_matches(const fr_event_binding_t *entry,
 }
 
 static uint32_t fr_event_now_ms(void) {
-  uint16_t ms = 0;
+  uint32_t ms = 0;
   (void)fr_platform_millis(&ms);
-  return (uint32_t)ms;
+  return ms;
 }
 
 static fr_err_t fr_event_platform_install(fr_event_kind_t kind, uint16_t source,
@@ -185,6 +201,7 @@ fr_err_t fr_event_drain(fr_runtime_t *runtime) {
   for (uint8_t i = 0; i < count; i++) {
     const fr_event_candidate_t *cand = &candidates[i];
     fr_event_binding_t *entry;
+    uint32_t since_registered_ms;
 
     if (cand->binding_index >= FR_EVENT_BINDING_COUNT) {
       continue;
@@ -196,7 +213,10 @@ fr_err_t fr_event_drain(fr_runtime_t *runtime) {
     if (entry->generation != cand->generation) {
       continue;
     }
-    if (cand->timestamp_ms < entry->registered_at_ms) {
+    /* Candidate and registration use one uint32_t clock. The half-range rule
+     * treats deltas above ~24.8 days as before the current registration. */
+    since_registered_ms = cand->timestamp_ms - entry->registered_at_ms;
+    if (since_registered_ms > (uint32_t)INT32_MAX) {
       continue;
     }
     /* Debounce drops without updating last_fire_ms. has_fired gates the window
@@ -211,6 +231,30 @@ fr_err_t fr_event_drain(fr_runtime_t *runtime) {
   }
 
   return FR_OK;
+}
+
+/* Best-effort: losing this notice must not change dispatch or eval results. */
+void fr_event_report_overflow(fr_runtime_t *runtime) {
+#if FR_FEATURE_REPL
+  uint32_t dropped;
+
+  if (runtime == NULL) {
+    return;
+  }
+  if (runtime->events.overflow_count ==
+      runtime->events.overflow_reported_count) {
+    return;
+  }
+
+  dropped =
+      runtime->events.overflow_count - runtime->events.overflow_reported_count;
+  runtime->events.overflow_reported_count = runtime->events.overflow_count;
+  (void)fr_platform_write_text("! events dropped: ");
+  fr_event_write_u32(dropped);
+  (void)fr_platform_write_text("\n");
+#else
+  (void)runtime;
+#endif
 }
 
 /* Run each pending binding's body once. Call only at statement-boundary safe

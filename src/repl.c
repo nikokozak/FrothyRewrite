@@ -1803,6 +1803,7 @@ static fr_err_t fr_repl_service_events(void *ctx) {
   if (fr_event_drain(runtime) != FR_OK) {
     return FR_OK;
   }
+  fr_event_report_overflow(runtime);
   err = fr_event_dispatch(runtime);
   if (err != FR_OK && err != FR_ERR_INTERRUPTED) {
     char response[FR_REPL_OUTPUT_BYTES];

@@ -18,6 +18,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifndef FR_VM_YIELD_SAFE_POINTS
+#define FR_VM_YIELD_SAFE_POINTS 4096u
+#endif
+
+#if FR_VM_YIELD_SAFE_POINTS == 0 || FR_VM_YIELD_SAFE_POINTS > UINT16_MAX
+#error "FR_VM_YIELD_SAFE_POINTS must be 1..UINT16_MAX"
+#endif
+
 typedef struct fr_vm_state_t {
   fr_code_offset_t ip;
   fr_tagged_t stack[FR_PROFILE_MAX_STACK_DEPTH];
@@ -681,6 +689,7 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
     uint16_t call_depth) {
   fr_vm_state_t state = {.call_depth = call_depth};
   fr_instruction_header_t header;
+  uint16_t yield_countdown = FR_VM_YIELD_SAFE_POINTS;
 
   if (call_depth >= FR_PROFILE_MAX_CALL_DEPTH) {
     return FR_ERR_OVERFLOW;
@@ -719,6 +728,12 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
        (RETURN). Loop back-edges in repeat/while/forever emit DROP before
        the jump, so DROP also covers each loop iteration. */
     if (op == FR_OP_DROP || op == FR_OP_RETURN) {
+      yield_countdown--;
+      if (yield_countdown == 0) {
+        fr_platform_yield();
+        yield_countdown = FR_VM_YIELD_SAFE_POINTS;
+      }
+      fr_event_report_overflow(runtime);
       FR_TRY(fr_event_dispatch(runtime));
     }
   }

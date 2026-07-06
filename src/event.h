@@ -16,4 +16,6 @@ fr_err_t fr_event_clear_table(fr_runtime_t *runtime);
 
 fr_err_t fr_event_drain(fr_runtime_t *runtime);
 
+void fr_event_report_overflow(fr_runtime_t *runtime);
+
 fr_err_t fr_event_dispatch(fr_runtime_t *runtime);

@@ -10,14 +10,13 @@
 enum {
   FR_HOST_MAX_PIN = 39,
   FR_HOST_ADC_MAX_PIN = 39,
-  FR_HOST_MILLIS_WRAP = 16384,
 #if FR_FEATURE_UART
   FR_HOST_UART_SCRIPT_LENGTH = 5,
 #endif
 };
 
 static uint8_t fr_host_gpio_values[FR_HOST_MAX_PIN + 1];
-static uint16_t fr_host_millis;
+static uint32_t fr_host_millis;
 
 #if FR_FEATURE_PWM
 enum {
@@ -186,11 +185,11 @@ static fr_err_t fr_host_uart_entry(uint16_t platform_index,
 #endif
 
 fr_err_t fr_platform_delay_ms(uint16_t ms) {
-  fr_host_millis = (uint16_t)((fr_host_millis + ms) % FR_HOST_MILLIS_WRAP);
+  fr_host_millis += ms;
   return FR_OK;
 }
 
-fr_err_t fr_platform_millis(uint16_t *out_ms) {
+fr_err_t fr_platform_millis(uint32_t *out_ms) {
   if (out_ms == NULL) {
     return FR_ERR_INVALID;
   }
@@ -198,6 +197,8 @@ fr_err_t fr_platform_millis(uint16_t *out_ms) {
   *out_ms = fr_host_millis;
   return FR_OK;
 }
+
+void fr_platform_yield(void) {}
 
 fr_err_t fr_platform_gpio_mode(uint16_t pin, uint16_t mode) {
   if (pin > FR_HOST_MAX_PIN) {
@@ -1191,7 +1192,7 @@ void fr_host_wifi_fire_event(fr_event_kind_t kind) {
    * fr_platform_delay_ms before binding still receives the candidate. */
   (void)fr_platform_event_post_test_candidate(slot->binding_index,
                                               slot->generation,
-                                              (uint32_t)fr_host_millis);
+                                              fr_host_millis);
 }
 
 void fr_host_tcp_queue_response(uint16_t handle_platform_index,
