@@ -26,6 +26,20 @@
 #error "FR_VM_YIELD_SAFE_POINTS must be 1..UINT16_MAX"
 #endif
 
+/* Poll the interrupt line (Ctrl-C, boot button) every Nth safe point rather
+   than every one: the poll's UART-readiness + GPIO reads cost ~382 cyc, and a
+   tight loop hits a safe point every iteration. N safe points of Ctrl-C latency
+   is sub-millisecond for a fast loop. The interrupted flag itself is still
+   checked every safe point (cheap bool), so an async SIGINT on host and a flag
+   set by the last poll both bail immediately. */
+#ifndef FR_VM_POLL_SAFE_POINTS
+#define FR_VM_POLL_SAFE_POINTS 64u
+#endif
+
+#if FR_VM_POLL_SAFE_POINTS == 0 || FR_VM_POLL_SAFE_POINTS > UINT16_MAX
+#error "FR_VM_POLL_SAFE_POINTS must be 1..UINT16_MAX"
+#endif
+
 typedef struct fr_vm_state_t {
   fr_code_offset_t ip;
   fr_tagged_t stack[FR_PROFILE_MAX_STACK_DEPTH];
@@ -761,6 +775,7 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
   fr_vm_state_t state = {.call_depth = call_depth};
   fr_instruction_header_t header;
   uint16_t yield_countdown = FR_VM_YIELD_SAFE_POINTS;
+  uint16_t poll_countdown = FR_VM_POLL_SAFE_POINTS;
 
   if (call_depth >= FR_PROFILE_MAX_CALL_DEPTH) {
     return FR_ERR_OVERFLOW;
@@ -795,7 +810,11 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
        (RETURN). Loop back-edges in repeat/while/forever emit DROP before
        the jump, so DROP also covers each loop iteration. */
     if (op == FR_OP_DROP || op == FR_OP_RETURN) {
-      FR_TRY(fr_platform_poll_interrupt(runtime));
+      poll_countdown--;
+      if (poll_countdown == 0) {
+        FR_TRY(fr_platform_poll_interrupt(runtime));
+        poll_countdown = FR_VM_POLL_SAFE_POINTS;
+      }
       if (fr_runtime_is_interrupted(runtime)) {
         return FR_ERR_INTERRUPTED;
       }
