@@ -2,6 +2,12 @@ import type { ReplConnector, Response, Status, Transport, Unsubscribe } from "./
 import { TransportError, WireFormatError } from "./types.ts";
 
 const PROMPT = "> ";
+// Reserved wire prefix (docs/wire-protocol.md v1.1): a device line beginning
+// with "! " is asynchronous event output (a handler that fired at the idle
+// prompt or between reading a request's bytes), never part of a request's
+// response. Eval results never begin with "! "; a program must not print a
+// line starting with it.
+const ASYNC_PREFIX = "! ";
 const ERROR_RE = /^error: (.+) \((\d+)\)$/;
 const LEGACY_ERROR_RE = /^err (\d+)$/;
 
@@ -75,6 +81,11 @@ class Connector implements ReplConnector {
   private acceptLine(line: string): void {
     this.lines.push(line);
     for (const cb of this.subscribers) cb(line);
+
+    // Async event lines are delivered to subscribers above but never fold into
+    // a request's response, so an event firing during the request window can't
+    // corrupt it. See ASYNC_PREFIX.
+    if (line.startsWith(ASYNC_PREFIX)) return;
 
     const p = this.pending;
     if (!p || p.terminator) return;

@@ -86,6 +86,12 @@ fr_err_t fr_platform_uart_available(uint16_t platform_index,
 #if FR_FEATURE_REPL
 fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof);
 fr_err_t fr_platform_write_text(const char *text);
+/* Idle-servicing hook. The REPL registers a handler the platform calls while
+ * read_line waits for the next byte, so timer and interrupt events fire at an
+ * idle prompt instead of only while a program runs. A platform whose read
+ * blocks with no poll loop (host stdin) treats registration as a no-op. */
+typedef fr_err_t (*fr_platform_idle_fn)(void *ctx);
+void fr_platform_set_idle_handler(fr_platform_idle_fn handler, void *ctx);
 #endif
 
 #if FR_FEATURE_REPL || FR_FEATURE_PAD
