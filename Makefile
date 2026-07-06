@@ -196,12 +196,6 @@ UNITY_T16_BYTES_TEST_SOURCES = \
 	$(PLATFORM_SOURCES) \
 	$(PERSISTENCE_KERNEL_SOURCES)
 
-FUZZ_VERIFY_SOURCES = \
-	test/fuzz_verify.c \
-	$(KERNEL_SOURCES) \
-	$(PLATFORM_SOURCES) \
-	$(PERSISTENCE_SOURCES)
-
 FROTHY_SOURCES = \
 	$(TARGET_MAIN_SOURCE) \
 	$(KERNEL_SOURCES) \
@@ -273,22 +267,6 @@ UNITY_T15_NET_TEST_BINARY ?= $(BUILD_DIR)/test-unity-t15-net
 UNITY_T15B_TCP_TEST_BINARY ?= $(BUILD_DIR)/test-unity-t15b-tcp
 UNITY_T14_POWER_TEST_BINARY ?= $(BUILD_DIR)/test-unity-t14-power
 UNITY_T16_BYTES_TEST_BINARY ?= $(BUILD_DIR)/test-unity-t16-bytes
-FUZZ_VERIFY_GUARDED_BINARY ?= $(BUILD_DIR)/fuzz-verify-guarded
-FUZZ_VERIFY_TRUSTED_BINARY ?= $(BUILD_DIR)/fuzz-verify-trusted
-FUZZ_COUNT ?= 50000
-FUZZ_SOURCE_COUNT ?= $(FUZZ_COUNT)
-FUZZ_CORRUPTION_COUNT ?= $(FUZZ_COUNT)
-FUZZ_SEED ?= 12648430
-# ASAN is opt-in: the differential (guarded-vs-trusted) diff is the real proof and
-# needs no sanitizer, and macOS/Darwin 25 clang aborts the ASAN binary at init.
-# Enable on Linux/CI for the extra latent-OOB net:
-#   make fuzz-diff FUZZ_ASAN_CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g" FUZZ_ASAN_LDFLAGS=-fsanitize=address
-FUZZ_ASAN_CFLAGS ?=
-FUZZ_ASAN_LDFLAGS ?=
-FUZZ_SOURCE_GUARDED_OUT ?= $(BUILD_DIR)/fuzz-source-guarded.out
-FUZZ_SOURCE_TRUSTED_OUT ?= $(BUILD_DIR)/fuzz-source-trusted.out
-FUZZ_CORRUPTION_GUARDED_OUT ?= $(BUILD_DIR)/fuzz-corruption-guarded.out
-FUZZ_CORRUPTION_TRUSTED_OUT ?= $(BUILD_DIR)/fuzz-corruption-trusted.out
 FROTHY_BINARY ?= frothy
 # Helper basename must match compilerProgramName in cmd/frothy-session.
 OVERLAY_COMPILER ?= $(BUILD_DIR)/frothy-compile-overlay
@@ -743,36 +721,6 @@ $(UNITY_T16_BYTES_TEST_BINARY): $(UNITY_T16_BYTES_TEST_SOURCES) $(KERNEL_DEPS) $
 		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 -DFR_HOST_TEST_HELPERS=1 $(UNITY_T16_BYTES_TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
-$(FUZZ_VERIFY_GUARDED_BINARY): $(FUZZ_VERIFY_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) | $(BUILD_DIR)
-	$(FR_CC) $(FR_CFLAGS) $(FUZZ_ASAN_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 $(FUZZ_VERIFY_SOURCES) $(FR_LDFLAGS) $(FUZZ_ASAN_LDFLAGS) -o $@
-
-$(FUZZ_VERIFY_TRUSTED_BINARY): $(FUZZ_VERIFY_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) | $(BUILD_DIR)
-	$(FR_CC) $(FR_CFLAGS) $(FUZZ_ASAN_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 -DFR_VM_TRUST=1 $(FUZZ_VERIFY_SOURCES) $(FR_LDFLAGS) $(FUZZ_ASAN_LDFLAGS) -o $@
-
-fuzz-diff:
-	$(MAKE) BOARD=host PROFILE=host_normal BUILD_DIR=build/fuzz-host-normal _fuzz-diff-run
-
-_fuzz-diff-run: $(FUZZ_VERIFY_GUARDED_BINARY) $(FUZZ_VERIFY_TRUSTED_BINARY)
-	ASAN_OPTIONS=abort_on_error=1:detect_leaks=0 ./$(FUZZ_VERIFY_GUARDED_BINARY) --seed $(FUZZ_SEED) --count $(FUZZ_SOURCE_COUNT) --mode source > $(FUZZ_SOURCE_GUARDED_OUT)
-	ASAN_OPTIONS=abort_on_error=1:detect_leaks=0 ./$(FUZZ_VERIFY_TRUSTED_BINARY) --seed $(FUZZ_SEED) --count $(FUZZ_SOURCE_COUNT) --mode source > $(FUZZ_SOURCE_TRUSTED_OUT)
-	@if ! diff -u $(FUZZ_SOURCE_GUARDED_OUT) $(FUZZ_SOURCE_TRUSTED_OUT); then \
-		case_id=$$(paste $(FUZZ_SOURCE_GUARDED_OUT) $(FUZZ_SOURCE_TRUSTED_OUT) | awk -F '\t' '$$1 != $$2 { split($$1, a, " "); print a[1]; exit }'); \
-		printf 'source divergence at case %s\n' "$$case_id" >&2; \
-		ASAN_OPTIONS=abort_on_error=1:detect_leaks=0 ./$(FUZZ_VERIFY_GUARDED_BINARY) --seed $(FUZZ_SEED) --count $(FUZZ_SOURCE_COUNT) --mode source --dump-case "$$case_id" >/dev/null; \
-		ASAN_OPTIONS=abort_on_error=1:detect_leaks=0 ./$(FUZZ_VERIFY_TRUSTED_BINARY) --seed $(FUZZ_SEED) --count $(FUZZ_SOURCE_COUNT) --mode source --dump-case "$$case_id" >/dev/null; \
-		exit 1; \
-	fi
-	ASAN_OPTIONS=abort_on_error=1:detect_leaks=0 ./$(FUZZ_VERIFY_GUARDED_BINARY) --seed $(FUZZ_SEED) --count $(FUZZ_CORRUPTION_COUNT) --mode corruption > $(FUZZ_CORRUPTION_GUARDED_OUT)
-	ASAN_OPTIONS=abort_on_error=1:detect_leaks=0 ./$(FUZZ_VERIFY_TRUSTED_BINARY) --seed $(FUZZ_SEED) --count $(FUZZ_CORRUPTION_COUNT) --mode corruption > $(FUZZ_CORRUPTION_TRUSTED_OUT)
-	@if ! diff -u $(FUZZ_CORRUPTION_GUARDED_OUT) $(FUZZ_CORRUPTION_TRUSTED_OUT); then \
-		case_id=$$(paste $(FUZZ_CORRUPTION_GUARDED_OUT) $(FUZZ_CORRUPTION_TRUSTED_OUT) | awk -F '\t' '$$1 != $$2 { split($$1, a, " "); print a[1]; exit }'); \
-		printf 'corruption divergence at case %s\n' "$$case_id" >&2; \
-		ASAN_OPTIONS=abort_on_error=1:detect_leaks=0 ./$(FUZZ_VERIFY_GUARDED_BINARY) --seed $(FUZZ_SEED) --count $(FUZZ_CORRUPTION_COUNT) --mode corruption --dump-case "$$case_id" >/dev/null; \
-		ASAN_OPTIONS=abort_on_error=1:detect_leaks=0 ./$(FUZZ_VERIFY_TRUSTED_BINARY) --seed $(FUZZ_SEED) --count $(FUZZ_CORRUPTION_COUNT) --mode corruption --dump-case "$$case_id" >/dev/null; \
-		exit 1; \
-	fi
-	@printf 'fuzz-diff ok seed=%s source=%s corruption=%s\n' "$(FUZZ_SEED)" "$(FUZZ_SOURCE_COUNT)" "$(FUZZ_CORRUPTION_COUNT)"
-
 $(OVERLAY_COMPILER): tools/frothy-compile-overlay.c $(FROTHY_DEPS) | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) tools/frothy-compile-overlay.c $(KERNEL_SOURCES) $(PLATFORM_SOURCES) $(PERSISTENCE_SOURCES) $(FR_LDFLAGS) -o $@
 
@@ -803,4 +751,4 @@ vsix:
 clean:
 	rm -rf build frothy test/test test/test-host-normal
 
-.PHONY: test test-unity artifacts flash wipe-nvs web-bins test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host fuzz-diff _fuzz-diff-run print-config vsix clean
+.PHONY: test test-unity artifacts flash wipe-nvs web-bins test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean

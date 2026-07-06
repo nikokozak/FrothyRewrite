@@ -1,6 +1,4 @@
 set(FR_GEN_DIR ${FR_REWRITE_ROOT}/build/${FR_REWRITE_BOARD}/gen)
-set(FR_REWRITE_EXTRA_CFLAGS "" CACHE STRING
-    "Extra C flags for the Frothy ESP-IDF component")
 
 # T12L: frothy build sets FROTHY_LIBS_CMAKE and FROTHY_LIB_NATIVES_C via
 # idf.py -D flags. When set, include the generator's libs.cmake (which
@@ -76,13 +74,6 @@ idf_component_register(
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     FR_PROFILE_HEADER="${FR_REWRITE_PROFILE}.h"
     FR_PROFILE_NAME="${FR_REWRITE_PROFILE}")
-
-if(FR_REWRITE_EXTRA_CFLAGS)
-    separate_arguments(FR_REWRITE_EXTRA_CFLAGS_LIST NATIVE_COMMAND
-        "${FR_REWRITE_EXTRA_CFLAGS}")
-    target_compile_options(${COMPONENT_LIB} PRIVATE
-        ${FR_REWRITE_EXTRA_CFLAGS_LIST})
-endif()
 
 # T12L: suppress lib_native.c's empty defaults when the generator emitted
 # strong overrides (see src/lib_native.c FR_LIB_NATIVES_PROVIDED comment).

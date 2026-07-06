@@ -73,36 +73,6 @@ fr_err_t fr_instruction_stream_init(fr_instruction_stream_t *view,
                                     const uint8_t *bytes, uint16_t length);
 fr_err_t fr_instruction_read_header(const fr_instruction_stream_t *view,
                                     fr_instruction_header_t *header);
-fr_err_t fr_verify_code_object(const fr_instruction_stream_t *view);
-fr_err_t fr_instruction_decode_slot(const fr_instruction_stream_t *view,
-                                    fr_code_offset_t ip,
-                                    fr_slot_id_t *out_slot_id);
-fr_err_t fr_instruction_decode_int(const fr_instruction_stream_t *view,
-                                   fr_code_offset_t ip, fr_int_t *out_int);
-fr_err_t fr_instruction_decode_object_id(
-    const fr_instruction_stream_t *view, fr_code_offset_t ip,
-    fr_object_id_t *out_object_id);
-fr_err_t fr_instruction_decode_code_id(
-    const fr_instruction_stream_t *view, fr_code_offset_t ip,
-    fr_code_object_id_t *out_code_object_id);
-fr_err_t fr_instruction_decode_jump(const fr_instruction_stream_t *view,
-                                    fr_code_offset_t ip,
-                                    fr_code_offset_t *out_target);
-fr_err_t fr_instruction_decode_arg(const fr_instruction_stream_t *view,
-                                   fr_code_offset_t ip,
-                                   uint8_t *out_arg_index);
-fr_err_t fr_instruction_decode_local(const fr_instruction_stream_t *view,
-                                     fr_code_offset_t ip,
-                                     uint8_t *out_local_index);
-fr_err_t fr_instruction_decode_call_slot_arg(
-    const fr_instruction_stream_t *view, fr_code_offset_t ip,
-    fr_slot_id_t *out_slot_id, uint8_t *out_arg_count);
-#if FR_FEATURE_CELLS
-fr_err_t fr_instruction_decode_cell(const fr_instruction_stream_t *view,
-                                    fr_code_offset_t ip,
-                                    fr_slot_id_t *out_slot_id,
-                                    uint16_t *out_index);
-#endif
 fr_err_t fr_instruction_read_slot_operand(const fr_instruction_stream_t *view,
                                           fr_code_offset_t ip,
                                           fr_slot_id_t *out_slot_id);

@@ -76,7 +76,6 @@ fr_err_t fr_code_install(fr_runtime_t *runtime,
       FR_PROFILE_MAX_INSTRUCTION_BYTES) {
     return FR_ERR_CAPACITY;
   }
-  FR_TRY(fr_verify_code_object(view));
   /* Names are introspection metadata, not semantics. If the shared pool is
    * full, drop them and let the renderer fall back rather than fail a compile
    * the instructions accept. */

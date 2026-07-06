@@ -352,35 +352,6 @@ static uint32_t read_u32_little_endian(const uint8_t *bytes) {
 }
 #endif
 
-static fr_err_t test_verify_bytes(const uint8_t *bytes, uint16_t length) {
-  fr_instruction_stream_t view;
-
-  FR_TRY(fr_instruction_stream_init(&view, bytes, length));
-  return fr_verify_code_object(&view);
-}
-
-#if FR_FEATURE_COMPILER
-static fr_err_t test_verify_compiled_update(fr_runtime_t *runtime,
-                                            const char *source,
-                                            bool apply_update) {
-  fr_compile_overlay_update_t update;
-
-  FR_TRY(fr_compile_overlay_update_for_runtime(runtime, source, &update));
-  if (update.overlay_update.code_objects == NULL ||
-      update.overlay_update.code_object_count == 0) {
-    return FR_ERR_INVALID;
-  }
-  for (uint16_t i = 0; i < update.overlay_update.code_object_count; i++) {
-    FR_TRY(fr_verify_code_object(
-        &update.overlay_update.code_objects[i].instructions));
-  }
-  if (apply_update) {
-    FR_TRY(fr_overlay_apply(runtime, &update.overlay_update));
-  }
-  return FR_OK;
-}
-#endif
-
 static void test_base_def_contract(void) {
   bool seen_slots[FR_PROFILE_MAX_SLOTS] = {0};
   uint16_t expected_layer_count = FR_FEATURE_PERSISTENCE ? 4 : 3;
@@ -1295,95 +1266,6 @@ static void test_instruction_stream(void) {
                                               &text_len) == FR_OK &&
             strcmp(text, "PUSH_NIL\nRETURN\n") == 0);
 }
-
-#if FR_FEATURE_COMPILER
-static void test_instruction_verifier(void) {
-  fr_runtime_t runtime;
-  fr_compile_overlay_update_t update;
-  uint8_t valid_jump[] = {0x00, 0x00, FR_OP_JUMP, 0x00, 0x00,
-                          FR_TEST_PUSH_INT(1), FR_TEST_PUSH_INT(2)};
-  uint8_t jump_past_end[] = {0x00, 0x00, FR_OP_JUMP, 0x00, 0x00,
-                             FR_TEST_PUSH_INT(1), FR_TEST_PUSH_INT(2)};
-  uint8_t jump_mid_instruction[] = {0x00, 0x00, FR_OP_JUMP, 0x00, 0x00,
-                                    FR_TEST_PUSH_INT(1), FR_TEST_PUSH_INT(2)};
-  uint8_t slot_out_of_range[] = {0x00, 0x00, FR_OP_LOAD_SLOT,
-                                 0x00, 0x00, FR_OP_RETURN};
-  uint8_t unknown_opcode[] = {0x00, 0x00, FR_OP_PUSH_NIL, FR_OP_RETURN};
-  uint8_t return_junk[] = {0x00, 0x00, FR_OP_RETURN, 0xff};
-  const fr_code_offset_t first_push_ip = 5u;
-  const fr_code_offset_t second_push_ip =
-      first_push_ip + FR_INSTRUCTION_PUSH_INT_SIZE;
-
-  write_instruction_header(valid_jump, FR_INSTRUCTION_MIN_HEADER_SIZE);
-  write_instruction_header(jump_past_end, FR_INSTRUCTION_MIN_HEADER_SIZE);
-  write_instruction_header(jump_mid_instruction, FR_INSTRUCTION_MIN_HEADER_SIZE);
-  write_instruction_header(slot_out_of_range, FR_INSTRUCTION_MIN_HEADER_SIZE);
-  write_instruction_header(unknown_opcode, FR_INSTRUCTION_MIN_HEADER_SIZE);
-  write_instruction_header(return_junk, FR_INSTRUCTION_MIN_HEADER_SIZE);
-  write_jump_operand(&valid_jump[3], second_push_ip);
-  write_jump_operand(&jump_past_end[3], (fr_code_offset_t)sizeof(jump_past_end));
-  write_jump_operand(&jump_mid_instruction[3],
-                     (fr_code_offset_t)(first_push_ip + 1u));
-  write_slot_operand(&slot_out_of_range[3], FR_PROFILE_MAX_SLOTS);
-  unknown_opcode[2] = 0xff;
-
-  CHECK("verifier accepts valid hand-built stream",
-        test_verify_bytes(valid_jump, sizeof(valid_jump)) == FR_OK);
-  CHECK("verifier rejects truncated stream",
-        test_verify_bytes(valid_jump, (uint16_t)(sizeof(valid_jump) - 1u)) !=
-            FR_OK);
-  CHECK("verifier rejects out-of-range slot operand",
-        test_verify_bytes(slot_out_of_range, sizeof(slot_out_of_range)) !=
-            FR_OK);
-  CHECK("verifier rejects jump past length",
-        test_verify_bytes(jump_past_end, sizeof(jump_past_end)) != FR_OK);
-  CHECK("verifier rejects jump into instruction",
-        test_verify_bytes(jump_mid_instruction,
-                          sizeof(jump_mid_instruction)) != FR_OK);
-  CHECK("verifier rejects unknown opcode",
-        test_verify_bytes(unknown_opcode, sizeof(unknown_opcode)) != FR_OK);
-  CHECK("verifier rejects trailing junk after return",
-        test_verify_bytes(return_junk, sizeof(return_junk)) != FR_OK);
-
-  CHECK("verifier accept compile runtime",
-        fr_base_image_install(&runtime) == FR_OK);
-  CHECK("verifier accepts compiled arithmetic",
-        test_verify_compiled_update(&runtime, "boot is fn [ 2 + 3 * 4 ]",
-                                    true) == FR_OK);
-  CHECK("verifier accepts compiled if else",
-        test_verify_compiled_update(
-            &runtime, "boot is fn [ if false [ 1 ] else [ 2 ] ]", true) ==
-            FR_OK);
-  CHECK("verifier accepts compiled loop",
-        test_verify_compiled_update(&runtime, "boot is fn [ repeat 2 [ ms: 1 ] ]",
-                                    true) == FR_OK);
-  CHECK("verifier accepts compiled args and locals",
-        test_verify_compiled_update(
-            &runtime, "to twice with n [ here x is n * 2 ; x ]", true) ==
-            FR_OK);
-  CHECK("verifier accepts compiled self recursion",
-        test_verify_compiled_update(
-            &runtime,
-            "to count_down with n [ if n < 1 [ 0 ] else [ count_down: n - 1 ] ]",
-            true) == FR_OK);
-  CHECK("verifier accepts compiled native call",
-        test_verify_compiled_update(&runtime, "boot is fn [ ms: 1 ]", true) ==
-            FR_OK);
-
-#if FR_FEATURE_CELLS
-  CHECK("verifier cells setup",
-        fr_compile_overlay_update_for_runtime(&runtime, "counter is cells(2)",
-                                              &update) == FR_OK &&
-            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
-  CHECK("verifier accepts compiled cells program",
-        test_verify_compiled_update(
-            &runtime, "boot is fn [ set counter[0] to 1 ; counter[0] ]",
-            true) == FR_OK);
-#else
-  (void)update;
-#endif
-}
-#endif
 
 static void test_slots(void) {
   fr_runtime_t runtime;
@@ -5041,14 +4923,15 @@ static void test_image(void) {
                                  &overlay_length) == FR_OK &&
             fr_overlay_update_decode(overlay_bytes, (uint16_t)(overlay_length - 1u),
                                      &decoded_update) == FR_ERR_CORRUPT);
-  CHECK("crc-valid invalid code fails verifier before install",
+  CHECK("crc-valid invalid code reaches runtime guard",
         fr_overlay_update_encode(&invalid_code_update, overlay_bytes,
                                  (uint16_t)sizeof(overlay_bytes),
                                  &overlay_length) == FR_OK &&
             fr_overlay_update_decode(overlay_bytes, overlay_length,
                                      &decoded_update) == FR_OK &&
             fr_image_install(&runtime, &image_a) == FR_OK &&
-            fr_overlay_apply(&runtime, &decoded_update.update) ==
+            fr_overlay_apply(&runtime, &decoded_update.update) == FR_OK &&
+            fr_vm_run_slot(&runtime, FR_TEST_FIRST_USER_SLOT, &tagged) ==
                 FR_ERR_INVALID);
 #if FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES > 0
   CHECK("overlay update byte codec applies",
@@ -11273,9 +11156,6 @@ int main(void) {
   test_base_def_contract();
   test_profile_hash_word_size();
   test_instruction_stream();
-#if FR_FEATURE_COMPILER
-  test_instruction_verifier();
-#endif
   test_slots();
 #if FR_FEATURE_HANDLES
   test_handles();
