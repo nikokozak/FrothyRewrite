@@ -26,6 +26,51 @@
 #error "FR_VM_YIELD_SAFE_POINTS must be 1..UINT16_MAX"
 #endif
 
+#if FR_VM_TRUST
+#define FR_VM_READ_SLOT(view, ip, out)                                        \
+  fr_instruction_decode_slot((view), (ip), (out))
+#define FR_VM_READ_INT(view, ip, out)                                         \
+  fr_instruction_decode_int((view), (ip), (out))
+#define FR_VM_READ_OBJECT_ID(view, ip, out)                                   \
+  fr_instruction_decode_object_id((view), (ip), (out))
+#define FR_VM_READ_CODE_ID(view, ip, out)                                     \
+  fr_instruction_decode_code_id((view), (ip), (out))
+#define FR_VM_READ_JUMP(view, ip, out)                                        \
+  fr_instruction_decode_jump((view), (ip), (out))
+#define FR_VM_READ_ARG(view, ip, out)                                         \
+  fr_instruction_decode_arg((view), (ip), (out))
+#define FR_VM_READ_LOCAL(view, ip, out)                                       \
+  fr_instruction_decode_local((view), (ip), (out))
+#define FR_VM_READ_CALL_SLOT_ARG(view, ip, out_slot, out_count)               \
+  fr_instruction_decode_call_slot_arg((view), (ip), (out_slot), (out_count))
+#if FR_FEATURE_CELLS
+#define FR_VM_READ_CELL(view, ip, out_slot, out_index)                        \
+  fr_instruction_decode_cell((view), (ip), (out_slot), (out_index))
+#endif
+#else
+#define FR_VM_READ_SLOT(view, ip, out)                                        \
+  fr_instruction_read_slot_operand((view), (ip), (out))
+#define FR_VM_READ_INT(view, ip, out)                                         \
+  fr_instruction_read_int_operand((view), (ip), (out))
+#define FR_VM_READ_OBJECT_ID(view, ip, out)                                   \
+  fr_instruction_read_object_id_operand((view), (ip), (out))
+#define FR_VM_READ_CODE_ID(view, ip, out)                                     \
+  fr_instruction_read_code_id_operand((view), (ip), (out))
+#define FR_VM_READ_JUMP(view, ip, out)                                        \
+  fr_instruction_read_jump_operand((view), (ip), (out))
+#define FR_VM_READ_ARG(view, ip, out)                                         \
+  fr_instruction_read_arg_operand((view), (ip), (out))
+#define FR_VM_READ_LOCAL(view, ip, out)                                       \
+  fr_instruction_read_local_operand((view), (ip), (out))
+#define FR_VM_READ_CALL_SLOT_ARG(view, ip, out_slot, out_count)               \
+  fr_instruction_read_call_slot_arg_operands((view), (ip), (out_slot),        \
+                                             (out_count))
+#if FR_FEATURE_CELLS
+#define FR_VM_READ_CELL(view, ip, out_slot, out_index)                        \
+  fr_instruction_read_cell_operands((view), (ip), (out_slot), (out_index))
+#endif
+#endif
+
 typedef struct fr_vm_state_t {
   fr_code_offset_t ip;
   fr_tagged_t stack[FR_PROFILE_MAX_STACK_DEPTH];
@@ -94,7 +139,7 @@ static fr_err_t fr_vm_load_slot(fr_runtime_t *runtime,
   fr_slot_id_t slot_id = 0;
   fr_tagged_t tagged = 0;
 
-  FR_TRY(fr_instruction_read_slot_operand(view, state->ip, &slot_id));
+  FR_TRY(FR_VM_READ_SLOT(view, state->ip, &slot_id));
   FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
 
   state->ip += 3;
@@ -107,7 +152,7 @@ static fr_err_t fr_vm_store_slot(fr_runtime_t *runtime,
   fr_slot_id_t slot_id = 0;
   fr_tagged_t tagged = 0;
 
-  FR_TRY(fr_instruction_read_slot_operand(view, state->ip, &slot_id));
+  FR_TRY(FR_VM_READ_SLOT(view, state->ip, &slot_id));
   FR_TRY(fr_vm_pop(state, &tagged));
   FR_TRY(fr_slot_write(runtime, slot_id, tagged));
 
@@ -120,7 +165,7 @@ static fr_err_t fr_vm_push_int(const fr_instruction_stream_t *view,
   fr_int_t int_operand = 0;
   fr_tagged_t tagged = 0;
 
-  FR_TRY(fr_instruction_read_int_operand(view, state->ip, &int_operand));
+  FR_TRY(FR_VM_READ_INT(view, state->ip, &int_operand));
   FR_TRY(fr_tagged_encode_int(int_operand, &tagged));
 
   state->ip += FR_INSTRUCTION_PUSH_INT_SIZE;
@@ -132,7 +177,7 @@ static fr_err_t fr_vm_push_object_id(const fr_instruction_stream_t *view,
   fr_object_id_t object_id = 0;
   fr_tagged_t tagged = 0;
 
-  FR_TRY(fr_instruction_read_object_id_operand(view, state->ip, &object_id));
+  FR_TRY(FR_VM_READ_OBJECT_ID(view, state->ip, &object_id));
   FR_TRY(fr_tagged_encode_object_id(object_id, &tagged));
 
   state->ip += FR_INSTRUCTION_PUSH_OBJECT_ID_SIZE;
@@ -147,7 +192,7 @@ static fr_err_t fr_vm_push_code_id(const fr_instruction_stream_t *view,
   fr_code_object_id_t code_id = 0;
   fr_tagged_t tagged = 0;
 
-  FR_TRY(fr_instruction_read_code_id_operand(view, state->ip, &code_id));
+  FR_TRY(FR_VM_READ_CODE_ID(view, state->ip, &code_id));
   FR_TRY(fr_tagged_encode_int((fr_int_t)code_id, &tagged));
 
   state->ip += FR_INSTRUCTION_PUSH_CODE_ID_SIZE;
@@ -171,7 +216,7 @@ static fr_err_t fr_vm_load_arg(const fr_instruction_stream_t *view,
                                fr_vm_state_t *state) {
   uint8_t arg_index = 0;
 
-  FR_TRY(fr_instruction_read_arg_operand(view, state->ip, &arg_index));
+  FR_TRY(FR_VM_READ_ARG(view, state->ip, &arg_index));
   if (arg_index >= state->arg_count) {
     return FR_ERR_INVALID;
   }
@@ -184,7 +229,7 @@ static fr_err_t fr_vm_load_local(const fr_instruction_stream_t *view,
                                  fr_vm_state_t *state) {
   uint8_t local_index = 0;
 
-  FR_TRY(fr_instruction_read_local_operand(view, state->ip, &local_index));
+  FR_TRY(FR_VM_READ_LOCAL(view, state->ip, &local_index));
   if (local_index >= state->local_count) {
     return FR_ERR_INVALID;
   }
@@ -198,7 +243,7 @@ static fr_err_t fr_vm_store_local(const fr_instruction_stream_t *view,
   uint8_t local_index = 0;
   fr_tagged_t value = 0;
 
-  FR_TRY(fr_instruction_read_local_operand(view, state->ip, &local_index));
+  FR_TRY(FR_VM_READ_LOCAL(view, state->ip, &local_index));
   if (local_index >= state->local_count) {
     return FR_ERR_INVALID;
   }
@@ -251,7 +296,7 @@ static fr_err_t fr_vm_load_cell(fr_runtime_t *runtime,
   fr_tagged_t tagged = 0;
   fr_object_id_t object_id = 0;
 
-  FR_TRY(fr_instruction_read_cell_operands(view, state->ip, &slot_id, &index));
+  FR_TRY(FR_VM_READ_CELL(view, state->ip, &slot_id, &index));
   FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
   FR_TRY(fr_cells_read(runtime, object_id, index, &tagged));
 
@@ -267,7 +312,7 @@ static fr_err_t fr_vm_store_cell(fr_runtime_t *runtime,
   fr_tagged_t value = 0;
   fr_object_id_t object_id = 0;
 
-  FR_TRY(fr_instruction_read_cell_operands(view, state->ip, &slot_id, &index));
+  FR_TRY(FR_VM_READ_CELL(view, state->ip, &slot_id, &index));
   FR_TRY(fr_vm_pop(state, &value));
   FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
   FR_TRY(fr_cells_write(runtime, object_id, index, value));
@@ -284,7 +329,7 @@ static fr_err_t fr_vm_load_cell_dynamic(fr_runtime_t *runtime,
   fr_tagged_t tagged = 0;
   fr_object_id_t object_id = 0;
 
-  FR_TRY(fr_instruction_read_slot_operand(view, state->ip, &slot_id));
+  FR_TRY(FR_VM_READ_SLOT(view, state->ip, &slot_id));
   FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
   FR_TRY(fr_vm_pop_cell_index(runtime, state, object_id, &index));
   FR_TRY(fr_cells_read(runtime, object_id, index, &tagged));
@@ -301,7 +346,7 @@ static fr_err_t fr_vm_store_cell_dynamic(fr_runtime_t *runtime,
   fr_tagged_t value = 0;
   fr_object_id_t object_id = 0;
 
-  FR_TRY(fr_instruction_read_slot_operand(view, state->ip, &slot_id));
+  FR_TRY(FR_VM_READ_SLOT(view, state->ip, &slot_id));
   FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
   FR_TRY(fr_vm_pop_cell_index(runtime, state, object_id, &index));
   FR_TRY(fr_vm_pop(state, &value));
@@ -417,7 +462,7 @@ static fr_err_t fr_vm_call_slot(fr_runtime_t *runtime,
   fr_slot_id_t slot_id = 0;
   fr_tagged_t result = 0;
 
-  FR_TRY(fr_instruction_read_slot_operand(view, state->ip, &slot_id));
+  FR_TRY(FR_VM_READ_SLOT(view, state->ip, &slot_id));
   FR_TRY(fr_vm_run_slot_depth(runtime, slot_id, NULL, 0, &result,
                               (uint16_t)(state->call_depth + 1)));
 
@@ -433,8 +478,7 @@ static fr_err_t fr_vm_call_slot_arg(fr_runtime_t *runtime,
   fr_tagged_t result = 0;
   fr_tagged_t args[FR_PROFILE_MAX_STACK_DEPTH];
 
-  FR_TRY(fr_instruction_read_call_slot_arg_operands(view, state->ip, &slot_id,
-                                                    &arg_count));
+  FR_TRY(FR_VM_READ_CALL_SLOT_ARG(view, state->ip, &slot_id, &arg_count));
   if (state->depth < arg_count) {
     return FR_ERR_UNDERFLOW;
   }
@@ -458,7 +502,7 @@ static fr_err_t fr_vm_call_native_slot(fr_runtime_t *runtime,
   fr_tagged_t result = 0;
   fr_tagged_t args[FR_PROFILE_MAX_STACK_DEPTH];
 
-  FR_TRY(fr_instruction_read_slot_operand(view, state->ip, &slot_id));
+  FR_TRY(FR_VM_READ_SLOT(view, state->ip, &slot_id));
   FR_TRY(fr_slot_read(runtime, slot_id, &slot_tagged));
   FR_TRY(fr_tagged_decode_native_id(slot_tagged, &native_id));
   FR_TRY(fr_native_get(runtime, native_id, &entry));
@@ -586,7 +630,7 @@ static fr_err_t fr_vm_compare_int(fr_vm_state_t *state, fr_opcode_t op) {
 static fr_err_t fr_vm_jump(const fr_instruction_stream_t *view,
                            fr_vm_state_t *state) {
   fr_code_offset_t target = 0;
-  FR_TRY(fr_instruction_read_jump_operand(view, state->ip, &target));
+  FR_TRY(FR_VM_READ_JUMP(view, state->ip, &target));
   state->ip = target;
   return FR_OK;
 }
@@ -597,7 +641,7 @@ static fr_err_t fr_vm_jump_if_falsy(const fr_instruction_stream_t *view,
   fr_tagged_t condition = 0;
 
   FR_TRY(fr_vm_pop(state, &condition));
-  FR_TRY(fr_instruction_read_jump_operand(view, state->ip, &target));
+  FR_TRY(FR_VM_READ_JUMP(view, state->ip, &target));
 
   if (fr_tagged_is_falsy(condition)) {
     state->ip = target;
@@ -613,7 +657,7 @@ static fr_err_t fr_vm_repeat_begin(const fr_instruction_stream_t *view,
   fr_tagged_t tagged = 0;
   fr_int_t count = 0;
 
-  FR_TRY(fr_instruction_read_jump_operand(view, state->ip, &target));
+  FR_TRY(FR_VM_READ_JUMP(view, state->ip, &target));
   if (state->depth == 0) {
     return FR_ERR_UNDERFLOW;
   }
@@ -638,7 +682,7 @@ static fr_err_t fr_vm_repeat_next(const fr_instruction_stream_t *view,
   fr_tagged_t tagged = 0;
   fr_int_t count = 0;
 
-  FR_TRY(fr_instruction_read_jump_operand(view, state->ip, &target));
+  FR_TRY(FR_VM_READ_JUMP(view, state->ip, &target));
   if (state->depth == 0) {
     return FR_ERR_UNDERFLOW;
   }
