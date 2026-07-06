@@ -182,9 +182,10 @@ fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
 }
 
 /* Pull candidates from the platform and mark surviving ones pending. Body-free
- * so this can run from the per-step poll path. Stale candidates (cancelled
- * slot, generation mismatch, queued before the current registration) are
- * dropped per spec §3. */
+ * so this can run from the safe-point service path. Delivery is statement-level:
+ * a long expression runs until the next DROP or RETURN. Stale candidates
+ * (cancelled slot, generation mismatch, queued before the current registration)
+ * are dropped per spec §3. */
 fr_err_t fr_event_drain(fr_runtime_t *runtime) {
   fr_event_candidate_t candidates[FR_EVENT_BINDING_COUNT];
   uint8_t count = 0;
