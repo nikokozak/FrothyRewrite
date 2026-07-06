@@ -42,6 +42,7 @@ enum {
   FR_ESP_BACKSPACE = 8,
   FR_ESP_DELETE = 127,
   FR_ESP_STORAGE_SLOT_COUNT = 2,
+  FR_ESP_VM_YIELD_INTERVAL_US = 250000,
 };
 
 #if FR_FEATURE_UART
@@ -173,6 +174,7 @@ static bool fr_esp_pending_byte_valid;
 static uint8_t fr_esp_pending_byte;
 static adc_oneshot_unit_handle_t fr_esp_adc1;
 static bool fr_esp_adc1_initialized;
+static int64_t fr_esp_last_vm_yield_us;
 
 static fr_err_t fr_esp_err(esp_err_t err) {
   switch (err) {
@@ -285,7 +287,18 @@ fr_err_t fr_platform_millis(uint32_t *out_ms) {
 }
 
 void fr_platform_yield(void) {
-  taskYIELD();
+  int64_t now_us = esp_timer_get_time();
+
+  if (fr_esp_last_vm_yield_us == 0) {
+    fr_esp_last_vm_yield_us = now_us;
+    return;
+  }
+  if (now_us - fr_esp_last_vm_yield_us < FR_ESP_VM_YIELD_INTERVAL_US) {
+    return;
+  }
+
+  fr_esp_last_vm_yield_us = now_us;
+  vTaskDelay(1);
 }
 
 static bool fr_esp_gpio_pin_valid(uint16_t pin) {
