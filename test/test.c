@@ -6138,6 +6138,13 @@ static void test_compile(void) {
 #endif
   char line[32];
   const uint16_t push_size = FR_INSTRUCTION_PUSH_INT_SIZE;
+#if FR_PROFILE_MAX_CALL_DEPTH > 10
+  const char *fib_check_source = "fib: 10";
+  fr_int_t fib_check_value = 55;
+#else
+  const char *fib_check_source = "fib: 6";
+  fr_int_t fib_check_value = 8;
+#endif
 
   CHECK("compile boot is nil",
         fr_compile_overlay_update("boot is nil", &update) == FR_OK &&
@@ -6675,6 +6682,32 @@ static void test_compile(void) {
                 before_name_count &&
             fr_slot_read(&project_runtime, foo_slot, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 2);
+  CHECK("compile failed to function rolls back fresh slot",
+        (before_slot_count = fr_slot_count(&project_runtime), true) &&
+            (before_name_count =
+                 fr_slot_project_name_count(&project_runtime),
+             true) &&
+            fr_compile_overlay_update_for_runtime(
+                &project_runtime, "to broken [ missing ]", &update) ==
+                FR_ERR_NOT_FOUND &&
+            fr_slot_count(&project_runtime) == before_slot_count &&
+            fr_slot_project_name_count(&project_runtime) ==
+                before_name_count &&
+            fr_slot_id_for_name(&project_runtime, "broken", &slot_id) ==
+                FR_ERR_NOT_FOUND);
+  CHECK("compile failed is-fn function rolls back fresh slot",
+        (before_slot_count = fr_slot_count(&project_runtime), true) &&
+            (before_name_count =
+                 fr_slot_project_name_count(&project_runtime),
+             true) &&
+            fr_compile_overlay_update_for_runtime(
+                &project_runtime, "broken is fn [ missing ]", &update) ==
+                FR_ERR_NOT_FOUND &&
+            fr_slot_count(&project_runtime) == before_slot_count &&
+            fr_slot_project_name_count(&project_runtime) ==
+                before_name_count &&
+            fr_slot_id_for_name(&project_runtime, "broken", &slot_id) ==
+                FR_ERR_NOT_FOUND);
   CHECK("compile project rename leaves old name until clear",
         fr_compile_overlay_update_for_runtime(&project_runtime, "bar is foo",
                                               &update) == FR_OK &&
@@ -6734,6 +6767,32 @@ static void test_compile(void) {
                 FR_OP_CALL_NATIVE_SLOT &&
             expression.instruction_bytes[6u + push_size] ==
                 FR_SLOT_GPIO_WRITE);
+  CHECK("compiled self recursion runs and retargets through slot",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime,
+                "to fib with n [ if n < 2 [ n ] else [ fib: n - 1 + "
+                "fib: n - 2 ] ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_slot_id_for_name(&runtime, "fib", &slot_id) == FR_OK &&
+            fr_compile_expression_for_runtime(&runtime, fib_check_source,
+                                              &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
+            decoded == fib_check_value &&
+            fr_compile_overlay_update_for_runtime(&runtime, "oldfib is fib",
+                                                  &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "to fib with n [ 100 + n ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_expression_for_runtime(&runtime, "oldfib: 3",
+                                              &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 203);
   CHECK("compile static overlay rejects runtime call binding",
         fr_base_image_install(&binding_runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(

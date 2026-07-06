@@ -251,6 +251,25 @@ const char *fr_slot_project_name_at(const fr_runtime_t *runtime,
 #endif
 }
 
+static bool fr_slot_project_name_points_to(const fr_runtime_t *runtime,
+                                           fr_slot_id_t slot_id) {
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  if (runtime == NULL) {
+    return false;
+  }
+  for (uint16_t i = 0; i < runtime->slots.overlay_name_count; i++) {
+    if (runtime->slots.overlay_name_slots[i] == slot_id) {
+      return true;
+    }
+  }
+  return false;
+#else
+  (void)runtime;
+  (void)slot_id;
+  return false;
+#endif
+}
+
 fr_err_t fr_slot_prepare_project_name(const fr_runtime_t *runtime,
                                       const char *name,
                                       fr_slot_id_t *out_slot_id) {
@@ -291,6 +310,57 @@ fr_err_t fr_slot_prepare_project_name(const fr_runtime_t *runtime,
 #else
   return FR_ERR_UNSUPPORTED;
 #endif
+}
+
+fr_err_t fr_slot_rollback_project_name(fr_runtime_t *runtime,
+                                       const char *name,
+                                       fr_slot_id_t slot_id) {
+  bool removed_name = false;
+
+  if (runtime == NULL || name == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_slot_is_project_id(slot_id) || slot_id >= FR_PROFILE_MAX_SLOTS) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_slot_check_name(name));
+
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  for (uint16_t i = 0; i < runtime->slots.overlay_name_count; i++) {
+    if (runtime->slots.overlay_name_slots[i] == slot_id &&
+        strcmp(runtime->slots.overlay_names[i], name) == 0) {
+      for (uint16_t j = i + 1; j < runtime->slots.overlay_name_count; j++) {
+        strcpy(runtime->slots.overlay_names[j - 1],
+               runtime->slots.overlay_names[j]);
+        runtime->slots.overlay_name_slots[j - 1] =
+            runtime->slots.overlay_name_slots[j];
+      }
+      runtime->slots.overlay_name_count =
+          (uint16_t)(runtime->slots.overlay_name_count - 1);
+      runtime->slots.overlay_names[runtime->slots.overlay_name_count][0] = '\0';
+      runtime->slots.overlay_name_slots[runtime->slots.overlay_name_count] = 0;
+      removed_name = true;
+      break;
+    }
+  }
+#endif
+
+  if (!removed_name && fr_slot_project_name_points_to(runtime, slot_id)) {
+    return FR_ERR_NOT_FOUND;
+  }
+  runtime->slots.current[slot_id] = runtime->slots.base[slot_id];
+  runtime->slots.overlay[slot_id] = false;
+  while (runtime->slots.count > runtime->slots.base_count) {
+    fr_slot_id_t last = (fr_slot_id_t)(runtime->slots.count - 1);
+
+    if (runtime->slots.overlay[last] ||
+        runtime->slots.current[last] != runtime->slots.base[last] ||
+        fr_slot_project_name_points_to(runtime, last)) {
+      break;
+    }
+    runtime->slots.count = last;
+  }
+  return FR_OK;
 }
 
 fr_err_t fr_slot_validate_project_names(const fr_runtime_t *runtime,

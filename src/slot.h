@@ -32,6 +32,9 @@ const char *fr_slot_project_name_at(const fr_runtime_t *runtime,
 fr_err_t fr_slot_prepare_project_name(const fr_runtime_t *runtime,
                                       const char *name,
                                       fr_slot_id_t *out_slot_id);
+fr_err_t fr_slot_rollback_project_name(fr_runtime_t *runtime,
+                                       const char *name,
+                                       fr_slot_id_t slot_id);
 fr_err_t fr_slot_validate_project_names(const fr_runtime_t *runtime,
                                         const fr_slot_name_t names[],
                                         uint16_t name_count,

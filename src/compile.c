@@ -48,6 +48,9 @@ typedef struct fr_compile_context_t {
   fr_runtime_t *runtime;
   const fr_parse_span_t *params;
   uint8_t param_count;
+  fr_slot_id_t definition_slot_id;
+  uint8_t definition_arity;
+  bool has_definition;
   fr_compile_body_texts_t *body_texts;
   fr_compile_locals_t *locals;
   fr_compile_event_body_t *event_body;
@@ -334,6 +337,16 @@ static fr_err_t fr_compile_emit_call_slot_arg(uint8_t instruction_bytes[],
                                FR_OP_CALL_SLOT_ARG));
   FR_TRY(fr_compile_write_u16(instruction_bytes, offset, slot_id));
   return fr_compile_write_byte(instruction_bytes, offset, arg_count);
+}
+
+static bool fr_compile_current_definition_for_slot(
+    const fr_compile_context_t *ctx, fr_slot_id_t slot_id, uint8_t *out_arity) {
+  if (ctx == NULL || out_arity == NULL || !ctx->has_definition ||
+      ctx->definition_slot_id != slot_id) {
+    return false;
+  }
+  *out_arity = ctx->definition_arity;
+  return true;
 }
 
 #if FR_FEATURE_CELLS
@@ -646,8 +659,32 @@ static fr_err_t fr_compile_emit_call(const fr_compile_context_t *ctx,
   fr_slot_id_t slot_id = 0;
   fr_native_id_t native_id = 0;
   fr_code_object_id_t code_object_id = 0;
+  uint8_t definition_arity = 0;
 
   FR_TRY(fr_compile_slot_for_name(ctx, expr->name, &slot_id));
+
+  if (fr_compile_current_definition_for_slot(ctx, slot_id,
+                                             &definition_arity)) {
+    if (expr->child_count != definition_arity) {
+      return FR_ERR_INVALID;
+    }
+    for (uint8_t i = 0; i < expr->child_count; i++) {
+      const fr_parse_expr_t *arg =
+          fr_compile_expr_at(parsed, expr->children[i]);
+
+      if (arg == NULL) {
+        return FR_ERR_INVALID;
+      }
+      FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[i],
+                                  instruction_bytes, offset));
+    }
+    if (definition_arity == 0) {
+      return fr_compile_emit_slot_op(instruction_bytes, offset,
+                                     FR_OP_CALL_SLOT, slot_id);
+    }
+    return fr_compile_emit_call_slot_arg(instruction_bytes, offset, slot_id,
+                                         definition_arity);
+  }
 
   if (ctx != NULL && ctx->runtime != NULL) {
     FR_TRY(fr_slot_read(ctx->runtime, slot_id, &tagged));
@@ -1001,9 +1038,12 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
   body->bytes[1] = FR_INSTRUCTION_LOCALS_HEADER_SIZE;
   body->bytes[2] = 0;
   body->bytes[3] = 0;
-  body_ctx.runtime = ctx->runtime;
+  body_ctx = *ctx;
+  body_ctx.params = NULL;
+  body_ctx.param_count = 0;
   body_ctx.body_texts = ctx->body_texts;
   body_ctx.locals = &body_locals;
+  body_ctx.event_body = NULL;
   FR_TRY(fr_compile_emit_expr(&body_ctx, parsed, expr->children[body_child],
                               body->bytes, &body_offset));
   FR_TRY(fr_compile_write_byte(body->bytes, &body_offset, FR_OP_RETURN));
@@ -1555,6 +1595,7 @@ static fr_err_t fr_compile_record_object(
 static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
                                     const fr_parse_line_t *parsed,
                                     const fr_parse_expr_t *function,
+                                    fr_slot_id_t definition_slot_id,
                                     fr_compile_overlay_update_t *out) {
   fr_compile_context_t body_ctx = {0};
   fr_compile_body_texts_t body_texts = {
@@ -1603,6 +1644,9 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
   }
   body_ctx.params = arity > 0 ? &parsed->params[function->param_start] : NULL;
   body_ctx.param_count = arity;
+  body_ctx.definition_slot_id = definition_slot_id;
+  body_ctx.definition_arity = arity;
+  body_ctx.has_definition = true;
   body_ctx.body_texts = &body_texts;
   body_ctx.locals = &locals;
   body_ctx.event_body = &event_body;
@@ -1656,6 +1700,38 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
   return FR_OK;
 }
 
+/* A fresh function name must resolve while its body compiles. The compiled
+ * overlay update still owns the real install, so this binding is always
+ * rolled back before compile returns. */
+static fr_err_t fr_compile_bind_temporary_definition_slot(
+    const fr_compile_context_t *ctx, const fr_slot_name_t *slot_name,
+    bool has_slot_name) {
+  if (!has_slot_name) {
+    return FR_OK;
+  }
+  if (ctx == NULL || ctx->runtime == NULL || slot_name == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_slot_write(ctx->runtime, slot_name->slot_id, fr_tagged_nil()));
+  return fr_slot_bind_project_name(ctx->runtime, slot_name->name,
+                                   slot_name->slot_id);
+}
+
+static fr_err_t fr_compile_rollback_temporary_definition_slot(
+    const fr_compile_context_t *ctx, const fr_slot_name_t *slot_name,
+    bool has_slot_name) {
+  if (!has_slot_name) {
+    return FR_OK;
+  }
+  if (ctx == NULL || ctx->runtime == NULL || slot_name == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  return fr_slot_rollback_project_name(ctx->runtime, slot_name->name,
+                                       slot_name->slot_id);
+}
+
 static fr_err_t
 fr_compile_overlay_update_with_context(const fr_compile_context_t *ctx,
                                        const char *source,
@@ -1688,7 +1764,25 @@ fr_compile_overlay_update_with_context(const fr_compile_context_t *ctx,
   }
 
   if (value->kind == FR_PARSE_EXPR_FUNCTION) {
-    FR_TRY(fr_compile_function(ctx, &parsed, value, out));
+    fr_err_t err = FR_OK;
+    fr_err_t rollback_err = FR_OK;
+
+    err = fr_compile_bind_temporary_definition_slot(ctx, &out->slot_name,
+                                                    has_slot_name);
+    if (err != FR_OK) {
+      (void)fr_compile_rollback_temporary_definition_slot(
+          ctx, &out->slot_name, has_slot_name);
+      return err;
+    }
+    err = fr_compile_function(ctx, &parsed, value, slot_id, out);
+    rollback_err = fr_compile_rollback_temporary_definition_slot(
+        ctx, &out->slot_name, has_slot_name);
+    if (err != FR_OK) {
+      return err;
+    }
+    if (rollback_err != FR_OK) {
+      return rollback_err;
+    }
     out->slot_inits[0].slot_id = slot_id;
     fr_compile_attach_slot_name(out, has_slot_name);
     return FR_OK;

@@ -45,6 +45,8 @@ typedef struct fr_parser_t {
   fr_token_t token;
   fr_parse_line_t *out;
   uint8_t expr_depth;
+  uint8_t call_arg_stop_depth;
+  bool stop_plus_before_call;
 } fr_parser_t;
 
 typedef uint32_t fr_parse_int_magnitude_t;
@@ -467,6 +469,23 @@ static fr_err_t fr_parse_expect_word(fr_parser_t *parser, const char *word) {
   return fr_parse_advance(parser);
 }
 
+static bool fr_parse_plus_rhs_starts_call(const fr_parser_t *parser) {
+  fr_parser_t lookahead;
+
+  if (parser == NULL || parser->token.kind != FR_TOKEN_PLUS) {
+    return false;
+  }
+  lookahead = *parser;
+  if (fr_parse_advance(&lookahead) != FR_OK ||
+      lookahead.token.kind != FR_TOKEN_NAME) {
+    return false;
+  }
+  if (fr_parse_advance(&lookahead) != FR_OK) {
+    return false;
+  }
+  return lookahead.token.kind == FR_TOKEN_COLON;
+}
+
 static fr_err_t fr_parse_finish_line(fr_parser_t *parser) {
   if (parser->token.kind == FR_TOKEN_SEMICOLON) {
     FR_TRY(fr_parse_advance(parser));
@@ -658,6 +677,26 @@ static fr_err_t fr_parse_function(fr_parser_t *parser,
   return fr_parse_function_value(parser, out_id);
 }
 
+static fr_err_t fr_parse_call_argument(fr_parser_t *parser,
+                                       fr_parse_expr_id_t *out_id) {
+  bool saved_stop_plus_before_call = false;
+  uint8_t saved_call_arg_stop_depth = 0;
+  fr_err_t err = FR_OK;
+
+  if (parser == NULL || out_id == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  saved_stop_plus_before_call = parser->stop_plus_before_call;
+  saved_call_arg_stop_depth = parser->call_arg_stop_depth;
+  parser->stop_plus_before_call = true;
+  parser->call_arg_stop_depth = (uint8_t)(parser->expr_depth + 1u);
+  err = fr_parse_expression(parser, out_id);
+  parser->stop_plus_before_call = saved_stop_plus_before_call;
+  parser->call_arg_stop_depth = saved_call_arg_stop_depth;
+  return err;
+}
+
 static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
                                       fr_parse_expr_id_t *out_id) {
   fr_parse_span_t name = parser->token.span;
@@ -697,7 +736,7 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
         return FR_ERR_INVALID;
       }
 
-      FR_TRY(fr_parse_expression(parser, &call.children[call.child_count]));
+      FR_TRY(fr_parse_call_argument(parser, &call.children[call.child_count]));
       if (call.child_count == 0) {
         call.child = call.children[0];
       }
@@ -1125,6 +1164,14 @@ static fr_err_t fr_parse_additive(fr_parser_t *parser,
                                                     : FR_PARSE_EXPR_SUB,
         .child_count = 2};
 
+    /* In a call arg, `foo: a + bar: b` leaves the plus outside the first
+     * call. The depth check lets parentheses keep that plus inside the arg. */
+    if (parser->stop_plus_before_call &&
+        parser->expr_depth == parser->call_arg_stop_depth &&
+        parser->token.kind == FR_TOKEN_PLUS &&
+        fr_parse_plus_rhs_starts_call(parser)) {
+      break;
+    }
     FR_TRY(fr_parse_advance(parser));
     FR_TRY(fr_parse_multiplicative(parser, &rhs));
     binop.children[0] = lhs;
