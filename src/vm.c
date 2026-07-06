@@ -788,17 +788,18 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
   state.ip = header.header_size;
   while (state.ip < view->length && !state.returned) {
     fr_opcode_t op;
-    FR_TRY(fr_platform_poll_interrupt(runtime));
-    if (fr_runtime_is_interrupted(runtime)) {
-      return FR_ERR_INTERRUPTED;
-    }
-    FR_TRY(fr_event_drain(runtime));
+
     op = (fr_opcode_t)view->bytes[state.ip];
     FR_TRY(fr_vm_step(runtime, view, &state));
     /* Spec §9 safe points: statement boundary (DROP) and end of any body
        (RETURN). Loop back-edges in repeat/while/forever emit DROP before
        the jump, so DROP also covers each loop iteration. */
     if (op == FR_OP_DROP || op == FR_OP_RETURN) {
+      FR_TRY(fr_platform_poll_interrupt(runtime));
+      if (fr_runtime_is_interrupted(runtime)) {
+        return FR_ERR_INTERRUPTED;
+      }
+      FR_TRY(fr_event_drain(runtime));
       yield_countdown--;
       if (yield_countdown == 0) {
         fr_platform_yield();

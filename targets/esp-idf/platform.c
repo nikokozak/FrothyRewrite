@@ -228,17 +228,54 @@ static fr_err_t fr_esp_nvs_init(void) {
   return fr_esp_err(err);
 }
 
+static fr_err_t fr_esp_boot_button_init(void) {
+#ifdef FR_BOARD_BOOT_BUTTON
+  const gpio_config_t config = {
+      .pin_bit_mask = 1ULL << FR_BOARD_BOOT_BUTTON,
+      .mode = GPIO_MODE_INPUT,
+      .pull_up_en = GPIO_PULLUP_ENABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_DISABLE,
+  };
+
+  return fr_esp_err(gpio_config(&config));
+#else
+  return FR_OK;
+#endif
+}
+
+static bool fr_esp_boot_button_pressed(void) {
+#ifdef FR_BOARD_BOOT_BUTTON
+  return gpio_get_level((gpio_num_t)FR_BOARD_BOOT_BUTTON) == 0;
+#else
+  return false;
+#endif
+}
+
 fr_err_t fr_esp_platform_init(void) {
   if (fr_esp_initialized) {
     return FR_OK;
   }
 
   FR_TRY(fr_esp_uart_init());
+  FR_TRY(fr_esp_boot_button_init());
 #if FR_FEATURE_PERSISTENCE
   FR_TRY(fr_esp_nvs_init());
 #endif
   fr_esp_initialized = true;
   return FR_OK;
+}
+
+static bool fr_esp_console_key_ready(void) {
+  size_t len = 0;
+
+  if (fr_esp_pending_byte_valid) {
+    return true;
+  }
+  if (uart_get_buffered_data_len(FR_BOARD_UART_PORT, &len) != ESP_OK) {
+    return false;
+  }
+  return len > 0;
 }
 
 static fr_err_t fr_esp_read_byte(uint8_t *out_byte, TickType_t timeout) {
@@ -261,6 +298,7 @@ static fr_err_t fr_esp_read_byte(uint8_t *out_byte, TickType_t timeout) {
 }
 
 static void fr_esp_save_pending_byte(uint8_t byte) {
+  /* One-byte typeahead: safe-point polling must never grow memory. */
   fr_esp_pending_byte = byte;
   fr_esp_pending_byte_valid = true;
 }
@@ -527,11 +565,20 @@ fr_err_t fr_platform_adc_read(uint16_t pin, uint16_t *out_value) {
 
 fr_err_t fr_platform_poll_interrupt(fr_runtime_t *runtime) {
   uint8_t byte = 0;
-  fr_err_t err = fr_esp_read_byte(&byte, 0);
+  fr_err_t err = FR_OK;
 
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
+  if (fr_esp_boot_button_pressed()) {
+    fr_runtime_interrupt(runtime);
+    return FR_OK;
+  }
+  if (!fr_esp_console_key_ready()) {
+    return FR_OK;
+  }
+
+  err = fr_esp_read_byte(&byte, 0);
   if (err == FR_ERR_NOT_FOUND) {
     return FR_OK;
   }

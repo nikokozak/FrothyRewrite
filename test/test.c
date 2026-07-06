@@ -9212,10 +9212,13 @@ static void test_vm(void) {
       0x00, 0x00, FR_TEST_PUSH_INT(-1), FR_OP_REPEAT_BEGIN, 0x00, 0x00,
       FR_TEST_PUSH_INT(1), FR_OP_DROP, FR_OP_REPEAT_NEXT, 0x00, 0x00,
       FR_OP_PUSH_NIL, FR_OP_RETURN};
+  /* Safe-point polling is statement-granularity; hand-written looping bytecode
+   * carries the same DROP before the back-edge that the compiler emits for
+   * repeat/while/forever. */
   uint8_t interrupt_loop[] = {0x00, 0x00, FR_OP_CALL_NATIVE_SLOT,
                               0x00, 0x00, FR_OP_STORE_SLOT,
-                              0x00, 0x00, FR_OP_JUMP,
-                              0x00, 0x00};
+                              0x00, 0x00, FR_OP_DROP,
+                              FR_OP_JUMP, 0x00, 0x00};
   fr_code_object_id_t code_object_id = 0;
   fr_code_object_id_t arg_code_object_id = 0;
   fr_code_object_id_t recursive_code_object_id = 0;
@@ -9338,7 +9341,7 @@ static void test_vm(void) {
   write_jump_operand(&repeat_negative[repeat_next_ip + 1u], repeat_body_ip);
   write_slot_operand(&interrupt_loop[3], 3);
   write_slot_operand(&interrupt_loop[6], 0);
-  write_jump_operand(&interrupt_loop[9], 2);
+  write_jump_operand(&interrupt_loop[10], 2);
 
   CHECK("vm runtime init", fr_runtime_init(&runtime) == FR_OK);
   CHECK("vm return nil",
