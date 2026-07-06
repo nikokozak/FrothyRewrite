@@ -1259,7 +1259,9 @@ static void fr_esp_event_gpio_isr(void *arg) {
   };
   BaseType_t woken = pdFALSE;
   if (xQueueSendFromISR(fr_esp_event_queue, &candidate, &woken) != pdTRUE) {
+    portENTER_CRITICAL_ISR(&fr_esp_event_overflow_mux);
     fr_esp_event_overflow++;
+    portEXIT_CRITICAL_ISR(&fr_esp_event_overflow_mux);
   }
   portYIELD_FROM_ISR(woken);
 }
@@ -1275,7 +1277,9 @@ static void fr_esp_event_timer_callback(void *arg) {
       .timestamp_ms = fr_esp_event_millis_now(),
   };
   if (xQueueSend(fr_esp_event_queue, &candidate, 0) != pdTRUE) {
+    portENTER_CRITICAL(&fr_esp_event_overflow_mux);
     fr_esp_event_overflow++;
+    portEXIT_CRITICAL(&fr_esp_event_overflow_mux);
   }
 }
 
@@ -1451,9 +1455,7 @@ fr_err_t fr_platform_event_drain(fr_event_candidate_t *out_events,
     return FR_OK;
   }
 
-  /* The ISR writes to fr_esp_event_overflow with a plain ++ to stay on the
-   * allowed-call list; drain runs in task context, so the read-and-zero pair
-   * goes under the mux to keep them atomic with respect to each other. */
+  /* Writers and drain share one mux so the drained delta is exact. */
   portENTER_CRITICAL(&fr_esp_event_overflow_mux);
   *overflow_delta = fr_esp_event_overflow;
   fr_esp_event_overflow = 0;
@@ -1566,7 +1568,9 @@ static void fr_esp_wifi_enqueue(fr_event_kind_t kind) {
   candidate.generation = slot->generation;
   candidate.timestamp_ms = fr_esp_event_millis_now();
   if (xQueueSend(fr_esp_event_queue, &candidate, 0) != pdTRUE) {
+    portENTER_CRITICAL(&fr_esp_event_overflow_mux);
     fr_esp_event_overflow++;
+    portEXIT_CRITICAL(&fr_esp_event_overflow_mux);
   }
 }
 
