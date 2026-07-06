@@ -15,18 +15,8 @@ static uint16_t fr_read_u16_little_endian(const uint8_t *bytes) {
   return (uint16_t)(bytes[0] | ((uint16_t)bytes[1] << 8));
 }
 
-#if FR_WORD_SIZE == 16
-static fr_int_t fr_read_i16_little_endian(const uint8_t *bytes) {
-  return (fr_int_t)(int16_t)fr_read_u16_little_endian(bytes);
-}
-#endif
-
 static fr_int_t fr_read_int_operand_little_endian(const uint8_t *bytes) {
-#if FR_WORD_SIZE == 16
-  return fr_read_i16_little_endian(bytes);
-#else
   return (fr_int_t)(int32_t)fr_read_u32_le(bytes);
-#endif
 }
 
 static fr_err_t fr_require_bytes(const fr_instruction_stream_t *view,
@@ -239,11 +229,6 @@ fr_err_t fr_instruction_read_object_id_operand(
 
   *out_object_id =
       (fr_object_id_t)fr_read_u16_little_endian(&view->bytes[ip + 1]);
-#if FR_WORD_SIZE == 16
-  if ((fr_tagged_t)*out_object_id > FR_TAGGED_OBJECT_MAX_ID) {
-    return FR_ERR_RANGE;
-  }
-#endif
   return FR_OK;
 }
 

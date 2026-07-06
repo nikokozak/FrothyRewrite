@@ -183,21 +183,15 @@ static void fr_profile_hash_u16(uint32_t *crc, uint16_t value) {
   *crc = fr_crc32_update(*crc, bytes, (uint16_t)sizeof(bytes));
 }
 
-#if FR_WORD_SIZE == 32
 static void fr_profile_hash_u32(uint32_t *crc, uint32_t value) {
   uint8_t bytes[4];
 
   fr_write_u32_le(bytes, value);
   *crc = fr_crc32_update(*crc, bytes, (uint16_t)sizeof(bytes));
 }
-#endif
 
 static void fr_profile_hash_tagged(uint32_t *crc, fr_tagged_t tagged) {
-#if FR_WORD_SIZE == 16
-  fr_profile_hash_u16(crc, tagged);
-#else
   fr_profile_hash_u32(crc, tagged);
-#endif
 }
 
 #if FR_PROFILE_HASH_FEATURE_NATIVE_SIGNATURES

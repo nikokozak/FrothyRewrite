@@ -274,28 +274,15 @@ enum {
   ((uint8_t)(((uint32_t)(int32_t)(value) >> 16) & 0xffu))
 #define FR_TEST_INT_BYTE3(value)                                             \
   ((uint8_t)(((uint32_t)(int32_t)(value) >> 24) & 0xffu))
-#if FR_WORD_SIZE == 16
-#define FR_TEST_INT_BYTES(value)                                             \
-  FR_TEST_INT_BYTE0(value), FR_TEST_INT_BYTE1(value)
-#else
 #define FR_TEST_INT_BYTES(value)                                             \
   FR_TEST_INT_BYTE0(value), FR_TEST_INT_BYTE1(value),                        \
       FR_TEST_INT_BYTE2(value), FR_TEST_INT_BYTE3(value)
-#endif
 #define FR_TEST_PUSH_INT(value) FR_OP_PUSH_INT, FR_TEST_INT_BYTES(value)
-#if FR_WORD_SIZE == 32
 #define FR_TEST_PERSIST_INT_SOURCE "100000"
 #define FR_TEST_PERSIST_INT_VALUE 100000
 #define FR_TEST_PERSIST_RECORD_INIT "point is Point: 100000, \"ready\""
 #define FR_TEST_PERSIST_RECORD_SET "set point->x to 100001"
 #define FR_TEST_PERSIST_RECORD_VALUE 100001
-#else
-#define FR_TEST_PERSIST_INT_SOURCE "7"
-#define FR_TEST_PERSIST_INT_VALUE 7
-#define FR_TEST_PERSIST_RECORD_INIT "point is Point: 10, \"ready\""
-#define FR_TEST_PERSIST_RECORD_SET "set point->x to 11"
-#define FR_TEST_PERSIST_RECORD_VALUE 11
-#endif
 
 #define CHECK(name, expr)                                                      \
   do {                                                                         \
@@ -519,7 +506,7 @@ static void test_base_def_contract(void) {
 }
 
 static void test_profile_hash_word_size(void) {
-  uint16_t other = (FR_WORD_SIZE == 16) ? 32u : 16u;
+  uint16_t other = 16u;
   CHECK("profile hash differs when word size differs",
         fr_profile_hash() != fr_profile_debug_hash_for_word_size(other));
 #if FR_FEATURE_SOURCE_BASE
@@ -552,7 +539,7 @@ static void test_profile_hash_word_size(void) {
 static void test_persist_cross_width_header_rejection(void) {
   fr_runtime_t runtime;
   uint8_t header[FR_PERSIST_HEADER_BYTES];
-  const uint16_t other = (FR_WORD_SIZE == 16) ? 32u : 16u;
+  const uint16_t other = 16u;
 
   CHECK("save populates storage for cross-width test",
         fr_base_image_install(&runtime) == FR_OK &&
@@ -869,11 +856,6 @@ static void test_refs(void) {
   CHECK("last slot decodes",
         fr_tagged_decode_slot_id(tagged, &slot_id) == FR_OK);
   CHECK("last slot round trip", slot_id == FR_TAGGED_SLOT_MAX_ID);
-#if FR_WORD_SIZE == 16
-  CHECK("slot rejects one past",
-        fr_tagged_encode_slot_id((fr_slot_id_t)(FR_TAGGED_SLOT_MAX_ID + 1u),
-                                 &tagged) == FR_ERR_RANGE);
-#else
   CHECK("wide slot band rejects compact-id overflow",
         fr_tagged_decode_slot_id(
             (fr_tagged_t)(FR_TAGGED_SLOT_BASE + FR_TAGGED_SLOT_MAX_ID + 1u),
@@ -881,7 +863,6 @@ static void test_refs(void) {
   CHECK("wide slot band overflow is invalid",
         !fr_tagged_is_valid((fr_tagged_t)(FR_TAGGED_SLOT_BASE +
                                           FR_TAGGED_SLOT_MAX_ID + 1u)));
-#endif
   CHECK("non-slot returns type",
         fr_tagged_decode_slot_id(fr_tagged_nil(), &slot_id) == FR_ERR_TYPE);
 
@@ -896,12 +877,6 @@ static void test_refs(void) {
   CHECK("last code decodes",
         fr_tagged_decode_code_object_id(tagged, &code_object_id) == FR_OK);
   CHECK("last code round trip", code_object_id == FR_TAGGED_CODE_MAX_ID);
-#if FR_WORD_SIZE == 16
-  CHECK("code rejects one past",
-        fr_tagged_encode_code_object_id(
-            (fr_code_object_id_t)(FR_TAGGED_CODE_MAX_ID + 1u), &tagged) ==
-            FR_ERR_RANGE);
-#else
   CHECK("wide code band rejects compact-id overflow",
         fr_tagged_decode_code_object_id(
             (fr_tagged_t)(FR_TAGGED_CODE_BASE + FR_TAGGED_CODE_MAX_ID + 1u),
@@ -909,7 +884,6 @@ static void test_refs(void) {
   CHECK("wide code band overflow is invalid",
         !fr_tagged_is_valid((fr_tagged_t)(FR_TAGGED_CODE_BASE +
                                           FR_TAGGED_CODE_MAX_ID + 1u)));
-#endif
   CHECK("non-code returns type",
         fr_tagged_decode_code_object_id(fr_tagged_nil(), &code_object_id) ==
             FR_ERR_TYPE);
@@ -925,12 +899,6 @@ static void test_refs(void) {
   CHECK("last native decodes",
         fr_tagged_decode_native_id(tagged, &native_id) == FR_OK);
   CHECK("last native round trip", native_id == FR_TAGGED_NATIVE_MAX_ID);
-#if FR_WORD_SIZE == 16
-  CHECK("native rejects one past",
-        fr_tagged_encode_native_id(
-            (fr_native_id_t)(FR_TAGGED_NATIVE_MAX_ID + 1u), &tagged) ==
-            FR_ERR_RANGE);
-#else
   CHECK("wide native band rejects compact-id overflow",
         fr_tagged_decode_native_id((fr_tagged_t)(FR_TAGGED_NATIVE_BASE +
                                                  FR_TAGGED_NATIVE_MAX_ID + 1u),
@@ -938,7 +906,6 @@ static void test_refs(void) {
   CHECK("wide native band overflow is invalid",
         !fr_tagged_is_valid((fr_tagged_t)(FR_TAGGED_NATIVE_BASE +
                                           FR_TAGGED_NATIVE_MAX_ID + 1u)));
-#endif
   CHECK("non-native returns type",
         fr_tagged_decode_native_id(fr_tagged_nil(), &native_id) == FR_ERR_TYPE);
 
@@ -953,12 +920,6 @@ static void test_refs(void) {
   CHECK("last object decodes",
         fr_tagged_decode_object_id(tagged, &object_id) == FR_OK);
   CHECK("last object round trip", object_id == FR_TAGGED_OBJECT_MAX_ID);
-#if FR_WORD_SIZE == 16
-  CHECK("object rejects one past",
-        fr_tagged_encode_object_id(
-            (fr_object_id_t)(FR_TAGGED_OBJECT_MAX_ID + 1u), &tagged) ==
-            FR_ERR_RANGE);
-#else
   CHECK("wide object band rejects compact-id overflow",
         fr_tagged_decode_object_id((fr_tagged_t)(FR_TAGGED_OBJECT_BASE +
                                                  FR_TAGGED_OBJECT_MAX_ID + 1u),
@@ -966,7 +927,6 @@ static void test_refs(void) {
   CHECK("wide object band overflow is invalid",
         !fr_tagged_is_valid((fr_tagged_t)(FR_TAGGED_OBJECT_BASE +
                                           FR_TAGGED_OBJECT_MAX_ID + 1u)));
-#endif
   CHECK("non-object returns type",
         fr_tagged_decode_object_id(fr_tagged_nil(), &object_id) == FR_ERR_TYPE);
 #if FR_FEATURE_HANDLES
@@ -2365,20 +2325,12 @@ static void test_random(void) {
                    "seed the pseudo-random generator\n"
                    "ok\n") == 0);
 
-  /* The raw xorshift32 sequence is identical across every target; only the
-   * FR_TAGGED_INT_MAX mask in the language wrapper changes the visible value
-   * per word size. */
-#if FR_WORD_SIZE == 16
-#define FR_TEST_RANDOM_SEED1_NEXT1 "8225\nok\n"
-#define FR_TEST_RANDOM_SEED1_NEXT2 "1537\nok\n"
-#define FR_TEST_RANDOM_SEED1_NEXT3 "10437\nok\n"
-#define FR_TEST_RANDOM_SEED2_NEXT1 "66\nok\n"
-#else
+  /* The raw xorshift32 sequence is identical across every target; the language
+   * wrapper masks it to the tagged integer range before returning. */
 #define FR_TEST_RANDOM_SEED1_NEXT1 "270369\nok\n"
 #define FR_TEST_RANDOM_SEED1_NEXT2 "67634689\nok\n"
 #define FR_TEST_RANDOM_SEED1_NEXT3 "499951813\nok\n"
 #define FR_TEST_RANDOM_SEED2_NEXT1 "540738\nok\n"
-#endif
   CHECK("random.seed=1 pins the first three next values",
         fr_repl_eval_line(&runtime, "random.seed: 1", out, sizeof(out)) ==
                 FR_OK &&
@@ -7725,30 +7677,9 @@ static void test_persist(void) {
       'R',
       'P',
       'O',
-#if FR_WORD_SIZE == 16
-      1,
-#else
-      0,
-#endif
-      FR_TEST_PERSIST_RECORD_END,
-  };
-#if FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_WORD_SIZE == 16
-  uint8_t name_free_payload[] = {
-      'F',
-      'R',
-      'P',
-      'O',
-      FR_PERSIST_PAYLOAD_VERSION,
-      FR_TEST_PERSIST_RECORD_BIND,
-      0,
-      0,
-      FR_INSTALL_TIER_USER,
-      FR_TEST_PERSIST_VALUE_INT,
-      0,
       0,
       FR_TEST_PERSIST_RECORD_END,
   };
-#endif
 #if !FR_FEATURE_CELLS
   uint8_t cell_payload[] = {
       'F',
@@ -7823,11 +7754,6 @@ static void test_persist(void) {
 #if !FR_FEATURE_CELLS
   (void)expression;
 #endif
-#if FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_WORD_SIZE == 16
-  write_u16_little_endian(&name_free_payload[6],
-                          FR_TEST_FIRST_USER_SLOT);
-  write_u16_little_endian(&name_free_payload[10], (uint16_t)(int16_t)13);
-#endif
 #if !FR_FEATURE_CELLS
   write_u16_little_endian(&cell_payload[8], 1);
   write_u16_little_endian(&cell_payload[11], (uint16_t)(int16_t)7);
@@ -7838,23 +7764,11 @@ static void test_persist(void) {
             fr_persist_restore(&runtime) == FR_ERR_NOT_FOUND &&
             fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
-  CHECK("persist payload rejects other word-size version",
+  CHECK("persist payload rejects wrong payload version",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_payload_restore(
                 &runtime, wrong_version_payload,
                 (uint16_t)sizeof(wrong_version_payload)) == FR_ERR_CORRUPT);
-#if FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_WORD_SIZE == 16
-  CHECK("persist restores payload without name records",
-        fr_base_image_install(&runtime) == FR_OK &&
-            fr_persist_payload_restore(&runtime, name_free_payload,
-                                       (uint16_t)sizeof(name_free_payload)) ==
-                FR_OK &&
-            fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &tagged) ==
-                FR_OK &&
-            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 13 &&
-            fr_slot_id_for_name(&runtime, "legacy", &slot_id) ==
-                FR_ERR_NOT_FOUND);
-#endif
 #if !FR_FEATURE_CELLS
   CHECK("persist payload rejects compiled-out cell records",
         fr_base_image_install(&runtime) == FR_OK &&

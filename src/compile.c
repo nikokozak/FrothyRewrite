@@ -302,15 +302,6 @@ static fr_err_t fr_compile_write_u16(uint8_t instruction_bytes[],
                                (uint8_t)(word >> 8));
 }
 
-#if FR_WORD_SIZE == 16
-static fr_err_t fr_compile_write_i16(uint8_t instruction_bytes[],
-                                     uint16_t *offset, fr_int_t int_operand) {
-  return fr_compile_write_u16(instruction_bytes, offset,
-                              (uint16_t)(int16_t)int_operand);
-}
-#endif
-
-#if FR_WORD_SIZE == 32
 static fr_err_t fr_compile_write_u32(uint8_t instruction_bytes[],
                                      uint16_t *offset, uint32_t word) {
   if (*offset + 4u > FR_COMPILE_MAX_INSTRUCTION_BYTES) {
@@ -320,17 +311,12 @@ static fr_err_t fr_compile_write_u32(uint8_t instruction_bytes[],
   *offset = (uint16_t)(*offset + 4u);
   return FR_OK;
 }
-#endif
 
 static fr_err_t fr_compile_write_int_operand(uint8_t instruction_bytes[],
                                              uint16_t *offset,
                                              fr_int_t int_operand) {
-#if FR_WORD_SIZE == 16
-  return fr_compile_write_i16(instruction_bytes, offset, int_operand);
-#else
   return fr_compile_write_u32(instruction_bytes, offset,
                               (uint32_t)(int32_t)int_operand);
-#endif
 }
 
 static fr_err_t fr_compile_emit_slot_op(uint8_t instruction_bytes[],
@@ -420,11 +406,6 @@ static fr_err_t fr_compile_emit_push_code_id(uint8_t instruction_bytes[],
 static fr_err_t fr_compile_emit_push_object_id(uint8_t instruction_bytes[],
                                                uint16_t *offset,
                                                fr_object_id_t object_id) {
-#if FR_WORD_SIZE == 16
-  if ((fr_tagged_t)object_id > FR_TAGGED_OBJECT_MAX_ID) {
-    return FR_ERR_RANGE;
-  }
-#endif
   FR_TRY(fr_compile_write_byte(instruction_bytes, offset,
                                FR_OP_PUSH_OBJECT_ID));
   return fr_compile_write_u16(instruction_bytes, offset, (uint16_t)object_id);

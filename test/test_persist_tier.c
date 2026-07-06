@@ -56,13 +56,8 @@ const fr_lib_native_def_t fr_lib_natives[] = {
 const uint16_t fr_lib_natives_count = 1;
 
 /* Mirror persist_payload.c's enum so a public test can shape the bytes. */
-#if FR_WORD_SIZE == 16
-#define FR_TEST_TIER_PAYLOAD_VERSION 3
-#define FR_TEST_TIER_PAYLOAD_VERSION_LEGACY 2
-#else
 #define FR_TEST_TIER_PAYLOAD_VERSION 4
 #define FR_TEST_TIER_PAYLOAD_VERSION_LEGACY 3
-#endif
 
 #define FR_TEST_TIER_RECORD_CODE 1
 #define FR_TEST_TIER_RECORD_BIND 2
@@ -87,17 +82,13 @@ static void write_u16_le(uint8_t *p, uint16_t v) {
 }
 
 static void write_int_le(uint8_t *p, fr_int_t v) {
-#if FR_WORD_SIZE == 16
-  write_u16_le(p, (uint16_t)(int16_t)v);
-#else
   p[0] = (uint8_t)((uint32_t)(int32_t)v & 0xff);
   p[1] = (uint8_t)(((uint32_t)(int32_t)v >> 8) & 0xff);
   p[2] = (uint8_t)(((uint32_t)(int32_t)v >> 16) & 0xff);
   p[3] = (uint8_t)(((uint32_t)(int32_t)v >> 24) & 0xff);
-#endif
 }
 
-#define FR_TEST_TIER_INT_BYTES (FR_WORD_SIZE / 8)
+#define FR_TEST_TIER_INT_BYTES 4
 /* magic 4 + version 1 + BIND tag 1 + slot 2 + tier 1 + value_kind 1 + int N + END 1. */
 #define FR_TEST_TIER_PAYLOAD_LEN ((uint16_t)(11 + FR_TEST_TIER_INT_BYTES))
 #define FR_TEST_TIER_LEGACY_LEN ((uint16_t)(FR_TEST_TIER_PAYLOAD_LEN - 1))

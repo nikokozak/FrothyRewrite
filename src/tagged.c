@@ -129,10 +129,9 @@ fr_err_t fr_tagged_decode_bool(fr_tagged_t tagged, bool *out_value) {
   return FR_ERR_TYPE;
 }
 
-/* The encode-side range check for compact IDs is #if FR_WORD_SIZE == 16 only;
- * the 32-bit branch trusts the typedef to fit the 32-bit band (UINT16_MAX).
- * Lock that here so widening fr_slot_id_t et al. past 16 bits without also
- * widening the band fails the build, not the runtime. */
+/* Compact IDs fit the 32-bit tag bands. Lock that here so widening
+ * fr_slot_id_t et al. past 16 bits without also widening the band fails the
+ * build, not the runtime. */
 typedef char fr_slot_id_fits_32bit_max_id
     [((fr_slot_id_t)-1 <= UINT16_MAX) ? 1 : -1];
 typedef char fr_code_object_id_fits_32bit_max_id
@@ -147,11 +146,6 @@ fr_err_t fr_tagged_encode_slot_id(fr_slot_id_t slot_id,
   if (out_tagged == NULL) {
     return FR_ERR_INVALID;
   }
-#if FR_WORD_SIZE == 16
-  if ((fr_tagged_t)slot_id > FR_TAGGED_SLOT_MAX_ID) {
-    return FR_ERR_RANGE;
-  }
-#endif
 
   *out_tagged = (fr_tagged_t)(slot_id + FR_TAGGED_SLOT_BASE);
   return FR_OK;
@@ -178,11 +172,6 @@ fr_err_t fr_tagged_encode_code_object_id(fr_code_object_id_t code_object_id,
   if (out_tagged == NULL) {
     return FR_ERR_INVALID;
   }
-#if FR_WORD_SIZE == 16
-  if ((fr_tagged_t)code_object_id > FR_TAGGED_CODE_MAX_ID) {
-    return FR_ERR_RANGE;
-  }
-#endif
 
   *out_tagged = (fr_tagged_t)(code_object_id + FR_TAGGED_CODE_BASE);
   return FR_OK;
@@ -210,11 +199,6 @@ fr_err_t fr_tagged_encode_native_id(fr_native_id_t native_id,
   if (out_tagged == NULL) {
     return FR_ERR_INVALID;
   }
-#if FR_WORD_SIZE == 16
-  if ((fr_tagged_t)native_id > FR_TAGGED_NATIVE_MAX_ID) {
-    return FR_ERR_RANGE;
-  }
-#endif
 
   *out_tagged = (fr_tagged_t)(native_id + FR_TAGGED_NATIVE_BASE);
   return FR_OK;
@@ -241,11 +225,6 @@ fr_err_t fr_tagged_encode_object_id(fr_object_id_t object_id,
   if (out_tagged == NULL) {
     return FR_ERR_INVALID;
   }
-#if FR_WORD_SIZE == 16
-  if ((fr_tagged_t)object_id > FR_TAGGED_OBJECT_MAX_ID) {
-    return FR_ERR_RANGE;
-  }
-#endif
 
   *out_tagged = (fr_tagged_t)(object_id + FR_TAGGED_OBJECT_BASE);
   return FR_OK;

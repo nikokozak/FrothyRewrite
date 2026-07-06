@@ -174,7 +174,6 @@ static fr_err_t fr_overlay_update_reader_u16(fr_overlay_update_reader_t *reader,
   return FR_OK;
 }
 
-#if FR_WORD_SIZE == 32
 static fr_err_t fr_overlay_update_reader_u32(fr_overlay_update_reader_t *reader,
                                              uint32_t *out) {
   if (reader == NULL || out == NULL) {
@@ -188,16 +187,11 @@ static fr_err_t fr_overlay_update_reader_u32(fr_overlay_update_reader_t *reader,
   reader->offset = (uint16_t)(reader->offset + 4);
   return FR_OK;
 }
-#endif
 
 static fr_err_t
 fr_overlay_update_writer_int(fr_overlay_update_writer_t *writer,
                              fr_int_t value) {
-#if FR_WORD_SIZE == 16
-  return fr_overlay_update_writer_u16(writer, (uint16_t)(int16_t)value);
-#else
   return fr_overlay_update_writer_u32(writer, (uint32_t)(int32_t)value);
-#endif
 }
 
 static fr_err_t fr_overlay_update_reader_int(fr_overlay_update_reader_t *reader,
@@ -205,19 +199,11 @@ static fr_err_t fr_overlay_update_reader_int(fr_overlay_update_reader_t *reader,
   if (out == NULL) {
     return FR_ERR_INVALID;
   }
-#if FR_WORD_SIZE == 16
-  {
-    uint16_t word = 0;
-    FR_TRY(fr_overlay_update_reader_u16(reader, &word));
-    *out = (fr_int_t)(int16_t)word;
-  }
-#else
   {
     uint32_t word = 0;
     FR_TRY(fr_overlay_update_reader_u32(reader, &word));
     *out = (fr_int_t)(int32_t)word;
   }
-#endif
   return fr_tagged_can_encode_int(*out) ? FR_OK : FR_ERR_CORRUPT;
 }
 

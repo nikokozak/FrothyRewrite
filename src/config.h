@@ -1,22 +1,22 @@
 #pragma once
 
 #ifndef FR_PROFILE_HEADER
-#define FR_PROFILE_HEADER "host.h"
+#define FR_PROFILE_HEADER "host_small.h"
 #endif
 
 #include FR_PROFILE_HEADER
 
 /*
- * Every profile header must declare FR_WORD_SIZE (16 or 32). A silent default
- * would let a new profile pick up the wrong tagged-word contract without the
- * author noticing.
+ * Every profile header must declare FR_WORD_SIZE. A silent default would let a
+ * new profile pick up the wrong tagged-word contract without the author
+ * noticing.
  */
 #ifndef FR_WORD_SIZE
-#error "profile header must define FR_WORD_SIZE (16 or 32)"
+#error "profile header must define FR_WORD_SIZE"
 #endif
 
-#if FR_WORD_SIZE != 16 && FR_WORD_SIZE != 32
-#error "FR_WORD_SIZE must be 16 or 32"
+#if FR_WORD_SIZE != 32
+#error "Frothy is 32-bit only; FR_WORD_SIZE must be 32"
 #endif
 
 #ifndef FR_BASE_IMAGE_INCLUDE_SYMBOLS

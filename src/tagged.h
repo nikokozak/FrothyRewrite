@@ -9,30 +9,6 @@
  * A tagged word is the encoded runtime word stored in slots and carried by the
  * VM stack. Parsed integers and instruction operands are raw until encoded.
  */
-#if FR_WORD_SIZE == 16
-typedef uint16_t fr_tagged_t;
-
-#define FR_TAGGED_WORD_BYTES 2u
-#define FR_TAGGED_INT_END ((fr_tagged_t)0x7FFFu)
-#define FR_TAGGED_SPECIAL_BASE ((fr_tagged_t)0x8000u)
-#define FR_TAGGED_SPECIAL_END ((fr_tagged_t)0x87FFu)
-#define FR_TAGGED_SLOT_BASE ((fr_tagged_t)0x8800u)
-#define FR_TAGGED_SLOT_END ((fr_tagged_t)0x9FFFu)
-#define FR_TAGGED_SLOT_MAX_ID ((fr_tagged_t)0x17FFu)
-#define FR_TAGGED_CODE_BASE ((fr_tagged_t)0xA000u)
-#define FR_TAGGED_CODE_END ((fr_tagged_t)0xB7FFu)
-#define FR_TAGGED_CODE_MAX_ID ((fr_tagged_t)0x17FFu)
-#define FR_TAGGED_NATIVE_BASE ((fr_tagged_t)0xB800u)
-#define FR_TAGGED_NATIVE_END ((fr_tagged_t)0xCFFFu)
-#define FR_TAGGED_NATIVE_MAX_ID ((fr_tagged_t)0x17FFu)
-#define FR_TAGGED_OBJECT_BASE ((fr_tagged_t)0xD000u)
-#define FR_TAGGED_OBJECT_END ((fr_tagged_t)0xEFFFu)
-#define FR_TAGGED_OBJECT_MAX_ID ((fr_tagged_t)0x1FFFu)
-#define FR_TAGGED_RESERVED_END ((fr_tagged_t)0xFFFFu)
-#define FR_TAGGED_INT_BIAS ((int32_t)0x4000)
-#define FR_TAGGED_INT_MIN (-16384)
-#define FR_TAGGED_INT_MAX 16383
-#elif FR_WORD_SIZE == 32
 typedef uint32_t fr_tagged_t;
 
 #define FR_TAGGED_WORD_BYTES 4u
@@ -55,27 +31,16 @@ typedef uint32_t fr_tagged_t;
 #define FR_TAGGED_INT_BIAS ((int32_t)0x40000000L)
 #define FR_TAGGED_INT_MIN (-1073741824)
 #define FR_TAGGED_INT_MAX 1073741823
-#endif
 
 #if FR_FEATURE_HANDLES
-#if FR_WORD_SIZE == 16
-#define FR_TAGGED_HANDLE_BASE ((fr_tagged_t)0xF000u)
-#define FR_TAGGED_HANDLE_END ((fr_tagged_t)0xF0FFu)
-#define FR_TAGGED_RESERVED_BASE ((fr_tagged_t)0xF100u)
-#else
 #define FR_TAGGED_HANDLE_BASE ((fr_tagged_t)0xF0000000u)
 #define FR_TAGGED_HANDLE_END ((fr_tagged_t)0xF00000FFu)
 #define FR_TAGGED_RESERVED_BASE ((fr_tagged_t)0xF0000100u)
-#endif
 #define FR_TAGGED_HANDLE_MAX_ID ((fr_tagged_t)0x0Fu)
 #define FR_TAGGED_HANDLE_MAX_GENERATION ((fr_tagged_t)0x0Fu)
 #define FR_TAGGED_HANDLE_GENERATION_SHIFT 4u
 #else
-#if FR_WORD_SIZE == 16
-#define FR_TAGGED_RESERVED_BASE ((fr_tagged_t)0xF000u)
-#else
 #define FR_TAGGED_RESERVED_BASE ((fr_tagged_t)0xF0000000u)
-#endif
 #endif
 
 #if FR_FEATURE_BYTES
