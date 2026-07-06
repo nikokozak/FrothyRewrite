@@ -52,6 +52,9 @@ typedef enum fr_parse_expr_kind_t {
   FR_PARSE_EXPR_GE,
   FR_PARSE_EXPR_EQ,
   FR_PARSE_EXPR_NE,
+  FR_PARSE_EXPR_AND,
+  FR_PARSE_EXPR_OR,
+  FR_PARSE_EXPR_NOT,
   FR_PARSE_EXPR_ADD,
   FR_PARSE_EXPR_SUB,
   FR_PARSE_EXPR_MUL,
@@ -71,6 +74,7 @@ typedef struct fr_parse_expr_t {
   uint8_t param_start;
   uint8_t param_count;
   uint8_t child_count;
+  bool text_has_escapes;
 } fr_parse_expr_t;
 
 typedef struct fr_parse_definition_t {

@@ -411,6 +411,90 @@ static fr_err_t fr_compile_emit_push_object_id(uint8_t instruction_bytes[],
   return fr_compile_write_u16(instruction_bytes, offset, (uint16_t)object_id);
 }
 
+static int8_t fr_compile_hex_value(char c) {
+  if (c >= '0' && c <= '9') {
+    return (int8_t)(c - '0');
+  }
+  if (c >= 'a' && c <= 'f') {
+    return (int8_t)(c - 'a' + 10);
+  }
+  if (c >= 'A' && c <= 'F') {
+    return (int8_t)(c - 'A' + 10);
+  }
+  return -1;
+}
+
+static fr_err_t fr_compile_copy_text_literal(const fr_parse_expr_t *expr,
+                                             uint8_t out[], uint16_t out_cap,
+                                             uint16_t *out_length) {
+  uint16_t used = 0;
+
+  if (expr == NULL || out == NULL || out_length == NULL ||
+      expr->kind != FR_PARSE_EXPR_TEXT) {
+    return FR_ERR_INVALID;
+  }
+  if (expr->text.length > 0 && expr->text.start == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!expr->text_has_escapes) {
+    if (expr->text.length > out_cap) {
+      return FR_ERR_RANGE;
+    }
+    if (expr->text.length > 0) {
+      memcpy(out, expr->text.start, expr->text.length);
+    }
+    *out_length = expr->text.length;
+    return FR_OK;
+  }
+
+  for (uint16_t i = 0; i < expr->text.length; i++) {
+    uint8_t byte = (uint8_t)expr->text.start[i];
+
+    if (used >= out_cap) {
+      return FR_ERR_RANGE;
+    }
+    if (byte != '\\') {
+      out[used] = byte;
+      used = (uint16_t)(used + 1);
+      continue;
+    }
+
+    i += 1;
+    if (i >= expr->text.length) {
+      return FR_ERR_INVALID;
+    }
+    switch (expr->text.start[i]) {
+    case 'n': out[used] = '\n'; break;
+    case 'r': out[used] = '\r'; break;
+    case 't': out[used] = '\t'; break;
+    case '"': out[used] = '"'; break;
+    case '\\': out[used] = '\\'; break;
+    case 'x': {
+      int8_t high = 0;
+      int8_t low = 0;
+
+      if (i + 2 >= expr->text.length) {
+        return FR_ERR_INVALID;
+      }
+      high = fr_compile_hex_value(expr->text.start[i + 1]);
+      low = fr_compile_hex_value(expr->text.start[i + 2]);
+      if (high < 0 || low < 0) {
+        return FR_ERR_INVALID;
+      }
+      out[used] = (uint8_t)((high << 4) | low);
+      i = (uint16_t)(i + 2);
+      break;
+    }
+    default:
+      return FR_ERR_INVALID;
+    }
+    used = (uint16_t)(used + 1);
+  }
+
+  *out_length = used;
+  return FR_OK;
+}
+
 /* Bare expressions install the text now and emit the live runtime id. Function
  * bodies stash bytes in the overlay update's text_objects[] and emit the local
  * index; apply patches each operand to the runtime id before code install, so
@@ -427,7 +511,8 @@ static fr_err_t fr_compile_emit_text_literal(const fr_compile_context_t *ctx,
   if (ctx == NULL) {
     return FR_ERR_UNSUPPORTED;
   }
-  if (expr->text.length > FR_PROFILE_MAX_TEXT_LENGTH) {
+  if (!expr->text_has_escapes &&
+      expr->text.length > FR_PROFILE_MAX_TEXT_LENGTH) {
     return FR_ERR_RANGE;
   }
   if (expr->text.length > 0 && expr->text.start == NULL) {
@@ -435,16 +520,17 @@ static fr_err_t fr_compile_emit_text_literal(const fr_compile_context_t *ctx,
   }
   if (ctx->body_texts != NULL) {
     fr_compile_body_texts_t *bt = ctx->body_texts;
+    uint16_t copied_length = 0;
 
     if (bt->count >= bt->capacity) {
       return FR_ERR_RANGE;
     }
-    if (expr->text.length > 0) {
-      memcpy(bt->storage[bt->count], expr->text.start, expr->text.length);
-    }
+    FR_TRY(fr_compile_copy_text_literal(
+        expr, bt->storage[bt->count], FR_PROFILE_MAX_TEXT_LENGTH,
+        &copied_length));
     bt->objects[bt->count] = (fr_image_text_object_t){
         .bytes = bt->storage[bt->count],
-        .length = expr->text.length,
+        .length = copied_length,
     };
     object_id = (fr_object_id_t)bt->count;
     bt->count = (uint16_t)(bt->count + 1);
@@ -453,8 +539,19 @@ static fr_err_t fr_compile_emit_text_literal(const fr_compile_context_t *ctx,
   if (ctx->runtime == NULL) {
     return FR_ERR_UNSUPPORTED;
   }
-  FR_TRY(fr_text_install(ctx->runtime, (const uint8_t *)expr->text.start,
-                         expr->text.length, &object_id));
+  if (expr->text_has_escapes) {
+    uint8_t decoded[FR_PROFILE_MAX_TEXT_LENGTH > 0
+                        ? FR_PROFILE_MAX_TEXT_LENGTH
+                        : 1];
+    uint16_t decoded_length = 0;
+
+    FR_TRY(fr_compile_copy_text_literal(
+        expr, decoded, (uint16_t)sizeof(decoded), &decoded_length));
+    FR_TRY(fr_text_install(ctx->runtime, decoded, decoded_length, &object_id));
+  } else {
+    FR_TRY(fr_text_install(ctx->runtime, (const uint8_t *)expr->text.start,
+                           expr->text.length, &object_id));
+  }
   return fr_compile_emit_push_object_id(instruction_bytes, offset, object_id);
 }
 #endif
@@ -690,6 +787,79 @@ static fr_err_t fr_compile_emit_if(const fr_compile_context_t *ctx,
     FR_TRY(fr_compile_patch_u16(instruction_bytes, end_operands[i], *offset));
   }
   return FR_OK;
+}
+
+static fr_err_t fr_compile_emit_bool_result(const fr_compile_context_t *ctx,
+                                            const fr_parse_line_t *parsed,
+                                            fr_parse_expr_id_t expr_id,
+                                            uint8_t instruction_bytes[],
+                                            uint16_t *offset, bool negate) {
+  uint16_t false_target_operand = 0;
+  uint16_t end_operand = 0;
+
+  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
+  FR_TRY(
+      fr_compile_emit_expr(ctx, parsed, expr_id, instruction_bytes, offset));
+  FR_TRY(fr_compile_emit_jump_placeholder(
+      instruction_bytes, offset, FR_OP_JUMP_IF_FALSY, &false_target_operand));
+  FR_TRY(fr_compile_emit_push_bool(instruction_bytes, offset, !negate));
+  FR_TRY(fr_compile_emit_jump_placeholder(instruction_bytes, offset, FR_OP_JUMP,
+                                          &end_operand));
+  FR_TRY(
+      fr_compile_patch_u16(instruction_bytes, false_target_operand, *offset));
+  FR_TRY(fr_compile_emit_push_bool(instruction_bytes, offset, negate));
+  return fr_compile_patch_u16(instruction_bytes, end_operand, *offset);
+}
+
+static fr_err_t fr_compile_emit_and(const fr_compile_context_t *ctx,
+                                    const fr_parse_line_t *parsed,
+                                    const fr_parse_expr_t *expr,
+                                    uint8_t instruction_bytes[],
+                                    uint16_t *offset) {
+  uint16_t false_target_operand = 0;
+  uint16_t end_operand = 0;
+
+  if (expr == NULL || expr->child_count != 2) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
+  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
+                              instruction_bytes, offset));
+  FR_TRY(fr_compile_emit_jump_placeholder(
+      instruction_bytes, offset, FR_OP_JUMP_IF_FALSY, &false_target_operand));
+  FR_TRY(fr_compile_emit_bool_result(ctx, parsed, expr->children[1],
+                                     instruction_bytes, offset, false));
+  FR_TRY(fr_compile_emit_jump_placeholder(instruction_bytes, offset, FR_OP_JUMP,
+                                          &end_operand));
+  FR_TRY(
+      fr_compile_patch_u16(instruction_bytes, false_target_operand, *offset));
+  FR_TRY(fr_compile_emit_push_bool(instruction_bytes, offset, false));
+  return fr_compile_patch_u16(instruction_bytes, end_operand, *offset);
+}
+
+static fr_err_t fr_compile_emit_or(const fr_compile_context_t *ctx,
+                                   const fr_parse_line_t *parsed,
+                                   const fr_parse_expr_t *expr,
+                                   uint8_t instruction_bytes[],
+                                   uint16_t *offset) {
+  uint16_t rhs_target_operand = 0;
+  uint16_t end_operand = 0;
+
+  if (expr == NULL || expr->child_count != 2) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
+  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
+                              instruction_bytes, offset));
+  FR_TRY(fr_compile_emit_jump_placeholder(
+      instruction_bytes, offset, FR_OP_JUMP_IF_FALSY, &rhs_target_operand));
+  FR_TRY(fr_compile_emit_push_bool(instruction_bytes, offset, true));
+  FR_TRY(fr_compile_emit_jump_placeholder(instruction_bytes, offset, FR_OP_JUMP,
+                                          &end_operand));
+  FR_TRY(fr_compile_patch_u16(instruction_bytes, rhs_target_operand, *offset));
+  FR_TRY(fr_compile_emit_bool_result(ctx, parsed, expr->children[1],
+                                     instruction_bytes, offset, false));
+  return fr_compile_patch_u16(instruction_bytes, end_operand, *offset);
 }
 
 static fr_err_t fr_compile_emit_repeat(const fr_compile_context_t *ctx,
@@ -1019,6 +1189,16 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_NE:
     return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
                                  FR_OP_NE_INT);
+  case FR_PARSE_EXPR_AND:
+    return fr_compile_emit_and(ctx, parsed, expr, instruction_bytes, offset);
+  case FR_PARSE_EXPR_OR:
+    return fr_compile_emit_or(ctx, parsed, expr, instruction_bytes, offset);
+  case FR_PARSE_EXPR_NOT:
+    if (expr->child_count != 1) {
+      return FR_ERR_INVALID;
+    }
+    return fr_compile_emit_bool_result(ctx, parsed, expr->child,
+                                       instruction_bytes, offset, true);
   case FR_PARSE_EXPR_ADD:
     return fr_compile_emit_binop(ctx, parsed, expr, instruction_bytes, offset,
                                  FR_OP_ADD_INT);
@@ -1251,20 +1431,19 @@ static fr_err_t fr_compile_record_field_ref(
     return FR_ERR_INVALID;
   }
   if (expr->kind == FR_PARSE_EXPR_TEXT) {
+    uint16_t copied_length = 0;
+
     if (*text_count >= FR_PARSE_MAX_BODY_EXPRS ||
-        expr->text.length > FR_PROFILE_MAX_TEXT_LENGTH) {
+        (!expr->text_has_escapes &&
+         expr->text.length > FR_PROFILE_MAX_TEXT_LENGTH)) {
       return FR_ERR_RANGE;
     }
-    if (expr->text.length > 0 && expr->text.start == NULL) {
-      return FR_ERR_INVALID;
-    }
-    if (expr->text.length > 0) {
-      memcpy(out->body_text_bytes[*text_count], expr->text.start,
-             expr->text.length);
-    }
+    FR_TRY(fr_compile_copy_text_literal(
+        expr, out->body_text_bytes[*text_count], FR_PROFILE_MAX_TEXT_LENGTH,
+        &copied_length));
     out->text_objects[*text_count] = (fr_image_text_object_t){
         .bytes = out->body_text_bytes[*text_count],
-        .length = expr->text.length,
+        .length = copied_length,
     };
     *out_ref =
         (fr_image_ref_t){FR_IMAGE_REF_TEXT_OBJECT, 0, *text_count};
@@ -1510,19 +1689,19 @@ fr_compile_overlay_update_with_context(const fr_compile_context_t *ctx,
 
 #if FR_FEATURE_TEXT
   if (value->kind == FR_PARSE_EXPR_TEXT) {
+    uint16_t copied_length = 0;
+
     FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_TEXT));
-    if (value->text.length > FR_PROFILE_MAX_TEXT_LENGTH) {
+    if (!value->text_has_escapes &&
+        value->text.length > FR_PROFILE_MAX_TEXT_LENGTH) {
       return FR_ERR_RANGE;
     }
-    if (value->text.length > 0 && value->text.start == NULL) {
-      return FR_ERR_INVALID;
-    }
-    if (value->text.length > 0) {
-      memcpy(out->text_bytes, value->text.start, value->text.length);
-    }
+    FR_TRY(fr_compile_copy_text_literal(value, out->text_bytes,
+                                        FR_PROFILE_MAX_TEXT_LENGTH,
+                                        &copied_length));
     out->text_object = (fr_image_text_object_t){
         .bytes = out->text_bytes,
-        .length = value->text.length,
+        .length = copied_length,
     };
     out->slot_inits[0] =
         (fr_image_slot_init_t){slot_id, {FR_IMAGE_REF_TEXT_OBJECT, 0, 0}};
