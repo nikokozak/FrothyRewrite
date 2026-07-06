@@ -5305,6 +5305,102 @@ static void test_public_surface(void) {
 }
 
 #if FR_FEATURE_COMPILER
+static bool test_append_source(char *out, size_t cap, size_t *used,
+                               const char *text) {
+  size_t len = strlen(text);
+
+  if (out == NULL || used == NULL || *used + len >= cap) {
+    return false;
+  }
+  memcpy(&out[*used], text, len);
+  *used += len;
+  out[*used] = '\0';
+  return true;
+}
+
+static bool test_make_call_depth_line(char *out, size_t cap, uint16_t depth) {
+  size_t used = 0;
+
+  if (!test_append_source(out, cap, &used, "boot is fn [ ")) {
+    return false;
+  }
+  for (uint16_t i = 0; i < depth; i++) {
+    if (!test_append_source(out, cap, &used, "a: ")) {
+      return false;
+    }
+  }
+  return test_append_source(out, cap, &used, "1 ]");
+}
+
+static bool test_make_paren_chain(char *out, size_t cap, uint16_t depth) {
+  size_t used = 0;
+
+  if (out == NULL || depth > (cap - 2u) / 2u) {
+    return false;
+  }
+  for (uint16_t i = 0; i < depth; i++) {
+    out[used++] = '(';
+  }
+  out[used++] = '1';
+  for (uint16_t i = 0; i < depth; i++) {
+    out[used++] = ')';
+  }
+  out[used] = '\0';
+  return true;
+}
+
+static bool test_make_else_if_overflow_line(char *out, size_t cap) {
+  size_t used = 0;
+
+  if (!test_append_source(out, cap, &used, "boot is fn [ if false [ 1 ]")) {
+    return false;
+  }
+  for (uint16_t i = 0; i < FR_PARSE_MAX_BODY_EXPRS; i++) {
+    if (!test_append_source(out, cap, &used, " else if false [ 1 ]")) {
+      return false;
+    }
+  }
+  return test_append_source(out, cap, &used, " ]");
+}
+
+static bool test_make_local_overflow_line(char *out, size_t cap) {
+  size_t used = 0;
+
+  if (!test_append_source(out, cap, &used, "boot is fn [ ")) {
+    return false;
+  }
+  for (uint16_t i = 0; i <= FR_PARSE_MAX_LOCALS; i++) {
+    char bind[32];
+
+    (void)snprintf(bind, sizeof(bind), "here l%u is %u ; ", (unsigned)i,
+                   (unsigned)i);
+    if (!test_append_source(out, cap, &used, bind)) {
+      return false;
+    }
+  }
+  return test_append_source(out, cap, &used, "l0 ]");
+}
+
+static bool test_make_param_overflow_line(char *out, size_t cap) {
+  size_t used = 0;
+
+  if (!test_append_source(out, cap, &used, "boot is fn with ")) {
+    return false;
+  }
+  for (uint16_t i = 0; i <= FR_PARSE_MAX_PARAMS; i++) {
+    char param[16];
+
+    if (i > 0 && !test_append_source(out, cap, &used, ", ")) {
+      return false;
+    }
+    (void)snprintf(param, sizeof(param), "p%u", (unsigned)i);
+    if (!test_append_source(out, cap, &used, param)) {
+      return false;
+    }
+  }
+  return test_append_source(out, cap, &used, " [ p0 ]");
+}
+
 static void test_parse(void) {
   fr_parse_line_t parsed;
   fr_parse_expr_id_t expr_id = 0;
@@ -5314,6 +5410,7 @@ static void test_parse(void) {
   const fr_parse_expr_t *condition = NULL;
   const fr_parse_expr_t *else_body = NULL;
   char line[80];
+  char cap_line[8192];
 
   CHECK("parse literal definition",
         fr_parse_line("boot is nil", &parsed) == FR_OK &&
@@ -5990,6 +6087,9 @@ static void test_parse(void) {
   CHECK("parse rejects trailing parameter comma",
         fr_parse_line("boot is fn with count, [ count ]", &parsed) ==
             FR_ERR_INVALID);
+  CHECK("parse rejects too many parameters",
+        test_make_param_overflow_line(cap_line, sizeof(cap_line)) &&
+            fr_parse_line(cap_line, &parsed) == FR_ERR_CAPACITY);
   CHECK("parse rejects missing expression",
         fr_parse_line("boot is fn [ ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse rejects empty expression",
@@ -5999,8 +6099,9 @@ static void test_parse(void) {
   CHECK("parse rejects unterminated final semicolon",
         fr_parse_line("boot is fn [ one;", &parsed) == FR_ERR_INVALID);
   CHECK("parse rejects excessive expression depth",
-        fr_parse_line("boot is fn [ a: b: c: d: e: f: g: h: i: 1 ]",
-                      &parsed) == FR_ERR_OVERFLOW);
+        test_make_call_depth_line(cap_line, sizeof(cap_line),
+                                  FR_PARSE_MAX_EXPR_DEPTH) &&
+            fr_parse_line(cap_line, &parsed) == FR_ERR_OVERFLOW);
   CHECK("parse paren overrides precedence",
         fr_parse_expression_line("(1 + 2) * 3", &parsed, &expr_id) == FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_MUL &&
@@ -6010,13 +6111,17 @@ static void test_parse(void) {
                 FR_PARSE_EXPR_INT &&
             parsed.exprs[parsed.exprs[expr_id].children[1]].int_value == 3);
   CHECK("parse paren chain reaches max depth",
-        fr_parse_expression_line("(((((((1)))))))", &parsed, &expr_id) ==
+        test_make_paren_chain(cap_line, sizeof(cap_line),
+                              (uint16_t)(FR_PARSE_MAX_EXPR_DEPTH - 1u)) &&
+            fr_parse_expression_line(cap_line, &parsed, &expr_id) ==
                 FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
             parsed.exprs[expr_id].int_value == 1);
   CHECK("parse rejects overflow paren chain",
-        fr_parse_expression_line("((((((((1))))))))", &parsed, &expr_id) ==
-            FR_ERR_OVERFLOW);
+        test_make_paren_chain(cap_line, sizeof(cap_line),
+                              FR_PARSE_MAX_EXPR_DEPTH) &&
+            fr_parse_expression_line(cap_line, &parsed, &expr_id) ==
+                FR_ERR_OVERFLOW);
   CHECK("parse rejects lonely lparen",
         fr_parse_expression_line("(", &parsed, &expr_id) == FR_ERR_INVALID);
   CHECK("parse rejects missing rparen",
@@ -6137,6 +6242,7 @@ static void test_compile(void) {
   uint16_t text_length = 0;
 #endif
   char line[32];
+  char cap_line[8192];
   const uint16_t push_size = FR_INSTRUCTION_PUSH_INT_SIZE;
 #if FR_PROFILE_MAX_CALL_DEPTH > 10
   const char *fib_check_source = "fib: 10";
@@ -7555,11 +7661,8 @@ static void test_compile(void) {
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 2);
   CHECK("compiled chained else if rejects over-capacity arms",
         fr_runtime_init(&runtime) == FR_OK &&
-            fr_compile_overlay_update(
-                "boot is fn [ if false [ 1 ] else if false [ 2 ] "
-                "else if false [ 3 ] else if false [ 4 ] "
-                "else if false [ 5 ] else if false [ 6 ] ]",
-                &update) == FR_ERR_CAPACITY);
+            test_make_else_if_overflow_line(cap_line, sizeof(cap_line)) &&
+            fr_compile_overlay_update(cap_line, &update) == FR_ERR_CAPACITY);
   CHECK("compiled here local binding yields nil",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ here x is 5 ]",
@@ -7597,12 +7700,10 @@ static void test_compile(void) {
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 2);
-  CHECK("five here locals in one function exceed the cap",
+  CHECK("too many here locals in one function exceed the cap",
         fr_runtime_init(&runtime) == FR_OK &&
-            fr_compile_overlay_update(
-                "boot is fn [ here a is 1 ; here b is 2 ; here c is 3 ; "
-                "here d is 4 ; here e is 5 ; a ]",
-                &update) == FR_ERR_CAPACITY);
+            test_make_local_overflow_line(cap_line, sizeof(cap_line)) &&
+            fr_compile_overlay_update(cap_line, &update) == FR_ERR_CAPACITY);
   CHECK("here after a closed inner block still binds a fresh slot",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update(
@@ -10425,6 +10526,26 @@ static void test_repl_see_source_form(void) {
             strcmp(out, "overlay code\n"
                         "to g [ here local0 is 5 ; local0 + 1 ]\n"
                         "ok\n") == 0);
+#if FR_PARSE_MAX_LOCALS > 10
+  {
+    char local_out[1024];
+
+    CHECK("see source with double-digit local binding",
+          fr_base_image_install(&runtime) == FR_OK &&
+              fr_repl_eval_line(
+                  &runtime,
+                  "many-locals is fn [ here a0 is 0 ; here a1 is 1 ; "
+                  "here a2 is 2 ; here a3 is 3 ; here a4 is 4 ; "
+                  "here a5 is 5 ; here a6 is 6 ; here a7 is 7 ; "
+                  "here a8 is 8 ; here a9 is 9 ; here a10 is 10 ; a10 ]",
+                  local_out, sizeof(local_out)) == FR_OK &&
+              strcmp(local_out, "ok\n") == 0 &&
+              fr_repl_eval_line(&runtime, "see many-locals", local_out,
+                                sizeof(local_out)) == FR_OK &&
+              strstr(local_out, "here local10 is 10") != NULL &&
+              strstr(local_out, "local10 ]") != NULL);
+  }
+#endif
 #if FR_FEATURE_CELLS
   CHECK("see source dynamic cell read",
         fr_base_image_install(&runtime) == FR_OK &&

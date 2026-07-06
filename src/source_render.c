@@ -313,6 +313,30 @@ static fr_err_t fr_source_param_name_at(const char *names, uint16_t names_len,
   return FR_OK;
 }
 
+static void fr_source_local_name(uint8_t index, char canon[9]) {
+  char digits[3];
+  uint8_t digit_count = 0;
+  uint8_t magnitude = index;
+  uint8_t out_pos = 0;
+
+  do {
+    digits[digit_count] = (char)('0' + (magnitude % 10u));
+    digit_count = (uint8_t)(digit_count + 1u);
+    magnitude /= 10u;
+  } while (magnitude > 0);
+
+  canon[out_pos++] = 'l';
+  canon[out_pos++] = 'o';
+  canon[out_pos++] = 'c';
+  canon[out_pos++] = 'a';
+  canon[out_pos++] = 'l';
+  while (digit_count > 0) {
+    digit_count = (uint8_t)(digit_count - 1u);
+    canon[out_pos++] = digits[digit_count];
+  }
+  canon[out_pos] = '\0';
+}
+
 static fr_err_t fr_source_render_span(fr_source_render_t *r,
                                       const fr_instruction_stream_t *view,
                                       const char *names, uint16_t names_len,
@@ -766,19 +790,10 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
 #endif
     case FR_OP_LOAD_LOCAL: {
       uint8_t local_index = 0;
-      /* canonical localN — local names are not persisted, mirroring
-       * the argN answer for restored params (T10c). Single-digit
-       * suffix matches FR_PARSE_MAX_LOCALS = 4; if that rises past 9,
-       * use the digit-loop in fr_source_param_name_at. */
-      char canon[8];
+      char canon[9];
 
       FR_TRY(fr_instruction_read_local_operand(view, ip, &local_index));
-      if (local_index >= 10) {
-        return FR_ERR_UNSUPPORTED;
-      }
-      canon[0] = 'l'; canon[1] = 'o'; canon[2] = 'c'; canon[3] = 'a';
-      canon[4] = 'l'; canon[5] = (char)('0' + local_index);
-      canon[6] = '\0';
+      fr_source_local_name(local_index, canon);
       FR_TRY(fr_source_push_text(r, canon));
       ip = (fr_code_offset_t)(ip + 2u);
       break;
@@ -787,21 +802,16 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       uint8_t local_index = 0;
       fr_source_frag_t value;
       uint16_t start = r->used;
-      char canon[8];
+      char canon[9];
 
       FR_TRY(fr_instruction_read_local_operand(view, ip, &local_index));
-      if (local_index >= 10) {
-        return FR_ERR_UNSUPPORTED;
-      }
       if (r->depth < 1) {
         return FR_ERR_UNSUPPORTED;
       }
       value = r->stack[r->depth - 1];
       r->depth = (uint8_t)(r->depth - 1);
 
-      canon[0] = 'l'; canon[1] = 'o'; canon[2] = 'c'; canon[3] = 'a';
-      canon[4] = 'l'; canon[5] = (char)('0' + local_index);
-      canon[6] = '\0';
+      fr_source_local_name(local_index, canon);
       FR_TRY(fr_source_puts(r, "here "));
       FR_TRY(fr_source_puts(r, canon));
       FR_TRY(fr_source_puts(r, " is "));
