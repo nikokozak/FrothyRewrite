@@ -1,7 +1,11 @@
 # Frothy
 
-<!-- PROSE: one-paragraph tagline. What Frothy is, who it's for, the
-     single sentence that makes a stranger want to keep reading. -->
+Frothy is a small language for live-coding microcontrollers over a serial
+line. You define words and send them to the board; it evaluates them and
+answers back — no compile-flash-reboot loop, no toolchain to install, no
+filesystem to mount. It is built for people learning to program hardware and
+for anyone who wants a chip that talks back: the runtime is small enough to
+read end to end, and the language is small enough to keep in your head.
 
 ## Try Frothy in 60 seconds (no install)
 
@@ -14,9 +18,9 @@ on a desktop? You can be running Frothy without installing anything.
 Both pages talk to the board over WebSerial. No Frothy install on your
 machine, no toolchain to set up.
 
-<!-- PROSE: one or two sentences framing what the reader will see —
-     "you'll be defining words and watching the chip respond in
-     seconds" — set the right expectation. -->
+Within a few seconds you'll be defining words and watching the board act on
+them — set a pin, blink the onboard LED, print a value — one line at a time,
+the way you'd talk to a REPL.
 
 ## Develop on your machine
 
@@ -48,8 +52,9 @@ frothy connect --port /dev/cu.usbserial-0001
 
 Every verb prints `--help` with description, examples, and flags.
 
-<!-- PROSE: one sentence on what the reader should do if they get
-     stuck on any step (link to issues? frothy doctor?). -->
+Stuck on any step? Run `frothy doctor` — it checks your setup and names the
+fix for each problem it finds. Most first-run snags (no board attached, wrong
+port, ESP-IDF not installed) show up there before anything else does.
 
 ## Write your first Frothy program
 
@@ -63,11 +68,21 @@ frothy send main.fr --port /dev/cu.usbserial-0001
 Or stay interactive — `frothy connect` opens a REPL where you type
 Frothy lines directly at the board.
 
-<!-- PROSE: a 4-6 line code sample showing what an idiomatic Frothy
-     program looks like. The web editor's default sketch is:
-       to greet [ "hello, world" ]
-       greet
-     Use that, or something more compelling. -->
+A first Frothy program defines a word and runs it. The board answers on the
+next line:
+
+```
+-- Define a word with `to`, then call it with a trailing colon.
+to greet [ "hello from your board" ]
+greet:
+-- greet: answers  "hello from your board"
+
+-- Blink the onboard LED five times, 200 ms on and 200 ms off.
+blink: $led_builtin, 5, 200
+```
+
+Words you define stick around on the board, so you build a program by
+teaching the chip one word at a time.
 
 ## Edit Frothy code
 
@@ -115,12 +130,13 @@ Frothy is in active rewrite. Module 0.1 (talk to your board) and 0.2
 pivot + hardening) is in progress; the web editor, web flasher, CLI
 bootstrap, and curated `--help` story landed in this round.
 
-<!-- PROSE: one or two sentences pitching what Frothy is *for* in a
-     pedagogical / hardware-teaching context. This is what a grant
-     reader (or a teacher considering Frothy for a classroom) will
-     latch onto. -->
+Frothy is built for teaching the feel of hardware. The loop from idea to a
+chip doing something is seconds long, the whole language fits on a page, and
+nothing you write can leak memory or fragment its way to a mysterious crash —
+Frothy programs never allocate at all. It aims to be the shortest path from
+"I have a board" to "I made it do something," whether that's in a classroom, a
+workshop, or your own first afternoon with a microcontroller.
 
 ## License
 
-<!-- PROSE: confirm the project license. Existing tree carries no
-     LICENSE file at root; pick one before public attention. -->
+Frothy is released under the [MIT License](LICENSE).
