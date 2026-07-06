@@ -750,6 +750,14 @@ fr_err_t fr_platform_uart_available(uint16_t platform_index,
 #endif
 
 #if FR_FEATURE_REPL
+static fr_platform_idle_fn fr_esp_idle_handler;
+static void *fr_esp_idle_ctx;
+
+void fr_platform_set_idle_handler(fr_platform_idle_fn handler, void *ctx) {
+  fr_esp_idle_handler = handler;
+  fr_esp_idle_ctx = ctx;
+}
+
 fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
   uint16_t used = 0;
 
@@ -764,6 +772,12 @@ fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
     fr_err_t err = fr_esp_read_byte(&byte, pdMS_TO_TICKS(20));
 
     if (err == FR_ERR_NOT_FOUND) {
+      /* No byte this tick: service timer/interrupt events so they fire at the
+       * idle prompt. The handler reports its own faults and returns OK; the
+       * read loop keeps running regardless. */
+      if (fr_esp_idle_handler != NULL) {
+        (void)fr_esp_idle_handler(fr_esp_idle_ctx);
+      }
       continue;
     }
     FR_TRY(err);

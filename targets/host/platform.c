@@ -423,6 +423,13 @@ fr_err_t fr_platform_uart_available(uint16_t platform_index,
 #endif
 
 #if FR_FEATURE_REPL
+/* Host read blocks on fgets with no poll loop, so there is no idle window in
+ * which to service events; registration is a no-op. */
+void fr_platform_set_idle_handler(fr_platform_idle_fn handler, void *ctx) {
+  (void)handler;
+  (void)ctx;
+}
+
 fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
   size_t length = 0;
 

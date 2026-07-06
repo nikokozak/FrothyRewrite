@@ -9,6 +9,7 @@
 #if FR_FEATURE_COMPILER
 #include "compile.h"
 #endif
+#include "event.h"
 #include "handle.h"
 #include "instruction.h"
 #include "native.h"
@@ -1803,6 +1804,34 @@ fr_err_t fr_repl_eval_line(fr_runtime_t *runtime, const char *line, char *out,
   return fr_repl_eval_line_to_writer(runtime, line, &writer);
 }
 
+/* Idle-servicing body: drain queued interrupt/timer candidates and run any
+ * pending handler bodies, so events fire at the prompt instead of only while a
+ * program runs. The platform calls this while read_line waits for input.
+ *
+ * A handler fault surfaces as an async error line (so it is not lost, the way a
+ * fault during a running program surfaces on the response); Ctrl-C is expected
+ * and stays silent. After an interrupt, runtime->interrupted remains set until
+ * the next eval clears it, so idle dispatch pauses until the user acts — an
+ * acceptable consequence of having just interrupted. Always returns OK: a fault
+ * here must never break the read loop. */
+static fr_err_t fr_repl_service_events(void *ctx) {
+  fr_runtime_t *runtime = (fr_runtime_t *)ctx;
+  fr_err_t err;
+
+  if (fr_event_drain(runtime) != FR_OK) {
+    return FR_OK;
+  }
+  err = fr_event_dispatch(runtime);
+  if (err != FR_OK && err != FR_ERR_INTERRUPTED) {
+    char response[FR_REPL_OUTPUT_BYTES];
+    if (fr_repl_write_error(response, (uint16_t)sizeof(response), err) == FR_OK) {
+      (void)fr_platform_write_text("! ");
+      (void)fr_platform_write_text(response);
+    }
+  }
+  return FR_OK;
+}
+
 fr_err_t fr_repl_run(fr_runtime_t *runtime, const fr_repl_io_t *io) {
   char line[FR_REPL_LINE_BYTES];
   const fr_repl_writer_t writer = {
@@ -1815,6 +1844,8 @@ fr_err_t fr_repl_run(fr_runtime_t *runtime, const fr_repl_io_t *io) {
       io->write_text == NULL) {
     return FR_ERR_INVALID;
   }
+
+  fr_platform_set_idle_handler(fr_repl_service_events, runtime);
 
   /* T12L-7 D3: each fresh REPL session starts in user-install mode. */
   runtime->install_tier = FR_INSTALL_TIER_USER;

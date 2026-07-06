@@ -305,6 +305,13 @@ fr_err_t fr_platform_heap_largest(uint32_t *out_bytes) {
 }
 
 #if FR_FEATURE_REPL
+/* The tethered UART read blocks per byte with no idle poll; registration is a
+ * no-op. */
+void fr_platform_set_idle_handler(fr_platform_idle_fn handler, void *ctx) {
+  (void)handler;
+  (void)ctx;
+}
+
 fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
   static bool skip_lf_after_cr = false;
   uint16_t used = 0;

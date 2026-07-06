@@ -1198,6 +1198,41 @@ static fr_err_t fr_native_text_pack(fr_runtime_t *runtime,
 #endif
 
 #if FR_FEATURE_TEXT && FR_FEATURE_REPL
+/* An event handler runs outside the request/response stream (fired at the idle
+ * prompt, or interleaved into a running program at a safe point). Its print
+ * output is framed with the reserved async-line prefix: each line begins with
+ * "! " and ends with a newline. "! " is reserved for this — eval results never
+ * begin with it — so a host can route these lines to an event lane. See
+ * docs/wire-protocol.md (v1.1). */
+static fr_err_t fr_native_print_async(const uint8_t *bytes, uint16_t length) {
+  static const uint8_t prefix[2] = {'!', ' '};
+  static const uint8_t newline = '\n';
+  uint16_t run_start = 0;
+
+  /* An empty print writes nothing (like the synchronous path); emitting a bare
+   * "! " line for no payload would be a fake event. */
+  if (length == 0) {
+    return FR_OK;
+  }
+  FR_TRY(fr_platform_write_bytes(prefix, sizeof(prefix)));
+  for (uint16_t i = 0; i < length; i++) {
+    if (bytes[i] == '\n') {
+      FR_TRY(fr_platform_write_bytes(&bytes[run_start], (uint16_t)(i + 1 - run_start)));
+      run_start = (uint16_t)(i + 1);
+      if (run_start < length) {
+        FR_TRY(fr_platform_write_bytes(prefix, sizeof(prefix)));
+      }
+    }
+  }
+  if (run_start < length) {
+    FR_TRY(fr_platform_write_bytes(&bytes[run_start], (uint16_t)(length - run_start)));
+  }
+  if (bytes[length - 1] != '\n') {
+    FR_TRY(fr_platform_write_bytes(&newline, 1));
+  }
+  return FR_OK;
+}
+
 static fr_err_t fr_native_print(fr_runtime_t *runtime, const fr_tagged_t *args,
                                 uint8_t arg_count, fr_tagged_t *out) {
   const uint8_t *bytes = NULL;
@@ -1208,7 +1243,11 @@ static fr_err_t fr_native_print(fr_runtime_t *runtime, const fr_tagged_t *args,
   }
   FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[0], &bytes,
                                              &length));
-  FR_TRY(fr_platform_write_bytes(bytes, length));
+  if (runtime->dispatching_event) {
+    FR_TRY(fr_native_print_async(bytes, length));
+  } else {
+    FR_TRY(fr_platform_write_bytes(bytes, length));
+  }
   *out = fr_tagged_nil();
   return FR_OK;
 }
