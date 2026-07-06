@@ -558,6 +558,28 @@ fr_err_t fr_instruction_disassemble_at(const fr_instruction_stream_t *view,
     return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 5),
                                       next_ip);
   }
+  case FR_OP_LOAD_CELL_DYNAMIC: {
+    fr_slot_id_t slot_id = 0;
+    FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
+    FR_TRY(fr_append_text(out, out_cap, &used, "LOAD_CELL_DYNAMIC "));
+    FR_TRY(fr_append_u32(out, out_cap, &used, slot_id));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 3),
+                                      next_ip);
+  }
+  case FR_OP_STORE_CELL_DYNAMIC: {
+    fr_slot_id_t slot_id = 0;
+    FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
+    FR_TRY(fr_append_text(out, out_cap, &used, "STORE_CELL_DYNAMIC "));
+    FR_TRY(fr_append_u32(out, out_cap, &used, slot_id));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 3),
+                                      next_ip);
+  }
+#else
+  case FR_OP_LOAD_CELL:
+  case FR_OP_STORE_CELL:
+  case FR_OP_LOAD_CELL_DYNAMIC:
+  case FR_OP_STORE_CELL_DYNAMIC:
+    return FR_ERR_UNSUPPORTED;
 #endif
   case FR_OP_CALL_NATIVE_SLOT: {
     fr_slot_id_t slot_id = 0;

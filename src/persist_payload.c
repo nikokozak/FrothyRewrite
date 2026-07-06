@@ -1888,6 +1888,7 @@ static fr_err_t fr_persist_decode_payload(
     if (record == FR_PERSIST_RECORD_CODE) {
       fr_persist_code_record_t *code = NULL;
       fr_instruction_stream_t instructions;
+      fr_instruction_header_t header = {0};
 
       if (*out_code_count >= FR_PROFILE_CODE_OBJECT_TABLE_SIZE) {
         return FR_ERR_CAPACITY;
@@ -1901,6 +1902,7 @@ static fr_err_t fr_persist_decode_payload(
       FR_TRY(fr_persist_reader_bytes(&reader, code->length, &code->bytes));
       FR_TRY(fr_instruction_stream_init(&instructions, code->bytes,
                                         code->length));
+      FR_TRY(fr_instruction_read_header(&instructions, &header));
       *out_code_count = (uint16_t)(*out_code_count + 1);
     } else if (record == FR_PERSIST_RECORD_TEXT) {
 #if !FR_FEATURE_TEXT

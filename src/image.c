@@ -639,10 +639,12 @@ static fr_err_t fr_image_check_apply(const fr_runtime_t *runtime,
   for (uint16_t i = 0; i < records->code_object_count; i++) {
     const fr_instruction_stream_t *instructions =
         &records->code_objects[i].instructions;
+    fr_instruction_header_t header = {0};
 
     if (instructions->length == 0 || instructions->bytes == NULL) {
       return FR_ERR_INVALID;
     }
+    FR_TRY(fr_instruction_read_header(instructions, &header));
     if (used_instruction_bytes + instructions->length >
         FR_PROFILE_MAX_INSTRUCTION_BYTES) {
       return FR_ERR_CAPACITY;
@@ -1348,6 +1350,7 @@ static fr_err_t fr_overlay_update_decode_code(
     uint16_t *instruction_bytes_used) {
   fr_image_code_object_t *code = NULL;
   fr_instruction_stream_t instructions;
+  fr_instruction_header_t header = {0};
   const uint8_t *instruction_bytes = NULL;
   uint16_t local_id = 0;
   uint16_t length = 0;
@@ -1374,6 +1377,7 @@ static fr_err_t fr_overlay_update_decode_code(
   }
   FR_TRY(fr_overlay_update_reader_bytes(reader, length, &instruction_bytes));
   FR_TRY(fr_instruction_stream_init(&instructions, instruction_bytes, length));
+  FR_TRY(fr_instruction_read_header(&instructions, &header));
 
   memcpy(&out->instruction_bytes[*instruction_bytes_used], instruction_bytes,
          length);

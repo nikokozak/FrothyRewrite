@@ -669,22 +669,17 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
 #if !FR_FEATURE_CELLS
     return FR_ERR_UNSUPPORTED;
 #else
-    fr_int_t index = 0;
+    fr_parse_expr_id_t index = 0;
 
     FR_TRY(fr_parse_advance(parser));
-    if (parser->token.kind != FR_TOKEN_INT) {
-      return FR_ERR_INVALID;
-    }
-    index = parser->token.int_value;
-    if (index < 0) {
-      return FR_ERR_RANGE;
-    }
-    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_expression(parser, &index));
     FR_TRY(fr_parse_expect(parser, FR_TOKEN_RBRACKET));
     FR_TRY(fr_parse_add_expr(parser,
                              (fr_parse_expr_t){.kind = FR_PARSE_EXPR_CELL_READ,
                                                .name = name,
-                                               .int_value = index},
+                                               .child = index,
+                                               .children = {index},
+                                               .child_count = 1},
                              &base_id));
     return fr_parse_field_postfix(parser, base_id, out_id);
 #endif
@@ -772,9 +767,9 @@ static fr_err_t fr_parse_set(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
     return fr_parse_add_expr(
         parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_CELL_WRITE,
                                   .name = target->name,
-                                  .int_value = target->int_value,
-                                  .child = value,
-                                  .child_count = 1},
+                                  .child = target->child,
+                                  .children = {target->child, value},
+                                  .child_count = 2},
         out_id);
 #endif
   }
