@@ -552,13 +552,19 @@ static fr_err_t fr_image_count_new_record_shapes(
 
 static fr_err_t fr_image_record_field_ref_allowed(
     const fr_runtime_t *runtime, const fr_image_records_t *records,
-    fr_image_ref_t ref) {
+    fr_image_ref_t ref, uint16_t installed_record_count) {
   fr_int_t ignored_int = 0;
   fr_object_id_t object_id = 0;
   const uint8_t *ignored_bytes = NULL;
   uint16_t ignored_length = 0;
 
   FR_TRY(fr_image_check_ref(records, ref));
+  /* Record fields store literal scalars or text objects in this tranche. A
+   * future local record is unavailable before it is also a disallowed value. */
+  if (ref.kind == FR_IMAGE_REF_RECORD_OBJECT &&
+      ref.index >= installed_record_count) {
+    return FR_ERR_NOT_FOUND;
+  }
   if (ref.kind == FR_IMAGE_REF_TEXT_OBJECT) {
     return FR_OK;
   }
@@ -736,7 +742,7 @@ static fr_err_t fr_image_check_apply(const fr_runtime_t *runtime,
     used_record_values += record->field_count;
     for (uint16_t j = 0; j < record->field_count; j++) {
       FR_TRY(fr_image_record_field_ref_allowed(runtime, records,
-                                               record->field_values[j]));
+                                               record->field_values[j], i));
     }
   }
 #else
@@ -784,15 +790,17 @@ static fr_err_t fr_image_check_apply(const fr_runtime_t *runtime,
   return FR_OK;
 }
 
-static fr_err_t fr_image_resolve_ref(const fr_image_records_t *records,
-                                     const fr_code_object_id_t code_ids[],
-                                     const fr_object_id_t cell_ids[],
-                                     const fr_object_id_t text_ids[],
-                                     const fr_object_id_t record_shape_ids[],
-                                     const fr_object_id_t record_ids[],
-                                     const fr_native_id_t native_ids[],
-                                     fr_image_ref_t ref,
-                                     fr_tagged_t *out_tagged) {
+/* Counts passed here are the ids already available in this install phase, not
+ * necessarily the total records in the image. Code ids are known before code
+ * install; record ids are known only as each record is installed. */
+static fr_err_t fr_image_resolve_ref(
+    const fr_code_object_id_t code_ids[], uint16_t code_id_count,
+    const fr_object_id_t cell_ids[], uint16_t cell_id_count,
+    const fr_object_id_t text_ids[], uint16_t text_id_count,
+    const fr_object_id_t record_shape_ids[], uint16_t record_shape_id_count,
+    const fr_object_id_t record_ids[], uint16_t record_id_count,
+    const fr_native_id_t native_ids[], uint16_t native_id_count,
+    fr_image_ref_t ref, fr_tagged_t *out_tagged) {
   switch (ref.kind) {
   case FR_IMAGE_REF_LITERAL_TAGGED:
     if (!fr_tagged_is_valid(ref.literal_tagged)) {
@@ -801,33 +809,33 @@ static fr_err_t fr_image_resolve_ref(const fr_image_records_t *records,
     *out_tagged = ref.literal_tagged;
     return FR_OK;
   case FR_IMAGE_REF_CODE_OBJECT:
-    if (ref.index >= records->code_object_count) {
+    if (ref.index >= code_id_count) {
       return FR_ERR_NOT_FOUND;
     }
     return fr_tagged_encode_code_object_id(code_ids[ref.index], out_tagged);
   case FR_IMAGE_REF_NATIVE:
-    if (ref.index >= records->native_count) {
+    if (ref.index >= native_id_count) {
       return FR_ERR_NOT_FOUND;
     }
     return fr_tagged_encode_native_id(native_ids[ref.index], out_tagged);
   case FR_IMAGE_REF_CELL_OBJECT:
-    if (ref.index >= records->cell_object_count) {
+    if (ref.index >= cell_id_count) {
       return FR_ERR_NOT_FOUND;
     }
     return fr_tagged_encode_object_id(cell_ids[ref.index], out_tagged);
   case FR_IMAGE_REF_TEXT_OBJECT:
-    if (ref.index >= records->text_object_count) {
+    if (ref.index >= text_id_count) {
       return FR_ERR_NOT_FOUND;
     }
     return fr_tagged_encode_object_id(text_ids[ref.index], out_tagged);
   case FR_IMAGE_REF_RECORD_SHAPE_OBJECT:
-    if (ref.index >= records->record_shape_object_count) {
+    if (ref.index >= record_shape_id_count) {
       return FR_ERR_NOT_FOUND;
     }
     return fr_tagged_encode_object_id(record_shape_ids[ref.index],
                                       out_tagged);
   case FR_IMAGE_REF_RECORD_OBJECT:
-    if (ref.index >= records->record_object_count) {
+    if (ref.index >= record_id_count) {
       return FR_ERR_NOT_FOUND;
     }
     return fr_tagged_encode_object_id(record_ids[ref.index], out_tagged);
@@ -929,15 +937,23 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
   fr_object_id_t record_shape_ids[FR_OBJECT_TABLE_CAPACITY];
   fr_object_id_t record_ids[FR_OBJECT_TABLE_CAPACITY];
   fr_native_id_t native_ids[FR_PROFILE_NATIVE_TABLE_SIZE];
+  uint16_t installed_text_count = 0;
+  uint16_t installed_cell_count = 0;
+  uint16_t installed_record_shape_count = 0;
+  uint16_t installed_record_count = 0;
+  uint16_t installed_native_count = 0;
 
 #if FR_FEATURE_TEXT
   /* Text install runs first so PUSH_OBJECT_ID operands can be patched from
    * local indices to runtime ids before code install copies the bytes. */
-  for (uint16_t i = 0; i < records->text_object_count; i++) {
-    FR_TRY(fr_text_install(runtime, records->text_objects[i].bytes,
-                           records->text_objects[i].length, &text_ids[i]));
+  for (; installed_text_count < records->text_object_count;
+       installed_text_count++) {
+    FR_TRY(fr_text_install(
+        runtime, records->text_objects[installed_text_count].bytes,
+        records->text_objects[installed_text_count].length,
+        &text_ids[installed_text_count]));
   }
-  if (records->text_object_count > 0) {
+  if (installed_text_count > 0) {
     for (uint16_t i = 0; i < records->code_object_count; i++) {
       /* Records views are const, but the compile output and decoded overlay
        * arenas under them are writable. Cast once at the call site. */
@@ -945,7 +961,7 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
 
       FR_TRY(fr_image_patch_code_text_refs(
           writable, records->code_objects[i].instructions.length, text_ids,
-          records->text_object_count));
+          installed_text_count));
     }
   }
 #else
@@ -976,65 +992,79 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
     }
   }
 #if FR_FEATURE_RECORDS
-  for (uint16_t i = 0; i < records->record_shape_object_count; i++) {
+  for (; installed_record_shape_count < records->record_shape_object_count;
+       installed_record_shape_count++) {
+    const fr_image_record_shape_object_t *shape =
+        &records->record_shape_objects[installed_record_shape_count];
+
     FR_TRY(fr_record_shape_install(
-        runtime, records->record_shape_objects[i].name,
-        records->record_shape_objects[i].fields,
-        records->record_shape_objects[i].field_count, &record_shape_ids[i]));
+        runtime, shape->name, shape->fields, shape->field_count,
+        &record_shape_ids[installed_record_shape_count]));
   }
-  for (uint16_t i = 0; i < records->record_object_count; i++) {
+  for (; installed_record_count < records->record_object_count;
+       installed_record_count++) {
+    const fr_image_record_object_t *record =
+        &records->record_objects[installed_record_count];
     fr_tagged_t shape_tagged = 0;
     fr_object_id_t shape_object_id = 0;
     fr_tagged_t field_values[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
 
-    FR_TRY(fr_image_resolve_ref(records, code_ids, cell_ids, text_ids,
-                                record_shape_ids, record_ids, native_ids,
-                                records->record_objects[i].shape,
-                                &shape_tagged));
+    FR_TRY(fr_image_resolve_ref(
+        code_ids, records->code_object_count, cell_ids, installed_cell_count,
+        text_ids, installed_text_count, record_shape_ids,
+        installed_record_shape_count, record_ids, installed_record_count,
+        native_ids, installed_native_count, record->shape, &shape_tagged));
     FR_TRY(fr_tagged_decode_object_id(shape_tagged, &shape_object_id));
-    if (records->record_objects[i].field_count >
-        FR_RECORD_FIELDS_PER_SHAPE_CAPACITY) {
+    if (record->field_count > FR_RECORD_FIELDS_PER_SHAPE_CAPACITY) {
       return FR_ERR_RANGE;
     }
-    for (uint16_t j = 0; j < records->record_objects[i].field_count; j++) {
+    for (uint16_t j = 0; j < record->field_count; j++) {
       FR_TRY(fr_image_resolve_ref(
-          records, code_ids, cell_ids, text_ids, record_shape_ids, record_ids,
-          native_ids, records->record_objects[i].field_values[j],
+          code_ids, records->code_object_count, cell_ids, installed_cell_count,
+          text_ids, installed_text_count, record_shape_ids,
+          installed_record_shape_count, record_ids, installed_record_count,
+          native_ids, installed_native_count, record->field_values[j],
           &field_values[j]));
     }
     FR_TRY(fr_record_install(runtime, shape_object_id, field_values,
-                             records->record_objects[i].field_count,
-                             &record_ids[i]));
+                             record->field_count,
+                             &record_ids[installed_record_count]));
   }
 #else
   (void)record_shape_ids;
   (void)record_ids;
 #endif
 #if FR_FEATURE_CELLS
-  for (uint16_t i = 0; i < records->cell_object_count; i++) {
-    FR_TRY(fr_cells_install(runtime, records->cell_objects[i].length,
-                            records->cell_objects[i].initial_values,
-                            &cell_ids[i]));
+  for (; installed_cell_count < records->cell_object_count;
+       installed_cell_count++) {
+    FR_TRY(fr_cells_install(
+        runtime, records->cell_objects[installed_cell_count].length,
+        records->cell_objects[installed_cell_count].initial_values,
+        &cell_ids[installed_cell_count]));
   }
 #else
   (void)cell_ids;
 #endif
-  for (uint16_t i = 0; i < records->native_count; i++) {
+  for (; installed_native_count < records->native_count;
+       installed_native_count++) {
+    const fr_image_native_t *native = &records->natives[installed_native_count];
     const fr_native_signature_t *signature = NULL;
 
 #if FR_FEATURE_NATIVE_SIGNATURES
-    signature = records->natives[i].signature;
+    signature = native->signature;
 #endif
-    FR_TRY(fr_native_install(runtime, records->natives[i].fn,
-                             records->natives[i].arity, signature,
-                             &native_ids[i]));
+    FR_TRY(fr_native_install(runtime, native->fn, native->arity, signature,
+                             &native_ids[installed_native_count]));
   }
   for (uint16_t i = 0; i < records->slot_init_count; i++) {
     fr_tagged_t tagged = 0;
 
-    FR_TRY(fr_image_resolve_ref(records, code_ids, cell_ids, text_ids,
-                                record_shape_ids, record_ids, native_ids,
-                                records->slot_inits[i].ref, &tagged));
+    FR_TRY(fr_image_resolve_ref(
+        code_ids, records->code_object_count, cell_ids, installed_cell_count,
+        text_ids, installed_text_count, record_shape_ids,
+        installed_record_shape_count, record_ids, installed_record_count,
+        native_ids, installed_native_count,
+        records->slot_inits[i].ref, &tagged));
     if (mode == FR_IMAGE_APPLY_BASE) {
       FR_TRY(fr_slot_set_base(runtime, records->slot_inits[i].slot_id, tagged));
     } else {
