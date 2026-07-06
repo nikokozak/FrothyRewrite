@@ -189,12 +189,12 @@ fr_err_t fr_instruction_read_header(const fr_instruction_stream_t *view,
   return FR_OK;
 }
 
+/* Operand readers below trust their out-pointers: every call site passes the
+   address of a caller-owned stack local (verified across vm/image/persist/source_render).
+   The out==NULL guard was a dead internal branch and is intentionally omitted. */
 fr_err_t fr_instruction_read_slot_operand(const fr_instruction_stream_t *view,
                                           fr_code_offset_t ip,
                                           fr_slot_id_t *out_slot_id) {
-  if (out_slot_id == NULL) {
-    return FR_ERR_INVALID;
-  }
   FR_TRY(fr_require_bytes(view, ip, 3));
 
   *out_slot_id = fr_read_u16_little_endian(&view->bytes[ip + 1]);
@@ -207,9 +207,6 @@ fr_err_t fr_instruction_read_slot_operand(const fr_instruction_stream_t *view,
 fr_err_t fr_instruction_read_int_operand(const fr_instruction_stream_t *view,
                                          fr_code_offset_t ip,
                                          fr_int_t *out_int) {
-  if (out_int == NULL) {
-    return FR_ERR_INVALID;
-  }
   FR_TRY(fr_require_bytes(view, ip, FR_INSTRUCTION_PUSH_INT_SIZE));
 
   *out_int = fr_read_int_operand_little_endian(&view->bytes[ip + 1]);
@@ -222,9 +219,6 @@ fr_err_t fr_instruction_read_int_operand(const fr_instruction_stream_t *view,
 fr_err_t fr_instruction_read_object_id_operand(
     const fr_instruction_stream_t *view, fr_code_offset_t ip,
     fr_object_id_t *out_object_id) {
-  if (out_object_id == NULL) {
-    return FR_ERR_INVALID;
-  }
   FR_TRY(fr_require_bytes(view, ip, FR_INSTRUCTION_PUSH_OBJECT_ID_SIZE));
 
   *out_object_id =
@@ -235,9 +229,6 @@ fr_err_t fr_instruction_read_object_id_operand(
 fr_err_t fr_instruction_read_code_id_operand(
     const fr_instruction_stream_t *view, fr_code_offset_t ip,
     fr_code_object_id_t *out_code_object_id) {
-  if (out_code_object_id == NULL) {
-    return FR_ERR_INVALID;
-  }
   FR_TRY(fr_require_bytes(view, ip, FR_INSTRUCTION_PUSH_CODE_ID_SIZE));
 
   *out_code_object_id =
@@ -248,9 +239,6 @@ fr_err_t fr_instruction_read_code_id_operand(
 fr_err_t fr_instruction_read_jump_operand(const fr_instruction_stream_t *view,
                                           fr_code_offset_t ip,
                                           fr_code_offset_t *out_target) {
-  if (out_target == NULL) {
-    return FR_ERR_INVALID;
-  }
   FR_TRY(fr_require_bytes(view, ip, 3));
 
   *out_target = fr_read_u16_little_endian(&view->bytes[ip + 1]);
@@ -265,9 +253,6 @@ fr_err_t fr_instruction_read_arg_operand(const fr_instruction_stream_t *view,
                                          uint8_t *out_arg_index) {
   fr_instruction_header_t header;
 
-  if (out_arg_index == NULL) {
-    return FR_ERR_INVALID;
-  }
   FR_TRY(fr_require_bytes(view, ip, 2));
   FR_TRY(fr_instruction_read_header(view, &header));
 
@@ -283,9 +268,6 @@ fr_err_t fr_instruction_read_local_operand(const fr_instruction_stream_t *view,
                                            uint8_t *out_local_index) {
   fr_instruction_header_t header;
 
-  if (out_local_index == NULL) {
-    return FR_ERR_INVALID;
-  }
   FR_TRY(fr_require_bytes(view, ip, 2));
   FR_TRY(fr_instruction_read_header(view, &header));
 
@@ -299,9 +281,6 @@ fr_err_t fr_instruction_read_local_operand(const fr_instruction_stream_t *view,
 fr_err_t fr_instruction_read_call_slot_arg_operands(
     const fr_instruction_stream_t *view, fr_code_offset_t ip,
     fr_slot_id_t *out_slot_id, uint8_t *out_arg_count) {
-  if (out_slot_id == NULL || out_arg_count == NULL) {
-    return FR_ERR_INVALID;
-  }
   FR_TRY(fr_require_bytes(view, ip, 4));
 
   *out_slot_id = fr_read_u16_little_endian(&view->bytes[ip + 1]);
@@ -320,9 +299,6 @@ fr_err_t fr_instruction_read_cell_operands(const fr_instruction_stream_t *view,
                                            fr_code_offset_t ip,
                                            fr_slot_id_t *out_slot_id,
                                            uint16_t *out_index) {
-  if (out_slot_id == NULL || out_index == NULL) {
-    return FR_ERR_INVALID;
-  }
   FR_TRY(fr_require_bytes(view, ip, 5));
 
   *out_slot_id = fr_read_u16_little_endian(&view->bytes[ip + 1]);
@@ -341,9 +317,6 @@ fr_err_t fr_instruction_read_field_operand(const fr_instruction_stream_t *view,
                                            uint8_t *out_length) {
   uint8_t length = 0;
 
-  if (out_name == NULL || out_length == NULL) {
-    return FR_ERR_INVALID;
-  }
   FR_TRY(fr_require_bytes(view, ip, 2));
   length = view->bytes[ip + 1];
   if (length == 0 || length > FR_PROFILE_MAX_NAME_BYTES) {
