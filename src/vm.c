@@ -799,14 +799,18 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
       if (fr_runtime_is_interrupted(runtime)) {
         return FR_ERR_INTERRUPTED;
       }
-      FR_TRY(fr_event_drain(runtime));
+      if (runtime->events.active_count > 0) {
+        FR_TRY(fr_event_drain(runtime));
+      }
       yield_countdown--;
       if (yield_countdown == 0) {
         fr_platform_yield();
         yield_countdown = FR_VM_YIELD_SAFE_POINTS;
       }
-      fr_event_report_overflow(runtime);
-      FR_TRY(fr_event_dispatch(runtime));
+      if (runtime->events.active_count > 0) {
+        fr_event_report_overflow(runtime);
+        FR_TRY(fr_event_dispatch(runtime));
+      }
     }
   }
 
