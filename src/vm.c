@@ -821,6 +821,7 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
 fr_err_t fr_vm_run_instruction_stream(fr_runtime_t *runtime,
                                       const fr_instruction_stream_t *view,
                                       fr_tagged_t *out_tagged) {
+  FR_TRY(fr_verify_code_object(view));
   return fr_vm_run_instruction_stream_depth(runtime, view, NULL, 0, out_tagged,
                                             0);
 }
