@@ -7870,9 +7870,10 @@ static void test_persist(void) {
             fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
             decoded == 100000);
-  /* The saturated-cursor test needs a payload above 1024 bytes, which needs
-     both a roomy persistence image and many overlay-name slots. Skip it on
-     small-pressure profiles that have neither. */
+  /* This asserts the saved payload exceeds 1024 bytes but stays under the
+     persistence cap, so it is only satisfiable when the cap itself exceeds
+     1024. The small-pressure profile caps at 1024 and skips; roomier profiles
+     (4096, with enough overlay names to fill it) run it. */
 #if FR_PROFILE_PERSISTENCE_BYTES > 1024
   {
     /* Drive payload well past the 16-bit profile 512-byte ceiling so the

@@ -7,4 +7,4 @@
 -Iprofiles
 -Itargets/host
 -Iboards/host
--DFR_PROFILE_HEADER="host.h"
+-DFR_PROFILE_HEADER="host_small.h"
