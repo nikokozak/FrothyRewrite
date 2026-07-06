@@ -68,6 +68,7 @@ typedef struct fr_event_binding_t {
 
 typedef struct fr_event_table_t {
   fr_event_binding_t entries[FR_EVENT_BINDING_COUNT];
+  uint8_t active_count;
   uint32_t overflow_count;
   uint32_t overflow_reported_count;
 } fr_event_table_t;

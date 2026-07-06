@@ -3455,6 +3455,7 @@ static void test_event_table(void) {
 
   CHECK("runtime init", fr_runtime_init(&runtime) == FR_OK);
   CHECK("event capacity is sixteen", FR_EVENT_BINDING_COUNT == 16);
+  CHECK("active count starts at zero", runtime.events.active_count == 0);
   CHECK("overflow starts at zero", runtime.events.overflow_count == 0);
   for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
     CHECK("entry kind starts none",
@@ -3477,6 +3478,7 @@ static void test_event_table(void) {
   slot->pending = true;
   slot->registered_at_ms = 12345;
   slot->last_fire_ms = 1000;
+  runtime.events.active_count = 1;
   runtime.events.overflow_count = 11;
 
   CHECK("entry round-trips fields",
@@ -3485,6 +3487,7 @@ static void test_event_table(void) {
             slot->body == 7 && slot->pending == true &&
             slot->registered_at_ms == 12345 && slot->last_fire_ms == 1000);
   CHECK("overflow round-trips", runtime.events.overflow_count == 11);
+  CHECK("active count round-trips", runtime.events.active_count == 1);
 
   CHECK("clear project clears bindings",
         fr_runtime_clear_project(&runtime) == FR_OK);
@@ -3496,6 +3499,7 @@ static void test_event_table(void) {
   CHECK("entry pending cleared", slot->pending == false);
   CHECK("entry timestamps cleared",
         slot->registered_at_ms == 0 && slot->last_fire_ms == 0);
+  CHECK("active count cleared", runtime.events.active_count == 0);
   CHECK("overflow cleared", runtime.events.overflow_count == 0);
 }
 
@@ -3508,6 +3512,7 @@ static void test_event_register_cancel(void) {
   CHECK("register gpio rising",
         fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 5, 30, 7) ==
             FR_OK);
+  CHECK("register increments active count", runtime.events.active_count == 1);
   entry = &runtime.events.entries[0];
   CHECK("register fills kind", entry->kind == FR_EVENT_KIND_GPIO_RISING);
   CHECK("register fills source", entry->source == 5);
@@ -3520,6 +3525,7 @@ static void test_event_register_cancel(void) {
   CHECK("re-register same pin different edge",
         fr_event_register(&runtime, FR_EVENT_KIND_GPIO_FALLING, 5, 0, 9) ==
             FR_OK);
+  CHECK("re-register keeps active count", runtime.events.active_count == 1);
   CHECK("re-register reuses slot zero",
         runtime.events.entries[0].kind == FR_EVENT_KIND_GPIO_FALLING);
   CHECK("re-register bumps generation",
@@ -3530,12 +3536,16 @@ static void test_event_register_cancel(void) {
 
   CHECK("register every takes next slot",
         fr_event_register(&runtime, FR_EVENT_KIND_EVERY, 100, 0, 11) == FR_OK);
+  CHECK("second registration increments active count",
+        runtime.events.active_count == 2);
   CHECK("every lands at slot one",
         runtime.events.entries[1].kind == FR_EVENT_KIND_EVERY &&
             runtime.events.entries[1].source == 100);
 
   CHECK("register after same source as every",
         fr_event_register(&runtime, FR_EVENT_KIND_AFTER, 100, 0, 13) == FR_OK);
+  CHECK("third registration increments active count",
+        runtime.events.active_count == 3);
   CHECK("after takes a separate slot",
         runtime.events.entries[2].kind == FR_EVENT_KIND_AFTER &&
             runtime.events.entries[2].source == 100);
@@ -3544,6 +3554,7 @@ static void test_event_register_cancel(void) {
 
   CHECK("cancel gpio matches any edge on the pin",
         fr_event_cancel(&runtime, FR_EVENT_KIND_GPIO_CHANGES, 5) == FR_OK);
+  CHECK("cancel decrements active count", runtime.events.active_count == 2);
   CHECK("cancel clears kind",
         runtime.events.entries[0].kind == FR_EVENT_KIND_NONE);
   CHECK("cancel bumps generation",
@@ -3554,9 +3565,12 @@ static void test_event_register_cancel(void) {
   CHECK("second cancel returns not found",
         fr_event_cancel(&runtime, FR_EVENT_KIND_GPIO_RISING, 5) ==
             FR_ERR_NOT_FOUND);
+  CHECK("failed cancel leaves active count", runtime.events.active_count == 2);
 
   CHECK("cancel every by exact kind",
         fr_event_cancel(&runtime, FR_EVENT_KIND_EVERY, 100) == FR_OK);
+  CHECK("cancel every decrements active count",
+        runtime.events.active_count == 1);
   CHECK("every slot cleared",
         runtime.events.entries[1].kind == FR_EVENT_KIND_NONE);
   CHECK("after slot still present",
@@ -3564,6 +3578,8 @@ static void test_event_register_cancel(void) {
 
   CHECK("cancel after by exact kind",
         fr_event_cancel(&runtime, FR_EVENT_KIND_AFTER, 100) == FR_OK);
+  CHECK("cancel after decrements active count",
+        runtime.events.active_count == 0);
   CHECK("after slot cleared",
         runtime.events.entries[2].kind == FR_EVENT_KIND_NONE);
 
@@ -3572,15 +3588,22 @@ static void test_event_register_cancel(void) {
           fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING,
                             (uint16_t)(20 + i), 0, 1) == FR_OK);
   }
+  CHECK("filled table active count",
+        runtime.events.active_count == FR_EVENT_BINDING_COUNT);
   CHECK("seventeenth distinct source returns capacity",
         fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 99, 0, 1) ==
             FR_ERR_CAPACITY);
+  CHECK("capacity failure leaves active count",
+        runtime.events.active_count == FR_EVENT_BINDING_COUNT);
   CHECK("re-registration under capacity still succeeds",
         fr_event_register(&runtime, FR_EVENT_KIND_GPIO_FALLING, 20, 0, 1) ==
             FR_OK);
+  CHECK("full re-registration leaves active count",
+        runtime.events.active_count == FR_EVENT_BINDING_COUNT);
 
   CHECK("clear project at capacity",
         fr_runtime_clear_project(&runtime) == FR_OK);
+  CHECK("clear project zeros active count", runtime.events.active_count == 0);
   for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
     CHECK("clear leaves no live binding",
           runtime.events.entries[i].kind == FR_EVENT_KIND_NONE);
@@ -3652,11 +3675,14 @@ static void test_event_drain_dispatch(void) {
   CHECK("pending cleared after run", gpio_entry->pending == false);
   CHECK("binding still registered after fire",
         gpio_entry->kind == FR_EVENT_KIND_GPIO_RISING);
+  CHECK("gpio fire keeps active count", runtime.events.active_count == 1);
 
   /* AFTER binding is removed before its body runs. */
   CHECK("register after",
         fr_event_register(&runtime, FR_EVENT_KIND_AFTER, 1000, 0, body_id) ==
             FR_OK);
+  CHECK("after register increments active count",
+        runtime.events.active_count == 2);
   after_entry = &runtime.events.entries[1];
   CHECK("after lands at slot one",
         after_entry->kind == FR_EVENT_KIND_AFTER &&
@@ -3668,10 +3694,64 @@ static void test_event_drain_dispatch(void) {
   CHECK("dispatch after", fr_event_dispatch(&runtime) == FR_OK);
   CHECK("after binding cleared on fire",
         after_entry->kind == FR_EVENT_KIND_NONE);
+  CHECK("after fire decrements active count", runtime.events.active_count == 1);
   CHECK("after generation bumped on fire", after_entry->generation == 2);
   CHECK("after slot reverted", after_entry->source == 0 &&
                                    after_entry->body == 0 &&
                                    after_entry->last_fire_ms == 0);
+}
+
+static void test_event_safe_point_fires_when_active(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t body_view;
+  fr_instruction_stream_t run_view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *entry = NULL;
+  fr_tagged_t result = 0;
+  fr_tagged_t slot_value = 0;
+  fr_int_t decoded = 0;
+  uint8_t body_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(42),
+                          FR_OP_STORE_SLOT, 0x00, 0x00,
+                          FR_OP_RETURN};
+  uint8_t run_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(1), FR_OP_DROP,
+                         FR_OP_RETURN};
+  const size_t store_operand_offset =
+      FR_INSTRUCTION_MIN_HEADER_SIZE + FR_INSTRUCTION_PUSH_INT_SIZE + 1u;
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_slot_operand(&body_bytes[store_operand_offset],
+                     FR_TEST_FIRST_USER_SLOT);
+  write_instruction_header(run_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+
+  CHECK("safe-point event runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("safe-point body view",
+        fr_instruction_stream_init(&body_view, body_bytes,
+                                   sizeof(body_bytes)) == FR_OK);
+  CHECK("safe-point install body",
+        fr_code_install(&runtime, &body_view, NULL, 0, &body_id) == FR_OK);
+  CHECK("safe-point run view",
+        fr_instruction_stream_init(&run_view, run_bytes, sizeof(run_bytes)) ==
+            FR_OK);
+  CHECK("safe-point no active events yet", runtime.events.active_count == 0);
+
+  CHECK("safe-point register event",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+  CHECK("safe-point active count one", runtime.events.active_count == 1);
+  entry = &runtime.events.entries[0];
+  CHECK("safe-point post candidate",
+        fr_platform_event_post_test_candidate(0, entry->generation, 10) ==
+            FR_OK);
+  CHECK("safe-point run stream",
+        fr_vm_run_instruction_stream(&runtime, &run_view, &result) == FR_OK &&
+            fr_tagged_is_nil(result));
+  CHECK("safe-point body wrote slot",
+        fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
+            fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
+            decoded == 42);
+  CHECK("safe-point active binding survives",
+        runtime.events.active_count == 1 &&
+            entry->kind == FR_EVENT_KIND_GPIO_RISING && !entry->pending);
 }
 
 static void test_event_coalescing(void) {
@@ -11192,6 +11272,7 @@ int main(void) {
   test_event_table();
   test_event_register_cancel();
   test_event_drain_dispatch();
+  test_event_safe_point_fires_when_active();
   test_event_coalescing();
   test_event_debounce_drops_within_window();
   test_event_debounce_first_fire_at_zero();

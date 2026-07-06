@@ -97,6 +97,7 @@ fr_err_t fr_event_register(fr_runtime_t *runtime, fr_event_kind_t kind,
                            uint16_t source, uint16_t debounce_ms,
                            fr_code_object_id_t body) {
   fr_event_binding_t *entry = NULL;
+  fr_event_kind_t old_kind = FR_EVENT_KIND_NONE;
   uint16_t target = FR_EVENT_BINDING_COUNT;
   uint16_t next_generation = 0;
 
@@ -127,11 +128,15 @@ fr_err_t fr_event_register(fr_runtime_t *runtime, fr_event_kind_t kind,
   }
 
   entry = &runtime->events.entries[target];
+  old_kind = entry->kind;
   next_generation = (uint16_t)(entry->generation + 1);
   /* Stage: try to arm the platform first. If install fails we leave the
      prior binding (or the empty slot) untouched. */
   FR_TRY(fr_event_platform_install(kind, source, target, next_generation));
 
+  if (old_kind == FR_EVENT_KIND_NONE && kind != FR_EVENT_KIND_NONE) {
+    runtime->events.active_count++;
+  }
   entry->kind = kind;
   entry->source = source;
   entry->debounce_ms = debounce_ms;
@@ -147,6 +152,7 @@ fr_err_t fr_event_register(fr_runtime_t *runtime, fr_event_kind_t kind,
 fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
                          uint16_t source) {
   fr_event_binding_t *entry = NULL;
+  fr_event_kind_t old_kind = FR_EVENT_KIND_NONE;
   uint16_t target = FR_EVENT_BINDING_COUNT;
 
   if (runtime == NULL) {
@@ -168,7 +174,11 @@ fr_err_t fr_event_cancel(fr_runtime_t *runtime, fr_event_kind_t kind,
   }
 
   entry = &runtime->events.entries[target];
+  old_kind = entry->kind;
   FR_TRY(fr_event_platform_remove(entry, target));
+  if (old_kind != FR_EVENT_KIND_NONE) {
+    runtime->events.active_count--;
+  }
   entry->kind = FR_EVENT_KIND_NONE;
   entry->generation = (uint16_t)(entry->generation + 1);
   entry->pending = false;
@@ -293,7 +303,11 @@ fr_err_t fr_event_dispatch(fr_runtime_t *runtime) {
     entry->pending = false;
 
     if (entry->kind == FR_EVENT_KIND_AFTER) {
+      fr_event_kind_t old_kind = entry->kind;
       (void)fr_platform_event_timer_remove(i);
+      if (old_kind != FR_EVENT_KIND_NONE) {
+        runtime->events.active_count--;
+      }
       entry->kind = FR_EVENT_KIND_NONE;
       entry->generation = (uint16_t)(entry->generation + 1);
       entry->source = 0;
