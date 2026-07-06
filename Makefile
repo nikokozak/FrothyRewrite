@@ -408,25 +408,6 @@ web-bins:
 		0x8000 build/esp32_devkit_v1/partition_table/partition-table.bin \
 		0x10000 build/esp32_devkit_v1/frothy.bin
 
-test-tiny-328:
-	$(MAKE) BOARD=host PROFILE=tiny_328 TEST_BINARY=test/test-tiny-328 test
-
-test-tiny-328-volatile:
-	$(MAKE) BOARD=host PROFILE=tiny_328_volatile \
-		PERSISTENCE_SOURCES= TEST_BINARY=test/test-tiny-328-volatile test
-
-test-tiny-328-tethered:
-	$(MAKE) BOARD=host PROFILE=tiny_328_tethered \
-		TEST_BINARY=test/test-tiny-328-tethered test
-
-test-tiny-328-tethered-host-names:
-	$(MAKE) BOARD=host PROFILE=tiny_328_tethered_host_names \
-		TEST_BINARY=test/test-tiny-328-tethered-host-names test
-
-test-tiny-328-tethered-host-names-persist:
-	$(MAKE) BOARD=host PROFILE=tiny_328_tethered_host_names_persist \
-		TEST_BINARY=test/test-tiny-328-tethered-host-names-persist test
-
 test-host-normal:
 	$(MAKE) BOARD=host PROFILE=host_normal \
 		TEST_BINARY=test/test-host-normal test
@@ -650,14 +631,9 @@ test-esp32-plain-host-transcript: esp32-plain-host
 	printf 'esp32_plain host transcript ok\n'
 
 host-overlay-compiler:
-	$(MAKE) BOARD=host PROFILE=tiny_328_tether_compiler \
+	$(MAKE) BOARD=host PROFILE=host_small \
 		OVERLAY_COMPILER=build/host/frothy-compile-overlay \
 		build/host/frothy-compile-overlay
-
-host-overlay-compiler-tiny-host-names:
-	$(MAKE) BOARD=host PROFILE=tiny_328_tether_compiler_host_names \
-		OVERLAY_COMPILER=build/host/frothy-compile-overlay-tiny-host-names \
-		build/host/frothy-compile-overlay-tiny-host-names
 
 frothy-host-command: host-overlay-compiler
 	GOCACHE=$(GO_CACHE) go build -o $(FROTHY_HOST_COMMAND_BINARY) ./cmd/frothy-session
@@ -701,56 +677,6 @@ test-install-host:
 		exit 1; \
 	fi; \
 	printf 'install host dry-run ok\n'
-
-test-helper-targets: host-overlay-compiler host-overlay-compiler-tiny-host-names
-	$(MAKE) BOARD=host PROFILE=tiny_328_tethered \
-		FROTHY_BINARY=build/host/frothy-tethered frothy
-	$(MAKE) BOARD=host PROFILE=tiny_328_tethered_host_names_persist \
-		FROTHY_BINARY=build/host/frothy-host-names-persist frothy
-	@helper_target=$$(printf '@target\n' | build/host/frothy-compile-overlay); \
-	device_status=$$(printf 'status\n' | build/host/frothy-tethered); \
-	for field in profile_hash word_size int_min int_max apply_bytes; do \
-		helper_value=$$(printf '%s\n' "$$helper_target" | sed -n "s/.*$$field=\\([^ ]*\\).*/\\1/p"); \
-		device_value=$$(printf '%s\n' "$$device_status" | sed -n "s/.*$$field=\\([^ ]*\\).*/\\1/p"); \
-		if [ -z "$$helper_value" ] || [ "$$helper_value" != "$$device_value" ]; then \
-			printf 'helper target mismatch: tiny_328_tethered %s helper=%s device=%s\n' "$$field" "$$helper_value" "$$device_value"; \
-			exit 1; \
-		fi; \
-	done; \
-	printf 'helper target tiny_328_tethered %s\n' "$$helper_target"
-	@helper_target=$$(printf '@target\n' | build/host/frothy-compile-overlay-tiny-host-names); \
-	device_status=$$(printf 'status\n' | build/host/frothy-host-names-persist); \
-	for field in profile_hash word_size int_min int_max apply_bytes; do \
-		helper_value=$$(printf '%s\n' "$$helper_target" | sed -n "s/.*$$field=\\([^ ]*\\).*/\\1/p"); \
-		device_value=$$(printf '%s\n' "$$device_status" | sed -n "s/.*$$field=\\([^ ]*\\).*/\\1/p"); \
-		if [ -z "$$helper_value" ] || [ "$$helper_value" != "$$device_value" ]; then \
-			printf 'helper target mismatch: tiny_328_tethered_host_names_persist %s helper=%s device=%s\n' "$$field" "$$helper_value" "$$device_value"; \
-			exit 1; \
-		fi; \
-	done; \
-	printf 'helper target tiny_328_tethered_host_names_persist %s\n' "$$helper_target"
-
-test-helper-tiny-blink: frothy-session host-overlay-compiler-tiny-host-names
-	$(MAKE) BOARD=host PROFILE=tiny_328_tethered_host_names_persist \
-		FROTHY_BINARY=build/host/frothy-host-names-persist frothy
-	@out=$$(printf '%s\n' \
-		'time is 200' \
-		'blink is fn [ pin: 4, 1; ms: time; pin: 4, 0; ms: time ]' \
-		'blink:' \
-		'14:' \
-		'blink_times is fn with count [ repeat count [ blink: ] ]' \
-		'blink_times: 2' \
-		'blink_inline is fn with count [ repeat count [ pin: 4, 1; ms: 200; pin: 4, 0; ms: 200 ] ]' \
-		'blink_inline: 2' \
-		| $(FROTHY_SESSION_BINARY) --dry-run \
-			--compiler build/host/frothy-compile-overlay-tiny-host-names \
-		| build/host/frothy-host-names-persist); \
-	ok_count=$$(printf '%s\n' "$$out" | grep -c '^> ok$$'); \
-	if [ "$$ok_count" != 8 ]; then \
-		printf '%s\n' "$$out"; \
-		exit 1; \
-	fi; \
-	printf 'tiny helper blink transcript ok\n'
 
 $(TEST_BINARY): $(TEST_DEPS)
 	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 $(TEST_SOURCES) $(FR_LDFLAGS) -o $@
@@ -823,6 +749,6 @@ vsix:
 	cd editors/vscode && npm ci && npm run build && npx vsce package
 
 clean:
-	rm -rf build frothy test/test test/test-tiny-328 test/test-tiny-328-volatile test/test-tiny-328-tethered test/test-tiny-328-tethered-host-names test/test-tiny-328-tethered-host-names-persist test/test-host-normal
+	rm -rf build frothy test/test test/test-host-normal
 
-.PHONY: test test-unity artifacts flash wipe-nvs web-bins test-tiny-328 test-tiny-328-volatile test-tiny-328-tethered test-tiny-328-tethered-host-names test-tiny-328-tethered-host-names-persist test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler host-overlay-compiler-tiny-host-names frothy-host-command frothy-session cli install-host test-install-host test-helper-targets print-config vsix clean
+.PHONY: test test-unity artifacts flash wipe-nvs web-bins test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean

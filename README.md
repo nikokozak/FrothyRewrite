@@ -97,9 +97,9 @@ teaching the chip one word at a time.
 Frothy's runtime stays small enough to read end to end:
 
 - `src/`: core runtime, parser, compiler, VM, image, persistence, slots, tagged values.
-- `profiles/`: feature and word-size choices per target class.
-- `boards/`: board definitions (`esp32_devkit_v1`, `host`, `arduino_uno`).
-- `targets/`: host, AVR, and ESP-IDF platform glue.
+- `profiles/`: feature and capacity choices per target class.
+- `boards/`: board definitions (`esp32_devkit_v1`, `host`).
+- `targets/`: host and ESP-IDF platform glue.
 - `cmd/frothy-session/`: the `frothy` CLI (Go).
 - `libs/frothy-repl/`, `libs/frothy-editor/`: ESM libraries that wrap
   the wire protocol for browser and Node consumers.
@@ -115,7 +115,6 @@ the web tools are conveniences, not a private control plane.
 
 ```sh
 make test                                # core C test binary
-make test-tiny-328                       # tiny-AVR profile
 make test-host-normal                    # roomy host profile
 make test-esp32-plain-host-transcript    # ESP32 transcript replay
 go test ./cmd/frothy-session/...         # the Go CLI

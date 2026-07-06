@@ -1,11 +1,14 @@
 /*
- * Host proof profile. It intentionally starts with tiny limits so host tests do
- * not hide target pressure.
+ * Small-pressure host proof profile. It intentionally starts with tiny limits
+ * so host tests do not hide target pressure — the capacity-error paths
+ * (slots, stack, call depth, overlay names, persistence) stay exercised. This
+ * is the 32-bit successor to the retired 16-bit `host` profile: the runtime is
+ * 32-bit-only, so the pressure it carries is capacity, not word width.
  */
 
 #pragma once
 
-#define FR_WORD_SIZE 16
+#define FR_WORD_SIZE 32
 
 #define FR_PROFILE_MAX_SLOTS 32
 #define FR_PROFILE_MAX_INSTRUCTION_BYTES 128

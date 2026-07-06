@@ -342,7 +342,6 @@ static fr_err_t fr_repl_append_u16(char *out, uint16_t out_cap,
   return FR_OK;
 }
 
-#if FR_WORD_SIZE == 32
 static fr_err_t fr_repl_append_u32(char *out, uint16_t out_cap,
                                    uint16_t *used, uint32_t value) {
   if (out == NULL || used == NULL || *used >= out_cap) {
@@ -352,29 +351,16 @@ static fr_err_t fr_repl_append_u32(char *out, uint16_t out_cap,
   *used = (uint16_t)strlen(out);
   return FR_OK;
 }
-#endif
 
 static fr_err_t fr_repl_append_int(char *out, uint16_t out_cap,
                                    uint16_t *used, fr_int_t value) {
   if (value < 0) {
-#if FR_WORD_SIZE == 16
-    uint16_t magnitude = (uint16_t)(-(int32_t)value);
-#else
     uint32_t magnitude = (uint32_t)(-(int64_t)value);
-#endif
 
     FR_TRY(fr_repl_append(out, out_cap, used, "-"));
-#if FR_WORD_SIZE == 16
-    return fr_repl_append_u16(out, out_cap, used, magnitude);
-#else
     return fr_repl_append_u32(out, out_cap, used, magnitude);
-#endif
   }
-#if FR_WORD_SIZE == 16
-  return fr_repl_append_u16(out, out_cap, used, (uint16_t)value);
-#else
   return fr_repl_append_u32(out, out_cap, used, (uint32_t)value);
-#endif
 }
 
 static fr_err_t fr_repl_append_char(char *out, uint16_t out_cap,
@@ -501,11 +487,7 @@ static fr_err_t fr_repl_write_status(const fr_repl_writer_t *writer) {
   FR_TRY(fr_repl_writer_write(writer, " interrupt="));
   FR_TRY(fr_repl_writer_write(writer, fr_profile_interrupt_mode()));
   FR_TRY(fr_repl_writer_write(writer, " word_size="));
-#if FR_WORD_SIZE == 16
-  FR_TRY(fr_repl_writer_write(writer, "16"));
-#else
   FR_TRY(fr_repl_writer_write(writer, "32"));
-#endif
   FR_TRY(fr_repl_writer_write(writer, " int_min="));
   {
     char int_min[14];

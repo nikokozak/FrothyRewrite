@@ -33,13 +33,7 @@ typedef enum fr_err_t {
 
 const char *fr_err_name(fr_err_t err);
 
-#if FR_WORD_SIZE == 16
-typedef int16_t fr_int_t;
-#elif FR_WORD_SIZE == 32
 typedef int32_t fr_int_t;
-#else
-#error "FR_WORD_SIZE must be 16 or 32"
-#endif
 typedef uint16_t fr_slot_id_t;
 typedef uint16_t fr_code_object_id_t;
 typedef uint16_t fr_native_id_t;

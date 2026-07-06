@@ -46,11 +46,7 @@ typedef struct fr_parser_t {
   uint8_t expr_depth;
 } fr_parser_t;
 
-#if FR_WORD_SIZE == 16
-typedef uint16_t fr_parse_int_magnitude_t;
-#else
 typedef uint32_t fr_parse_int_magnitude_t;
-#endif
 
 #define FR_PARSE_INT_POS_LIMIT                                                \
   ((fr_parse_int_magnitude_t)FR_TAGGED_INT_MAX)

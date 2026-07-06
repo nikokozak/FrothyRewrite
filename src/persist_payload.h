@@ -6,18 +6,14 @@
 #if FR_FEATURE_PERSISTENCE
 
 /*
- * 16-bit and 32-bit each carry their own version because int value fields
- * are wider on 32-bit. Independent from the overlay update version in
- * config.h. Project policy is no backwards compatibility (D7 in T12L-7);
- * the decoder only accepts the current version. Older payloads are
- * invalid and the recovery path is dangerous.wipe + re-install.
+ * Current payload version carries 32-bit int value fields. Independent from
+ * the overlay update version in config.h. Project policy is no backwards
+ * compatibility (D7 in T12L-7); the decoder only accepts the current version.
+ * Older payloads are invalid and the recovery path is dangerous.wipe +
+ * re-install.
  */
 enum {
-#if FR_WORD_SIZE == 16
-  FR_PERSIST_PAYLOAD_VERSION = 3,
-#else
   FR_PERSIST_PAYLOAD_VERSION = 4,
-#endif
 };
 
 fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
