@@ -582,6 +582,8 @@ static void test_persist_code_id_round_trip(void) {
   const size_t outer_code_id_operand = FR_INSTRUCTION_MIN_HEADER_SIZE + 1u;
 
   fr_platform_storage_debug_reset();
+  write_instruction_header(inner_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(outer_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
   CHECK("code-id round-trip base image",
         fr_base_image_install(&runtime) == FR_OK);
   CHECK("code-id round-trip install inner",
@@ -971,11 +973,17 @@ static void test_instruction_stream(void) {
   uint8_t push_int_store_slot[] = {0x00, 0x00, FR_TEST_PUSH_INT(7),
                                    FR_OP_STORE_SLOT, 0x00, 0x00,
                                    FR_OP_RETURN};
+  uint8_t old_version_return[] = {0x00, FR_INSTRUCTION_MIN_HEADER_SIZE,
+                                  FR_OP_RETURN};
 #if FR_FEATURE_CELLS
   uint8_t load_cell_zero[] = {0x00, 0x00, FR_OP_LOAD_CELL, 0x00,
                               0x00, 0x00, 0x00, FR_OP_RETURN};
   uint8_t store_cell_zero[] = {0x00, 0x00, FR_OP_STORE_CELL, 0x00,
                                0x00, 0x00, 0x00, FR_OP_RETURN};
+  uint8_t load_cell_dynamic[] = {0x00, 0x00, FR_OP_LOAD_CELL_DYNAMIC,
+                                 0x00, 0x00, FR_OP_RETURN};
+  uint8_t store_cell_dynamic[] = {0x00, 0x00, FR_OP_STORE_CELL_DYNAMIC,
+                                  0x00, 0x00, FR_OP_RETURN};
 #endif
 #if FR_FEATURE_RECORDS
   uint8_t load_field_x[] = {0x00, 0x00, FR_OP_LOAD_FIELD,  0x01,
@@ -1038,6 +1046,8 @@ static void test_instruction_stream(void) {
 #if FR_FEATURE_CELLS
   write_instruction_header(load_cell_zero, FR_INSTRUCTION_MIN_HEADER_SIZE);
   write_instruction_header(store_cell_zero, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(load_cell_dynamic, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(store_cell_dynamic, FR_INSTRUCTION_MIN_HEADER_SIZE);
 #endif
 #if FR_FEATURE_RECORDS
   write_instruction_header(load_field_x, FR_INSTRUCTION_MIN_HEADER_SIZE);
@@ -1062,6 +1072,8 @@ static void test_instruction_stream(void) {
 #if FR_FEATURE_CELLS
   write_cell_operands(&load_cell_zero[3], 1, 2);
   write_cell_operands(&store_cell_zero[3], 1, 2);
+  write_slot_operand(&load_cell_dynamic[3], 1);
+  write_slot_operand(&store_cell_dynamic[3], 1);
 #endif
   load_arg_zero[4] = 0;
   write_jump_operand(&jump_push_two[3], jump_second_push_ip);
@@ -1088,6 +1100,10 @@ static void test_instruction_stream(void) {
             fr_instruction_read_header(&view, &header) == FR_OK &&
             header.header_size == FR_INSTRUCTION_ARITY_HEADER_SIZE &&
             header.arity == 1);
+  CHECK("old instruction format version is unsupported",
+        fr_instruction_stream_init(&view, old_version_return,
+                                   sizeof(old_version_return)) == FR_OK &&
+            fr_instruction_read_header(&view, &header) == FR_ERR_UNSUPPORTED);
 
   CHECK("read slot operand",
         fr_instruction_stream_init(&view, load_slot_last,
@@ -1170,6 +1186,18 @@ static void test_instruction_stream(void) {
             fr_instruction_disassemble_at(&view, 2, text, sizeof(text),
                                           &text_len, &next_ip) == FR_OK &&
             strcmp(text, "STORE_CELL 1 2") == 0 && next_ip == 7);
+  CHECK("disassemble dynamic load cell",
+        fr_instruction_stream_init(&view, load_cell_dynamic,
+                                   sizeof(load_cell_dynamic)) == FR_OK &&
+            fr_instruction_disassemble_at(&view, 2, text, sizeof(text),
+                                          &text_len, &next_ip) == FR_OK &&
+            strcmp(text, "LOAD_CELL_DYNAMIC 1") == 0 && next_ip == 5);
+  CHECK("disassemble dynamic store cell",
+        fr_instruction_stream_init(&view, store_cell_dynamic,
+                                   sizeof(store_cell_dynamic)) == FR_OK &&
+            fr_instruction_disassemble_at(&view, 2, text, sizeof(text),
+                                          &text_len, &next_ip) == FR_OK &&
+            strcmp(text, "STORE_CELL_DYNAMIC 1") == 0 && next_ip == 5);
 #endif
 #if FR_FEATURE_RECORDS
   CHECK("disassemble load field",
@@ -4599,6 +4627,8 @@ static void test_image(void) {
   uint8_t push_two[] = {0x00, 0x00, FR_TEST_PUSH_INT(2), FR_OP_RETURN};
   uint8_t push_three[] = {0x00, 0x00, FR_TEST_PUSH_INT(3), FR_OP_RETURN};
   uint8_t invalid_opcode[] = {0x00, 0x00, 0xfe};
+  uint8_t old_version_code[] = {0x00, FR_INSTRUCTION_MIN_HEADER_SIZE,
+                                FR_OP_RETURN};
 
 #if !FR_BASE_IMAGE_INCLUDE_SYMBOLS && FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES == 0
   (void)slot_id;
@@ -4743,6 +4773,15 @@ static void test_image(void) {
       .code_objects = invalid_code_update_code,
       .code_object_count = 1,
   };
+  const fr_image_code_object_t old_version_update_code[] = {
+      {{old_version_code, sizeof(old_version_code)}, NULL, 0},
+  };
+  const fr_overlay_update_t old_version_update = {
+      .slot_inits = invalid_code_slots,
+      .slot_init_count = 1,
+      .code_objects = old_version_update_code,
+      .code_object_count = 1,
+  };
 #if FR_PROFILE_MAX_OVERLAY_UPDATE_NAMES > 0
   const fr_image_slot_init_t named_update_slots[] = {
       {FR_TEST_FIRST_USER_SLOT, {FR_IMAGE_REF_CODE_OBJECT, 0, 0}},
@@ -4821,6 +4860,8 @@ static void test_image(void) {
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1 &&
             fr_vm_run_slot(&runtime, 4, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 3);
+  CHECK("overlay rejects old instruction format version",
+        fr_overlay_apply(&runtime, &old_version_update) == FR_ERR_UNSUPPORTED);
   CHECK("overlay update byte codec checks crc",
         fr_overlay_update_encode(&overlay_update, overlay_bytes,
                                  (uint16_t)sizeof(overlay_bytes),
@@ -5831,20 +5872,46 @@ static void test_parse(void) {
         fr_parse_expression_line("counter[1]", &parsed, &expr_id) == FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_CELL_READ &&
             fr_parse_span_equals(parsed.exprs[expr_id].name, "counter") &&
-            parsed.exprs[expr_id].int_value == 1);
+            parsed.exprs[expr_id].child_count == 1 &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_INT &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].int_value == 1);
+  CHECK("parse cell read accepts expression index",
+        fr_parse_expression_line("counter[i + 1]", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_CELL_READ &&
+            parsed.exprs[expr_id].child_count == 1 &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_ADD);
   CHECK("parse cell write expression",
         fr_parse_expression_line("set counter[1] to 7", &parsed, &expr_id) ==
                 FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_CELL_WRITE &&
             fr_parse_span_equals(parsed.exprs[expr_id].name, "counter") &&
-            parsed.exprs[expr_id].int_value == 1 &&
-            parsed.exprs[parsed.exprs[expr_id].child].kind ==
+            parsed.exprs[expr_id].child_count == 2 &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_INT &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].int_value == 1 &&
+            parsed.exprs[parsed.exprs[expr_id].children[1]].kind ==
                 FR_PARSE_EXPR_INT);
+  CHECK("parse cell write accepts expression index",
+        fr_parse_expression_line("set counter[i] to 7", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_CELL_WRITE &&
+            parsed.exprs[expr_id].child_count == 2 &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_NAME &&
+            fr_parse_span_equals(
+                parsed.exprs[parsed.exprs[expr_id].children[0]].name, "i"));
   CHECK("parse rejects zero cells",
         fr_parse_line("counter is cells(0)", &parsed) == FR_ERR_RANGE);
-  CHECK("parse rejects negative cell index",
+  CHECK("parse keeps negative literal cell index for compile/runtime checks",
         fr_parse_expression_line("counter[-1]", &parsed, &expr_id) ==
-            FR_ERR_RANGE);
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_CELL_READ &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_INT &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].int_value == -1);
 #else
   CHECK("parse cells unsupported without feature",
         fr_parse_line("counter is cells(2)", &parsed) == FR_ERR_UNSUPPORTED);
@@ -6253,39 +6320,118 @@ static void test_compile(void) {
                                           &expression) == FR_OK &&
             expression.instructions.length == 8u + push_size &&
             expression.instruction_bytes[2] == FR_OP_PUSH_INT &&
-            expression.instruction_bytes[2u + push_size] ==
-                FR_OP_STORE_CELL &&
+            expression.instruction_bytes[2u + push_size] == FR_OP_STORE_CELL &&
             expression.instruction_bytes[3u + push_size] == slot_id &&
             expression.instruction_bytes[7u + push_size] == FR_OP_RETURN &&
-            fr_vm_run_instruction_stream(&cell_runtime, &expression.instructions,
-                                         &tagged) == FR_OK &&
+            fr_vm_run_instruction_stream(
+                &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged) &&
             fr_compile_expression_for_runtime(&cell_runtime, "counter[0]",
                                               &expression) == FR_OK &&
-            fr_vm_run_instruction_stream(&cell_runtime,
-                                         &expression.instructions, &tagged) ==
-                FR_OK &&
+            fr_vm_run_instruction_stream(
+                &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 7);
+  {
+    const uint16_t dynamic_read_op =
+        FR_INSTRUCTION_LOCALS_HEADER_SIZE + push_size + 2u + 1u + 2u;
+    const uint16_t dynamic_write_op = FR_INSTRUCTION_LOCALS_HEADER_SIZE +
+                                      push_size + 2u + 1u + push_size + 2u;
+
+    CHECK("compile dynamic cell read uses stack index opcode",
+          fr_compile_expression_for_runtime(&cell_runtime,
+                                            "here i is 0 ; counter[i]",
+                                            &expression) == FR_OK &&
+              expression.instructions.length == dynamic_read_op + 4u &&
+              expression.instruction_bytes[1] ==
+                  FR_INSTRUCTION_LOCALS_HEADER_SIZE &&
+              expression.instruction_bytes[dynamic_read_op - 2u] ==
+                  FR_OP_LOAD_LOCAL &&
+              expression.instruction_bytes[dynamic_read_op] ==
+                  FR_OP_LOAD_CELL_DYNAMIC &&
+              expression.instruction_bytes[dynamic_read_op + 1u] == slot_id &&
+              fr_vm_run_instruction_stream(
+                  &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
+              fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 7);
+    CHECK("compile dynamic cell write stores through stack index",
+          fr_compile_expression_for_runtime(&cell_runtime,
+                                            "here i is 1 ; set counter[i] to 8",
+                                            &expression) == FR_OK &&
+              expression.instructions.length == dynamic_write_op + 4u &&
+              expression.instruction_bytes[dynamic_write_op - 2u] ==
+                  FR_OP_LOAD_LOCAL &&
+              expression.instruction_bytes[dynamic_write_op] ==
+                  FR_OP_STORE_CELL_DYNAMIC &&
+              expression.instruction_bytes[dynamic_write_op + 1u] == slot_id &&
+              fr_vm_run_instruction_stream(
+                  &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
+              fr_tagged_is_nil(tagged) &&
+              fr_compile_expression_for_runtime(&cell_runtime, "counter[1]",
+                                                &expression) == FR_OK &&
+              fr_vm_run_instruction_stream(
+                  &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
+              fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 8);
+    CHECK("dynamic cell read range fails at runtime",
+          fr_compile_expression_for_runtime(&cell_runtime,
+                                            "here i is 2 ; counter[i]",
+                                            &expression) == FR_OK &&
+              fr_vm_run_instruction_stream(&cell_runtime,
+                                           &expression.instructions,
+                                           &tagged) == FR_ERR_RANGE);
+  }
+  CHECK("compile dynamic cell index loop averages readings",
+        fr_compile_overlay_update_for_runtime(
+            &cell_runtime, "readings is cells(4)", &update) == FR_OK &&
+            fr_overlay_apply(&cell_runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_expression_for_runtime(
+                &cell_runtime, "set readings[0] to 10", &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(
+                &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
+            fr_compile_expression_for_runtime(
+                &cell_runtime, "set readings[1] to 20", &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(
+                &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
+            fr_compile_expression_for_runtime(
+                &cell_runtime, "set readings[2] to 30", &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(
+                &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
+            fr_compile_expression_for_runtime(
+                &cell_runtime, "set readings[3] to 40", &expression) == FR_OK &&
+            fr_vm_run_instruction_stream(
+                &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(&cell_runtime, "idx is 0",
+                                                  &update) == FR_OK &&
+            fr_overlay_apply(&cell_runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(&cell_runtime, "total is 0",
+                                                  &update) == FR_OK &&
+            fr_overlay_apply(&cell_runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &cell_runtime,
+                "average is fn [ set idx to 0; set total to 0; "
+                "while idx < 4 [ set total to total + readings[idx]; "
+                "set idx to idx + 1 ]; total / 4 ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&cell_runtime, &update.overlay_update) == FR_OK &&
+            fr_slot_id_for_name(&cell_runtime, "average", &slot_id) == FR_OK &&
+            fr_vm_run_slot(&cell_runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 25);
 #if FR_FEATURE_TEXT
   CHECK("compile cell write stores named text",
-        fr_compile_overlay_update_for_runtime(&cell_runtime,
-                                              "message is \"ready\"",
-                                              &update) == FR_OK &&
+        fr_compile_overlay_update_for_runtime(
+            &cell_runtime, "message is \"ready\"", &update) == FR_OK &&
             fr_overlay_apply(&cell_runtime, &update.overlay_update) == FR_OK &&
             fr_compile_expression_for_runtime(&cell_runtime,
                                               "set counter[0] to message",
                                               &expression) == FR_OK &&
-            fr_vm_run_instruction_stream(&cell_runtime, &expression.instructions,
-                                         &tagged) == FR_OK &&
+            fr_vm_run_instruction_stream(
+                &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged) &&
             fr_compile_expression_for_runtime(&cell_runtime, "counter[0]",
                                               &expression) == FR_OK &&
-            fr_vm_run_instruction_stream(&cell_runtime,
-                                         &expression.instructions, &tagged) ==
-                FR_OK &&
+            fr_vm_run_instruction_stream(
+                &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
             fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
-            fr_text_view(&cell_runtime, object_id, &text_bytes,
-                         &text_length) == FR_OK &&
+            fr_text_view(&cell_runtime, object_id, &text_bytes, &text_length) ==
+                FR_OK &&
             text_length == 5 && memcmp(text_bytes, "ready", 5) == 0);
 #endif
   CHECK("compile function cell write",
@@ -6299,23 +6445,25 @@ static void test_compile(void) {
             fr_tagged_is_nil(tagged) &&
             fr_compile_expression_for_runtime(&cell_runtime, "counter[1]",
                                               &expression) == FR_OK &&
-            fr_vm_run_instruction_stream(&cell_runtime,
-                                         &expression.instructions, &tagged) ==
-                FR_OK &&
+            fr_vm_run_instruction_stream(
+                &cell_runtime, &expression.instructions, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
   CHECK("compile cell read range fails at runtime",
         fr_compile_expression_for_runtime(&cell_runtime, "counter[2]",
                                           &expression) == FR_OK &&
             fr_vm_run_instruction_stream(&cell_runtime,
-                                         &expression.instructions, &tagged) ==
-                FR_ERR_RANGE);
+                                         &expression.instructions,
+                                         &tagged) == FR_ERR_RANGE);
+  CHECK("compile rejects negative literal cell index",
+        fr_compile_expression_for_runtime(&cell_runtime, "counter[-1]",
+                                          &expression) == FR_ERR_RANGE);
 #if FR_TAGGED_INT_MAX > 65535
   CHECK("compile rejects cell index beyond operand width",
         fr_compile_expression_for_runtime(&cell_runtime, "counter[65536]",
                                           &expression) == FR_ERR_RANGE &&
-            fr_compile_expression_for_runtime(
-                &cell_runtime, "set counter[65536] to 7", &expression) ==
-                FR_ERR_RANGE);
+            fr_compile_expression_for_runtime(&cell_runtime,
+                                              "set counter[65536] to 7",
+                                              &expression) == FR_ERR_RANGE);
 #endif
   CHECK("compile rejects bare cells expression",
         fr_compile_expression_for_runtime(&cell_runtime, "cells(1)",
@@ -8342,19 +8490,16 @@ static void test_persist(void) {
 #if FR_FEATURE_CELLS
   CHECK("persist restores cells",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_compile_overlay_update_for_runtime(&runtime,
-                                                  "counter is cells(2)",
-                                                  &update) == FR_OK &&
-            test_persist_apply_user_overlay(&runtime,
-                                            &update.overlay_update) == FR_OK &&
-            fr_compile_expression_for_runtime(&runtime,
-                                              "set counter[0] to "
-                                              FR_TEST_PERSIST_INT_SOURCE,
-                                              &expression) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime, "counter is cells(2)", &update) == FR_OK &&
+            test_persist_apply_user_overlay(&runtime, &update.overlay_update) ==
+                FR_OK &&
+            fr_compile_expression_for_runtime(
+                &runtime, "set counter[0] to " FR_TEST_PERSIST_INT_SOURCE,
+                &expression) == FR_OK &&
             fr_vm_run_instruction_stream(&runtime, &expression.instructions,
                                          &tagged) == FR_OK &&
-            fr_compile_expression_for_runtime(&runtime,
-                                              "set counter[1] to one",
+            fr_compile_expression_for_runtime(&runtime, "set counter[1] to one",
                                               &expression) == FR_OK &&
             fr_vm_run_instruction_stream(&runtime, &expression.instructions,
                                          &tagged) == FR_OK &&
@@ -8372,6 +8517,24 @@ static void test_persist(void) {
             fr_vm_run_instruction_stream(&runtime, &expression.instructions,
                                          &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
+  {
+    char out[32];
+
+    CHECK("persist restores dynamic cell index code",
+          fr_base_image_install(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime, "readings is cells(3)", out,
+                                sizeof(out)) == FR_OK &&
+              fr_repl_eval_line(&runtime, "set readings[2] to 9", out,
+                                sizeof(out)) == FR_OK &&
+              fr_repl_eval_line(&runtime, "pick is fn with i [ readings[i] ]",
+                                out, sizeof(out)) == FR_OK &&
+              fr_persist_save(&runtime) == FR_OK &&
+              fr_base_image_install(&runtime) == FR_OK &&
+              fr_persist_restore(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime, "pick: 2", out, sizeof(out)) ==
+                  FR_OK &&
+              strcmp(out, "9\nok\n") == 0);
+  }
 #endif
 #if FR_FEATURE_RECORDS
   CHECK("persist restores records with text fields",
@@ -8625,7 +8788,8 @@ static void test_persist_payload_rejects_seventeenth_event_record(void) {
   uint8_t payload[] = {
       'F', 'R', 'P', 'O',
       FR_PERSIST_PAYLOAD_VERSION,
-      0x01, 0, 0, 3, 0, 0, 0, 0,
+      0x01, 0, 0, 3, 0, FR_INSTRUCTION_FORMAT_VERSION,
+      FR_INSTRUCTION_MIN_HEADER_SIZE, FR_OP_RETURN,
       FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
       FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
       FR_TEST_PERSIST_RECORD_EVENT, FR_EVENT_KIND_GPIO_RISING, 0, 0, 0, 0, 0, 0,
@@ -8819,6 +8983,18 @@ static void test_vm(void) {
   uint8_t store_cell_zero[] = {0x00, 0x00, FR_TEST_PUSH_INT(9),
                                FR_OP_STORE_CELL, 0x00, 0x00, 0x00, 0x00,
                                FR_OP_RETURN};
+  uint8_t load_cell_dynamic_zero[] = {
+      0x00, 0x00, FR_TEST_PUSH_INT(0), FR_OP_LOAD_CELL_DYNAMIC, 0x00, 0x00,
+      FR_OP_RETURN};
+  uint8_t store_cell_dynamic_zero[] = {
+      0x00, 0x00, FR_TEST_PUSH_INT(11), FR_TEST_PUSH_INT(0),
+      FR_OP_STORE_CELL_DYNAMIC, 0x00, 0x00, FR_OP_RETURN};
+  uint8_t load_cell_dynamic_past_end[] = {
+      0x00, 0x00, FR_TEST_PUSH_INT(1), FR_OP_LOAD_CELL_DYNAMIC, 0x00, 0x00,
+      FR_OP_RETURN};
+  uint8_t load_cell_dynamic_negative[] = {
+      0x00, 0x00, FR_TEST_PUSH_INT(-1), FR_OP_LOAD_CELL_DYNAMIC, 0x00, 0x00,
+      FR_OP_RETURN};
 #endif
   uint8_t load_slot_too_large[] = {0x00, 0x00, FR_OP_LOAD_SLOT,
                                    0x00, 0x00, FR_OP_RETURN};
@@ -8882,6 +9058,10 @@ static void test_vm(void) {
 #if FR_FEATURE_CELLS
   const fr_code_offset_t store_cell_ip =
       2u + FR_INSTRUCTION_PUSH_INT_SIZE;
+  const fr_code_offset_t load_cell_dynamic_ip =
+      2u + FR_INSTRUCTION_PUSH_INT_SIZE;
+  const fr_code_offset_t store_cell_dynamic_ip =
+      2u + (FR_INSTRUCTION_PUSH_INT_SIZE * 2u);
 #endif
   const fr_code_offset_t call_slot_arg_ip =
       2u + FR_INSTRUCTION_PUSH_INT_SIZE;
@@ -8920,6 +9100,14 @@ static void test_vm(void) {
 #if FR_FEATURE_CELLS
   write_instruction_header(load_cell_zero, FR_INSTRUCTION_MIN_HEADER_SIZE);
   write_instruction_header(store_cell_zero, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(load_cell_dynamic_zero,
+                           FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(store_cell_dynamic_zero,
+                           FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(load_cell_dynamic_past_end,
+                           FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(load_cell_dynamic_negative,
+                           FR_INSTRUCTION_MIN_HEADER_SIZE);
 #endif
   write_instruction_header(load_slot_too_large,
                            FR_INSTRUCTION_MIN_HEADER_SIZE);
@@ -8946,6 +9134,10 @@ static void test_vm(void) {
 #if FR_FEATURE_CELLS
   write_cell_operands(&load_cell_zero[3], 5, 0);
   write_cell_operands(&store_cell_zero[store_cell_ip + 1u], 5, 0);
+  write_slot_operand(&load_cell_dynamic_zero[load_cell_dynamic_ip + 1u], 5);
+  write_slot_operand(&store_cell_dynamic_zero[store_cell_dynamic_ip + 1u], 5);
+  write_slot_operand(&load_cell_dynamic_past_end[load_cell_dynamic_ip + 1u], 5);
+  write_slot_operand(&load_cell_dynamic_negative[load_cell_dynamic_ip + 1u], 5);
 #endif
   write_slot_operand(&load_slot_too_large[3], FR_PROFILE_MAX_SLOTS);
   write_slot_operand(&store_underflow[3], 0);
@@ -9079,6 +9271,30 @@ static void test_vm(void) {
             fr_tagged_is_nil(result) &&
             fr_cells_read(&runtime, object_id, 0, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 9);
+  CHECK("vm dynamic load cell",
+        fr_instruction_stream_init(&view, load_cell_dynamic_zero,
+                                   sizeof(load_cell_dynamic_zero)) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &view, &result) == FR_OK &&
+            fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 9);
+  CHECK("vm dynamic store cell",
+        fr_instruction_stream_init(&view, store_cell_dynamic_zero,
+                                   sizeof(store_cell_dynamic_zero)) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &view, &result) == FR_OK &&
+            fr_tagged_is_nil(result) &&
+            fr_cells_read(&runtime, object_id, 0, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 11);
+  CHECK("vm dynamic load cell rejects past end",
+        fr_instruction_stream_init(&view, load_cell_dynamic_past_end,
+                                   sizeof(load_cell_dynamic_past_end)) ==
+                FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &view, &result) ==
+                FR_ERR_RANGE);
+  CHECK("vm dynamic load cell rejects negative index",
+        fr_instruction_stream_init(&view, load_cell_dynamic_negative,
+                                   sizeof(load_cell_dynamic_negative)) ==
+                FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &view, &result) ==
+                FR_ERR_RANGE);
   CHECK("vm load cell rejects non-cell slot",
         fr_slot_write(&runtime, 5, cell_initial) == FR_OK &&
             fr_instruction_stream_init(&view, load_cell_zero,
@@ -10067,7 +10283,7 @@ static fr_err_t test_repl_write_text(const char *text) {
  * renderer's arg-name lookup and infix reduction; pin its exact form. */
 static void test_repl_see_source_form(void) {
   fr_runtime_t runtime;
-  char out[128];
+  char out[256];
 
 #if FR_FEATURE_PERSISTENCE
   fr_platform_storage_debug_reset();
@@ -10080,16 +10296,16 @@ static void test_repl_see_source_form(void) {
             fr_repl_eval_line(&runtime, "see twice", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "overlay code\nto twice with n [ n * 2 ]\nok\n") == 0);
-  CHECK("see source if/else",
-        fr_repl_eval_line(&runtime,
-                          "abs1 is fn with n [ if n < 0 [ -1 * n ] else [ n ] ]",
-                          out, sizeof(out)) == FR_OK &&
-            strcmp(out, "ok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "see abs1", out, sizeof(out)) ==
-                FR_OK &&
-            strcmp(out, "overlay code\n"
-                        "to abs1 with n [ if n < 0 [ -1 * n ] else [ n ] ]\n"
-                        "ok\n") == 0);
+  CHECK(
+      "see source if/else",
+      fr_repl_eval_line(&runtime,
+                        "abs1 is fn with n [ if n < 0 [ -1 * n ] else [ n ] ]",
+                        out, sizeof(out)) == FR_OK &&
+          strcmp(out, "ok\n") == 0 &&
+          fr_repl_eval_line(&runtime, "see abs1", out, sizeof(out)) == FR_OK &&
+          strcmp(out, "overlay code\n"
+                      "to abs1 with n [ if n < 0 [ -1 * n ] else [ n ] ]\n"
+                      "ok\n") == 0);
   /* Chained else if: a three-arm dispatch with a final else, the canonical
    * shape from T9b. Fresh install for the overlay-name budget. */
   CHECK("see source chained else if",
@@ -10117,50 +10333,96 @@ static void test_repl_see_source_form(void) {
                 "else [ 0 ] ]",
                 out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "see two", out, sizeof(out)) ==
-                FR_OK &&
+            fr_repl_eval_line(&runtime, "see two", out, sizeof(out)) == FR_OK &&
             strcmp(out, "overlay code\n"
                         "to two [ if false [ -1 ] else if true [ 1 ; 2 ] "
                         "else [ 0 ] ]\n"
                         "ok\n") == 0);
   /* Old recursive form still parses, and `see` canonicalizes it to the chained
-   * spelling per the T9b render decision. Two-level only to fit the 16-node
-   * expression cap. Fresh install for the budget. */
-  CHECK("see source recursive else collapses to chained",
-        fr_base_image_install(&runtime) == FR_OK &&
-            fr_repl_eval_line(
-                &runtime,
-                "pick is fn [ if false [ 1 ] else [ if true [ 2 ] "
-                "else [ 3 ] ] ]",
-                out, sizeof(out)) == FR_OK &&
-            strcmp(out, "ok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "see pick", out, sizeof(out)) ==
-                FR_OK &&
-            strcmp(out, "overlay code\n"
-                        "to pick [ if false [ 1 ] else if true [ 2 ] "
-                        "else [ 3 ] ]\n"
-                        "ok\n") == 0);
+   * spelling per the T9b render decision. Two-level only to keep the source
+   * compact. Fresh install for the budget. */
+  CHECK(
+      "see source recursive else collapses to chained",
+      fr_base_image_install(&runtime) == FR_OK &&
+          fr_repl_eval_line(&runtime,
+                            "pick is fn [ if false [ 1 ] else [ if true [ 2 ] "
+                            "else [ 3 ] ] ]",
+                            out, sizeof(out)) == FR_OK &&
+          strcmp(out, "ok\n") == 0 &&
+          fr_repl_eval_line(&runtime, "see pick", out, sizeof(out)) == FR_OK &&
+          strcmp(out, "overlay code\n"
+                      "to pick [ if false [ 1 ] else if true [ 2 ] "
+                      "else [ 3 ] ]\n"
+                      "ok\n") == 0);
   /* Locals render with canonical localN names regardless of the original source
    * names — local names are not persisted in T9b, mirroring the argN answer for
    * restored params (T10c). Fresh install for the overlay-name budget. */
   CHECK("see source with here local binding",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_repl_eval_line(&runtime,
-                              "g is fn [ here x is 5 ; x + 1 ]", out,
+            fr_repl_eval_line(&runtime, "g is fn [ here x is 5 ; x + 1 ]", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "see g", out, sizeof(out)) == FR_OK &&
             strcmp(out, "overlay code\n"
                         "to g [ here local0 is 5 ; local0 + 1 ]\n"
                         "ok\n") == 0);
+#if FR_FEATURE_CELLS
+  CHECK("see source dynamic cell read",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "readings is cells(3)", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "pick is fn with i [ readings[i] ]",
+                              out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see pick", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to pick with i [ readings[i] ]\n"
+                        "ok\n") == 0);
+  CHECK("see source dynamic cell write",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "readings is cells(3)", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime,
+                              "put is fn with i, v [ set readings[i] to v ]",
+                              out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see put", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to put with i, v [ set readings[i] to v ]\n"
+                        "ok\n") == 0);
+  CHECK("see source dynamic cell index loop",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "readings is cells(4)", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "i is 0", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "total is 0", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime,
+                              "avg is fn [ set i to 0; set total to 0; "
+                              "while i < 4 [ set total to total + readings[i]; "
+                              "set i to i + 1 ]; total / 4 ]",
+                              out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see avg", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "overlay code\n"
+                        "to avg [ set i to 0 ; set total to 0 ; while i < 4 [ "
+                        "set total to total + readings[i] ; set i to i + 1 ] ; "
+                        "total / 4 ]\n"
+                        "ok\n") == 0);
+#endif
   /* Fresh install: tiny's overlay-name budget only holds two words at once. A
    * real wait loop polls external state and so can end; spin on a pin read. */
   CHECK("see source while",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_repl_eval_line(
-                &runtime,
-                "wait is fn with p [ while gpio.read: p [ ms: 1 ] ]", out,
-                sizeof(out)) == FR_OK &&
+                &runtime, "wait is fn with p [ while gpio.read: p [ ms: 1 ] ]",
+                out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "see wait", out, sizeof(out)) ==
                 FR_OK &&

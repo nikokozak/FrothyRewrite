@@ -112,7 +112,7 @@ static fr_err_t fr_vm_store_slot(fr_runtime_t *runtime,
   FR_TRY(fr_slot_write(runtime, slot_id, tagged));
 
   state->ip += 3;
-  return FR_OK;
+  return fr_vm_push(state, fr_tagged_nil());
 }
 
 static fr_err_t fr_vm_push_int(const fr_instruction_stream_t *view,
@@ -210,6 +210,39 @@ static fr_err_t fr_vm_store_local(const fr_instruction_stream_t *view,
 }
 
 #if FR_FEATURE_CELLS
+static fr_err_t fr_vm_cell_object_for_slot(fr_runtime_t *runtime,
+                                           fr_slot_id_t slot_id,
+                                           fr_object_id_t *out_object_id) {
+  fr_tagged_t tagged = 0;
+
+  if (out_object_id == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
+  return fr_tagged_decode_object_id(tagged, out_object_id);
+}
+
+static fr_err_t fr_vm_pop_cell_index(fr_runtime_t *runtime,
+                                     fr_vm_state_t *state,
+                                     fr_object_id_t object_id,
+                                     uint16_t *out_index) {
+  fr_tagged_t tagged = 0;
+  fr_int_t raw_index = 0;
+  uint16_t length = 0;
+
+  if (out_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_vm_pop(state, &tagged));
+  FR_TRY(fr_tagged_decode_int(tagged, &raw_index));
+  FR_TRY(fr_cells_length(runtime, object_id, &length));
+  if (raw_index < 0 || (uint32_t)raw_index >= length) {
+    return FR_ERR_RANGE;
+  }
+  *out_index = (uint16_t)raw_index;
+  return FR_OK;
+}
+
 static fr_err_t fr_vm_load_cell(fr_runtime_t *runtime,
                                 const fr_instruction_stream_t *view,
                                 fr_vm_state_t *state) {
@@ -219,8 +252,7 @@ static fr_err_t fr_vm_load_cell(fr_runtime_t *runtime,
   fr_object_id_t object_id = 0;
 
   FR_TRY(fr_instruction_read_cell_operands(view, state->ip, &slot_id, &index));
-  FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
-  FR_TRY(fr_tagged_decode_object_id(tagged, &object_id));
+  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
   FR_TRY(fr_cells_read(runtime, object_id, index, &tagged));
 
   state->ip += 5;
@@ -232,17 +264,50 @@ static fr_err_t fr_vm_store_cell(fr_runtime_t *runtime,
                                  fr_vm_state_t *state) {
   fr_slot_id_t slot_id = 0;
   uint16_t index = 0;
-  fr_tagged_t tagged = 0;
   fr_tagged_t value = 0;
   fr_object_id_t object_id = 0;
 
   FR_TRY(fr_instruction_read_cell_operands(view, state->ip, &slot_id, &index));
   FR_TRY(fr_vm_pop(state, &value));
-  FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
-  FR_TRY(fr_tagged_decode_object_id(tagged, &object_id));
+  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
   FR_TRY(fr_cells_write(runtime, object_id, index, value));
 
   state->ip += 5;
+  return fr_vm_push(state, fr_tagged_nil());
+}
+
+static fr_err_t fr_vm_load_cell_dynamic(fr_runtime_t *runtime,
+                                        const fr_instruction_stream_t *view,
+                                        fr_vm_state_t *state) {
+  fr_slot_id_t slot_id = 0;
+  uint16_t index = 0;
+  fr_tagged_t tagged = 0;
+  fr_object_id_t object_id = 0;
+
+  FR_TRY(fr_instruction_read_slot_operand(view, state->ip, &slot_id));
+  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
+  FR_TRY(fr_vm_pop_cell_index(runtime, state, object_id, &index));
+  FR_TRY(fr_cells_read(runtime, object_id, index, &tagged));
+
+  state->ip += 3;
+  return fr_vm_push(state, tagged);
+}
+
+static fr_err_t fr_vm_store_cell_dynamic(fr_runtime_t *runtime,
+                                         const fr_instruction_stream_t *view,
+                                         fr_vm_state_t *state) {
+  fr_slot_id_t slot_id = 0;
+  uint16_t index = 0;
+  fr_tagged_t value = 0;
+  fr_object_id_t object_id = 0;
+
+  FR_TRY(fr_instruction_read_slot_operand(view, state->ip, &slot_id));
+  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
+  FR_TRY(fr_vm_pop_cell_index(runtime, state, object_id, &index));
+  FR_TRY(fr_vm_pop(state, &value));
+  FR_TRY(fr_cells_write(runtime, object_id, index, value));
+
+  state->ip += 3;
   return fr_vm_push(state, fr_tagged_nil());
 }
 #endif
@@ -622,9 +687,15 @@ static fr_err_t fr_vm_step(fr_runtime_t *runtime,
     return fr_vm_load_cell(runtime, view, state);
   case FR_OP_STORE_CELL:
     return fr_vm_store_cell(runtime, view, state);
+  case FR_OP_LOAD_CELL_DYNAMIC:
+    return fr_vm_load_cell_dynamic(runtime, view, state);
+  case FR_OP_STORE_CELL_DYNAMIC:
+    return fr_vm_store_cell_dynamic(runtime, view, state);
 #else
   case FR_OP_LOAD_CELL:
   case FR_OP_STORE_CELL:
+  case FR_OP_LOAD_CELL_DYNAMIC:
+  case FR_OP_STORE_CELL_DYNAMIC:
     return FR_ERR_UNSUPPORTED;
 #endif
 #if FR_FEATURE_RECORDS

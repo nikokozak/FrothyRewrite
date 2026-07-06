@@ -190,11 +190,42 @@ static fr_err_t fr_source_reduce_call(fr_source_render_t *r, const char *name,
     if (i > 0) {
       FR_TRY(fr_source_puts(r, ", "));
     }
-    FR_TRY(fr_source_puts(r, &fr_source_render_arena[r->stack[base + i].start]));
+    FR_TRY(
+        fr_source_puts(r, &fr_source_render_arena[r->stack[base + i].start]));
   }
   r->depth = base;
   return fr_source_seal(r, start, false);
 }
+
+static fr_err_t fr_source_write_slot_write(fr_source_render_t *r,
+                                           const char *name,
+                                           fr_source_frag_t value) {
+  FR_TRY(fr_source_puts(r, "set "));
+  FR_TRY(fr_source_puts(r, name));
+  FR_TRY(fr_source_puts(r, " to "));
+  return fr_source_puts(r, &fr_source_render_arena[value.start]);
+}
+
+#if FR_FEATURE_CELLS
+static fr_err_t fr_source_write_cell_read(fr_source_render_t *r,
+                                          const char *name,
+                                          fr_source_frag_t index) {
+  FR_TRY(fr_source_puts(r, name));
+  FR_TRY(fr_source_putc(r, '['));
+  FR_TRY(fr_source_puts(r, &fr_source_render_arena[index.start]));
+  return fr_source_putc(r, ']');
+}
+
+static fr_err_t fr_source_write_cell_write(fr_source_render_t *r,
+                                           const char *name,
+                                           fr_source_frag_t index,
+                                           fr_source_frag_t value) {
+  FR_TRY(fr_source_puts(r, "set "));
+  FR_TRY(fr_source_write_cell_read(r, name, index));
+  FR_TRY(fr_source_puts(r, " to "));
+  return fr_source_puts(r, &fr_source_render_arena[value.start]);
+}
+#endif
 
 static const char *fr_source_slot_name(fr_source_render_t *r,
                                        fr_slot_id_t slot_id) {
@@ -609,7 +640,8 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       const char *name = NULL;
 
       FR_TRY(fr_instruction_read_arg_operand(view, ip, &arg_index));
-      FR_TRY(fr_source_param_name_at(names, names_len, arg_index, canon, &name));
+      FR_TRY(
+          fr_source_param_name_at(names, names_len, arg_index, canon, &name));
       FR_TRY(fr_source_push_text(r, name));
       ip = (fr_code_offset_t)(ip + 2u);
       break;
@@ -627,6 +659,111 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       ip = (fr_code_offset_t)(ip + 3u);
       break;
     }
+    case FR_OP_STORE_SLOT: {
+      fr_slot_id_t slot_id = 0;
+      fr_source_frag_t value;
+      const char *name = NULL;
+      uint16_t start = r->used;
+
+      FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
+      name = fr_source_slot_name(r, slot_id);
+      if (name == NULL || r->depth < 1) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      value = r->stack[r->depth - 1];
+      r->depth = (uint8_t)(r->depth - 1u);
+      FR_TRY(fr_source_write_slot_write(r, name, value));
+      FR_TRY(fr_source_seal(r, start, false));
+      ip = (fr_code_offset_t)(ip + 3u);
+      break;
+    }
+#if FR_FEATURE_CELLS
+    case FR_OP_LOAD_CELL: {
+      fr_slot_id_t slot_id = 0;
+      uint16_t index_value = 0;
+      fr_source_frag_t index;
+      const char *name = NULL;
+      uint16_t start = 0;
+
+      FR_TRY(fr_instruction_read_cell_operands(view, ip, &slot_id,
+                                               &index_value));
+      name = fr_source_slot_name(r, slot_id);
+      if (name == NULL) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      FR_TRY(fr_source_push_int(r, (fr_int_t)index_value));
+      index = r->stack[r->depth - 1];
+      r->depth = (uint8_t)(r->depth - 1u);
+      start = r->used;
+      FR_TRY(fr_source_write_cell_read(r, name, index));
+      FR_TRY(fr_source_seal(r, start, false));
+      ip = (fr_code_offset_t)(ip + 5u);
+      break;
+    }
+    case FR_OP_STORE_CELL: {
+      fr_slot_id_t slot_id = 0;
+      uint16_t index_value = 0;
+      fr_source_frag_t index;
+      fr_source_frag_t value;
+      const char *name = NULL;
+      uint16_t start = 0;
+
+      FR_TRY(fr_instruction_read_cell_operands(view, ip, &slot_id,
+                                               &index_value));
+      name = fr_source_slot_name(r, slot_id);
+      if (name == NULL || r->depth < 1) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      value = r->stack[r->depth - 1];
+      r->depth = (uint8_t)(r->depth - 1u);
+      FR_TRY(fr_source_push_int(r, (fr_int_t)index_value));
+      index = r->stack[r->depth - 1];
+      r->depth = (uint8_t)(r->depth - 1u);
+      start = r->used;
+      FR_TRY(fr_source_write_cell_write(r, name, index, value));
+      FR_TRY(fr_source_seal(r, start, false));
+      ip = (fr_code_offset_t)(ip + 5u);
+      break;
+    }
+    case FR_OP_LOAD_CELL_DYNAMIC: {
+      fr_slot_id_t slot_id = 0;
+      fr_source_frag_t index;
+      const char *name = NULL;
+      uint16_t start = r->used;
+
+      FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
+      name = fr_source_slot_name(r, slot_id);
+      if (name == NULL || r->depth < 1) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      index = r->stack[r->depth - 1];
+      r->depth = (uint8_t)(r->depth - 1u);
+      FR_TRY(fr_source_write_cell_read(r, name, index));
+      FR_TRY(fr_source_seal(r, start, false));
+      ip = (fr_code_offset_t)(ip + 3u);
+      break;
+    }
+    case FR_OP_STORE_CELL_DYNAMIC: {
+      fr_slot_id_t slot_id = 0;
+      fr_source_frag_t index;
+      fr_source_frag_t value;
+      const char *name = NULL;
+      uint16_t start = r->used;
+
+      FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
+      name = fr_source_slot_name(r, slot_id);
+      if (name == NULL || r->depth < 2) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      index = r->stack[r->depth - 1];
+      value = r->stack[r->depth - 2];
+      r->depth = (uint8_t)(r->depth - 2u);
+      FR_TRY(fr_source_write_cell_write(r, name, index, value));
+      FR_TRY(fr_source_seal(r, start, false));
+      ip = (fr_code_offset_t)(ip + 3u);
+      break;
+    }
+#endif
     case FR_OP_LOAD_LOCAL: {
       uint8_t local_index = 0;
       /* canonical localN — local names are not persisted, mirroring

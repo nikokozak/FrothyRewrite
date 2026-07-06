@@ -3,7 +3,7 @@
 #include "tagged.h"
 
 enum {
-  FR_INSTRUCTION_FORMAT_VERSION = 0u,
+  FR_INSTRUCTION_FORMAT_VERSION = 1u,
   FR_INSTRUCTION_MIN_HEADER_SIZE = 2u,
   FR_INSTRUCTION_ARITY_HEADER_SIZE = 3u,
   FR_INSTRUCTION_LOCALS_HEADER_SIZE = 4u,
@@ -65,6 +65,8 @@ typedef enum fr_opcode_t {
   FR_OP_STORE_LOCAL = 0x20,
   FR_OP_PUSH_CODE_ID = 0x21,
   FR_OP_BYTES_RESET = 0x22,
+  FR_OP_LOAD_CELL_DYNAMIC = 0x23,
+  FR_OP_STORE_CELL_DYNAMIC = 0x24,
 } fr_opcode_t;
 
 fr_err_t fr_instruction_stream_init(fr_instruction_stream_t *view,

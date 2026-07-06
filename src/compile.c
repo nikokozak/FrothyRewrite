@@ -357,6 +357,14 @@ static fr_err_t fr_compile_emit_cell_op(uint8_t instruction_bytes[],
   FR_TRY(fr_compile_write_u16(instruction_bytes, offset, slot_id));
   return fr_compile_write_u16(instruction_bytes, offset, index);
 }
+
+static fr_err_t fr_compile_emit_dynamic_cell_op(uint8_t instruction_bytes[],
+                                                uint16_t *offset,
+                                                fr_opcode_t op,
+                                                fr_slot_id_t slot_id) {
+  FR_TRY(fr_compile_write_byte(instruction_bytes, offset, (uint8_t)op));
+  return fr_compile_write_u16(instruction_bytes, offset, slot_id);
+}
 #endif
 
 #if FR_FEATURE_RECORDS
@@ -1110,21 +1118,52 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
 #if FR_FEATURE_CELLS
   case FR_PARSE_EXPR_CELL_READ:
     FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CELLS));
-    FR_TRY(fr_compile_slot_for_name(ctx, expr->name, &slot_id));
-    FR_TRY(fr_compile_cell_index(expr->int_value, &cell_index));
-    return fr_compile_emit_cell_op(instruction_bytes, offset, FR_OP_LOAD_CELL,
-                                   slot_id, cell_index);
-  case FR_PARSE_EXPR_CELL_WRITE:
-    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CELLS));
     if (expr->child_count != 1) {
       return FR_ERR_INVALID;
     }
     FR_TRY(fr_compile_slot_for_name(ctx, expr->name, &slot_id));
-    FR_TRY(fr_compile_cell_index(expr->int_value, &cell_index));
-    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->child, instruction_bytes,
-                                offset));
-    return fr_compile_emit_cell_op(instruction_bytes, offset, FR_OP_STORE_CELL,
-                                   slot_id, cell_index);
+    {
+      const fr_parse_expr_t *index =
+          fr_compile_expr_at(parsed, expr->children[0]);
+      if (index == NULL) {
+        return FR_ERR_INVALID;
+      }
+      if (index->kind == FR_PARSE_EXPR_INT) {
+        FR_TRY(fr_compile_cell_index(index->int_value, &cell_index));
+        return fr_compile_emit_cell_op(instruction_bytes, offset,
+                                       FR_OP_LOAD_CELL, slot_id, cell_index);
+      }
+    }
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
+                                instruction_bytes, offset));
+    return fr_compile_emit_dynamic_cell_op(
+        instruction_bytes, offset, FR_OP_LOAD_CELL_DYNAMIC, slot_id);
+  case FR_PARSE_EXPR_CELL_WRITE:
+    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CELLS));
+    if (expr->child_count != 2) {
+      return FR_ERR_INVALID;
+    }
+    FR_TRY(fr_compile_slot_for_name(ctx, expr->name, &slot_id));
+    {
+      const fr_parse_expr_t *index =
+          fr_compile_expr_at(parsed, expr->children[0]);
+      if (index == NULL) {
+        return FR_ERR_INVALID;
+      }
+      if (index->kind == FR_PARSE_EXPR_INT) {
+        FR_TRY(fr_compile_cell_index(index->int_value, &cell_index));
+        FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[1],
+                                    instruction_bytes, offset));
+        return fr_compile_emit_cell_op(instruction_bytes, offset,
+                                       FR_OP_STORE_CELL, slot_id, cell_index);
+      }
+    }
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[1],
+                                instruction_bytes, offset));
+    FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
+                                instruction_bytes, offset));
+    return fr_compile_emit_dynamic_cell_op(
+        instruction_bytes, offset, FR_OP_STORE_CELL_DYNAMIC, slot_id);
 #else
   case FR_PARSE_EXPR_CELL_READ:
   case FR_PARSE_EXPR_CELL_WRITE:
