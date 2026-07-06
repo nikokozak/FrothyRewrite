@@ -13,6 +13,7 @@ enum {
 
 fr_err_t fr_platform_delay_ms(uint16_t ms);
 fr_err_t fr_platform_millis(uint32_t *out_ms);
+fr_err_t fr_platform_micros(uint32_t *out_us);
 /* Let the platform scheduler run without changing Frothy program state. */
 void fr_platform_yield(void);
 fr_err_t fr_platform_gpio_mode(uint16_t pin, uint16_t mode);

@@ -83,6 +83,27 @@ static fr_err_t fr_native_millis(fr_runtime_t *runtime, const fr_tagged_t *args,
   return fr_tagged_encode_int((int32_t)shown_ms, out);
 }
 
+static fr_err_t fr_native_micros(fr_runtime_t *runtime, const fr_tagged_t *args,
+                                 uint8_t arg_count, fr_tagged_t *out) {
+  uint32_t us = 0;
+  uint32_t shown_us = 0;
+
+  (void)runtime;
+  if (args == NULL && arg_count > 0) {
+    return FR_ERR_INVALID;
+  }
+  if (arg_count != 0) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_platform_micros(&us));
+  /* The tagged-int band is the user-visible clock ceiling: micros wraps after
+   * about 17.9 minutes on the 32-bit runtime. A modular delta across that wrap
+   * is still correct for short spans. */
+  shown_us = us % ((uint32_t)FR_TAGGED_INT_MAX + 1u);
+  return fr_tagged_encode_int((int32_t)shown_us, out);
+}
+
 static fr_err_t fr_native_gpio_mode(fr_runtime_t *runtime,
                                     const fr_tagged_t *args,
                                     uint8_t arg_count, fr_tagged_t *out) {
@@ -1848,6 +1869,13 @@ static const fr_native_signature_t fr_native_millis_signature = {
     .help = "read milliseconds since boot, wrapped to int range",
 };
 
+static const fr_native_signature_t fr_native_micros_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "read microseconds since boot, wrapped to int range",
+};
+
 #if FR_FEATURE_PAD
 static const fr_native_signature_t fr_native_nil_to_int_signature = {
     .params = NULL,
@@ -2620,6 +2648,18 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 0,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_millis_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_MICROS,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "micros",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_micros,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_micros_signature,
 #endif
     },
 #if FR_FEATURE_UART
