@@ -4843,6 +4843,24 @@ static void test_image(void) {
       .record_objects = point_record_objects,
       .record_object_count = 1,
   };
+  const fr_image_ref_t forward_record_field_values[] = {
+      {FR_IMAGE_REF_RECORD_OBJECT, 0, 1},
+      {FR_IMAGE_REF_LITERAL_TAGGED, two, 0},
+  };
+  const fr_image_record_object_t forward_record_objects[] = {
+      {.shape = {FR_IMAGE_REF_RECORD_SHAPE_OBJECT, 0, 0},
+       .field_values = forward_record_field_values,
+       .field_count = 2},
+      {.shape = {FR_IMAGE_REF_RECORD_SHAPE_OBJECT, 0, 0},
+       .field_values = point_record_values,
+       .field_count = 2},
+  };
+  const fr_overlay_update_t forward_record_ref_update = {
+      .record_shape_objects = point_record_shapes,
+      .record_shape_object_count = 1,
+      .record_objects = forward_record_objects,
+      .record_object_count = 2,
+  };
 #endif
   const fr_image_slot_init_t invalid_code_slots[] = {
       {FR_TEST_FIRST_USER_SLOT, {FR_IMAGE_REF_CODE_OBJECT, 0, 0}},
@@ -4977,6 +4995,9 @@ static void test_image(void) {
         fr_overlay_update_encode(&record_overlay_update, overlay_bytes,
                                  (uint16_t)sizeof(overlay_bytes),
                                  &overlay_length) == FR_ERR_UNSUPPORTED);
+  CHECK("overlay rejects forward record field ref",
+        fr_overlay_apply(&runtime, &forward_record_ref_update) ==
+            FR_ERR_NOT_FOUND);
 #endif
   CHECK("overlay update decode rejects bad magic",
         fr_overlay_update_encode(&overlay_update, overlay_bytes,
