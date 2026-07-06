@@ -107,19 +107,6 @@
 #define FR_FEATURE_BYTES 0
 #endif
 
-/*
- * 0 = guarded: VM operand reads keep all runtime structural guards.
- * 1 = trusted: VM hot-path operand reads skip per-operand structural guards.
- * Safe only because fr_verify_code_object gates every execution entry.
- */
-#ifndef FR_VM_TRUST
-#define FR_VM_TRUST 0
-#endif
-
-#if FR_VM_TRUST != 0 && FR_VM_TRUST != 1
-#error "FR_VM_TRUST must be 0 or 1"
-#endif
-
 #define FR_FEATURE_OBJECTS                                                   \
   (FR_FEATURE_CELLS || FR_FEATURE_TEXT || FR_FEATURE_RECORDS)
 
