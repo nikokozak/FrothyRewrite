@@ -11,12 +11,9 @@ typedef char fr_compile_assert_overlay_text_cap_fits_parse_body
          : -1];
 
 enum {
-  FR_COMPILE_MAX_INSTRUCTION_BYTES = FR_PROFILE_MAX_INSTRUCTION_BYTES,
-  /* One function's packed param names: every arg at max token length plus its
-   * NUL. The runtime pool is a shared cache, but this scratch holds one
-   * signature, so it must fit the largest legal one or compile would reject it. */
-  FR_COMPILE_MAX_PARAM_NAME_BYTES =
-      FR_PARSE_MAX_PARAMS * (FR_PARSE_MAX_TOKEN_BYTES + 1),
+  FR_COMPILE_MAX_INSTRUCTION_BYTES =
+      FR_PROFILE_MAX_DEFINITION_INSTRUCTION_BYTES,
+  FR_COMPILE_MAX_PARAM_NAME_BYTES = FR_PROFILE_MAX_OVERLAY_PARAM_NAME_BYTES,
 };
 
 typedef struct fr_compile_overlay_update_t {
@@ -27,7 +24,8 @@ typedef struct fr_compile_overlay_update_t {
    * function gets index 0 in the overlay update; the event body, when
    * present, gets index 1. PUSH_CODE_ID resolves through that ordering. */
   fr_image_code_object_t event_body_object;
-  fr_image_code_object_t code_objects_storage[2];
+  fr_image_code_object_t
+      code_objects_storage[FR_PROFILE_MAX_DEFINITION_CODE_OBJECTS];
   fr_image_cell_object_t cell_object;
   fr_image_text_object_t text_object;
   fr_image_text_object_t
@@ -42,12 +40,11 @@ typedef struct fr_compile_overlay_update_t {
   uint8_t text_bytes[FR_PROFILE_MAX_TEXT_LENGTH > 0
                          ? FR_PROFILE_MAX_TEXT_LENGTH
                          : 1];
-  /* Scratch for text bytes collected from one line, either record-field
+  uint16_t
+      definition_text_offsets[FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS];
+  /* Scratch for text bytes collected from one definition, either record-field
    * defaults or function-body literals. Both paths feed text_objects[]. */
-  uint8_t body_text_bytes[FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS]
-                         [FR_PROFILE_MAX_TEXT_LENGTH > 0
-                              ? FR_PROFILE_MAX_TEXT_LENGTH
-                              : 1];
+  uint8_t definition_text_bytes[FR_PROFILE_MAX_DEFINITION_TEXT_BYTES];
   char record_name_text[FR_PROFILE_MAX_NAME_BYTES + 1];
   char record_field_name_text[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY]
                              [FR_PROFILE_MAX_NAME_BYTES + 1];
@@ -78,6 +75,8 @@ fr_err_t fr_compile_overlay_update_for_runtime(fr_runtime_t *runtime,
 fr_err_t fr_compile_overlay_update_for_runtime_with_diagnostic(
     fr_runtime_t *runtime, const char *source, fr_compile_overlay_update_t *out,
     fr_diagnostic_t *diag);
+fr_compile_overlay_update_t *fr_compile_overlay_workspace_acquire(void);
+void fr_compile_overlay_workspace_release(fr_compile_overlay_update_t *workspace);
 /* Compile one runtime-only binding, such as a call result assigned by `is`. */
 fr_err_t fr_compile_value_binding_for_runtime(
     fr_runtime_t *runtime, const char *source, fr_compile_value_binding_t *out);

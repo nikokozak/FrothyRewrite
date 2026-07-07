@@ -481,7 +481,9 @@ static fr_err_t fr_persist_encode_code_ref(
     fr_persist_object_record_kind_t object_kinds[], uint16_t *object_count,
     uint16_t *out_local_id) {
   fr_instruction_stream_t instructions;
-  uint8_t patched[FR_PROFILE_MAX_INSTRUCTION_BYTES];
+  /* Restore/save-path buffer holds one whole-image code object, which can be
+   * larger than a single device-compiled definition; size off the image cap. */
+  uint8_t patched[FR_PROFILE_TOTAL_IMAGE_BYTES];
   fr_instruction_stream_t view;
   fr_instruction_header_t header = {0};
   fr_code_offset_t ip = 0;
@@ -2625,7 +2627,9 @@ fr_persist_install_resources(fr_runtime_t *runtime,
   }
   for (uint16_t i = 0; i < code_count; i++) {
     fr_instruction_stream_t instructions;
-    uint8_t patched[FR_PROFILE_MAX_INSTRUCTION_BYTES];
+    /* Whole-image code object during restore; size off the image cap, not the
+     * per-definition cap (they diverge once the storage split lands). */
+    uint8_t patched[FR_PROFILE_TOTAL_IMAGE_BYTES];
     fr_instruction_header_t header = {0};
     fr_code_offset_t ip = 0;
     char scratch[64];

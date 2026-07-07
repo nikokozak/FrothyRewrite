@@ -1280,6 +1280,13 @@ static void test_slots(void) {
   CHECK("runtime reports slot limit", limits.max_slots == FR_PROFILE_MAX_SLOTS);
   CHECK("runtime reports instruction bytes",
         limits.max_instruction_bytes == FR_PROFILE_MAX_INSTRUCTION_BYTES);
+  CHECK("runtime reports definition instruction bytes",
+        limits.max_definition_instruction_bytes ==
+            FR_PROFILE_MAX_DEFINITION_INSTRUCTION_BYTES);
+  CHECK("runtime reports definition text bytes",
+        limits.max_definition_text_bytes == FR_PROFILE_MAX_DEFINITION_TEXT_BYTES);
+  CHECK("runtime reports source render bytes",
+        limits.max_source_render_bytes == FR_PROFILE_MAX_SOURCE_RENDER_BYTES);
   CHECK("runtime reports code objects",
         limits.max_code_objects == FR_PROFILE_CODE_OBJECT_TABLE_SIZE);
   CHECK("runtime reports native slots",
@@ -5532,6 +5539,61 @@ static bool test_make_param_overflow_line(char *out, size_t cap) {
   return test_append_source(out, cap, &used, " [ p0 ]");
 }
 
+#if FR_FEATURE_RECORDS && FR_PROFILE_MAX_DEFINITION_INSTRUCTION_BYTES == 512 && \
+    FR_PROFILE_MAX_NAME_BYTES >= 48
+static bool test_make_definition_instruction_cap_line(char *out, size_t cap,
+                                                     bool one_over) {
+  size_t used = 0;
+
+  if (!test_append_source(out, cap, &used, "wide is fn [ ")) {
+    return false;
+  }
+  for (uint16_t i = 0; i < 10; i++) {
+    uint16_t field_len = i == 9 ? 48 : 44;
+
+    if (!test_append_source(out, cap, &used, "boot -> ")) {
+      return false;
+    }
+    for (uint16_t j = 0; j < field_len; j++) {
+      if (used + 1 >= cap) {
+        return false;
+      }
+      out[used++] = 'f';
+      out[used] = '\0';
+    }
+    if (!test_append_source(out, cap, &used, "; ")) {
+      return false;
+    }
+  }
+  if (!test_append_source(out, cap, &used, "1")) {
+    return false;
+  }
+  if (one_over && !test_append_source(out, cap, &used, "; 1")) {
+    return false;
+  }
+  return test_append_source(out, cap, &used, " ]");
+}
+#endif
+
+#if FR_FEATURE_TEXT
+static bool test_make_definition_text_cap_line(char *out, size_t cap,
+                                               uint16_t text_bytes) {
+  size_t used = 0;
+
+  if (!test_append_source(out, cap, &used, "text_cap is fn [ \"")) {
+    return false;
+  }
+  for (uint16_t i = 0; i < text_bytes; i++) {
+    if (used + 1 >= cap) {
+      return false;
+    }
+    out[used++] = 't';
+    out[used] = '\0';
+  }
+  return test_append_source(out, cap, &used, "\" ]");
+}
+#endif
+
 static void test_parse(void) {
   fr_parse_line_t parsed;
   fr_parse_expr_id_t expr_id = 0;
@@ -6503,6 +6565,22 @@ static void test_compile(void) {
   CHECK("compile without runtime rejects dynamic definition",
         fr_compile_overlay_update("led is $led_builtin", &update) ==
             FR_ERR_NOT_FOUND);
+#if FR_FEATURE_RECORDS && FR_PROFILE_MAX_DEFINITION_INSTRUCTION_BYTES == 512 && \
+    FR_PROFILE_MAX_NAME_BYTES >= 48
+  CHECK("compile accepts definition at instruction cap",
+        test_make_definition_instruction_cap_line(cap_line, sizeof(cap_line),
+                                                  false) &&
+            fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(&runtime, cap_line,
+                                                  &update) == FR_OK &&
+            update.code_object.instructions.length ==
+                FR_PROFILE_MAX_DEFINITION_INSTRUCTION_BYTES);
+  CHECK("compile rejects definition over instruction cap",
+        test_make_definition_instruction_cap_line(cap_line, sizeof(cap_line),
+                                                  true) &&
+            fr_compile_overlay_update_for_runtime(&runtime, cap_line,
+                                                  &update) == FR_ERR_CAPACITY);
+#endif
   CHECK("compile runtime overlay name",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
@@ -6552,6 +6630,22 @@ static void test_compile(void) {
             fr_text_view(&text_runtime, object_id, &text_bytes, &text_length) ==
                 FR_OK &&
             text_length == 9 && memcmp(text_bytes, "a\tb\nc\r\"\\!", 9) == 0);
+  CHECK("compile accepts definition text at cap",
+        test_make_definition_text_cap_line(
+            cap_line, sizeof(cap_line), FR_PROFILE_MAX_DEFINITION_TEXT_BYTES) &&
+            fr_compile_overlay_update_for_runtime(&text_runtime, cap_line,
+                                                  &update) == FR_OK &&
+            update.overlay_update.text_object_count == 1 &&
+            update.text_objects[0].length ==
+                FR_PROFILE_MAX_DEFINITION_TEXT_BYTES);
+#if FR_PROFILE_MAX_DEFINITION_TEXT_BYTES < FR_PROFILE_MAX_TEXT_LENGTH
+  CHECK("compile rejects definition text over cap",
+        test_make_definition_text_cap_line(
+            cap_line, sizeof(cap_line),
+            (uint16_t)(FR_PROFILE_MAX_DEFINITION_TEXT_BYTES + 1u)) &&
+            fr_compile_overlay_update_for_runtime(&text_runtime, cap_line,
+                                                  &update) == FR_ERR_RANGE);
+#endif
   CHECK("compile text expression pushes object id",
         fr_compile_expression_for_runtime(&text_runtime, "\"ready\"",
                                           &expression) == FR_OK &&
@@ -9910,6 +10004,9 @@ static void test_repl(void) {
             strstr(out, " interrupt=") != NULL &&
             strstr(out, fr_profile_interrupt_mode()) != NULL &&
             strstr(out, " apply_bytes=") != NULL &&
+            strstr(out, " definition_code_bytes=") != NULL &&
+            strstr(out, " definition_text_bytes=") != NULL &&
+            strstr(out, " source_render_bytes=") != NULL &&
             strstr(out, "\nok\n") != NULL);
   CHECK("repl trims status command",
         fr_repl_eval_line(&runtime, " \tstatus \t", out, sizeof(out)) ==
@@ -11544,6 +11641,20 @@ static void test_repl_zero_arg_call_result(void) {
 }
 #endif
 
+#if FR_FEATURE_COMPILER && FR_FEATURE_REPL && FR_BASE_IMAGE_INCLUDE_SYMBOLS
+static void test_repl_compile_after_base_install(void) {
+  fr_runtime_t runtime;
+  char out[64];
+
+  CHECK("shared compile workspace installs base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("shared compile workspace serves repl after base install",
+        fr_repl_eval_line(&runtime, "after_base is fn [ one ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+}
+#endif
+
 #if FR_FEATURE_COMPILER && FR_FEATURE_PERSISTENCE && FR_BASE_IMAGE_INCLUDE_SYMBOLS
 static void test_dangerous_wipe_bare_word(void) {
   fr_runtime_t runtime;
@@ -11725,6 +11836,9 @@ int main(void) {
   test_repl_transcript();
 #if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS
   test_repl_zero_arg_call_result();
+#endif
+#if FR_FEATURE_COMPILER && FR_FEATURE_REPL && FR_BASE_IMAGE_INCLUDE_SYMBOLS
+  test_repl_compile_after_base_install();
 #endif
 #if FR_FEATURE_COMPILER && FR_FEATURE_PERSISTENCE && FR_BASE_IMAGE_INCLUDE_SYMBOLS
   test_dangerous_wipe_bare_word();

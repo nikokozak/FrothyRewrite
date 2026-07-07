@@ -29,14 +29,6 @@ typedef struct {
 static fr_source_base_record_t fr_source_base_records[FR_SOURCE_BASE_RECORD_MAX];
 static uint16_t fr_source_base_slot_count;
 
-/* T15-hwfix: fr_compile_overlay_update_t embeds profile-sized text buffers
- * (one max-text + 8 body texts). On esp32_plain with FR_PROFILE_MAX_TEXT_LENGTH
- * = 4096, putting it on app_main's 24KB task stack overflows. Heap-allocate
- * a single scratch the first time it's needed and reuse it across boot's
- * many per-line compiles. Single-threaded boot path; never freed (intent:
- * use it from REPL paths too in a future tightening). */
-static fr_compile_overlay_update_t *fr_source_base_compile_scratch;
-
 void fr_base_source_record_reset(void) { fr_source_base_slot_count = 0; }
 
 fr_err_t fr_base_source_record_add(fr_slot_id_t slot_id, const char *name) {
@@ -104,23 +96,30 @@ fr_err_t fr_base_source_record_slot_id_at(uint16_t index,
 
 static fr_err_t fr_base_compile_source_line(fr_runtime_t *runtime,
                                             const char *line) {
-  if (fr_source_base_compile_scratch == NULL) {
-    fr_source_base_compile_scratch =
-        (fr_compile_overlay_update_t *)malloc(sizeof(*fr_source_base_compile_scratch));
-    if (fr_source_base_compile_scratch == NULL) {
-      return FR_ERR_CAPACITY;
-    }
-  }
-  fr_compile_overlay_update_t *compiled = fr_source_base_compile_scratch;
+  fr_compile_overlay_update_t *compiled =
+      fr_compile_overlay_workspace_acquire();
+  fr_err_t err = FR_OK;
+  fr_slot_id_t slot_id = 0;
 
-  FR_TRY(fr_compile_overlay_update_for_runtime(runtime, line, compiled));
-  if (compiled->overlay_update.slot_init_count != 1 ||
-      compiled->overlay_update.slot_name_count != 1) {
-    return FR_ERR_INVALID;
+  if (compiled == NULL) {
+    return FR_ERR_CAPACITY;
   }
-  fr_slot_id_t slot_id = compiled->overlay_update.slot_inits[0].slot_id;
-  FR_TRY(fr_overlay_apply_base(runtime, &compiled->overlay_update));
-  return fr_base_source_record_add(slot_id, compiled->slot_name.name);
+
+  err = fr_compile_overlay_update_for_runtime(runtime, line, compiled);
+  if (err == FR_OK &&
+      (compiled->overlay_update.slot_init_count != 1 ||
+       compiled->overlay_update.slot_name_count != 1)) {
+    err = FR_ERR_INVALID;
+  }
+  if (err == FR_OK) {
+    slot_id = compiled->overlay_update.slot_inits[0].slot_id;
+    err = fr_overlay_apply_base(runtime, &compiled->overlay_update);
+  }
+  if (err == FR_OK) {
+    err = fr_base_source_record_add(slot_id, compiled->slot_name.name);
+  }
+  fr_compile_overlay_workspace_release(compiled);
+  return err;
 }
 
 /* Compile base/core.frothy one definition per line into base bindings. */

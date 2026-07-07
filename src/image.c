@@ -1299,21 +1299,31 @@ fr_err_t fr_overlay_update_encode(const fr_overlay_update_t *update,
   }
 
 #if FR_FEATURE_TEXT
-  for (uint16_t i = 0; i < records.text_object_count; i++) {
-    const fr_image_text_object_t *text = &records.text_objects[i];
+  {
+    uint32_t text_bytes_after = 0;
 
-    if (text->length > FR_PROFILE_MAX_TEXT_LENGTH) {
-      return FR_ERR_RANGE;
-    }
-    if (text->length > 0 && text->bytes == NULL) {
-      return FR_ERR_INVALID;
-    }
-    FR_TRY(fr_overlay_update_writer_u8(&writer,
-                                       FR_OVERLAY_UPDATE_RECORD_TEXT));
-    FR_TRY(fr_overlay_update_writer_u16(&writer, i));
-    FR_TRY(fr_overlay_update_writer_u16(&writer, text->length));
-    if (text->length > 0) {
-      FR_TRY(fr_overlay_update_writer_bytes(&writer, text->bytes, text->length));
+    for (uint16_t i = 0; i < records.text_object_count; i++) {
+      const fr_image_text_object_t *text = &records.text_objects[i];
+
+      if (text->length > FR_PROFILE_MAX_TEXT_LENGTH) {
+        return FR_ERR_RANGE;
+      }
+      if (text_bytes_after + text->length >
+          FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_BYTES) {
+        return FR_ERR_CAPACITY;
+      }
+      text_bytes_after += text->length;
+      if (text->length > 0 && text->bytes == NULL) {
+        return FR_ERR_INVALID;
+      }
+      FR_TRY(fr_overlay_update_writer_u8(&writer,
+                                         FR_OVERLAY_UPDATE_RECORD_TEXT));
+      FR_TRY(fr_overlay_update_writer_u16(&writer, i));
+      FR_TRY(fr_overlay_update_writer_u16(&writer, text->length));
+      if (text->length > 0) {
+        FR_TRY(
+            fr_overlay_update_writer_bytes(&writer, text->bytes, text->length));
+      }
     }
   }
 #endif

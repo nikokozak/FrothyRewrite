@@ -134,6 +134,10 @@ fr_runtime_limits_t fr_runtime_get_limits(void) {
   return (fr_runtime_limits_t){
       .max_slots = FR_PROFILE_MAX_SLOTS,
       .max_instruction_bytes = FR_PROFILE_MAX_INSTRUCTION_BYTES,
+      .max_definition_instruction_bytes =
+          FR_PROFILE_MAX_DEFINITION_INSTRUCTION_BYTES,
+      .max_definition_text_bytes = FR_PROFILE_MAX_DEFINITION_TEXT_BYTES,
+      .max_source_render_bytes = FR_PROFILE_MAX_SOURCE_RENDER_BYTES,
       .max_code_objects = FR_PROFILE_CODE_OBJECT_TABLE_SIZE,
       .max_natives = FR_PROFILE_NATIVE_TABLE_SIZE,
       .max_handles = FR_PROFILE_MAX_HANDLES,
