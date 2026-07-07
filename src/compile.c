@@ -17,10 +17,12 @@
  * caller is a bare expression that installs its own text now. */
 typedef struct fr_compile_body_texts_t {
   fr_image_text_object_t *objects;
-  uint8_t (*storage)[FR_PROFILE_MAX_TEXT_LENGTH > 0 ? FR_PROFILE_MAX_TEXT_LENGTH
-                                                    : 1];
-  uint16_t capacity;
+  uint8_t *storage;
+  uint16_t *offsets;
+  uint16_t object_capacity;
+  uint16_t storage_capacity;
   uint16_t count;
+  uint16_t used;
 } fr_compile_body_texts_t;
 
 typedef struct fr_compile_local_t {
@@ -64,6 +66,26 @@ typedef enum fr_compile_source_feature_t {
   FR_COMPILE_SOURCE_RECORDS,
   FR_COMPILE_SOURCE_EVENTS,
 } fr_compile_source_feature_t;
+
+/* ponytail: one compile at a time; add per-task workspaces if background
+ * compiles ever run concurrently. */
+static fr_compile_overlay_update_t fr_compile_shared_overlay_workspace;
+static bool fr_compile_shared_overlay_workspace_in_use;
+
+fr_compile_overlay_update_t *fr_compile_overlay_workspace_acquire(void) {
+  if (fr_compile_shared_overlay_workspace_in_use) {
+    return NULL;
+  }
+  fr_compile_shared_overlay_workspace_in_use = true;
+  return &fr_compile_shared_overlay_workspace;
+}
+
+void fr_compile_overlay_workspace_release(
+    fr_compile_overlay_update_t *workspace) {
+  if (workspace == &fr_compile_shared_overlay_workspace) {
+    fr_compile_shared_overlay_workspace_in_use = false;
+  }
+}
 
 static fr_err_t
 fr_compile_require_source_feature(fr_compile_source_feature_t feature) {
@@ -539,6 +561,36 @@ static fr_err_t fr_compile_copy_text_literal(const fr_parse_expr_t *expr,
   return FR_OK;
 }
 
+static fr_err_t fr_compile_body_texts_add(fr_compile_body_texts_t *bt,
+                                          const fr_parse_expr_t *expr,
+                                          fr_object_id_t *out_object_id) {
+  uint16_t offset = 0;
+  uint16_t copied_length = 0;
+
+  if (bt == NULL || expr == NULL || out_object_id == NULL ||
+      bt->objects == NULL || bt->storage == NULL || bt->offsets == NULL ||
+      bt->storage_capacity == 0) {
+    return FR_ERR_INVALID;
+  }
+  if (bt->count >= bt->object_capacity || bt->used > bt->storage_capacity) {
+    return FR_ERR_RANGE;
+  }
+
+  offset = bt->used;
+  FR_TRY(fr_compile_copy_text_literal(
+      expr, &bt->storage[offset], (uint16_t)(bt->storage_capacity - offset),
+      &copied_length));
+  bt->offsets[bt->count] = offset;
+  bt->objects[bt->count] = (fr_image_text_object_t){
+      .bytes = copied_length > 0 ? &bt->storage[offset] : NULL,
+      .length = copied_length,
+  };
+  *out_object_id = (fr_object_id_t)bt->count;
+  bt->count = (uint16_t)(bt->count + 1);
+  bt->used = (uint16_t)(bt->used + copied_length);
+  return FR_OK;
+}
+
 /* Bare expressions install the text now and emit the live runtime id. Function
  * bodies stash bytes in the overlay update's text_objects[] and emit the local
  * index; apply patches each operand to the runtime id before code install, so
@@ -564,20 +616,8 @@ static fr_err_t fr_compile_emit_text_literal(const fr_compile_context_t *ctx,
   }
   if (ctx->body_texts != NULL) {
     fr_compile_body_texts_t *bt = ctx->body_texts;
-    uint16_t copied_length = 0;
 
-    if (bt->count >= bt->capacity) {
-      return FR_ERR_RANGE;
-    }
-    FR_TRY(fr_compile_copy_text_literal(
-        expr, bt->storage[bt->count], FR_PROFILE_MAX_TEXT_LENGTH,
-        &copied_length));
-    bt->objects[bt->count] = (fr_image_text_object_t){
-        .bytes = bt->storage[bt->count],
-        .length = copied_length,
-    };
-    object_id = (fr_object_id_t)bt->count;
-    bt->count = (uint16_t)(bt->count + 1);
+    FR_TRY(fr_compile_body_texts_add(bt, expr, &object_id));
     return fr_compile_emit_push_object_id(instruction_bytes, offset, object_id);
   }
   if (ctx->runtime == NULL) {
@@ -1533,22 +1573,28 @@ static fr_err_t fr_compile_record_field_ref(
     return FR_ERR_INVALID;
   }
   if (expr->kind == FR_PARSE_EXPR_TEXT) {
-    uint16_t copied_length = 0;
+    fr_compile_body_texts_t texts = {
+        .objects = out->text_objects,
+        .storage = out->definition_text_bytes,
+        .offsets = out->definition_text_offsets,
+        .object_capacity = FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS,
+        .storage_capacity = FR_PROFILE_MAX_DEFINITION_TEXT_BYTES,
+        .count = *text_count,
+        .used = 0,
+    };
+    fr_object_id_t object_id = 0;
 
-    if (*text_count >= FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS ||
-        (!expr->text_has_escapes &&
-         expr->text.length > FR_PROFILE_MAX_TEXT_LENGTH)) {
+    for (uint16_t i = 0; i < *text_count; i++) {
+      texts.used = (uint16_t)(texts.used + out->text_objects[i].length);
+    }
+
+    if (!expr->text_has_escapes &&
+        expr->text.length > FR_PROFILE_MAX_TEXT_LENGTH) {
       return FR_ERR_RANGE;
     }
-    FR_TRY(fr_compile_copy_text_literal(
-        expr, out->body_text_bytes[*text_count], FR_PROFILE_MAX_TEXT_LENGTH,
-        &copied_length));
-    out->text_objects[*text_count] = (fr_image_text_object_t){
-        .bytes = out->body_text_bytes[*text_count],
-        .length = copied_length,
-    };
+    FR_TRY(fr_compile_body_texts_add(&texts, expr, &object_id));
     *out_ref =
-        (fr_image_ref_t){FR_IMAGE_REF_TEXT_OBJECT, 0, *text_count};
+        (fr_image_ref_t){FR_IMAGE_REF_TEXT_OBJECT, 0, object_id};
     *text_count = (uint16_t)(*text_count + 1);
     return FR_OK;
   }
@@ -1623,9 +1669,12 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
   fr_compile_context_t body_ctx = {0};
   fr_compile_body_texts_t body_texts = {
       .objects = out->text_objects,
-      .storage = out->body_text_bytes,
-      .capacity = FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS,
+      .storage = out->definition_text_bytes,
+      .offsets = out->definition_text_offsets,
+      .object_capacity = FR_PROFILE_MAX_OVERLAY_UPDATE_TEXT_OBJECTS,
+      .storage_capacity = FR_PROFILE_MAX_DEFINITION_TEXT_BYTES,
       .count = 0,
+      .used = 0,
   };
   fr_compile_locals_t locals = {0};
   fr_compile_event_body_t event_body = {

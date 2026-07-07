@@ -567,6 +567,30 @@ static fr_err_t fr_repl_write_status(const fr_repl_writer_t *writer) {
                              FR_REPL_APPLY_BYTES));
     FR_TRY(fr_repl_writer_write(writer, apply_bytes));
   }
+  FR_TRY(fr_repl_writer_write(writer, " definition_code_bytes="));
+  {
+    char bytes[6];
+
+    FR_TRY(fr_repl_write_u16(bytes, (uint16_t)sizeof(bytes),
+                             FR_PROFILE_MAX_DEFINITION_INSTRUCTION_BYTES));
+    FR_TRY(fr_repl_writer_write(writer, bytes));
+  }
+  FR_TRY(fr_repl_writer_write(writer, " definition_text_bytes="));
+  {
+    char bytes[6];
+
+    FR_TRY(fr_repl_write_u16(bytes, (uint16_t)sizeof(bytes),
+                             FR_PROFILE_MAX_DEFINITION_TEXT_BYTES));
+    FR_TRY(fr_repl_writer_write(writer, bytes));
+  }
+  FR_TRY(fr_repl_writer_write(writer, " source_render_bytes="));
+  {
+    char bytes[6];
+
+    FR_TRY(fr_repl_write_u16(bytes, (uint16_t)sizeof(bytes),
+                             FR_PROFILE_MAX_SOURCE_RENDER_BYTES));
+    FR_TRY(fr_repl_writer_write(writer, bytes));
+  }
   return fr_repl_writer_write(writer, "\nok\n");
 }
 
@@ -1872,30 +1896,35 @@ static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
 
 #if FR_FEATURE_COMPILER
   {
-    /* T15-hwfix: static rather than automatic — fr_compile_overlay_update_t
-     * embeds profile-sized text buffers (FR_PROFILE_MAX_TEXT_LENGTH + 8 body
-     * buffers); on esp32_plain that's ~36KB which overflows the REPL task
-     * stack. The REPL processes one line at a time on a single task, so
-     * static storage is safe. */
-    static fr_compile_overlay_update_t compiled;
-    memset(&compiled, 0, sizeof(compiled));
+    fr_compile_overlay_update_t *compiled =
+        fr_compile_overlay_workspace_acquire();
     if (diag != NULL) {
       *diag = (fr_diagnostic_t){0};
     }
+    if (compiled == NULL) {
+      return FR_ERR_CAPACITY;
+    }
     fr_err_t err = fr_compile_overlay_update_for_runtime_with_diagnostic(
-        runtime, line, &compiled, diag);
+        runtime, line, compiled, diag);
 
     if (err == FR_OK) {
-      FR_TRY(fr_overlay_apply(runtime, &compiled.overlay_update));
+      err = fr_overlay_apply(runtime, &compiled->overlay_update);
 #if FR_FEATURE_PERSISTENCE
-      fr_persist_session_install_tier_stamp_overlay(runtime,
-                                                    &compiled.overlay_update);
-      if (runtime->install_tier == FR_INSTALL_TIER_LIBRARY) {
-        FR_TRY(fr_persist_save_full(runtime));
+      if (err == FR_OK) {
+        fr_persist_session_install_tier_stamp_overlay(
+            runtime, &compiled->overlay_update);
+        if (runtime->install_tier == FR_INSTALL_TIER_LIBRARY) {
+          err = fr_persist_save_full(runtime);
+        }
       }
 #endif
-      return fr_repl_writer_write(writer, "ok\n");
+      if (err == FR_OK) {
+        err = fr_repl_writer_write(writer, "ok\n");
+      }
+      fr_compile_overlay_workspace_release(compiled);
+      return err;
     }
+    fr_compile_overlay_workspace_release(compiled);
     if (err == FR_ERR_UNSUPPORTED) {
       fr_compile_value_binding_t binding = {0};
       fr_err_t bind_err = FR_OK;

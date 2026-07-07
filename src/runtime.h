@@ -14,6 +14,9 @@
 typedef struct fr_runtime_limits_t {
   uint16_t max_slots;
   uint16_t max_instruction_bytes;
+  uint16_t max_definition_instruction_bytes;
+  uint16_t max_definition_text_bytes;
+  uint16_t max_source_render_bytes;
   uint16_t max_code_objects;
   uint16_t max_natives;
   uint16_t max_handles;

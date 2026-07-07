@@ -21,7 +21,7 @@
 
 /* Single-shot scratch: see finishes before the next REPL line, the same
  * lifetime the apply/run wire buffers in repl.c rely on. */
-static char fr_source_render_arena[FR_PROFILE_SOURCE_RENDER_BYTES];
+static char fr_source_render_arena[FR_PROFILE_MAX_SOURCE_RENDER_BYTES];
 
 typedef struct fr_source_frag_t {
   uint16_t start;     /* offset of a NUL-terminated string in the arena */
