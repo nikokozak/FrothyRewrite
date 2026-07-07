@@ -154,6 +154,9 @@ struct fr_runtime_t {
      entry; install-library / install-user REPL commands flip it; the persist
      encoder reads it when stamping new overlay records. */
   fr_install_tier_t install_tier;
+  /* Borrowed for one REPL eval so VM/native faults can fill the same
+     diagnostic object parse and compile already use. */
+  fr_diagnostic_t *diag;
 };
 
 fr_err_t fr_runtime_init(fr_runtime_t *runtime);

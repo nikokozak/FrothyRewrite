@@ -5,6 +5,26 @@
 
 #include <string.h>
 
+static fr_diag_value_kind_t
+fr_native_value_diag_kind(fr_native_value_kind_t kind) {
+  switch (kind) {
+  case FR_NATIVE_VALUE_ANY:
+    return FR_DIAG_VALUE_ANY;
+  case FR_NATIVE_VALUE_INT:
+    return FR_DIAG_VALUE_INT;
+  case FR_NATIVE_VALUE_HANDLE:
+    return FR_DIAG_VALUE_HANDLE;
+  case FR_NATIVE_VALUE_NIL:
+    return FR_DIAG_VALUE_NIL;
+  case FR_NATIVE_VALUE_TEXT:
+    return FR_DIAG_VALUE_TEXT;
+  case FR_NATIVE_VALUE_TEXT_OR_BYTES:
+    return FR_DIAG_VALUE_TEXT_OR_BYTES;
+  default:
+    return FR_DIAG_VALUE_NONE;
+  }
+}
+
 void fr_native_reset(fr_runtime_t *runtime) {
   if (runtime == NULL) {
     return;
@@ -113,6 +133,48 @@ fr_native_signature_check(const fr_native_signature_t *signature,
 }
 #endif
 
+static bool fr_native_diag_empty(const fr_runtime_t *runtime) {
+  return runtime != NULL && runtime->diag != NULL &&
+         runtime->diag->kind == FR_DIAG_NONE;
+}
+
+static const char *fr_native_diag_context_name(fr_diagnostic_t *diag,
+                                               const char *context_name) {
+  uint16_t length = 0;
+
+  if (diag == NULL) {
+    return "native";
+  }
+  if (context_name == NULL) {
+    return "native";
+  }
+  while (context_name[length] != '\0') {
+    if (length >= FR_PROFILE_PARSE_MAX_TOKEN_BYTES) {
+      return "native";
+    }
+    length = (uint16_t)(length + 1);
+  }
+  memcpy(diag->suggestion_text, context_name, length);
+  diag->suggestion_text[length] = '\0';
+  return diag->suggestion_text;
+}
+
+static void fr_native_note_arg_type(fr_runtime_t *runtime,
+                                    const char *context_name, uint8_t index,
+                                    fr_native_value_kind_t expected,
+                                    fr_tagged_t got) {
+  if (!fr_native_diag_empty(runtime)) {
+    return;
+  }
+
+  runtime->diag->kind = FR_DIAG_TYPE;
+  runtime->diag->expected = fr_native_value_diag_kind(expected);
+  runtime->diag->got = fr_tagged_diag_value_kind(got);
+  runtime->diag->index = index;
+  runtime->diag->context_name =
+      fr_native_diag_context_name(runtime->diag, context_name);
+}
+
 fr_err_t fr_native_install(fr_runtime_t *runtime, fr_native_fn_t fn,
                            uint8_t arity,
                            const fr_native_signature_t *signature,
@@ -161,6 +223,14 @@ fr_err_t fr_native_get(const fr_runtime_t *runtime, fr_native_id_t native_id,
 fr_err_t fr_native_call(fr_runtime_t *runtime, const fr_native_entry_t *entry,
                         const fr_tagged_t *args, uint8_t arg_count,
                         fr_tagged_t *out) {
+  return fr_native_call_named(runtime, entry, NULL, args, arg_count, out);
+}
+
+fr_err_t fr_native_call_named(fr_runtime_t *runtime,
+                              const fr_native_entry_t *entry,
+                              const char *context_name,
+                              const fr_tagged_t *args, uint8_t arg_count,
+                              fr_tagged_t *out) {
   if (runtime == NULL || entry == NULL || out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -176,6 +246,8 @@ fr_err_t fr_native_call(fr_runtime_t *runtime, const fr_native_entry_t *entry,
     for (uint8_t i = 0; i < arg_count; i++) {
       if (!fr_native_value_matches(runtime, entry->signature->params[i].type,
                                    args[i])) {
+        fr_native_note_arg_type(runtime, context_name, i,
+                                entry->signature->params[i].type, args[i]);
         return FR_ERR_TYPE;
       }
     }

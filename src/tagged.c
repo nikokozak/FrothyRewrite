@@ -26,6 +26,65 @@ fr_tagged_kind_t fr_tagged_kind(fr_tagged_t tagged) {
   }
 }
 
+const char *fr_tagged_kind_name(fr_tagged_kind_t kind) {
+  switch (kind) {
+  case FR_TAGGED_INT:
+    return "int";
+  case FR_TAGGED_SPECIAL:
+    return "special";
+  case FR_TAGGED_SLOT_ID:
+    return "slot";
+  case FR_TAGGED_CODE_OBJECT_ID:
+    return "function";
+  case FR_TAGGED_NATIVE_ID:
+    return "native";
+  case FR_TAGGED_OBJECT_ID:
+    return "object";
+  case FR_TAGGED_HANDLE:
+    return "handle";
+  case FR_TAGGED_BYTES:
+    return "bytes";
+  case FR_TAGGED_RESERVED:
+  default:
+    return "reserved";
+  }
+}
+
+fr_diag_value_kind_t fr_tagged_diag_value_kind(fr_tagged_t tagged) {
+  if (fr_tagged_is_bool(tagged)) {
+    return FR_DIAG_VALUE_BOOL;
+  }
+  if (fr_tagged_is_nil(tagged)) {
+    return FR_DIAG_VALUE_NIL;
+  }
+
+  switch (fr_tagged_kind(tagged)) {
+  case FR_TAGGED_INT:
+    return FR_DIAG_VALUE_INT;
+  case FR_TAGGED_SPECIAL:
+    return FR_DIAG_VALUE_SPECIAL;
+  case FR_TAGGED_SLOT_ID:
+    return FR_DIAG_VALUE_SLOT;
+  case FR_TAGGED_CODE_OBJECT_ID:
+    return FR_DIAG_VALUE_FUNCTION;
+  case FR_TAGGED_NATIVE_ID:
+    return FR_DIAG_VALUE_NATIVE;
+  case FR_TAGGED_OBJECT_ID:
+    return FR_DIAG_VALUE_OBJECT;
+#if FR_FEATURE_HANDLES
+  case FR_TAGGED_HANDLE:
+    return FR_DIAG_VALUE_HANDLE;
+#endif
+#if FR_FEATURE_BYTES
+  case FR_TAGGED_BYTES:
+    return FR_DIAG_VALUE_BYTES;
+#endif
+  case FR_TAGGED_RESERVED:
+  default:
+    return FR_DIAG_VALUE_RESERVED;
+  }
+}
+
 bool fr_tagged_is_valid(fr_tagged_t tagged) {
   switch (fr_tagged_kind(tagged)) {
   case FR_TAGGED_INT:

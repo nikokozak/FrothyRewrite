@@ -75,6 +75,13 @@ typedef enum fr_diag_message_id_t {
   FR_DIAG_MSG_COMPILE_EVENTS_DISABLED,
   FR_DIAG_MSG_COMPILE_PARAM_SHADOW,
   FR_DIAG_MSG_COMPILE_RECORD_NAME_NOT_SHAPE,
+  /* Runtime messages. Appended after E3 compile ids. */
+  FR_DIAG_MSG_RUNTIME_CELL_INDEX_OOB,
+  FR_DIAG_MSG_RUNTIME_CALL_DEPTH,
+  FR_DIAG_MSG_RUNTIME_STACK_OVERFLOW,
+  FR_DIAG_MSG_RUNTIME_STACK_UNDERFLOW,
+  FR_DIAG_MSG_RUNTIME_TOO_FEW_ARGS,
+  FR_DIAG_MSG_RUNTIME_INTEGER_OVERFLOW,
 } fr_diag_message_id_t;
 
 const char *fr_diag_message(uint16_t message_id);
@@ -89,20 +96,42 @@ typedef enum fr_diag_kind_t {
   FR_DIAG_NOTE,
 } fr_diag_kind_t;
 
+typedef int32_t fr_int_t;
+
+typedef enum fr_diag_value_kind_t {
+  FR_DIAG_VALUE_NONE = 0,
+  FR_DIAG_VALUE_INT,
+  FR_DIAG_VALUE_BOOL,
+  FR_DIAG_VALUE_NIL,
+  FR_DIAG_VALUE_SPECIAL,
+  FR_DIAG_VALUE_SLOT,
+  FR_DIAG_VALUE_FUNCTION,
+  FR_DIAG_VALUE_NATIVE,
+  FR_DIAG_VALUE_OBJECT,
+  FR_DIAG_VALUE_HANDLE,
+  FR_DIAG_VALUE_BYTES,
+  FR_DIAG_VALUE_RESERVED,
+  FR_DIAG_VALUE_ANY,
+  FR_DIAG_VALUE_TEXT,
+  FR_DIAG_VALUE_TEXT_OR_BYTES,
+} fr_diag_value_kind_t;
+
+const char *fr_diag_value_kind_name(uint16_t value_kind);
+
 typedef struct fr_diagnostic_t {
   fr_diag_kind_t kind;
   const char *span_start;
   uint16_t span_length;
   uint16_t message_id;
-  uint16_t expected;
-  uint16_t got;
+  fr_int_t expected;
+  fr_int_t got;
   uint16_t index;
+  const char *context_name;
   const char *suggestion_start;
   uint16_t suggestion_length;
   char suggestion_text[FR_PROFILE_PARSE_MAX_TOKEN_BYTES + 1];
 } fr_diagnostic_t;
 
-typedef int32_t fr_int_t;
 typedef uint16_t fr_slot_id_t;
 typedef uint16_t fr_code_object_id_t;
 typedef uint16_t fr_native_id_t;
