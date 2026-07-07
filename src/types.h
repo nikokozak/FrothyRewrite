@@ -66,6 +66,15 @@ typedef enum fr_diag_message_id_t {
   FR_DIAG_MSG_PARSE_EXPECTED_TO,
   FR_DIAG_MSG_PARSE_EXPECTED_EVENT_EDGE,
   FR_DIAG_MSG_PARSE_TOO_DEEP,
+  /* Compile messages. Appended after E2 parser ids. */
+  FR_DIAG_MSG_COMPILE_EVENT_BODY_LOCAL,
+  FR_DIAG_MSG_COMPILE_CONTROL_FLOW_DISABLED,
+  FR_DIAG_MSG_COMPILE_CELLS_DISABLED,
+  FR_DIAG_MSG_COMPILE_TEXT_DISABLED,
+  FR_DIAG_MSG_COMPILE_RECORDS_DISABLED,
+  FR_DIAG_MSG_COMPILE_EVENTS_DISABLED,
+  FR_DIAG_MSG_COMPILE_PARAM_SHADOW,
+  FR_DIAG_MSG_COMPILE_RECORD_NAME_NOT_SHAPE,
 } fr_diag_message_id_t;
 
 const char *fr_diag_message(uint16_t message_id);
@@ -88,6 +97,9 @@ typedef struct fr_diagnostic_t {
   uint16_t expected;
   uint16_t got;
   uint16_t index;
+  const char *suggestion_start;
+  uint16_t suggestion_length;
+  char suggestion_text[FR_PROFILE_PARSE_MAX_TOKEN_BYTES + 1];
 } fr_diagnostic_t;
 
 typedef int32_t fr_int_t;

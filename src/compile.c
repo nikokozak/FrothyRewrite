@@ -49,6 +49,9 @@ typedef struct fr_compile_context_t {
   fr_diagnostic_t *diag;
   const fr_parse_span_t *params;
   uint8_t param_count;
+  const fr_parse_span_t *event_outer_params;
+  uint8_t event_outer_param_count;
+  const fr_compile_locals_t *event_outer_locals;
   fr_slot_id_t definition_slot_id;
   uint8_t definition_arity;
   bool has_definition;
@@ -65,22 +68,69 @@ typedef enum fr_compile_source_feature_t {
   FR_COMPILE_SOURCE_EVENTS,
 } fr_compile_source_feature_t;
 
-static fr_err_t
-fr_compile_require_source_feature(fr_compile_source_feature_t feature) {
+static uint16_t
+fr_compile_source_feature_message(fr_compile_source_feature_t feature) {
   switch (feature) {
   case FR_COMPILE_SOURCE_CONTROL_FLOW:
-    return FR_FEATURE_SOURCE_CONTROL_FLOW ? FR_OK : FR_ERR_UNSUPPORTED;
+    return FR_DIAG_MSG_COMPILE_CONTROL_FLOW_DISABLED;
   case FR_COMPILE_SOURCE_CELLS:
-    return FR_FEATURE_CELLS ? FR_OK : FR_ERR_UNSUPPORTED;
+    return FR_DIAG_MSG_COMPILE_CELLS_DISABLED;
   case FR_COMPILE_SOURCE_TEXT:
-    return FR_FEATURE_TEXT ? FR_OK : FR_ERR_UNSUPPORTED;
+    return FR_DIAG_MSG_COMPILE_TEXT_DISABLED;
   case FR_COMPILE_SOURCE_RECORDS:
-    return FR_FEATURE_RECORDS ? FR_OK : FR_ERR_UNSUPPORTED;
+    return FR_DIAG_MSG_COMPILE_RECORDS_DISABLED;
   case FR_COMPILE_SOURCE_EVENTS:
-    return FR_FEATURE_EVENTS ? FR_OK : FR_ERR_UNSUPPORTED;
+    return FR_DIAG_MSG_COMPILE_EVENTS_DISABLED;
   default:
+    return FR_DIAG_MSG_NONE;
+  }
+}
+
+static bool fr_compile_source_feature_enabled(
+    fr_compile_source_feature_t feature) {
+  switch (feature) {
+  case FR_COMPILE_SOURCE_CONTROL_FLOW:
+    return FR_FEATURE_SOURCE_CONTROL_FLOW;
+  case FR_COMPILE_SOURCE_CELLS:
+    return FR_FEATURE_CELLS;
+  case FR_COMPILE_SOURCE_TEXT:
+    return FR_FEATURE_TEXT;
+  case FR_COMPILE_SOURCE_RECORDS:
+    return FR_FEATURE_RECORDS;
+  case FR_COMPILE_SOURCE_EVENTS:
+    return FR_FEATURE_EVENTS;
+  default:
+    return false;
+  }
+}
+
+static void fr_compile_note_span_diagnostic(const fr_compile_context_t *ctx,
+                                            fr_diag_kind_t kind,
+                                            uint16_t message_id,
+                                            fr_parse_span_t span) {
+  if (ctx == NULL || ctx->diag == NULL ||
+      ctx->diag->kind != FR_DIAG_NONE || message_id == FR_DIAG_MSG_NONE) {
+    return;
+  }
+  ctx->diag->kind = kind;
+  ctx->diag->span_start = span.start;
+  ctx->diag->span_length = span.length;
+  ctx->diag->message_id = message_id;
+}
+
+static fr_err_t
+fr_compile_require_source_feature(const fr_compile_context_t *ctx,
+                                  fr_compile_source_feature_t feature,
+                                  fr_parse_span_t span) {
+  if (fr_compile_source_feature_enabled(feature)) {
+    return FR_OK;
+  }
+  if (fr_compile_source_feature_message(feature) == FR_DIAG_MSG_NONE) {
     return FR_ERR_INVALID;
   }
+  fr_compile_note_span_diagnostic(
+      ctx, FR_DIAG_TOKEN, fr_compile_source_feature_message(feature), span);
+  return FR_ERR_UNSUPPORTED;
 }
 
 static fr_err_t fr_compile_copy_name(fr_parse_span_t span, char *out,
@@ -119,6 +169,18 @@ static fr_err_t fr_compile_param_names(const fr_parse_span_t *params,
   return FR_OK;
 }
 
+static bool fr_compile_span_same(fr_parse_span_t lhs, fr_parse_span_t rhs) {
+  if (lhs.length != rhs.length || lhs.start == NULL || rhs.start == NULL) {
+    return false;
+  }
+  for (uint16_t i = 0; i < lhs.length; i++) {
+    if (lhs.start[i] != rhs.start[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static fr_err_t fr_compile_slot_for_name(const fr_compile_context_t *ctx,
                                          fr_parse_span_t name,
                                          fr_slot_id_t *out_slot_id) {
@@ -131,8 +193,257 @@ static fr_err_t fr_compile_slot_for_name(const fr_compile_context_t *ctx,
   return fr_base_slot_id_for_name(copied, out_slot_id);
 }
 
+static bool fr_compile_candidate_length(const char *candidate,
+                                        uint16_t *out_length) {
+  uint16_t length = 0;
+
+  if (candidate == NULL || out_length == NULL) {
+    return false;
+  }
+  while (candidate[length] != '\0') {
+    if (length >= FR_PARSE_MAX_TOKEN_BYTES) {
+      return false;
+    }
+    length += 1;
+  }
+  if (length == 0) {
+    return false;
+  }
+  *out_length = length;
+  return true;
+}
+
+static uint8_t fr_compile_min3(uint8_t a, uint8_t b, uint8_t c) {
+  uint8_t m = a < b ? a : b;
+  return m < c ? m : c;
+}
+
+static uint8_t fr_compile_bounded_edit_distance(fr_parse_span_t typed,
+                                                const char *candidate,
+                                                uint16_t candidate_len,
+                                                uint8_t max_distance) {
+  uint8_t previous[FR_PARSE_MAX_TOKEN_BYTES + 1];
+  uint8_t current[FR_PARSE_MAX_TOKEN_BYTES + 1];
+  uint8_t limit = (uint8_t)(max_distance + 1u);
+
+  if (typed.start == NULL || typed.length > FR_PARSE_MAX_TOKEN_BYTES ||
+      candidate == NULL || candidate_len > FR_PARSE_MAX_TOKEN_BYTES) {
+    return limit;
+  }
+  if (typed.length > candidate_len) {
+    if (typed.length - candidate_len > max_distance) {
+      return limit;
+    }
+  } else if (candidate_len - typed.length > max_distance) {
+    return limit;
+  }
+
+  for (uint16_t j = 0; j <= candidate_len; j++) {
+    previous[j] = j > max_distance ? limit : (uint8_t)j;
+  }
+
+  for (uint16_t i = 1; i <= typed.length; i++) {
+    uint8_t row_min = limit;
+
+    current[0] = i > max_distance ? limit : (uint8_t)i;
+    row_min = current[0];
+    for (uint16_t j = 1; j <= candidate_len; j++) {
+      uint8_t cost = typed.start[i - 1u] == candidate[j - 1u] ? 0u : 1u;
+      uint8_t delete_cost =
+          previous[j] >= limit ? limit : (uint8_t)(previous[j] + 1u);
+      uint8_t insert_cost =
+          current[j - 1u] >= limit ? limit : (uint8_t)(current[j - 1u] + 1u);
+      uint8_t replace_cost =
+          previous[j - 1u] >= limit
+              ? limit
+              : (uint8_t)(previous[j - 1u] + cost);
+
+      current[j] = fr_compile_min3(delete_cost, insert_cost, replace_cost);
+      if (current[j] < row_min) {
+        row_min = current[j];
+      }
+    }
+    if (row_min > max_distance) {
+      return limit;
+    }
+    for (uint16_t j = 0; j <= candidate_len; j++) {
+      previous[j] = current[j];
+    }
+  }
+
+  return previous[candidate_len] > max_distance ? limit
+                                                : previous[candidate_len];
+}
+
+typedef struct fr_compile_suggestion_scan_t {
+  const char *prefix_start;
+  uint16_t prefix_length;
+  uint8_t prefix_count;
+  const char *best_start;
+  uint16_t best_length;
+  uint8_t best_distance;
+  uint8_t second_distance;
+} fr_compile_suggestion_scan_t;
+
+static bool fr_compile_name_is_proper_prefix(fr_parse_span_t typed,
+                                             const char *candidate,
+                                             uint16_t candidate_len) {
+  return typed.length > 0 && candidate_len > typed.length &&
+         memcmp(typed.start, candidate, typed.length) == 0;
+}
+
+static bool fr_compile_project_name_is_callable(
+    const fr_compile_context_t *ctx, const char *name) {
+  fr_slot_id_t slot_id = 0;
+  fr_tagged_t tagged = 0;
+  fr_native_id_t native_id = 0;
+  fr_code_object_id_t code_object_id = 0;
+
+  if (ctx == NULL || ctx->runtime == NULL || name == NULL) {
+    return false;
+  }
+  if (fr_slot_id_for_name(ctx->runtime, name, &slot_id) != FR_OK ||
+      fr_slot_read(ctx->runtime, slot_id, &tagged) != FR_OK) {
+    return false;
+  }
+  return fr_tagged_decode_native_id(tagged, &native_id) == FR_OK ||
+         fr_tagged_decode_code_object_id(tagged, &code_object_id) == FR_OK;
+}
+
+static void fr_compile_consider_suggestion(fr_parse_span_t typed,
+                                           const char *candidate,
+                                           fr_compile_suggestion_scan_t *scan) {
+  enum { FR_COMPILE_SUGGEST_MAX_DISTANCE = 2 };
+  uint16_t candidate_len = 0;
+  uint8_t distance = 0;
+
+  if (scan == NULL || !fr_compile_candidate_length(candidate, &candidate_len)) {
+    return;
+  }
+  if (fr_compile_name_is_proper_prefix(typed, candidate, candidate_len)) {
+    if (scan->prefix_count == 0) {
+      scan->prefix_start = candidate;
+      scan->prefix_length = candidate_len;
+    }
+    if (scan->prefix_count < 2) {
+      scan->prefix_count += 1;
+    }
+  }
+  distance = fr_compile_bounded_edit_distance(
+      typed, candidate, candidate_len, FR_COMPILE_SUGGEST_MAX_DISTANCE);
+  if (distance > FR_COMPILE_SUGGEST_MAX_DISTANCE) {
+    return;
+  }
+  if (distance < scan->best_distance) {
+    scan->second_distance = scan->best_distance;
+    scan->best_distance = distance;
+    scan->best_start = candidate;
+    scan->best_length = candidate_len;
+  } else if (distance < scan->second_distance) {
+    scan->second_distance = distance;
+  }
+}
+
+static void fr_compile_note_name_suggestion(const fr_compile_context_t *ctx,
+                                            fr_parse_span_t name,
+                                            bool call_position) {
+  enum { FR_COMPILE_SUGGEST_MAX_DISTANCE = 2 };
+  fr_compile_suggestion_scan_t scan = {
+      .best_distance = FR_COMPILE_SUGGEST_MAX_DISTANCE + 1u,
+      .second_distance = FR_COMPILE_SUGGEST_MAX_DISTANCE + 1u,
+  };
+  const char *suggestion = NULL;
+  uint16_t suggestion_length = 0;
+
+  if (ctx == NULL || ctx->diag == NULL || name.start == NULL ||
+      name.length == 0 || name.length > FR_PARSE_MAX_TOKEN_BYTES) {
+    return;
+  }
+
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+  for (uint16_t i = 0; i < fr_base_def_count(); i++) {
+    const fr_base_def_t *def = NULL;
+    fr_base_layer_t layer = FR_BASE_LAYER_CORE;
+
+    if (fr_base_def_at(i, &def, &layer) != FR_OK || def == NULL) {
+      continue;
+    }
+    (void)layer;
+    if (call_position && def->kind != FR_BASE_DEF_NATIVE) {
+      continue;
+    }
+    fr_compile_consider_suggestion(name, def->name, &scan);
+    fr_compile_consider_suggestion(name, def->alias, &scan);
+  }
+#endif
+
+  if (ctx->runtime != NULL) {
+    uint16_t project_name_count = fr_slot_project_name_count(ctx->runtime);
+
+    for (uint16_t i = 0; i < project_name_count; i++) {
+      const char *project_name = fr_slot_project_name_at(ctx->runtime, i);
+
+      if (call_position &&
+          !fr_compile_project_name_is_callable(ctx, project_name)) {
+        continue;
+      }
+      fr_compile_consider_suggestion(name, project_name, &scan);
+    }
+  }
+
+  if (scan.prefix_count > 1) {
+    return;
+  }
+  if (scan.prefix_count == 1) {
+    suggestion = scan.prefix_start;
+    suggestion_length = scan.prefix_length;
+  } else {
+    if (scan.best_start == NULL ||
+        scan.best_distance > FR_COMPILE_SUGGEST_MAX_DISTANCE ||
+        scan.best_distance + 1u > scan.second_distance ||
+        scan.best_distance >= name.length ||
+        scan.best_length > FR_PARSE_MAX_TOKEN_BYTES) {
+      return;
+    }
+    suggestion = scan.best_start;
+    suggestion_length = scan.best_length;
+  }
+  if (suggestion == NULL || suggestion_length > FR_PARSE_MAX_TOKEN_BYTES) {
+    return;
+  }
+  memcpy(ctx->diag->suggestion_text, suggestion, suggestion_length);
+  ctx->diag->suggestion_text[suggestion_length] = '\0';
+  ctx->diag->suggestion_start = ctx->diag->suggestion_text;
+  ctx->diag->suggestion_length = suggestion_length;
+}
+
+static bool
+fr_compile_event_outer_name_matches(const fr_compile_context_t *ctx,
+                                    fr_parse_span_t name) {
+  if (ctx == NULL) {
+    return false;
+  }
+  if (ctx->event_outer_params != NULL) {
+    for (uint8_t i = 0; i < ctx->event_outer_param_count; i++) {
+      if (fr_compile_span_same(ctx->event_outer_params[i], name)) {
+        return true;
+      }
+    }
+  }
+  if (ctx->event_outer_locals != NULL) {
+    for (uint8_t i = ctx->event_outer_locals->count; i > 0; i--) {
+      if (fr_compile_span_same(ctx->event_outer_locals->entries[i - 1u].name,
+                               name)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 static void fr_compile_note_name_diagnostic(const fr_compile_context_t *ctx,
-                                            fr_parse_span_t name) {
+                                            fr_parse_span_t name,
+                                            bool call_position) {
   if (ctx == NULL || ctx->diag == NULL ||
       ctx->diag->kind != FR_DIAG_NONE) {
     return;
@@ -140,15 +451,36 @@ static void fr_compile_note_name_diagnostic(const fr_compile_context_t *ctx,
   ctx->diag->kind = FR_DIAG_NAME;
   ctx->diag->span_start = name.start;
   ctx->diag->span_length = name.length;
+  if (fr_compile_event_outer_name_matches(ctx, name)) {
+    ctx->diag->message_id = FR_DIAG_MSG_COMPILE_EVENT_BODY_LOCAL;
+    return;
+  }
+  fr_compile_note_name_suggestion(ctx, name, call_position);
+}
+
+static void fr_compile_note_arity_diagnostic(const fr_compile_context_t *ctx,
+                                             fr_parse_span_t name,
+                                             uint16_t expected,
+                                             uint16_t got) {
+  if (ctx == NULL || ctx->diag == NULL ||
+      ctx->diag->kind != FR_DIAG_NONE) {
+    return;
+  }
+  ctx->diag->kind = FR_DIAG_ARITY;
+  ctx->diag->span_start = name.start;
+  ctx->diag->span_length = name.length;
+  ctx->diag->expected = expected;
+  ctx->diag->got = got;
 }
 
 static fr_err_t fr_compile_expr_slot_for_name(const fr_compile_context_t *ctx,
                                               fr_parse_span_t name,
-                                              fr_slot_id_t *out_slot_id) {
+                                              fr_slot_id_t *out_slot_id,
+                                              bool call_position) {
   fr_err_t err = fr_compile_slot_for_name(ctx, name, out_slot_id);
 
   if (err == FR_ERR_NOT_FOUND) {
-    fr_compile_note_name_diagnostic(ctx, name);
+    fr_compile_note_name_diagnostic(ctx, name, call_position);
   }
   return err;
 }
@@ -224,16 +556,23 @@ static const fr_parse_expr_t *fr_compile_expr_at(const fr_parse_line_t *parsed,
   return &parsed->exprs[expr_id];
 }
 
-static bool fr_compile_span_same(fr_parse_span_t lhs, fr_parse_span_t rhs) {
-  if (lhs.length != rhs.length || lhs.start == NULL || rhs.start == NULL) {
-    return false;
+static fr_parse_span_t
+fr_compile_expr_diagnostic_span(const fr_parse_line_t *parsed,
+                                const fr_parse_expr_t *expr) {
+  if (expr == NULL) {
+    return (fr_parse_span_t){0};
   }
-  for (uint16_t i = 0; i < lhs.length; i++) {
-    if (lhs.start[i] != rhs.start[i]) {
-      return false;
-    }
+  if (expr->name.start != NULL) {
+    return expr->name;
   }
-  return true;
+  if (expr->text.start != NULL) {
+    return expr->text;
+  }
+  if (expr->child_count > 0) {
+    return fr_compile_expr_diagnostic_span(
+        parsed, fr_compile_expr_at(parsed, expr->children[0]));
+  }
+  return (fr_parse_span_t){0};
 }
 
 static bool fr_compile_param_for_name(const fr_compile_context_t *ctx,
@@ -279,6 +618,9 @@ static fr_err_t fr_compile_add_local(const fr_compile_context_t *ctx,
     return FR_ERR_INVALID;
   }
   if (fr_compile_param_for_name(ctx, name, &shadow_arg)) {
+    (void)shadow_arg;
+    fr_compile_note_span_diagnostic(
+        ctx, FR_DIAG_TOKEN, FR_DIAG_MSG_COMPILE_PARAM_SHADOW, name);
     return FR_ERR_INVALID;
   }
   if (ctx->locals->next_index >= FR_PARSE_MAX_LOCALS ||
@@ -684,11 +1026,13 @@ static fr_err_t fr_compile_emit_call(const fr_compile_context_t *ctx,
   fr_code_object_id_t code_object_id = 0;
   uint8_t definition_arity = 0;
 
-  FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
+  FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id, true));
 
   if (fr_compile_current_definition_for_slot(ctx, slot_id,
                                              &definition_arity)) {
     if (expr->child_count != definition_arity) {
+      fr_compile_note_arity_diagnostic(ctx, expr->name, definition_arity,
+                                       expr->child_count);
       return FR_ERR_INVALID;
     }
     for (uint8_t i = 0; i < expr->child_count; i++) {
@@ -727,6 +1071,8 @@ static fr_err_t fr_compile_emit_call(const fr_compile_context_t *ctx,
     if (fr_tagged_decode_native_id(tagged, &native_id) == FR_OK) {
       FR_TRY(fr_native_get(ctx->runtime, native_id, &entry));
       if (expr->child_count != entry->arity) {
+        fr_compile_note_arity_diagnostic(ctx, expr->name, entry->arity,
+                                         expr->child_count);
         return FR_ERR_INVALID;
       }
       for (uint8_t i = 0; i < expr->child_count; i++) {
@@ -750,6 +1096,8 @@ static fr_err_t fr_compile_emit_call(const fr_compile_context_t *ctx,
                                       &instructions));
       FR_TRY(fr_instruction_read_header(&instructions, &header));
       if (expr->child_count != header.arity) {
+        fr_compile_note_arity_diagnostic(ctx, expr->name, header.arity,
+                                         expr->child_count);
         return FR_ERR_INVALID;
       }
       for (uint8_t i = 0; i < expr->child_count; i++) {
@@ -776,6 +1124,8 @@ static fr_err_t fr_compile_emit_call(const fr_compile_context_t *ctx,
   if (ref.kind == FR_IMAGE_REF_NATIVE) {
     FR_TRY(fr_base_def_for_slot(slot_id, &def, &layer));
     if (expr->child_count != def->native_arity) {
+      fr_compile_note_arity_diagnostic(ctx, expr->name, def->native_arity,
+                                       expr->child_count);
       return FR_ERR_INVALID;
     }
     for (uint8_t i = 0; i < expr->child_count; i++) {
@@ -821,7 +1171,9 @@ static fr_err_t fr_compile_emit_if(const fr_compile_context_t *ctx,
       expr->child_count > FR_PARSE_MAX_BODY_EXPRS) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
+  FR_TRY(fr_compile_require_source_feature(
+      ctx, FR_COMPILE_SOURCE_CONTROL_FLOW,
+      fr_compile_expr_diagnostic_span(parsed, expr)));
 
   arm_count = (uint8_t)(expr->child_count / 2u);
   has_final_else = (expr->child_count % 2u) == 1u;
@@ -865,7 +1217,10 @@ static fr_err_t fr_compile_emit_bool_result(const fr_compile_context_t *ctx,
   uint16_t false_target_operand = 0;
   uint16_t end_operand = 0;
 
-  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
+  FR_TRY(fr_compile_require_source_feature(
+      ctx, FR_COMPILE_SOURCE_CONTROL_FLOW,
+      fr_compile_expr_diagnostic_span(parsed,
+                                      fr_compile_expr_at(parsed, expr_id))));
   FR_TRY(
       fr_compile_emit_expr(ctx, parsed, expr_id, instruction_bytes, offset));
   FR_TRY(fr_compile_emit_jump_placeholder(
@@ -890,7 +1245,9 @@ static fr_err_t fr_compile_emit_and(const fr_compile_context_t *ctx,
   if (expr == NULL || expr->child_count != 2) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
+  FR_TRY(fr_compile_require_source_feature(
+      ctx, FR_COMPILE_SOURCE_CONTROL_FLOW,
+      fr_compile_expr_diagnostic_span(parsed, expr)));
   FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
                               instruction_bytes, offset));
   FR_TRY(fr_compile_emit_jump_placeholder(
@@ -916,7 +1273,9 @@ static fr_err_t fr_compile_emit_or(const fr_compile_context_t *ctx,
   if (expr == NULL || expr->child_count != 2) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
+  FR_TRY(fr_compile_require_source_feature(
+      ctx, FR_COMPILE_SOURCE_CONTROL_FLOW,
+      fr_compile_expr_diagnostic_span(parsed, expr)));
   FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
                               instruction_bytes, offset));
   FR_TRY(fr_compile_emit_jump_placeholder(
@@ -942,7 +1301,9 @@ static fr_err_t fr_compile_emit_repeat(const fr_compile_context_t *ctx,
   if (expr == NULL || expr->child_count != 2) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
+  FR_TRY(fr_compile_require_source_feature(
+      ctx, FR_COMPILE_SOURCE_CONTROL_FLOW,
+      fr_compile_expr_diagnostic_span(parsed, expr)));
 
   count = fr_compile_expr_at(parsed, expr->children[0]);
   if (count == NULL) {
@@ -982,7 +1343,9 @@ static fr_err_t fr_compile_emit_while(const fr_compile_context_t *ctx,
   if (expr == NULL || expr->child_count != 2) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
+  FR_TRY(fr_compile_require_source_feature(
+      ctx, FR_COMPILE_SOURCE_CONTROL_FLOW,
+      fr_compile_expr_diagnostic_span(parsed, expr)));
 
   cond_offset = *offset;
   FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
@@ -1024,7 +1387,9 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
   if (expr == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_EVENTS));
+  FR_TRY(fr_compile_require_source_feature(
+      ctx, FR_COMPILE_SOURCE_EVENTS,
+      fr_compile_expr_diagnostic_span(parsed, expr)));
   is_gpio_kind = expr->int_value >= FR_EVENT_KIND_GPIO_RISING &&
                  expr->int_value <= FR_EVENT_KIND_GPIO_CHANGES;
   is_timer_kind = expr->int_value == FR_EVENT_KIND_EVERY ||
@@ -1064,6 +1429,9 @@ fr_compile_emit_event_register(const fr_compile_context_t *ctx,
   body_ctx = *ctx;
   body_ctx.params = NULL;
   body_ctx.param_count = 0;
+  body_ctx.event_outer_params = ctx->params;
+  body_ctx.event_outer_param_count = ctx->param_count;
+  body_ctx.event_outer_locals = ctx->locals;
   body_ctx.body_texts = ctx->body_texts;
   body_ctx.locals = &body_locals;
   body_ctx.event_body = NULL;
@@ -1107,7 +1475,9 @@ static fr_err_t fr_compile_emit_forever(const fr_compile_context_t *ctx,
   if (expr == NULL || expr->child_count != 1) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CONTROL_FLOW));
+  FR_TRY(fr_compile_require_source_feature(
+      ctx, FR_COMPILE_SOURCE_CONTROL_FLOW,
+      fr_compile_expr_diagnostic_span(parsed, expr)));
 
   body_offset = *offset;
   FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
@@ -1148,7 +1518,9 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     return fr_compile_emit_push_int(instruction_bytes, offset, expr->int_value);
   case FR_PARSE_EXPR_TEXT:
 #if FR_FEATURE_TEXT
-    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_TEXT));
+    FR_TRY(fr_compile_require_source_feature(
+        ctx, FR_COMPILE_SOURCE_TEXT,
+        fr_compile_expr_diagnostic_span(parsed, expr)));
     return fr_compile_emit_text_literal(ctx, expr, instruction_bytes, offset);
 #else
     return FR_ERR_UNSUPPORTED;
@@ -1163,7 +1535,7 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     if (fr_compile_param_for_name(ctx, expr->name, &arg_index)) {
       return fr_compile_emit_load_arg(instruction_bytes, offset, arg_index);
     }
-    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
+    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id, false));
     return fr_compile_emit_slot_op(instruction_bytes, offset, FR_OP_LOAD_SLOT,
                                    slot_id);
   }
@@ -1180,11 +1552,13 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   }
 #if FR_FEATURE_CELLS
   case FR_PARSE_EXPR_CELL_READ:
-    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CELLS));
+    FR_TRY(fr_compile_require_source_feature(
+        ctx, FR_COMPILE_SOURCE_CELLS,
+        fr_compile_expr_diagnostic_span(parsed, expr)));
     if (expr->child_count != 1) {
       return FR_ERR_INVALID;
     }
-    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
+    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id, false));
     {
       const fr_parse_expr_t *index =
           fr_compile_expr_at(parsed, expr->children[0]);
@@ -1202,11 +1576,13 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     return fr_compile_emit_dynamic_cell_op(
         instruction_bytes, offset, FR_OP_LOAD_CELL_DYNAMIC, slot_id);
   case FR_PARSE_EXPR_CELL_WRITE:
-    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CELLS));
+    FR_TRY(fr_compile_require_source_feature(
+        ctx, FR_COMPILE_SOURCE_CELLS,
+        fr_compile_expr_diagnostic_span(parsed, expr)));
     if (expr->child_count != 2) {
       return FR_ERR_INVALID;
     }
-    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
+    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id, false));
     {
       const fr_parse_expr_t *index =
           fr_compile_expr_at(parsed, expr->children[0]);
@@ -1234,7 +1610,9 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
 #endif
 #if FR_FEATURE_RECORDS
   case FR_PARSE_EXPR_FIELD_READ:
-    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_RECORDS));
+    FR_TRY(fr_compile_require_source_feature(
+        ctx, FR_COMPILE_SOURCE_RECORDS,
+        fr_compile_expr_diagnostic_span(parsed, expr)));
     if (expr->child_count != 1) {
       return FR_ERR_INVALID;
     }
@@ -1243,7 +1621,9 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     return fr_compile_emit_field_op(instruction_bytes, offset,
                                     FR_OP_LOAD_FIELD, expr->name);
   case FR_PARSE_EXPR_FIELD_WRITE:
-    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_RECORDS));
+    FR_TRY(fr_compile_require_source_feature(
+        ctx, FR_COMPILE_SOURCE_RECORDS,
+        fr_compile_expr_diagnostic_span(parsed, expr)));
     if (expr->child_count != 2) {
       return FR_ERR_INVALID;
     }
@@ -1268,7 +1648,7 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     }
     /* fr_compile_expr_slot_for_name errors if the name has never been declared,
      * which is exactly the "set on undeclared slot" rejection we want. */
-    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
+    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id, false));
     FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->child, instruction_bytes,
                                 offset));
     return fr_compile_emit_slot_op(instruction_bytes, offset, FR_OP_STORE_SLOT,
@@ -1377,7 +1757,9 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     } else if (expr->child_count != 1) {
       return FR_ERR_INVALID;
     }
-    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_EVENTS));
+    FR_TRY(fr_compile_require_source_feature(
+        ctx, FR_COMPILE_SOURCE_EVENTS,
+        fr_compile_expr_diagnostic_span(parsed, expr)));
     FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, expr->int_value));
     if (cancel_is_wifi) {
       FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, 0));
@@ -1420,7 +1802,7 @@ static fr_err_t fr_compile_literal_ref(const fr_compile_context_t *ctx,
   }
   if (expr->kind == FR_PARSE_EXPR_NAME && ctx != NULL &&
       ctx->runtime != NULL) {
-    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
+    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id, false));
     FR_TRY(fr_slot_read(ctx->runtime, slot_id, &tagged));
     *out_ref = (fr_image_ref_t){FR_IMAGE_REF_LITERAL_TAGGED, tagged, 0};
     return FR_OK;
@@ -1462,6 +1844,9 @@ static fr_err_t fr_compile_check_record_shape_redefinition(
     return FR_OK;
   }
   if (fr_tagged_decode_object_id(tagged, &object_id) != FR_OK) {
+    fr_compile_note_span_diagnostic(
+        ctx, FR_DIAG_TYPE, FR_DIAG_MSG_COMPILE_RECORD_NAME_NOT_SHAPE,
+        parsed->definition.name);
     return FR_ERR_TYPE;
   }
   FR_TRY(fr_record_shape_view(ctx->runtime, object_id, &shape_name,
@@ -1486,11 +1871,12 @@ static fr_err_t fr_compile_check_record_shape_redefinition(
 static fr_err_t fr_compile_record_shape_line(
     const fr_compile_context_t *ctx, const fr_parse_line_t *parsed,
     fr_slot_id_t slot_id, fr_compile_overlay_update_t *out) {
-  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_RECORDS));
   if (parsed == NULL || out == NULL || parsed->record_field_count == 0 ||
       parsed->record_field_count > FR_RECORD_FIELDS_PER_SHAPE_CAPACITY) {
     return FR_ERR_INVALID;
   }
+  FR_TRY(fr_compile_require_source_feature(
+      ctx, FR_COMPILE_SOURCE_RECORDS, parsed->definition.name));
   FR_TRY(fr_compile_check_record_shape_redefinition(ctx, parsed, slot_id));
   FR_TRY(fr_compile_copy_name(parsed->definition.name, out->record_name_text,
                               sizeof(out->record_name_text)));
@@ -1573,14 +1959,18 @@ static fr_err_t fr_compile_record_object(
       value->kind != FR_PARSE_EXPR_CALL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_RECORDS));
-  FR_TRY(fr_compile_expr_slot_for_name(ctx, value->name, &shape_slot));
+  FR_TRY(fr_compile_require_source_feature(
+      ctx, FR_COMPILE_SOURCE_RECORDS,
+      fr_compile_expr_diagnostic_span(parsed, value)));
+  FR_TRY(fr_compile_expr_slot_for_name(ctx, value->name, &shape_slot, false));
   FR_TRY(fr_slot_read(ctx->runtime, shape_slot, &shape_tagged));
   FR_TRY(fr_tagged_decode_object_id(shape_tagged, &shape_object_id));
   FR_TRY(fr_record_shape_view(ctx->runtime, shape_object_id, &shape_name,
                               &shape_field_count));
   if (value->child_count != shape_field_count ||
       value->child_count > FR_RECORD_FIELDS_PER_SHAPE_CAPACITY) {
+    fr_compile_note_arity_diagnostic(ctx, value->name, shape_field_count,
+                                     value->child_count);
     return FR_ERR_INVALID;
   }
   for (uint8_t i = 0; i < value->child_count; i++) {
@@ -1814,7 +2204,8 @@ fr_compile_overlay_update_with_context(const fr_compile_context_t *ctx,
 
 #if FR_FEATURE_CELLS
   if (value->kind == FR_PARSE_EXPR_CELLS) {
-    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_CELLS));
+    FR_TRY(fr_compile_require_source_feature(
+        ctx, FR_COMPILE_SOURCE_CELLS, parsed.definition.name));
     if (value->int_value <= 0 ||
         value->int_value > FR_PROFILE_MAX_CELL_LENGTH) {
       return FR_ERR_RANGE;
@@ -1848,7 +2239,9 @@ fr_compile_overlay_update_with_context(const fr_compile_context_t *ctx,
   if (value->kind == FR_PARSE_EXPR_TEXT) {
     uint16_t copied_length = 0;
 
-    FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_TEXT));
+    FR_TRY(fr_compile_require_source_feature(
+        ctx, FR_COMPILE_SOURCE_TEXT,
+        fr_compile_expr_diagnostic_span(&parsed, value)));
     if (!value->text_has_escapes &&
         value->text.length > FR_PROFILE_MAX_TEXT_LENGTH) {
       return FR_ERR_RANGE;
