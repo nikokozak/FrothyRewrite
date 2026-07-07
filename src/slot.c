@@ -270,6 +270,28 @@ static bool fr_slot_project_name_points_to(const fr_runtime_t *runtime,
 #endif
 }
 
+/* Drop the top of the slot table back down over any trailing slots that are no
+ * longer in use: not overlaid, holding their base value, and unnamed. Keeps
+ * slots.count == (highest live slot)+1 so the next project name is assigned the
+ * lowest free id. Both name rollback and a user wipe free trailing slots and
+ * must call this, or a later definition is assigned an id past what the install
+ * validator will accept. */
+void fr_slot_reclaim_free_tail(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return;
+  }
+  while (runtime->slots.count > runtime->slots.base_count) {
+    fr_slot_id_t last = (fr_slot_id_t)(runtime->slots.count - 1);
+
+    if (runtime->slots.overlay[last] ||
+        runtime->slots.current[last] != runtime->slots.base[last] ||
+        fr_slot_project_name_points_to(runtime, last)) {
+      break;
+    }
+    runtime->slots.count = last;
+  }
+}
+
 fr_err_t fr_slot_prepare_project_name(const fr_runtime_t *runtime,
                                       const char *name,
                                       fr_slot_id_t *out_slot_id) {
@@ -350,16 +372,7 @@ fr_err_t fr_slot_rollback_project_name(fr_runtime_t *runtime,
   }
   runtime->slots.current[slot_id] = runtime->slots.base[slot_id];
   runtime->slots.overlay[slot_id] = false;
-  while (runtime->slots.count > runtime->slots.base_count) {
-    fr_slot_id_t last = (fr_slot_id_t)(runtime->slots.count - 1);
-
-    if (runtime->slots.overlay[last] ||
-        runtime->slots.current[last] != runtime->slots.base[last] ||
-        fr_slot_project_name_points_to(runtime, last)) {
-      break;
-    }
-    runtime->slots.count = last;
-  }
+  fr_slot_reclaim_free_tail(runtime);
   return FR_OK;
 }
 

@@ -35,6 +35,10 @@ fr_err_t fr_slot_prepare_project_name(const fr_runtime_t *runtime,
 fr_err_t fr_slot_rollback_project_name(fr_runtime_t *runtime,
                                        const char *name,
                                        fr_slot_id_t slot_id);
+/* Lower slots.count back over trailing slots that are free (unoverlaid, base
+ * value, unnamed). Call after freeing user slots so the next project name gets
+ * the lowest free id. */
+void fr_slot_reclaim_free_tail(fr_runtime_t *runtime);
 fr_err_t fr_slot_validate_project_names(const fr_runtime_t *runtime,
                                         const fr_slot_name_t names[],
                                         uint16_t name_count,
