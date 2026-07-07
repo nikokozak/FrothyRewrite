@@ -12333,6 +12333,10 @@ static bool test_error_line_equals(const char *out, const char *expected) {
          memcmp(line, expected, strlen(expected)) == 0;
 }
 
+static bool test_error_has_no_caret(const char *out) {
+  return out != NULL && strchr(out, '^') == NULL;
+}
+
 static void test_repl_error_diagnostics(void) {
   fr_runtime_t runtime;
   char out[512] = {0};
@@ -12403,9 +12407,31 @@ static void test_repl_error_diagnostics(void) {
   const char *cell_lines[] = {"missing[0]"};
 #endif
   const char *set_target_lines[] = {"set missing to 1"};
+  const char *native_type_lines[] = {"gpio.write: 2, true"};
+  const char *arith_type_lines[] = {"true + 1"};
+#if FR_FEATURE_CELLS
+  const char *cell_oob_lines[] = {
+      "c is cells(4)",
+      "c[99]",
+  };
+#endif
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  const char *call_depth_lines[] = {
+      "loop is fn [ loop: ]",
+      "loop:",
+  };
+  char call_depth_context[64];
+#endif
+  const char *int_overflow_lines[] = {"1073741823 + 1"};
   char long_line[FR_REPL_LINE_BYTES];
   const char *long_lines[] = {long_line};
   uint16_t spaces = FR_REPL_OUTPUT_BYTES;
+
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  snprintf(call_depth_context, sizeof(call_depth_context),
+           "call depth limit reached (%u)\n",
+           (unsigned)FR_PROFILE_MAX_CALL_DEPTH);
+#endif
 
   CHECK("repl diagnostic installs base image",
         fr_base_image_install(&runtime) == FR_OK);
@@ -12789,6 +12815,82 @@ static void test_repl_error_diagnostics(void) {
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "name: missing\n") != NULL &&
             strstr(out, "set missing to 1\n    ^^^^^^^\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders native arg type context without caret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, native_type_lines,
+                (uint8_t)(sizeof(native_type_lines) /
+                          sizeof(native_type_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: wrong type (2)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out,
+                   "gpio.write argument 2 expects an int, got a bool\n") !=
+                NULL &&
+            strstr(out, "gpio.write: 2, true\n") == NULL &&
+            test_error_has_no_caret(out));
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders arithmetic type context without caret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, arith_type_lines,
+                (uint8_t)(sizeof(arith_type_lines) /
+                          sizeof(arith_type_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: wrong type (2)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "expected an int, got a bool\n") != NULL &&
+            strstr(out, "true + 1\n") == NULL &&
+            test_error_has_no_caret(out));
+
+#if FR_FEATURE_CELLS
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders cell range context without caret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, cell_oob_lines,
+                (uint8_t)(sizeof(cell_oob_lines) /
+                          sizeof(cell_oob_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: out of range (1)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out,
+                   "cell index 99 is past the end (length 4)\n") != NULL &&
+            strstr(out, "c[99]\n") == NULL &&
+            test_error_has_no_caret(out));
+#endif
+
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders call depth context without caret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, call_depth_lines,
+                (uint8_t)(sizeof(call_depth_lines) /
+                          sizeof(call_depth_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: overflow (5)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, call_depth_context) != NULL &&
+            strstr(out, "loop:\n") == NULL && test_error_has_no_caret(out));
+#endif
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders integer overflow context without caret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, int_overflow_lines,
+                (uint8_t)(sizeof(int_overflow_lines) /
+                          sizeof(int_overflow_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: out of range (1)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "integer overflow\n") != NULL &&
+            strstr(out, "1073741823 + 1\n") == NULL &&
+            test_error_has_no_caret(out));
 
   if ((uint32_t)spaces + sizeof("nope") > sizeof(long_line)) {
     spaces = (uint16_t)(sizeof(long_line) - sizeof("nope"));

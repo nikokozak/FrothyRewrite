@@ -52,6 +52,7 @@ fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
   runtime->interrupted = false;
   runtime->dispatching_event = false;
   runtime->install_tier = FR_INSTALL_TIER_USER;
+  runtime->diag = NULL;
   return FR_OK;
 }
 

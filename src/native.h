@@ -54,3 +54,8 @@ fr_err_t fr_native_get(const fr_runtime_t *runtime, fr_native_id_t native_id,
 fr_err_t fr_native_call(fr_runtime_t *runtime, const fr_native_entry_t *entry,
                         const fr_tagged_t *args, uint8_t arg_count,
                         fr_tagged_t *out);
+fr_err_t fr_native_call_named(fr_runtime_t *runtime,
+                              const fr_native_entry_t *entry,
+                              const char *context_name,
+                              const fr_tagged_t *args, uint8_t arg_count,
+                              fr_tagged_t *out);

@@ -911,14 +911,133 @@ static fr_err_t fr_repl_append_arity_line(char *out, uint16_t out_cap,
                                           uint16_t *used,
                                           const fr_diagnostic_t *diag) {
   FR_TRY(fr_repl_append(out, out_cap, used, "expected "));
-  FR_TRY(fr_repl_append_u16(out, out_cap, used, diag->expected));
+  FR_TRY(fr_repl_append_int(out, out_cap, used, diag->expected));
   if (diag->expected == 1) {
     FR_TRY(fr_repl_append(out, out_cap, used, " argument, got "));
   } else {
     FR_TRY(fr_repl_append(out, out_cap, used, " arguments, got "));
   }
-  FR_TRY(fr_repl_append_u16(out, out_cap, used, diag->got));
+  FR_TRY(fr_repl_append_int(out, out_cap, used, diag->got));
   return fr_repl_append_char(out, out_cap, used, '\n');
+}
+
+static const char *fr_repl_diag_value_article(uint16_t value_kind) {
+  switch ((fr_diag_value_kind_t)value_kind) {
+  case FR_DIAG_VALUE_INT:
+    return "an ";
+  case FR_DIAG_VALUE_BOOL:
+  case FR_DIAG_VALUE_SPECIAL:
+  case FR_DIAG_VALUE_SLOT:
+  case FR_DIAG_VALUE_FUNCTION:
+  case FR_DIAG_VALUE_NATIVE:
+  case FR_DIAG_VALUE_OBJECT:
+  case FR_DIAG_VALUE_HANDLE:
+  case FR_DIAG_VALUE_RESERVED:
+    return "a ";
+  case FR_DIAG_VALUE_NIL:
+  case FR_DIAG_VALUE_BYTES:
+  case FR_DIAG_VALUE_ANY:
+  case FR_DIAG_VALUE_TEXT:
+  case FR_DIAG_VALUE_TEXT_OR_BYTES:
+  case FR_DIAG_VALUE_NONE:
+  default:
+    return "";
+  }
+}
+
+static fr_err_t fr_repl_append_diag_value(char *out, uint16_t out_cap,
+                                          uint16_t *used,
+                                          uint16_t value_kind) {
+  const char *name = fr_diag_value_kind_name(value_kind);
+
+  if (name == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_repl_append(out, out_cap, used,
+                        fr_repl_diag_value_article(value_kind)));
+  return fr_repl_append(out, out_cap, used, name);
+}
+
+static fr_err_t fr_repl_append_type_context_line(
+    char *out, uint16_t out_cap, uint16_t *used,
+    const fr_diagnostic_t *diag) {
+  if (diag->context_name != NULL) {
+    FR_TRY(fr_repl_append(out, out_cap, used, diag->context_name));
+    FR_TRY(fr_repl_append(out, out_cap, used, " argument "));
+    FR_TRY(fr_repl_append_u16(out, out_cap, used,
+                              (uint16_t)(diag->index + 1u)));
+    FR_TRY(fr_repl_append(out, out_cap, used, " expects "));
+  } else {
+    FR_TRY(fr_repl_append(out, out_cap, used, "expected "));
+  }
+  FR_TRY(fr_repl_append_diag_value(out, out_cap, used,
+                                   (uint16_t)diag->expected));
+  FR_TRY(fr_repl_append(out, out_cap, used, ", got "));
+  FR_TRY(fr_repl_append_diag_value(out, out_cap, used, (uint16_t)diag->got));
+  return fr_repl_append_char(out, out_cap, used, '\n');
+}
+
+static fr_err_t fr_repl_append_runtime_context_line(
+    char *out, uint16_t out_cap, uint16_t *used,
+    const fr_diagnostic_t *diag, bool *out_wrote) {
+  const char *message = NULL;
+
+  if (out_wrote == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_wrote = false;
+  if (diag == NULL) {
+    return FR_OK;
+  }
+
+  if (diag->kind == FR_DIAG_TYPE) {
+    *out_wrote = true;
+    return fr_repl_append_type_context_line(out, out_cap, used, diag);
+  }
+
+  if (diag->kind == FR_DIAG_ARITY) {
+    *out_wrote = true;
+    if (diag->message_id == FR_DIAG_MSG_RUNTIME_TOO_FEW_ARGS) {
+      FR_TRY(fr_repl_append(out, out_cap, used, "too few arguments: expected "));
+      FR_TRY(fr_repl_append_int(out, out_cap, used, diag->expected));
+      FR_TRY(fr_repl_append(out, out_cap, used, ", got "));
+      FR_TRY(fr_repl_append_int(out, out_cap, used, diag->got));
+      return fr_repl_append_char(out, out_cap, used, '\n');
+    }
+    return fr_repl_append_arity_line(out, out_cap, used, diag);
+  }
+
+  switch ((fr_diag_message_id_t)diag->message_id) {
+  case FR_DIAG_MSG_RUNTIME_CELL_INDEX_OOB:
+    *out_wrote = true;
+    FR_TRY(fr_repl_append(out, out_cap, used, "cell index "));
+    FR_TRY(fr_repl_append_int(out, out_cap, used, diag->got));
+    FR_TRY(fr_repl_append(out, out_cap, used,
+                          " is past the end (length "));
+    FR_TRY(fr_repl_append_int(out, out_cap, used, diag->expected));
+    FR_TRY(fr_repl_append(out, out_cap, used, ")\n"));
+    return FR_OK;
+  case FR_DIAG_MSG_RUNTIME_CALL_DEPTH:
+    *out_wrote = true;
+    FR_TRY(fr_repl_append(out, out_cap, used,
+                          "call depth limit reached ("));
+    FR_TRY(fr_repl_append_int(out, out_cap, used, diag->expected));
+    FR_TRY(fr_repl_append(out, out_cap, used, ")\n"));
+    return FR_OK;
+  case FR_DIAG_MSG_RUNTIME_STACK_OVERFLOW:
+  case FR_DIAG_MSG_RUNTIME_STACK_UNDERFLOW:
+  case FR_DIAG_MSG_RUNTIME_INTEGER_OVERFLOW:
+    message = fr_diag_message(diag->message_id);
+    if (message == NULL) {
+      return FR_OK;
+    }
+    *out_wrote = true;
+    FR_TRY(fr_repl_append(out, out_cap, used, message));
+    return fr_repl_append_char(out, out_cap, used, '\n');
+  case FR_DIAG_MSG_NONE:
+  default:
+    return FR_OK;
+  }
 }
 
 static fr_err_t fr_repl_append_note_line(char *out, uint16_t out_cap,
@@ -961,7 +1080,16 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
   FR_TRY(fr_repl_append(out, out_cap, &used, ")\n"));
   base_used = used;
 
-  if (diag == NULL || diag->span_start == NULL) {
+  if (diag == NULL) {
+    return FR_OK;
+  }
+  if (diag->span_start == NULL) {
+    bool wrote_context = false;
+
+    if (fr_repl_append_runtime_context_line(out, out_cap, &used, diag,
+                                            &wrote_context) != FR_OK) {
+      fr_repl_truncate(out, &used, base_used);
+    }
     return FR_OK;
   }
 
@@ -2078,12 +2206,19 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
                                             const char *line,
                                             const fr_repl_writer_t *writer,
                                             fr_diagnostic_t *diag) {
+  fr_diagnostic_t *previous_diag = NULL;
   fr_err_t err = FR_OK;
 
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
   if (diag != NULL) {
     *diag = (fr_diagnostic_t){0};
   }
+  previous_diag = runtime->diag;
+  runtime->diag = diag;
   err = fr_repl_eval_line_to_writer_inner(runtime, line, writer, diag);
+  runtime->diag = previous_diag;
 #if FR_FEATURE_BYTES
   fr_bytes_reset_if_outermost(runtime);
 #endif

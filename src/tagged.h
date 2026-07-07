@@ -80,6 +80,8 @@ typedef enum fr_tagged_kind_t {
 } fr_tagged_kind_t;
 
 fr_tagged_kind_t fr_tagged_kind(fr_tagged_t tagged);
+const char *fr_tagged_kind_name(fr_tagged_kind_t kind);
+fr_diag_value_kind_t fr_tagged_diag_value_kind(fr_tagged_t tagged);
 bool fr_tagged_is_valid(fr_tagged_t tagged);
 
 fr_tagged_t fr_tagged_nil(void);
