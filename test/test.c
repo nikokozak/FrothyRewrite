@@ -4663,14 +4663,24 @@ static void test_code(void) {
   fr_instruction_stream_t view;
   fr_instruction_stream_t empty_view = {NULL, 0};
   fr_instruction_stream_t owned_view;
+  fr_instruction_stream_t too_large_view;
   fr_code_object_id_t code_object_id = 0;
+  fr_code_object_id_t base_code_id = 0;
+  fr_code_object_id_t overlay_code_id = 0;
+  fr_tagged_t base_code_tagged = 0;
+  fr_tagged_t overlay_code_tagged = 0;
+  uint32_t image_bytes_before = 0;
   fr_tagged_t result = 0;
   fr_int_t decoded = 0;
   uint8_t push_one[] = {0x00, 0x00, FR_TEST_PUSH_INT(1), FR_OP_RETURN};
   uint8_t push_two[] = {0x00, 0x00, FR_TEST_PUSH_INT(2), FR_OP_RETURN};
+  uint8_t stable_one[] = {0x00, 0x00, FR_TEST_PUSH_INT(1), FR_OP_RETURN};
+  uint8_t stable_two[] = {0x00, 0x00, FR_TEST_PUSH_INT(2), FR_OP_RETURN};
 
   write_instruction_header(push_one, FR_INSTRUCTION_MIN_HEADER_SIZE);
   write_instruction_header(push_two, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(stable_one, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(stable_two, FR_INSTRUCTION_MIN_HEADER_SIZE);
 
   CHECK("code runtime init", fr_runtime_init(&runtime) == FR_OK);
   CHECK("code rejects empty instruction stream",
@@ -4680,7 +4690,10 @@ static void test_code(void) {
         fr_instruction_stream_init(&view, push_one, sizeof(push_one)) == FR_OK);
   CHECK("code install push one",
         fr_code_install(&runtime, &view, NULL, 0, &code_object_id) == FR_OK &&
-            code_object_id == 0);
+            code_object_id == 0 &&
+            runtime.code.entries[code_object_id].storage_kind ==
+                FR_CODE_STORAGE_IMAGE &&
+            runtime.code.image_count == 1);
   push_one[3] = 0x02;
   push_one[4] = 0x00;
   CHECK("code owns bytes",
@@ -4693,14 +4706,20 @@ static void test_code(void) {
         fr_instruction_stream_init(&view, push_two, sizeof(push_two)) ==
                 FR_OK &&
             fr_code_install(&runtime, &view, NULL, 0, &code_object_id) == FR_OK &&
-            code_object_id == 1);
+            code_object_id == 1 &&
+            runtime.code.entries[code_object_id].storage_kind ==
+                FR_CODE_STORAGE_IMAGE &&
+            runtime.code.image_count == 2);
   fr_code_mark_base(&runtime);
   CHECK("code restore keeps base",
         (fr_code_restore_base(&runtime), true) &&
             fr_code_get_instructions(&runtime, 1, &owned_view) == FR_OK);
   CHECK("overlay code install",
         fr_code_install(&runtime, &view, NULL, 0, &code_object_id) == FR_OK &&
-            code_object_id == 2);
+            code_object_id == 2 &&
+            runtime.code.entries[code_object_id].storage_kind ==
+                FR_CODE_STORAGE_OVERLAY_RAM &&
+            runtime.code.image_count == 2);
   CHECK("code restore drops overlay",
         (fr_code_restore_base(&runtime), true) &&
             fr_code_get_instructions(&runtime, 2, &owned_view) ==
@@ -4709,6 +4728,78 @@ static void test_code(void) {
         (fr_code_reset(&runtime), true) &&
             fr_code_get_instructions(&runtime, 0, &owned_view) ==
                 FR_ERR_NOT_FOUND);
+
+  CHECK("code invariant starts clean", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("image code mounts through image store",
+        fr_instruction_stream_init(&view, stable_one, sizeof(stable_one)) ==
+                FR_OK &&
+            fr_code_mount_image(&runtime, &view, NULL, 0, &base_code_id) ==
+                FR_OK &&
+            base_code_id == 0 &&
+            runtime.code.image_count == 1 &&
+            runtime.code.entries[base_code_id].storage_kind ==
+                FR_CODE_STORAGE_IMAGE &&
+            fr_code_get_instructions(&runtime, base_code_id, &owned_view) ==
+                FR_OK &&
+            owned_view.bytes >= runtime.code.image_instruction_bytes &&
+            owned_view.bytes < runtime.code.image_instruction_bytes +
+                                   sizeof(runtime.code.image_instruction_bytes));
+  CHECK("base slot calls image code",
+        fr_tagged_encode_code_object_id(base_code_id, &base_code_tagged) ==
+                FR_OK &&
+            fr_slot_set_base(&runtime, 0, base_code_tagged) == FR_OK &&
+            (fr_code_mark_base(&runtime), true));
+  CHECK("base code runs before shadow",
+        fr_vm_run_slot(&runtime, 0, &result) == FR_OK &&
+            fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 1);
+  CHECK("overlay definition uses overlay arena",
+        fr_instruction_stream_init(&view, stable_two, sizeof(stable_two)) ==
+                FR_OK &&
+            fr_code_install_overlay(&runtime, &view, NULL, 0,
+                                    &overlay_code_id) == FR_OK &&
+            overlay_code_id == runtime.code.image_count &&
+            runtime.code.entries[overlay_code_id].storage_kind ==
+                FR_CODE_STORAGE_OVERLAY_RAM &&
+            fr_code_get_instructions(&runtime, overlay_code_id, &owned_view) ==
+                FR_OK &&
+            owned_view.bytes >= runtime.code.overlay_instruction_bytes &&
+            owned_view.bytes < runtime.code.overlay_instruction_bytes +
+                                   sizeof(runtime.code.overlay_instruction_bytes));
+  CHECK("overlay shadow calls overlay code without moving base id",
+        fr_tagged_encode_code_object_id(overlay_code_id, &overlay_code_tagged) ==
+                FR_OK &&
+            fr_slot_write(&runtime, 0, overlay_code_tagged) == FR_OK &&
+            base_code_id == 0 &&
+            runtime.code.image_count == 1 &&
+            fr_vm_run_slot(&runtime, 0, &result) == FR_OK &&
+            fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 2);
+  CHECK("clear overlay reveals original image code",
+        fr_runtime_clear_project(&runtime) == FR_OK &&
+            runtime.code.count == runtime.code.image_count &&
+            fr_code_get_instructions(&runtime, overlay_code_id, &owned_view) ==
+                FR_ERR_NOT_FOUND &&
+            fr_vm_run_slot(&runtime, 0, &result) == FR_OK &&
+            fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 1);
+  CHECK("redefine after clear reuses overlay id above stable image id",
+        fr_code_install_overlay(&runtime, &view, NULL, 0, &overlay_code_id) ==
+                FR_OK &&
+            overlay_code_id == runtime.code.image_count &&
+            base_code_id == 0 &&
+            runtime.code.entries[base_code_id].storage_kind ==
+                FR_CODE_STORAGE_IMAGE);
+  image_bytes_before = runtime.code.image_used_instruction_bytes;
+  too_large_view = (fr_instruction_stream_t){
+      .bytes = stable_two,
+      .length = (uint16_t)(FR_PROFILE_MAX_OVERLAY_CODE_BYTES + 1u),
+  };
+  CHECK("overlay over-cap leaves image arena untouched",
+        (fr_code_clear_overlay(&runtime), true) &&
+            fr_code_install_overlay(&runtime, &too_large_view, NULL, 0,
+                                    &overlay_code_id) == FR_ERR_CAPACITY &&
+            runtime.code.image_used_instruction_bytes == image_bytes_before &&
+            runtime.code.count == runtime.code.image_count &&
+            fr_vm_run_slot(&runtime, 0, &result) == FR_OK &&
+            fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 1);
 }
 
 static void test_image(void) {
@@ -8430,10 +8521,10 @@ static void test_compiler_overlay_wire_parity(void) {
   CHECK("compiler parity code counts match",
         direct_runtime.code.count == wire_runtime.code.count &&
             host_mirror.code.count == wire_runtime.code.count &&
-            direct_runtime.code.used_instruction_bytes ==
-                wire_runtime.code.used_instruction_bytes &&
-            host_mirror.code.used_instruction_bytes ==
-                wire_runtime.code.used_instruction_bytes);
+            direct_runtime.code.overlay_used_instruction_bytes ==
+                wire_runtime.code.overlay_used_instruction_bytes &&
+            host_mirror.code.overlay_used_instruction_bytes ==
+                wire_runtime.code.overlay_used_instruction_bytes);
   CHECK("compiler parity literal slot matches",
         test_named_slot_effects_match(&direct_runtime, &wire_runtime, "led"));
   CHECK("compiler parity code slot matches",
@@ -9047,6 +9138,146 @@ static void test_persist(void) {
             &runtime, "led is $led_builtin", &update) == FR_OK &&
             update.slot_inits[0].slot_id == FR_TEST_FIRST_USER_SLOT);
 }
+
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+static void test_persist_restore_with_live_overlay_code(void) {
+  fr_runtime_t runtime;
+  char out[64];
+
+  fr_platform_persist_clear();
+  CHECK("restore live overlay installs base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("restore live overlay saves code word",
+        fr_repl_eval_line(&runtime, "saved is fn [ one ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 && fr_persist_save(&runtime) == FR_OK);
+  CHECK("restore live overlay leaves scratch overlay",
+        fr_repl_eval_line(&runtime, "scratch is fn [ one ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            runtime.code.count > runtime.code.image_count);
+  CHECK("restore live overlay public restore succeeds",
+        fr_persist_restore(&runtime) == FR_OK);
+  CHECK("restore live overlay saved word runs",
+        fr_repl_eval_line(&runtime, "saved:", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+}
+
+static void test_persist_full_restore_code_ids_are_idempotent(void) {
+  fr_runtime_t runtime;
+  fr_code_table_t first_code;
+  fr_tagged_t result = 0;
+  fr_int_t decoded = 0;
+  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t image_length = 0;
+  const uint8_t *payload = NULL;
+  uint16_t payload_length = 0;
+  char out[64];
+
+  fr_platform_persist_clear();
+  CHECK("full restore idempotent seed base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("full restore idempotent saves code",
+        fr_repl_eval_line(&runtime, "boot is fn [ one ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 && fr_persist_save(&runtime) == FR_OK);
+  CHECK("full restore idempotent reads payload",
+        fr_platform_persist_read(image, (uint16_t)sizeof(image), &image_length,
+                                 0) == FR_OK &&
+            image_length > FR_PERSIST_HEADER_BYTES);
+  payload = &image[FR_PERSIST_HEADER_BYTES];
+  payload_length = (uint16_t)(image_length - FR_PERSIST_HEADER_BYTES);
+
+  CHECK("full restore idempotent first apply",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_payload_restore(&runtime, payload, payload_length) ==
+                FR_OK);
+  first_code = runtime.code;
+  CHECK("full restore idempotent first boot runs",
+        fr_vm_run_boot(&runtime, &result) == FR_OK &&
+            fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 1);
+  CHECK("full restore idempotent second apply",
+        fr_persist_payload_restore(&runtime, payload, payload_length) == FR_OK);
+  CHECK("full restore idempotent code table unchanged",
+        memcmp(&first_code, &runtime.code, sizeof(first_code)) == 0);
+  CHECK("full restore idempotent second boot runs",
+        fr_vm_run_boot(&runtime, &result) == FR_OK &&
+            fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 1);
+}
+
+static void test_persist_restored_code_drops_on_reset(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t first_restored_code_id = 0;
+  fr_slot_id_t slot_id = 0;
+  uint16_t base_code_count = 0;
+  char out[64];
+
+  fr_platform_persist_clear();
+  CHECK("restored code reset seed base", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("restored code reset saves user code",
+        fr_repl_eval_line(&runtime, "saved is fn [ one ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 && fr_persist_save(&runtime) == FR_OK);
+  CHECK("restored code reset public restore",
+        fr_base_image_install(&runtime) == FR_OK &&
+            (base_code_count = runtime.code.base_image_count, true) &&
+            fr_persist_restore(&runtime) == FR_OK &&
+            runtime.code.image_count > base_code_count);
+  first_restored_code_id = (fr_code_object_id_t)base_code_count;
+  CHECK("restored code reset mounted image code",
+        fr_code_get_instructions(&runtime, first_restored_code_id, &view) ==
+            FR_OK);
+  CHECK("restored code reset drops restored image code",
+        fr_runtime_reset(&runtime) == FR_OK &&
+            runtime.code.count == runtime.code.base_image_count &&
+            runtime.code.image_count == runtime.code.base_image_count &&
+            fr_code_get_instructions(&runtime, first_restored_code_id, &view) ==
+                FR_ERR_NOT_FOUND &&
+            fr_slot_id_for_name(&runtime, "saved", &slot_id) ==
+                FR_ERR_NOT_FOUND);
+}
+
+static void test_persist_restore_capacity_uses_base_code_boundary(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t filler_id = 0;
+  fr_err_t fill_err = FR_OK;
+  uint8_t push_nil[] = {0x00, 0x00, FR_OP_PUSH_NIL, FR_OP_RETURN};
+  char out[64];
+
+  write_instruction_header(push_nil, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  fr_platform_persist_clear();
+  CHECK("restore capacity boundary seed base",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("restore capacity boundary saves code",
+        fr_repl_eval_line(&runtime, "saved is fn [ one ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 && fr_persist_save(&runtime) == FR_OK);
+  CHECK("restore capacity boundary reinstalls base",
+        fr_base_image_install(&runtime) == FR_OK &&
+            (uint32_t)runtime.code.base_image_count + 1u <=
+                FR_PROFILE_CODE_OBJECT_TABLE_SIZE);
+  CHECK("restore capacity boundary filler view",
+        fr_instruction_stream_init(&view, push_nil, sizeof(push_nil)) == FR_OK);
+  while (runtime.code.image_count < FR_PROFILE_CODE_OBJECT_TABLE_SIZE) {
+    fill_err = fr_code_mount_image(&runtime, &view, NULL, 0, &filler_id);
+    CHECK("restore capacity boundary fills restored image ids",
+          fill_err == FR_OK);
+    if (fill_err != FR_OK) {
+      break;
+    }
+  }
+  CHECK("restore capacity boundary reaches table edge",
+        runtime.code.image_count == FR_PROFILE_CODE_OBJECT_TABLE_SIZE);
+  CHECK("restore capacity boundary public restore succeeds",
+        fr_persist_restore(&runtime) == FR_OK);
+  CHECK("restore capacity boundary saved word runs",
+        runtime.code.image_count == runtime.code.base_image_count + 1u &&
+            fr_repl_eval_line(&runtime, "saved:", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+}
+#endif
 #elif FR_FEATURE_PERSISTENCE
 static void test_persist(void) {
   fr_runtime_t runtime;
@@ -11803,6 +12034,12 @@ int main(void) {
 #endif
 #if FR_FEATURE_PERSISTENCE
   test_persist();
+#if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS
+  test_persist_restore_with_live_overlay_code();
+  test_persist_full_restore_code_ids_are_idempotent();
+  test_persist_restored_code_drops_on_reset();
+  test_persist_restore_capacity_uses_base_code_boundary();
+#endif
   test_persist_code_id_round_trip();
   test_persist_cross_width_header_rejection();
 #if FR_FEATURE_SOURCE_BASE

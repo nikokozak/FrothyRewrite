@@ -641,18 +641,27 @@ static fr_err_t fr_image_check_apply(const fr_runtime_t *runtime,
     return FR_ERR_CAPACITY;
   }
 
-  used_instruction_bytes = runtime->code.used_instruction_bytes;
+  if (mode == FR_IMAGE_APPLY_BASE &&
+      runtime->code.count != runtime->code.image_count) {
+    return FR_ERR_INVALID;
+  }
+  used_instruction_bytes = mode == FR_IMAGE_APPLY_BASE
+                               ? runtime->code.image_used_instruction_bytes
+                               : runtime->code.overlay_used_instruction_bytes;
   for (uint16_t i = 0; i < records->code_object_count; i++) {
     const fr_instruction_stream_t *instructions =
         &records->code_objects[i].instructions;
     fr_instruction_header_t header = {0};
+    uint32_t instruction_capacity =
+        mode == FR_IMAGE_APPLY_BASE
+            ? (uint32_t)sizeof(runtime->code.image_instruction_bytes)
+            : (uint32_t)sizeof(runtime->code.overlay_instruction_bytes);
 
     if (instructions->length == 0 || instructions->bytes == NULL) {
       return FR_ERR_INVALID;
     }
     FR_TRY(fr_instruction_read_header(instructions, &header));
-    if (used_instruction_bytes + instructions->length >
-        FR_PROFILE_MAX_INSTRUCTION_BYTES) {
+    if (used_instruction_bytes + instructions->length > instruction_capacity) {
       return FR_ERR_CAPACITY;
     }
     used_instruction_bytes += instructions->length;
@@ -967,11 +976,14 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
 #else
   (void)text_ids;
 #endif
-  /* fr_code_install assigns ids sequentially from runtime->code.count, so we
+  /* Code install assigns ids sequentially from the active code boundary, so we
    * can pre-compute the ids and patch PUSH_CODE_ID operands before install
    * copies the bytes. */
   for (uint16_t i = 0; i < records->code_object_count; i++) {
-    code_ids[i] = (fr_code_object_id_t)(runtime->code.count + i);
+    code_ids[i] = (fr_code_object_id_t)(
+        (mode == FR_IMAGE_APPLY_BASE ? runtime->code.image_count
+                                     : runtime->code.count) +
+        i);
   }
   if (records->code_object_count > 1) {
     for (uint16_t i = 0; i < records->code_object_count; i++) {
@@ -983,10 +995,18 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
   }
   for (uint16_t i = 0; i < records->code_object_count; i++) {
     fr_code_object_id_t installed_id = 0;
-    FR_TRY(fr_code_install(runtime, &records->code_objects[i].instructions,
-                           records->code_objects[i].param_names,
-                           records->code_objects[i].param_names_length,
-                           &installed_id));
+    if (mode == FR_IMAGE_APPLY_BASE) {
+      FR_TRY(fr_code_mount_image(runtime,
+                                 &records->code_objects[i].instructions,
+                                 records->code_objects[i].param_names,
+                                 records->code_objects[i].param_names_length,
+                                 &installed_id));
+    } else {
+      FR_TRY(fr_code_install_overlay(
+          runtime, &records->code_objects[i].instructions,
+          records->code_objects[i].param_names,
+          records->code_objects[i].param_names_length, &installed_id));
+    }
     if (installed_id != code_ids[i]) {
       return FR_ERR_CORRUPT;
     }
