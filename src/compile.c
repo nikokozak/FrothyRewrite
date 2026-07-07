@@ -1769,7 +1769,8 @@ fr_compile_overlay_update_with_context(const fr_compile_context_t *ctx,
   }
   memset(out, 0, sizeof(*out));
 
-  FR_TRY(fr_parse_line(source, &parsed));
+  FR_TRY(fr_parse_line_with_diagnostic(source, &parsed,
+                                       ctx != NULL ? ctx->diag : NULL));
   FR_TRY(fr_compile_definition_slot(ctx, parsed.definition.name, out, &slot_id,
                                     &has_slot_name));
   if (parsed.kind == FR_PARSE_LINE_RECORD_SHAPE) {
@@ -1969,7 +1970,7 @@ fr_err_t fr_compile_value_binding_for_runtime_with_diagnostic(
   }
   memset(out, 0, sizeof(*out));
 
-  FR_TRY(fr_parse_line(source, &parsed));
+  FR_TRY(fr_parse_line_with_diagnostic(source, &parsed, ctx.diag));
   if (parsed.kind != FR_PARSE_LINE_DEFINITION) {
     return FR_ERR_UNSUPPORTED;
   }
@@ -2032,7 +2033,8 @@ fr_compile_expression_with_context(const fr_compile_context_t *ctx,
   }
   memset(out, 0, sizeof(*out));
 
-  FR_TRY(fr_parse_expression_line(source, &parsed, &expr_id));
+  FR_TRY(fr_parse_expression_line_with_diagnostic(
+      source, &parsed, &expr_id, ctx != NULL ? ctx->diag : NULL));
 
   local_count = fr_compile_count_local_binds(&parsed);
   if (local_count > FR_PARSE_MAX_LOCALS) {

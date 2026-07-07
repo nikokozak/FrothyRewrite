@@ -49,3 +49,55 @@ const char *fr_err_name(fr_err_t err) {
     return NULL;
   }
 }
+
+const char *fr_diag_message(uint16_t message_id) {
+  static const char *const messages[] = {
+      [FR_DIAG_MSG_NONE] = NULL,
+      [FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN] = "unexpected token",
+      [FR_DIAG_MSG_PARSE_EXPECTED_IS] =
+          "expected 'is' before the value of a definition",
+      [FR_DIAG_MSG_PARSE_EXPECTED_COLON_BEFORE_ARGUMENT] =
+          "expected ':' before the argument to a word",
+      [FR_DIAG_MSG_PARSE_EXPECTED_WORD_NAME] = "expected a word name",
+      [FR_DIAG_MSG_PARSE_RESERVED_NAME] =
+          "reserved word cannot be used as a name",
+      [FR_DIAG_MSG_PARSE_RESERVED_PARAMETER] =
+          "reserved word cannot be used as a parameter",
+      [FR_DIAG_MSG_PARSE_DUPLICATE_PARAMETER] =
+          "parameter name is already used",
+      [FR_DIAG_MSG_PARSE_EXPECTED_PARAMETER] = "expected a parameter name",
+      [FR_DIAG_MSG_PARSE_EXPECTED_BLOCK_START] =
+          "expected '[' to start the block",
+      [FR_DIAG_MSG_PARSE_EXPECTED_BLOCK_END] =
+          "expected ']' to close the block",
+      [FR_DIAG_MSG_PARSE_UNEXPECTED_BLOCK_END] = "unexpected ']'",
+      [FR_DIAG_MSG_PARSE_EXPECTED_GROUP_END] =
+          "expected ')' to close the group",
+      [FR_DIAG_MSG_PARSE_UNEXPECTED_GROUP_END] = "unexpected ')'",
+      [FR_DIAG_MSG_PARSE_EMPTY_BLOCK] = "block needs an expression",
+      [FR_DIAG_MSG_PARSE_UNTERMINATED_TEXT] = "unterminated text literal",
+      [FR_DIAG_MSG_PARSE_BAD_ESCAPE] = "malformed text escape",
+      [FR_DIAG_MSG_PARSE_TEXT_TOO_LONG] = "text literal is too long",
+      [FR_DIAG_MSG_PARSE_TOKEN_TOO_LONG] = "token is too long",
+      [FR_DIAG_MSG_PARSE_BAD_INTEGER] = "malformed integer literal",
+      [FR_DIAG_MSG_PARSE_INTEGER_RANGE] = "integer literal is out of range",
+      [FR_DIAG_MSG_PARSE_TEXT_DISABLED] =
+          "text is not enabled in this build",
+      [FR_DIAG_MSG_PARSE_CELLS_DISABLED] =
+          "cells are not enabled in this build",
+      [FR_DIAG_MSG_PARSE_RECORDS_DISABLED] =
+          "records are not enabled in this build",
+      [FR_DIAG_MSG_PARSE_EMPTY_RECORD] = "record needs at least one field",
+      [FR_DIAG_MSG_PARSE_EXPECTED_FIELD] = "expected a field name",
+      [FR_DIAG_MSG_PARSE_DUPLICATE_FIELD] = "field name is already used",
+      [FR_DIAG_MSG_PARSE_BAD_FIELD] = "field name cannot contain '.'",
+      [FR_DIAG_MSG_PARSE_EXPECTED_TO] = "expected 'to' before the value",
+      [FR_DIAG_MSG_PARSE_EXPECTED_EVENT_EDGE] = "expected an event edge",
+      [FR_DIAG_MSG_PARSE_TOO_DEEP] = "expression is too deeply nested",
+  };
+
+  if (message_id >= (uint16_t)(sizeof(messages) / sizeof(messages[0]))) {
+    return NULL;
+  }
+  return messages[message_id];
+}

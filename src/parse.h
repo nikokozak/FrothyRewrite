@@ -99,4 +99,9 @@ typedef struct fr_parse_line_t {
 bool fr_parse_span_equals(fr_parse_span_t span, const char *text);
 fr_err_t fr_parse_expression_line(const char *source, fr_parse_line_t *out,
                                   fr_parse_expr_id_t *out_expr);
+fr_err_t fr_parse_expression_line_with_diagnostic(
+    const char *source, fr_parse_line_t *out, fr_parse_expr_id_t *out_expr,
+    fr_diagnostic_t *diag);
 fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out);
+fr_err_t fr_parse_line_with_diagnostic(const char *source, fr_parse_line_t *out,
+                                       fr_diagnostic_t *diag);
