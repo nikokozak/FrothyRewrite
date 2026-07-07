@@ -6,6 +6,7 @@
 
 #include "base_defs.h"
 #include "crc.h"
+#include "event.h"
 #include "persist_payload.h"
 #include "platform.h"
 #include "profile.h"
@@ -337,6 +338,11 @@ fr_err_t fr_persist_wipe_user(fr_runtime_t *runtime) {
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
+  /* Events are user runtime state: they are only ever armed by user code
+   * calling every/after/on. Stop them here (a full wipe does so via
+   * fr_runtime_reset) so a timer cannot keep firing into a slot the tier wipe
+   * just cleared, which spams 'wrong type' errors. */
+  FR_TRY(fr_event_clear_table(runtime));
   fr_persist_session_wipe_user_tier(runtime);
   return fr_persist_save(runtime);
 }

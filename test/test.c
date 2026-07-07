@@ -3503,6 +3503,22 @@ static void test_event_table(void) {
   CHECK("overflow cleared", runtime.events.overflow_count == 0);
 }
 
+/* Regression: wipe-user must stop armed timer events. A full wipe cleared them
+ * (via fr_runtime_reset) but wipe-user did not, so an every/on timer kept firing
+ * into the slots the wipe had just cleared, spamming 'wrong type' errors. */
+static void test_wipe_user_clears_events(void) {
+  fr_runtime_t runtime;
+
+  CHECK("wipe-events base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("wipe-events arm every",
+        fr_event_register(&runtime, FR_EVENT_KIND_EVERY, 100, 0, 3) == FR_OK &&
+            runtime.events.active_count == 1);
+  CHECK("wipe-events wipe-user ok", fr_persist_wipe_user(&runtime) == FR_OK);
+  CHECK("wipe-events timers stopped",
+        runtime.events.active_count == 0 &&
+            runtime.events.entries[0].kind == FR_EVENT_KIND_NONE);
+}
+
 static void test_event_register_cancel(void) {
   fr_runtime_t runtime;
   fr_event_binding_t *entry;
@@ -11328,6 +11344,7 @@ int main(void) {
   test_natives();
   test_event_table();
   test_event_register_cancel();
+  test_wipe_user_clears_events();
   test_event_drain_dispatch();
   test_event_safe_point_fires_when_active();
   test_event_coalescing();
