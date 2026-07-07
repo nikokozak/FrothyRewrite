@@ -33,6 +33,26 @@ typedef enum fr_err_t {
 
 const char *fr_err_name(fr_err_t err);
 
+typedef enum fr_diag_kind_t {
+  FR_DIAG_NONE = 0,
+  FR_DIAG_NAME,
+  FR_DIAG_TYPE,
+  FR_DIAG_ARITY,
+  FR_DIAG_LIMIT,
+  FR_DIAG_TOKEN,
+  FR_DIAG_NOTE,
+} fr_diag_kind_t;
+
+typedef struct fr_diagnostic_t {
+  fr_diag_kind_t kind;
+  const char *span_start;
+  uint16_t span_length;
+  uint16_t message_id;
+  uint16_t expected;
+  uint16_t got;
+  uint16_t index;
+} fr_diagnostic_t;
+
 typedef int32_t fr_int_t;
 typedef uint16_t fr_slot_id_t;
 typedef uint16_t fr_code_object_id_t;

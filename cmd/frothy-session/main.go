@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -87,6 +88,8 @@ const (
 	// Keep this basename in sync with OVERLAY_COMPILER in the Makefile.
 	compilerProgramName = "frothy-compile-overlay"
 )
+
+var canonicalErrorStatusPattern = regexp.MustCompile(`^error: .+\([0-9]+\)$`)
 
 func executableFileExists(path string) bool {
 	info, err := os.Stat(path)
@@ -332,9 +335,11 @@ func (d *serialDevice) readLoop() {
 }
 
 func responseHasTerminalStatus(response string) bool {
-	text := strings.ReplaceAll(response, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
+	text := normalizeResponseText(response)
 	if strings.HasSuffix(text, "ok\n") {
+		return true
+	}
+	if canonicalErrorStatusInResponse(text) != "" {
 		return true
 	}
 	status := responseStatus(response)
@@ -412,8 +417,23 @@ func (d *serialDevice) syncPrompt(timeout time.Duration) error {
 }
 
 func responseStatus(response string) string {
+	text := normalizeResponseText(response)
+	status := lastResponseStatusLine(text)
+	if status == "ok" || canonicalErrorStatusPattern.MatchString(status) {
+		return status
+	}
+	if errorStatus := canonicalErrorStatusInResponse(text); errorStatus != "" {
+		return errorStatus
+	}
+	return status
+}
+
+func normalizeResponseText(response string) string {
 	text := strings.ReplaceAll(response, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
+	return strings.ReplaceAll(text, "\r", "\n")
+}
+
+func lastResponseStatusLine(text string) string {
 	lines := strings.Split(text, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
@@ -422,6 +442,17 @@ func responseStatus(response string) string {
 		}
 	}
 	return ""
+}
+
+func canonicalErrorStatusInResponse(text string) string {
+	status := ""
+	for _, rawLine := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if canonicalErrorStatusPattern.MatchString(line) {
+			status = line
+		}
+	}
+	return status
 }
 
 func responseOK(response string) bool {

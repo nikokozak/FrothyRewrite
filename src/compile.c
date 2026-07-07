@@ -46,6 +46,7 @@ typedef struct fr_compile_event_body_t {
 
 typedef struct fr_compile_context_t {
   fr_runtime_t *runtime;
+  fr_diagnostic_t *diag;
   const fr_parse_span_t *params;
   uint8_t param_count;
   fr_slot_id_t definition_slot_id;
@@ -128,6 +129,28 @@ static fr_err_t fr_compile_slot_for_name(const fr_compile_context_t *ctx,
     return fr_slot_id_for_name(ctx->runtime, copied, out_slot_id);
   }
   return fr_base_slot_id_for_name(copied, out_slot_id);
+}
+
+static void fr_compile_note_name_diagnostic(const fr_compile_context_t *ctx,
+                                            fr_parse_span_t name) {
+  if (ctx == NULL || ctx->diag == NULL ||
+      ctx->diag->kind != FR_DIAG_NONE) {
+    return;
+  }
+  ctx->diag->kind = FR_DIAG_NAME;
+  ctx->diag->span_start = name.start;
+  ctx->diag->span_length = name.length;
+}
+
+static fr_err_t fr_compile_expr_slot_for_name(const fr_compile_context_t *ctx,
+                                              fr_parse_span_t name,
+                                              fr_slot_id_t *out_slot_id) {
+  fr_err_t err = fr_compile_slot_for_name(ctx, name, out_slot_id);
+
+  if (err == FR_ERR_NOT_FOUND) {
+    fr_compile_note_name_diagnostic(ctx, name);
+  }
+  return err;
 }
 
 static fr_err_t
@@ -661,7 +684,7 @@ static fr_err_t fr_compile_emit_call(const fr_compile_context_t *ctx,
   fr_code_object_id_t code_object_id = 0;
   uint8_t definition_arity = 0;
 
-  FR_TRY(fr_compile_slot_for_name(ctx, expr->name, &slot_id));
+  FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
 
   if (fr_compile_current_definition_for_slot(ctx, slot_id,
                                              &definition_arity)) {
@@ -1140,7 +1163,7 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     if (fr_compile_param_for_name(ctx, expr->name, &arg_index)) {
       return fr_compile_emit_load_arg(instruction_bytes, offset, arg_index);
     }
-    FR_TRY(fr_compile_slot_for_name(ctx, expr->name, &slot_id));
+    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
     return fr_compile_emit_slot_op(instruction_bytes, offset, FR_OP_LOAD_SLOT,
                                    slot_id);
   }
@@ -1161,7 +1184,7 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     if (expr->child_count != 1) {
       return FR_ERR_INVALID;
     }
-    FR_TRY(fr_compile_slot_for_name(ctx, expr->name, &slot_id));
+    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
     {
       const fr_parse_expr_t *index =
           fr_compile_expr_at(parsed, expr->children[0]);
@@ -1183,7 +1206,7 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     if (expr->child_count != 2) {
       return FR_ERR_INVALID;
     }
-    FR_TRY(fr_compile_slot_for_name(ctx, expr->name, &slot_id));
+    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
     {
       const fr_parse_expr_t *index =
           fr_compile_expr_at(parsed, expr->children[0]);
@@ -1243,9 +1266,9 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     if (fr_compile_param_for_name(ctx, expr->name, &arg_index)) {
       return FR_ERR_INVALID;
     }
-    /* fr_compile_slot_for_name errors if the name has never been declared,
+    /* fr_compile_expr_slot_for_name errors if the name has never been declared,
      * which is exactly the "set on undeclared slot" rejection we want. */
-    FR_TRY(fr_compile_slot_for_name(ctx, expr->name, &slot_id));
+    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
     FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->child, instruction_bytes,
                                 offset));
     return fr_compile_emit_slot_op(instruction_bytes, offset, FR_OP_STORE_SLOT,
@@ -1397,7 +1420,7 @@ static fr_err_t fr_compile_literal_ref(const fr_compile_context_t *ctx,
   }
   if (expr->kind == FR_PARSE_EXPR_NAME && ctx != NULL &&
       ctx->runtime != NULL) {
-    FR_TRY(fr_compile_slot_for_name(ctx, expr->name, &slot_id));
+    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id));
     FR_TRY(fr_slot_read(ctx->runtime, slot_id, &tagged));
     *out_ref = (fr_image_ref_t){FR_IMAGE_REF_LITERAL_TAGGED, tagged, 0};
     return FR_OK;
@@ -1551,7 +1574,7 @@ static fr_err_t fr_compile_record_object(
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_compile_require_source_feature(FR_COMPILE_SOURCE_RECORDS));
-  FR_TRY(fr_compile_slot_for_name(ctx, value->name, &shape_slot));
+  FR_TRY(fr_compile_expr_slot_for_name(ctx, value->name, &shape_slot));
   FR_TRY(fr_slot_read(ctx->runtime, shape_slot, &shape_tagged));
   FR_TRY(fr_tagged_decode_object_id(shape_tagged, &shape_object_id));
   FR_TRY(fr_record_shape_view(ctx->runtime, shape_object_id, &shape_name,
@@ -1898,8 +1921,16 @@ fr_err_t fr_compile_overlay_update(const char *source,
 
 fr_err_t fr_compile_overlay_update_for_runtime(
     fr_runtime_t *runtime, const char *source, fr_compile_overlay_update_t *out) {
+  return fr_compile_overlay_update_for_runtime_with_diagnostic(runtime, source,
+                                                               out, NULL);
+}
+
+fr_err_t fr_compile_overlay_update_for_runtime_with_diagnostic(
+    fr_runtime_t *runtime, const char *source, fr_compile_overlay_update_t *out,
+    fr_diagnostic_t *diag) {
   const fr_compile_context_t ctx = {
       .runtime = runtime,
+      .diag = diag,
   };
 
   if (runtime == NULL) {
@@ -1915,8 +1946,16 @@ static bool fr_compile_expr_is_runtime_binding_value(
 
 fr_err_t fr_compile_value_binding_for_runtime(
     fr_runtime_t *runtime, const char *source, fr_compile_value_binding_t *out) {
+  return fr_compile_value_binding_for_runtime_with_diagnostic(runtime, source,
+                                                              out, NULL);
+}
+
+fr_err_t fr_compile_value_binding_for_runtime_with_diagnostic(
+    fr_runtime_t *runtime, const char *source, fr_compile_value_binding_t *out,
+    fr_diagnostic_t *diag) {
   fr_compile_context_t ctx = {
       .runtime = runtime,
+      .diag = diag,
   };
   fr_compile_locals_t locals = {0};
   fr_parse_line_t parsed = {0};
@@ -2036,8 +2075,16 @@ fr_err_t fr_compile_expression(const char *source,
 fr_err_t fr_compile_expression_for_runtime(fr_runtime_t *runtime,
                                            const char *source,
                                            fr_compile_expression_t *out) {
+  return fr_compile_expression_for_runtime_with_diagnostic(runtime, source, out,
+                                                           NULL);
+}
+
+fr_err_t fr_compile_expression_for_runtime_with_diagnostic(
+    fr_runtime_t *runtime, const char *source, fr_compile_expression_t *out,
+    fr_diagnostic_t *diag) {
   const fr_compile_context_t ctx = {
       .runtime = runtime,
+      .diag = diag,
   };
 
   if (runtime == NULL) {
