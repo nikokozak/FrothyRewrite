@@ -146,13 +146,22 @@ void fr_host_i2c_queue_read(uint16_t platform_index, const uint8_t *bytes,
 #endif
 
 #if FR_FEATURE_PERSISTENCE
-fr_err_t fr_platform_storage_read(uint8_t slot, uint16_t offset, uint8_t *bytes,
-                                  uint16_t length);
-fr_err_t fr_platform_storage_write(uint8_t slot, uint16_t offset,
-                                   const uint8_t *bytes, uint16_t length);
-fr_err_t fr_platform_storage_erase(uint8_t slot);
+/* Read a committed persistence image by backend generation order. Index 0 is
+ * the newest valid-envelope image; higher indexes walk older valid envelopes.
+ * The platform owns torn-write atomicity, envelope CRC, and generation order. */
+fr_err_t fr_platform_persist_read(uint8_t *bytes, uint16_t cap,
+                                  uint16_t *out_length, uint8_t image_index);
+/* Atomically replace the committed image. After power loss, read returns the
+ * old image or the new image, never a mixed image. */
+fr_err_t fr_platform_persist_commit(const uint8_t *bytes, uint16_t length);
+fr_err_t fr_platform_persist_clear(void);
 
-void fr_platform_storage_debug_reset(void);
+#ifdef FR_HOST_TEST_HELPERS
+/* Host fault injection for durability tests. Corrupts the newest internally
+ * stored image without exposing the backend's slot layout. */
+fr_err_t fr_host_persist_debug_corrupt_newest(uint16_t offset, uint8_t value);
+void fr_host_persist_debug_interrupt_next_commit(uint16_t written_length);
+#endif
 #endif
 
 #if FR_FEATURE_NET

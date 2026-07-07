@@ -541,27 +541,26 @@ static void test_profile_hash_word_size(void) {
  * compare in fr_persist_header_parse. */
 static void test_persist_cross_width_header_rejection(void) {
   fr_runtime_t runtime;
-  uint8_t header[FR_PERSIST_HEADER_BYTES];
+  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t image_length = 0;
   const uint16_t other = 16u;
 
   CHECK("save populates storage for cross-width test",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK);
-  CHECK("read saved header for tampering",
-        fr_platform_storage_read(0, 0, header,
-                                 (uint16_t)sizeof(header)) == FR_OK);
+  CHECK("read saved image for tampering",
+        fr_platform_persist_read(image, (uint16_t)sizeof(image), &image_length,
+                                 0) == FR_OK);
 
-  fr_write_u32_le(&header[FR_PERSIST_PROFILE_HASH_OFFSET],
+  fr_write_u32_le(&image[FR_PERSIST_PROFILE_HASH_OFFSET],
                   fr_profile_debug_hash_for_word_size(other));
-  memset(&header[24], 0, 4);
-  fr_write_u32_le(&header[24],
-                  fr_crc32(header, FR_PERSIST_HEADER_BYTES));
+  memset(&image[FR_PERSIST_HEADER_CRC_OFFSET], 0, 4);
+  fr_write_u32_le(&image[FR_PERSIST_HEADER_CRC_OFFSET],
+                  fr_crc32(image, FR_PERSIST_HEADER_BYTES));
 
-  CHECK("write tampered headers back to both storage slots",
-        fr_platform_storage_write(0, 0, header,
-                                  (uint16_t)sizeof(header)) == FR_OK &&
-            fr_platform_storage_write(1, 0, header,
-                                      (uint16_t)sizeof(header)) == FR_OK);
+  CHECK("commit wrong-width image without fallback",
+        fr_platform_persist_clear() == FR_OK &&
+            fr_platform_persist_commit(image, image_length) == FR_OK);
   CHECK("restore rejects header with opposite-width profile hash",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_ERR_CORRUPT);
@@ -584,7 +583,7 @@ static void test_persist_code_id_round_trip(void) {
                            FR_OP_PUSH_CODE_ID, 0x00, 0x00, FR_OP_RETURN};
   const size_t outer_code_id_operand = FR_INSTRUCTION_MIN_HEADER_SIZE + 1u;
 
-  fr_platform_storage_debug_reset();
+  fr_platform_persist_clear();
   write_instruction_header(inner_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
   write_instruction_header(outer_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
   CHECK("code-id round-trip base image",
@@ -626,8 +625,9 @@ static void test_persist_code_id_round_trip(void) {
  * base/core.frothy. A rebuild with edited source rejects the old overlay. */
 static void test_persist_source_change_header_rejection(void) {
   fr_runtime_t runtime;
-  uint8_t header[FR_PERSIST_HEADER_BYTES];
+  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
   char perturbed[FR_PROFILE_REPL_LINE_BYTES];
+  uint16_t image_length = 0;
   uint16_t length = fr_source_base_bytes_len;
 
   if (length > sizeof(perturbed)) {
@@ -639,21 +639,20 @@ static void test_persist_source_change_header_rejection(void) {
   CHECK("save populates storage for source-change test",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK);
-  CHECK("read saved header for source-change tampering",
-        fr_platform_storage_read(0, 0, header,
-                                 (uint16_t)sizeof(header)) == FR_OK);
+  CHECK("read saved image for source-change tampering",
+        fr_platform_persist_read(image, (uint16_t)sizeof(image), &image_length,
+                                 0) == FR_OK);
 
-  fr_write_u32_le(&header[FR_PERSIST_PROFILE_HASH_OFFSET],
+  fr_write_u32_le(&image[FR_PERSIST_PROFILE_HASH_OFFSET],
                   fr_profile_debug_hash_for_source(FR_WORD_SIZE, perturbed,
                                                    length));
-  memset(&header[24], 0, 4);
-  fr_write_u32_le(&header[24], fr_crc32(header, FR_PERSIST_HEADER_BYTES));
+  memset(&image[FR_PERSIST_HEADER_CRC_OFFSET], 0, 4);
+  fr_write_u32_le(&image[FR_PERSIST_HEADER_CRC_OFFSET],
+                  fr_crc32(image, FR_PERSIST_HEADER_BYTES));
 
-  CHECK("write source-changed headers back to both storage slots",
-        fr_platform_storage_write(0, 0, header,
-                                  (uint16_t)sizeof(header)) == FR_OK &&
-            fr_platform_storage_write(1, 0, header,
-                                      (uint16_t)sizeof(header)) == FR_OK);
+  CHECK("commit source-changed image without fallback",
+        fr_platform_persist_clear() == FR_OK &&
+            fr_platform_persist_commit(image, image_length) == FR_OK);
   CHECK("restore rejects overlay saved under different source bytes",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_ERR_CORRUPT);
@@ -8382,8 +8381,8 @@ static void test_persist(void) {
   fr_tagged_t text_tagged = 0;
   uint16_t text_length = 0;
 #endif
-  uint8_t junk = 0xa5;
-  uint8_t header[FR_PERSIST_HEADER_BYTES];
+  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t image_length = 0;
   uint8_t wrong_version_payload[] = {
       'F',
       'R',
@@ -8462,7 +8461,7 @@ static void test_persist(void) {
       FR_TEST_PERSIST_RECORD_END,
   };
 #endif
-  fr_platform_storage_debug_reset();
+  fr_platform_persist_clear();
 #if !FR_FEATURE_CELLS
   (void)expression;
 #endif
@@ -8524,18 +8523,21 @@ static void test_persist(void) {
             fr_persist_debug_last_payload_bytes() > 0 &&
             fr_persist_debug_last_payload_bytes() < FR_PROFILE_PERSISTENCE_BYTES);
   CHECK("persist header stores profile hash",
-        fr_platform_storage_read(0, 0, header, (uint16_t)sizeof(header)) ==
-                FR_OK &&
-            read_u32_little_endian(&header[FR_PERSIST_PROFILE_HASH_OFFSET]) ==
+        fr_platform_persist_read(image, (uint16_t)sizeof(image), &image_length,
+                                 0) == FR_OK &&
+            image_length >= FR_PERSIST_HEADER_BYTES &&
+            read_u32_little_endian(&image[FR_PERSIST_PROFILE_HASH_OFFSET]) ==
                 fr_persist_debug_profile_hash());
   CHECK("persist restore mechanical boot",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
-  CHECK("persist ignores partial inactive payload",
-        fr_platform_storage_write(1, FR_PERSIST_HEADER_BYTES, &junk, 1) ==
-                FR_OK &&
+  CHECK("persist torn newer image falls back",
+        fr_platform_persist_read(image, (uint16_t)sizeof(image), &image_length,
+                                 0) == FR_OK &&
+            fr_platform_persist_commit(
+                image, (uint16_t)(FR_PERSIST_HEADER_BYTES + 1u)) == FR_OK &&
             fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
@@ -8564,13 +8566,17 @@ static void test_persist(void) {
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1 &&
             fr_handle_close(&runtime, handle_ref) == FR_OK);
 #endif
+  CHECK("read current image for corrupt newer test",
+        fr_platform_persist_read(image, (uint16_t)sizeof(image), &image_length,
+                                 0) == FR_OK &&
+            image_length > FR_PERSIST_HEADER_BYTES + 5u);
+  image[FR_PERSIST_HEADER_BYTES + 5u] ^= 0x5au;
   CHECK("persist corrupt newer payload falls back",
-        fr_platform_storage_write(1, FR_PERSIST_HEADER_BYTES + 5, &junk, 1) ==
-                FR_OK &&
+        fr_platform_persist_commit(image, image_length) == FR_OK &&
             fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
-            fr_tagged_is_nil(tagged));
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
 #if FR_WORD_SIZE == 32
   CHECK("persist saves roomier int",
         fr_compile_overlay_update("boot is 100000", &update) == FR_OK &&
@@ -8951,7 +8957,8 @@ static void test_persist(void) {
 static void test_persist(void) {
   fr_runtime_t runtime;
   fr_tagged_t tagged = 0;
-  uint8_t header[FR_PERSIST_HEADER_BYTES];
+  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t image_length = 0;
 #if FR_PROFILE_MAX_OVERLAY_NAMES == 0
   uint8_t named_payload[] = {
       'F',
@@ -9023,7 +9030,7 @@ static void test_persist(void) {
   };
 #endif
 
-  fr_platform_storage_debug_reset();
+  fr_platform_persist_clear();
 #if FR_PROFILE_MAX_OVERLAY_NAMES == 0
   write_u16_little_endian(&named_payload[6], FR_TEST_FIRST_USER_SLOT);
 #endif
@@ -9071,9 +9078,10 @@ static void test_persist(void) {
             fr_persist_debug_last_payload_bytes() > 0 &&
             fr_persist_debug_last_payload_bytes() < FR_PROFILE_PERSISTENCE_BYTES);
   CHECK("persist header stores profile hash without compiler",
-        fr_platform_storage_read(0, 0, header, (uint16_t)sizeof(header)) ==
-                FR_OK &&
-            read_u32_little_endian(&header[FR_PERSIST_PROFILE_HASH_OFFSET]) ==
+        fr_platform_persist_read(image, (uint16_t)sizeof(image), &image_length,
+                                 0) == FR_OK &&
+            image_length >= FR_PERSIST_HEADER_BYTES &&
+            read_u32_little_endian(&image[FR_PERSIST_PROFILE_HASH_OFFSET]) ==
                 fr_persist_debug_profile_hash());
   CHECK("persist restore base without compiler",
         fr_base_image_install(&runtime) == FR_OK &&
@@ -9103,7 +9111,7 @@ static void test_persist_payload_rejects_event_record(void) {
       FR_TEST_PERSIST_RECORD_END,
   };
 
-  fr_platform_storage_debug_reset();
+  fr_platform_persist_clear();
   CHECK("persist payload rejects compiled-out event records",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_payload_restore(&runtime, event_payload,
@@ -9143,7 +9151,7 @@ static void test_persist_payload_rejects_seventeenth_event_record(void) {
       FR_TEST_PERSIST_RECORD_END,
   };
 
-  fr_platform_storage_debug_reset();
+  fr_platform_persist_clear();
   CHECK("persist payload rejects seventeenth event record",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_payload_restore(&runtime, payload,
@@ -9163,7 +9171,7 @@ static void test_persist_events_round_trip(void) {
   fr_slot_id_t counter_slot = 0;
   char out[64];
 
-  fr_platform_storage_debug_reset();
+  fr_platform_persist_clear();
 
   /* on 0 rising: register at boot, save, reinstall base, restore, fire. */
   CHECK("persist on rising base", fr_base_image_install(&runtime) == FR_OK);
@@ -10944,7 +10952,7 @@ static void test_repl_see_source_form(void) {
   char out[256];
 
 #if FR_FEATURE_PERSISTENCE
-  fr_platform_storage_debug_reset();
+  fr_platform_persist_clear();
 #endif
   CHECK("see source one-liner",
         fr_base_image_install(&runtime) == FR_OK &&
@@ -11423,7 +11431,7 @@ static void test_repl_transcript(void) {
   char out[1024];
 
 #if FR_FEATURE_PERSISTENCE
-  fr_platform_storage_debug_reset();
+  fr_platform_persist_clear();
 #endif
 
   CHECK("repl transcript installs base image",
@@ -11543,7 +11551,7 @@ static void test_dangerous_wipe_bare_word(void) {
   fr_slot_id_t slot_id = 0;
   char out[64];
 
-  fr_platform_storage_debug_reset();
+  fr_platform_persist_clear();
   CHECK("dangerous.wipe installs base image",
         fr_base_image_install(&runtime) == FR_OK);
   CHECK("dangerous.wipe saves a boot overlay first",
@@ -11570,7 +11578,7 @@ static void test_repl_startup_restore_and_boot(void) {
   fr_tagged_t tagged = 0;
   fr_code_object_id_t code_id = 0;
 
-  fr_platform_storage_debug_reset();
+  fr_platform_persist_clear();
   CHECK("startup boot installs base image",
         fr_base_image_install(&runtime) == FR_OK);
   CHECK("startup boot tolerates first boot without saved image",

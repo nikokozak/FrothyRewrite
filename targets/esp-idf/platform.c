@@ -2,6 +2,7 @@
 
 #include "board.h"
 #include "handle.h"
+#include "persist_format.h"
 #include "runtime.h"
 
 #include "driver/gpio.h"
@@ -41,7 +42,7 @@ enum {
   FR_ESP_CTRL_C = 3,
   FR_ESP_BACKSPACE = 8,
   FR_ESP_DELETE = 127,
-  FR_ESP_STORAGE_SLOT_COUNT = 2,
+  FR_ESP_PERSIST_SLOT_COUNT = 2,
   FR_ESP_VM_YIELD_INTERVAL_US = 250000,
 };
 
@@ -1149,15 +1150,10 @@ fr_err_t fr_platform_i2c_close(uint16_t platform_index) {
 #endif
 
 #if FR_FEATURE_PERSISTENCE
-static uint8_t fr_esp_storage_image[FR_PROFILE_PERSISTENCE_BYTES];
+static uint8_t fr_esp_persist_image[FR_PROFILE_PERSISTENCE_BYTES];
+static uint8_t fr_esp_persist_best_image[FR_PROFILE_PERSISTENCE_BYTES];
 
-static bool fr_esp_storage_bounds(uint8_t slot, uint16_t offset,
-                                  uint16_t length) {
-  return slot < FR_ESP_STORAGE_SLOT_COUNT &&
-         (uint32_t)offset + length <= FR_PROFILE_PERSISTENCE_BYTES;
-}
-
-static const char *fr_esp_storage_key(uint8_t slot) {
+static const char *fr_esp_persist_key(uint8_t slot) {
   switch (slot) {
   case 0:
     return "slot0";
@@ -1168,7 +1164,7 @@ static const char *fr_esp_storage_key(uint8_t slot) {
   }
 }
 
-static fr_err_t fr_esp_storage_open(nvs_open_mode_t mode,
+static fr_err_t fr_esp_persist_open(nvs_open_mode_t mode,
                                     nvs_handle_t *out_handle) {
   if (out_handle == NULL) {
     return FR_ERR_INVALID;
@@ -1177,101 +1173,184 @@ static fr_err_t fr_esp_storage_open(nvs_open_mode_t mode,
   return fr_esp_err(nvs_open("frothy", mode, out_handle));
 }
 
-static fr_err_t fr_esp_storage_load(nvs_handle_t handle, const char *key,
-                                    uint8_t *image) {
-  size_t length = FR_PROFILE_PERSISTENCE_BYTES;
+static fr_err_t fr_esp_persist_load(nvs_handle_t handle, const char *key,
+                                    uint8_t *image, uint16_t *out_length) {
+  size_t length = 0;
   esp_err_t err = ESP_OK;
 
-  if (key == NULL || image == NULL) {
+  if (key == NULL || image == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
 
-  memset(image, 0xff, FR_PROFILE_PERSISTENCE_BYTES);
-  err = nvs_get_blob(handle, key, image, &length);
+  err = nvs_get_blob(handle, key, NULL, &length);
   if (err == ESP_ERR_NVS_NOT_FOUND) {
-    return FR_OK;
+    return FR_ERR_NOT_FOUND;
   }
   FR_TRY(fr_esp_err(err));
-  if (length != FR_PROFILE_PERSISTENCE_BYTES) {
+  if (length > FR_PROFILE_PERSISTENCE_BYTES || length > UINT16_MAX) {
     return FR_ERR_CORRUPT;
+  }
+  err = nvs_get_blob(handle, key, image, &length);
+  FR_TRY(fr_esp_err(err));
+  *out_length = (uint16_t)length;
+  return FR_OK;
+}
+
+static fr_err_t fr_esp_persist_slot_info(nvs_handle_t handle, uint8_t slot,
+                                         fr_persist_format_info_t *out) {
+  uint16_t length = 0;
+  fr_err_t err = FR_OK;
+
+  if (slot >= FR_ESP_PERSIST_SLOT_COUNT || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  err = fr_esp_persist_load(handle, fr_esp_persist_key(slot),
+                            fr_esp_persist_image, &length);
+  if (err != FR_OK) {
+    return err;
+  }
+  return fr_persist_format_validate(fr_esp_persist_image, length, out);
+}
+
+static fr_err_t fr_esp_persist_pick_read_slot(
+    nvs_handle_t handle, uint8_t image_index, uint8_t *out_slot,
+    fr_persist_format_info_t *out_info) {
+  fr_persist_format_info_t info[FR_ESP_PERSIST_SLOT_COUNT];
+  bool valid[FR_ESP_PERSIST_SLOT_COUNT] = {false, false};
+  bool saw_corrupt = false;
+  uint8_t slots[FR_ESP_PERSIST_SLOT_COUNT] = {0, 1};
+  uint8_t valid_count = 0;
+
+  if (out_slot == NULL || out_info == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  for (uint8_t slot = 0; slot < FR_ESP_PERSIST_SLOT_COUNT; slot++) {
+    fr_err_t err = fr_esp_persist_slot_info(handle, slot, &info[slot]);
+    valid[slot] = err == FR_OK;
+    if (err != FR_OK && err != FR_ERR_NOT_FOUND) {
+      saw_corrupt = true;
+    }
+  }
+
+  if (valid[0] && valid[1]) {
+    if (info[1].backend_generation > info[0].backend_generation) {
+      slots[0] = 1;
+      slots[1] = 0;
+    }
+    valid_count = 2;
+  } else if (valid[1]) {
+    slots[0] = 1;
+    valid_count = 1;
+  } else if (valid[0]) {
+    valid_count = 1;
+  } else {
+    return saw_corrupt ? FR_ERR_CORRUPT : FR_ERR_NOT_FOUND;
+  }
+
+  if (image_index >= valid_count) {
+    return FR_ERR_NOT_FOUND;
+  }
+  *out_slot = slots[image_index];
+  *out_info = info[*out_slot];
+  return FR_OK;
+}
+
+static fr_err_t fr_esp_persist_pick_commit_slot(nvs_handle_t handle,
+                                                uint8_t *out_slot,
+                                                uint32_t *out_generation) {
+  fr_persist_format_info_t info[FR_ESP_PERSIST_SLOT_COUNT];
+  bool valid[FR_ESP_PERSIST_SLOT_COUNT] = {false, false};
+
+  if (out_slot == NULL || out_generation == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  for (uint8_t slot = 0; slot < FR_ESP_PERSIST_SLOT_COUNT; slot++) {
+    valid[slot] = fr_esp_persist_slot_info(handle, slot, &info[slot]) == FR_OK;
+  }
+
+  if (valid[0] && valid[1]) {
+    if (info[0].backend_generation <= info[1].backend_generation) {
+      *out_slot = 0;
+      *out_generation = info[1].backend_generation + 1u;
+    } else {
+      *out_slot = 1;
+      *out_generation = info[0].backend_generation + 1u;
+    }
+  } else if (valid[0]) {
+    *out_slot = 1;
+    *out_generation = info[0].backend_generation + 1u;
+  } else if (valid[1]) {
+    *out_slot = 0;
+    *out_generation = info[1].backend_generation + 1u;
+  } else {
+    *out_slot = 0;
+    *out_generation = 1;
   }
   return FR_OK;
 }
 
-fr_err_t fr_platform_storage_read(uint8_t slot, uint16_t offset, uint8_t *bytes,
-                                  uint16_t length) {
+fr_err_t fr_platform_persist_read(uint8_t *bytes, uint16_t cap,
+                                  uint16_t *out_length, uint8_t image_index) {
   nvs_handle_t handle = 0;
-  const char *key = fr_esp_storage_key(slot);
+  uint8_t slot = 0;
+  fr_persist_format_info_t info = {0};
   fr_err_t err = FR_OK;
 
-  if ((bytes == NULL && length > 0) ||
-      !fr_esp_storage_bounds(slot, offset, length) || key == NULL) {
+  if (bytes == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
 
-  err = fr_esp_storage_open(NVS_READONLY, &handle);
-  if (err == FR_ERR_NOT_FOUND) {
-    memset(fr_esp_storage_image, 0xff, FR_PROFILE_PERSISTENCE_BYTES);
-    err = FR_OK;
-  }
-  if (err == FR_OK && handle != 0) {
-    err = fr_esp_storage_load(handle, key, fr_esp_storage_image);
-  }
-  if (err == FR_OK && length > 0) {
-    memcpy(bytes, &fr_esp_storage_image[offset], length);
-  }
-  if (handle != 0) {
-    nvs_close(handle);
-  }
-  return err;
-}
-
-fr_err_t fr_platform_storage_write(uint8_t slot, uint16_t offset,
-                                   const uint8_t *bytes, uint16_t length) {
-  nvs_handle_t handle = 0;
-  const char *key = fr_esp_storage_key(slot);
-  fr_err_t err = FR_OK;
-
-  if ((bytes == NULL && length > 0) ||
-      !fr_esp_storage_bounds(slot, offset, length) || key == NULL) {
-    return FR_ERR_INVALID;
-  }
-
-  err = fr_esp_storage_open(NVS_READWRITE, &handle);
-  if (err == FR_OK) {
-    err = fr_esp_storage_load(handle, key, fr_esp_storage_image);
-  }
-  if (err == FR_OK && length > 0) {
-    memcpy(&fr_esp_storage_image[offset], bytes, length);
-    err = fr_esp_err(nvs_set_blob(handle, key, fr_esp_storage_image,
-                                  FR_PROFILE_PERSISTENCE_BYTES));
-  }
-  if (err == FR_OK) {
-    err = fr_esp_err(nvs_commit(handle));
-  }
-  if (handle != 0) {
-    nvs_close(handle);
-  }
-  return err;
-}
-
-fr_err_t fr_platform_storage_erase(uint8_t slot) {
-  nvs_handle_t handle = 0;
-  const char *key = fr_esp_storage_key(slot);
-  fr_err_t err = FR_OK;
-  esp_err_t erase_err = ESP_OK;
-
-  if (slot >= FR_ESP_STORAGE_SLOT_COUNT || key == NULL) {
-    return FR_ERR_INVALID;
-  }
-
-  err = fr_esp_storage_open(NVS_READWRITE, &handle);
+  err = fr_esp_persist_open(NVS_READONLY, &handle);
   if (err != FR_OK) {
     return err;
   }
-  erase_err = nvs_erase_key(handle, key);
-  if (erase_err != ESP_OK && erase_err != ESP_ERR_NVS_NOT_FOUND) {
-    err = fr_esp_err(erase_err);
+  err = fr_esp_persist_pick_read_slot(handle, image_index, &slot, &info);
+  if (err == FR_OK) {
+    if (cap < info.total_length) {
+      err = FR_ERR_CAPACITY;
+    } else {
+      err = fr_esp_persist_load(handle, fr_esp_persist_key(slot),
+                                fr_esp_persist_best_image, out_length);
+      if (err == FR_OK) {
+        memcpy(bytes, fr_esp_persist_best_image, info.total_length);
+        *out_length = info.total_length;
+      }
+    }
+  }
+  nvs_close(handle);
+  return err;
+}
+
+fr_err_t fr_platform_persist_commit(const uint8_t *bytes, uint16_t length) {
+  nvs_handle_t handle = 0;
+  uint8_t slot = 0;
+  uint32_t backend_generation = 0;
+  fr_err_t err = FR_OK;
+
+  if (bytes == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (length < FR_PERSIST_HEADER_BYTES ||
+      length > FR_PROFILE_PERSISTENCE_BYTES) {
+    return FR_ERR_CORRUPT;
+  }
+
+  err = fr_esp_persist_open(NVS_READWRITE, &handle);
+  if (err != FR_OK) {
+    return err;
+  }
+  err = fr_esp_persist_pick_commit_slot(handle, &slot, &backend_generation);
+  if (err == FR_OK) {
+    memcpy(fr_esp_persist_image, bytes, length);
+    err = fr_persist_format_stamp_generation(fr_esp_persist_image, length,
+                                             backend_generation);
+  }
+  if (err == FR_OK) {
+    err = fr_esp_err(nvs_set_blob(handle, fr_esp_persist_key(slot),
+                                  fr_esp_persist_image, length));
   }
   if (err == FR_OK) {
     err = fr_esp_err(nvs_commit(handle));
@@ -1280,10 +1359,26 @@ fr_err_t fr_platform_storage_erase(uint8_t slot) {
   return err;
 }
 
-void fr_platform_storage_debug_reset(void) {
-  for (uint8_t slot = 0; slot < FR_ESP_STORAGE_SLOT_COUNT; slot++) {
-    (void)fr_platform_storage_erase(slot);
+fr_err_t fr_platform_persist_clear(void) {
+  nvs_handle_t handle = 0;
+  fr_err_t err = FR_OK;
+
+  err = fr_esp_persist_open(NVS_READWRITE, &handle);
+  if (err != FR_OK) {
+    return err;
   }
+  for (uint8_t slot = 0; slot < FR_ESP_PERSIST_SLOT_COUNT; slot++) {
+    esp_err_t erase_err = nvs_erase_key(handle, fr_esp_persist_key(slot));
+    if (erase_err != ESP_OK && erase_err != ESP_ERR_NVS_NOT_FOUND) {
+      err = fr_esp_err(erase_err);
+      break;
+    }
+  }
+  if (err == FR_OK) {
+    err = fr_esp_err(nvs_commit(handle));
+  }
+  nvs_close(handle);
+  return err;
 }
 #endif
 

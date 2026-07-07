@@ -41,6 +41,7 @@ set(FR_KERNEL_SOURCES
     ${FR_REWRITE_ROOT}/src/compile.c
     ${FR_REWRITE_ROOT}/src/repl.c
     ${FR_REWRITE_ROOT}/src/source_render.c
+    ${FR_REWRITE_ROOT}/src/persist_format.c
     ${FR_REWRITE_ROOT}/src/persist.c
     ${FR_REWRITE_ROOT}/src/persist_payload.c
     ${FR_GEN_DIR}/fr_source_base.c)

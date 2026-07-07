@@ -1,18 +1,22 @@
 /*
- * Unity persistence tests.
+ * Unity persistence durability tests.
  *
- * ADR 0042: an interrupted save must leave the previous good save in the
- * other slot restorable.
+ * S1: the core commits one complete envelope, and platform durability must
+ * return the newest good image while falling back to an older good image when
+ * the newer one is torn or corrupt.
  *
  * T10c: `see <function>` on a function with a text literal must render the
  * canonical `argN` form after a save/restore round-trip (text feature only).
  */
 
 #include "base_image.h"
+#include "crc.h"
 #include "persist.h"
 #include "platform.h"
 #include "repl.h"
 #include "runtime.h"
+#include "tagged.h"
+#include "vm.h"
 
 #include "unity/unity.h"
 
@@ -20,56 +24,115 @@
 
 static fr_runtime_t s_runtime;
 
-static void prime_two_good_slots(void) {
+static void save_boot_one_after_nil_save(void) {
+  char buf[128];
+
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "boot is fn [ one ]", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
 }
 
-void setUp(void) { fr_platform_storage_debug_reset(); }
+static void assert_restored_boot_is_one(void) {
+  fr_runtime_t restore_runtime;
+  fr_tagged_t tagged = 0;
+  fr_int_t decoded = 0;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&restore_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&restore_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_vm_run_boot(&restore_runtime, &tagged));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(tagged, &decoded));
+  TEST_ASSERT_EQUAL(1, decoded);
+}
+
+static void assert_restored_boot_is_nil(void) {
+  fr_runtime_t restore_runtime;
+  fr_tagged_t tagged = 0;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&restore_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&restore_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_vm_run_boot(&restore_runtime, &tagged));
+  TEST_ASSERT_TRUE(fr_tagged_is_nil(tagged));
+}
+
+void setUp(void) { TEST_ASSERT_EQUAL(FR_OK, fr_platform_persist_clear()); }
 
 void tearDown(void) {}
 
-/* Save sequence into the inactive slot is: erase, write payload, write header.
- * Power dies right after erase. The other slot, holding the previous good
- * save, must still restore. */
-static void test_truncated_after_erase_falls_back(void) {
-  fr_runtime_t restore_runtime;
-
-  prime_two_good_slots();
-  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_erase(0));
-
-  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&restore_runtime));
-  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&restore_runtime));
+static void test_read_returns_newest_good_image(void) {
+  save_boot_one_after_nil_save();
+  assert_restored_boot_is_one();
 }
 
-/* Same flow, but the truncation lands later: erase succeeded, payload bytes
- * were partially written, header never made it. Restore must still return
- * the previous good save from the other slot. */
-static void test_truncated_after_partial_payload_falls_back(void) {
-  fr_runtime_t restore_runtime;
-  uint8_t torn_payload[8] = {0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5};
+static void test_mid_commit_power_loss_keeps_previous_good_image(void) {
+  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t image_length = 0;
 
-  prime_two_good_slots();
-  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_erase(0));
+  save_boot_one_after_nil_save();
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_persist_read(
+                               image, (uint16_t)sizeof(image), &image_length,
+                               0));
+  TEST_ASSERT_GREATER_THAN(FR_PERSIST_HEADER_BYTES + 1u, image_length);
+
+  fr_host_persist_debug_interrupt_next_commit(
+      (uint16_t)(FR_PERSIST_HEADER_BYTES + 1u));
+  TEST_ASSERT_EQUAL(FR_ERR_IO, fr_platform_persist_commit(image, image_length));
+
+  assert_restored_boot_is_one();
+}
+
+static void test_bad_payload_newer_image_falls_back_to_older_good_image(void) {
+  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t image_length = 0;
+  fr_persist_format_info_t info = {0};
+  const uint16_t version_offset = (uint16_t)(FR_PERSIST_HEADER_BYTES + 4u);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_persist_read(
+                               image, (uint16_t)sizeof(image), &image_length,
+                               0));
   TEST_ASSERT_EQUAL(FR_OK,
-                    fr_platform_storage_write(0, FR_PERSIST_HEADER_BYTES,
-                                              torn_payload,
-                                              (uint16_t)sizeof(torn_payload)));
+                    fr_persist_format_validate(image, image_length, &info));
+  TEST_ASSERT_GREATER_THAN(version_offset, image_length);
 
-  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&restore_runtime));
-  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&restore_runtime));
+  image[version_offset] ^= 0x5au;
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_persist_format_build_header(
+                 image, info.payload_length,
+                 fr_crc32(&image[FR_PERSIST_HEADER_BYTES],
+                          info.payload_length)));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_persist_commit(image, info.total_length));
+
+  assert_restored_boot_is_nil();
 }
 
-/* Sanity: with both slots wiped, restore reports no save and resets. The
- * other two tests' FR_OK is therefore evidence that a slot's previous good
- * save carried the restore, not a silent fall-through. */
-static void test_both_slots_wiped_reports_not_found(void) {
+static void test_corrupt_newer_image_falls_back_to_older_good_image(void) {
+  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t image_length = 0;
+  uint16_t offset = (uint16_t)(FR_PERSIST_HEADER_BYTES + 5u);
+
+  save_boot_one_after_nil_save();
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_persist_read(
+                               image, (uint16_t)sizeof(image), &image_length,
+                               0));
+  TEST_ASSERT_GREATER_THAN(offset, image_length);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_host_persist_debug_corrupt_newest(
+                        offset, (uint8_t)(image[offset] ^ 0x5au)));
+
+  assert_restored_boot_is_nil();
+}
+
+static void test_clear_reports_not_found(void) {
   fr_runtime_t restore_runtime;
 
-  prime_two_good_slots();
-  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_erase(0));
-  TEST_ASSERT_EQUAL(FR_OK, fr_platform_storage_erase(1));
+  save_boot_one_after_nil_save();
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_persist_clear());
 
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&restore_runtime));
   TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND, fr_persist_restore(&restore_runtime));
@@ -104,9 +167,11 @@ static void test_see_after_restore_renders_canonical_arg_names(void) {
 
 int main(void) {
   UNITY_BEGIN();
-  RUN_TEST(test_truncated_after_erase_falls_back);
-  RUN_TEST(test_truncated_after_partial_payload_falls_back);
-  RUN_TEST(test_both_slots_wiped_reports_not_found);
+  RUN_TEST(test_read_returns_newest_good_image);
+  RUN_TEST(test_mid_commit_power_loss_keeps_previous_good_image);
+  RUN_TEST(test_bad_payload_newer_image_falls_back_to_older_good_image);
+  RUN_TEST(test_corrupt_newer_image_falls_back_to_older_good_image);
+  RUN_TEST(test_clear_reports_not_found);
 #if FR_FEATURE_TEXT
   RUN_TEST(test_see_after_restore_renders_canonical_arg_names);
 #endif

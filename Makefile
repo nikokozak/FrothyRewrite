@@ -97,6 +97,7 @@ KERNEL_SOURCES = \
 	$(REPL_SOURCES)
 
 PERSISTENCE_KERNEL_SOURCES = \
+	src/persist_format.c \
 	src/persist.c \
 	src/persist_payload.c
 
@@ -223,6 +224,7 @@ KERNEL_DEPS = \
 	src/base_image.h src/base_image.c \
 	src/event.h src/event.c \
 	src/platform.h \
+	src/persist_format.h src/persist_format.c \
 	src/persist.h src/persist.c \
 	src/persist_payload.h src/persist_payload.c \
 	src/vm.h src/vm.c \
@@ -683,7 +685,7 @@ $(TEST_BINARY): $(TEST_DEPS)
 
 $(UNITY_TEST_BINARY): $(UNITY_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) \
 		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
-	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 $(UNITY_TEST_SOURCES) $(FR_LDFLAGS) -o $@
+	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 -DFR_HOST_TEST_HELPERS=1 $(UNITY_TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
 $(UNITY_I2C_TEST_BINARY): $(UNITY_I2C_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) \
 		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
