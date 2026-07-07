@@ -219,3 +219,17 @@ html, body {
 .transcript-ok { color: var(--ok); }
 .transcript-error { color: var(--err); }
 .transcript-status { color: var(--status); font-style: italic; }
+
+/* Echo toggle in the command bar (client-side suppression of device echo). */
+.frothy-echo-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--shadow);
+  cursor: pointer;
+  user-select: none;
+}
+.frothy-echo-toggle input { cursor: pointer; }
