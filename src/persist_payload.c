@@ -2250,15 +2250,15 @@ static fr_err_t fr_persist_check_restore_capacity(
   (void)cell_count;
 #endif
 
-  if ((uint32_t)runtime->code.base_count + code_count >
+  if ((uint32_t)runtime->code.base_image_count + code_count >
       FR_PROFILE_CODE_OBJECT_TABLE_SIZE) {
     return FR_ERR_CAPACITY;
   }
 
-  used_instruction_bytes = runtime->code.base_used_instruction_bytes;
+  used_instruction_bytes = runtime->code.base_image_used_instruction_bytes;
   for (uint16_t i = 0; i < code_count; i++) {
     if (used_instruction_bytes + code_records[i].length >
-        FR_PROFILE_MAX_INSTRUCTION_BYTES) {
+        sizeof(runtime->code.image_instruction_bytes)) {
       return FR_ERR_CAPACITY;
     }
     used_instruction_bytes += code_records[i].length;
@@ -2569,7 +2569,7 @@ static fr_err_t fr_persist_apply_binds_tiered(
 
 /* Tier-agnostic resource install: texts, codes (with patched local id
  * operands), shapes, records, cells. Codes are not deduped — they always
- * append — so code_map[i] == runtime->code.base_count + i on success.
+ * append — so code_map[i] == runtime->code.image_count + i on success.
  * Objects dedupe by content via fr_text_install_since's find path, but the
  * encoder also dedupes by content so within a single payload no two records
  * carry the same bytes; the dedup never collapses two distinct local ids.
@@ -2683,7 +2683,7 @@ fr_persist_install_resources(fr_runtime_t *runtime,
       }
       ip = next_ip;
     }
-    FR_TRY(fr_code_install(runtime, &instructions, NULL, 0, &code_map[i]));
+    FR_TRY(fr_code_mount_image(runtime, &instructions, NULL, 0, &code_map[i]));
   }
 #if FR_FEATURE_RECORDS
   {
@@ -3566,14 +3566,11 @@ static fr_err_t fr_persist_payload_compute_user_closure_marks(
 }
 
 /* D5 acceptance #6: the public `restore` word brings L2 back from NVS while
- * leaving the L1 the runtime already has in place. Boot's two-call sequence
- * owns L1; the user-typed `restore` must not touch it — not the L1 binds,
- * not the L1 CODE / object records that back them. The L2 closure walker
- * above marks the resources L2 binds and L2 event bodies reach; install
- * runs with that closure as a filter, so an L1-only CODE / TEXT / RECORD
- * never enters the runtime's tables a second time. Wiping the L2 tier
- * first means the restored set replaces (not overlays) prior session L2;
- * library-tier slots are skipped by fr_persist_session_wipe_user_tier. */
+ * leaving L1 binds in place. Code is the exception in storage terms: it is
+ * rewound to the base-image boundary, then remounted from the payload so
+ * preserved library slots still point at executable ids and repeated restore
+ * calls cannot grow or drift the image id range. Binds, names, and events are
+ * still applied for the user tier only. */
 fr_err_t fr_persist_payload_restore_user_only(fr_runtime_t *runtime,
                                               const uint8_t *bytes,
                                               uint16_t length) {
@@ -3589,9 +3586,13 @@ fr_err_t fr_persist_payload_restore_user_only(fr_runtime_t *runtime,
   memset(object_in_l2, 0, sizeof(object_in_l2));
   FR_TRY(fr_persist_payload_decode_and_validate(runtime, bytes, length,
                                                 &decoded));
-  fr_persist_session_wipe_user_tier(runtime);
+  for (uint16_t i = 0; i < decoded.code_count; i++) {
+    code_in_l2[i] = true;
+  }
   FR_TRY(fr_persist_payload_compute_user_closure_marks(&decoded, code_in_l2,
                                                         object_in_l2));
+  fr_persist_session_wipe_user_tier(runtime);
+  fr_code_restore_base(runtime);
   FR_TRY(fr_persist_install_resources(runtime, &decoded, code_in_l2,
                                       object_in_l2, code_map, object_map));
   FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,

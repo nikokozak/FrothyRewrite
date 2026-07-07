@@ -191,10 +191,10 @@ fr_err_t fr_persist_save(const fr_runtime_t *runtime) {
   return fr_persist_commit_payload(payload_length);
 }
 
-/* D5: public `restore` brings L2 back from durable storage; L1 already in
- * place from boot stays untouched. The path skips fr_runtime_reset on the
- * no-payload path so a `restore` against empty storage cannot collapse the L1
- * the boot pipeline installed. */
+/* D5: public `restore` brings L2 back from durable storage; L1 binds already
+ * in place from boot stay untouched. The payload layer rewinds code to the
+ * base-image boundary and remounts saved code so code ids do not drift. The
+ * no-payload path still skips reset so an empty restore cannot collapse L1. */
 fr_err_t fr_persist_restore(fr_runtime_t *runtime) {
   fr_persist_forget_boot_image();
   return fr_persist_restore_read_and_apply(
