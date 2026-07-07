@@ -57,7 +57,13 @@ class Connector implements ReplConnector {
     for (;;) {
       const nl = this.buf.indexOf("\n");
       if (nl >= 0) {
-        const line = this.buf.slice(0, nl);
+        // Frame on LF, tolerate CRLF: the ESP32 target injects a CR before
+        // every LF (targets/esp-idf/platform.c fr_platform_write_text), so
+        // "ok\r\n" must classify as "ok". Strip one trailing CR, matching the
+        // canonical Go pump. Without this the terminator is never recognized
+        // and the request — and the whole send queue behind it — hangs.
+        const end = nl > 0 && this.buf.charCodeAt(nl - 1) === 13 ? nl - 1 : nl;
+        const line = this.buf.slice(0, end);
         this.buf = this.buf.slice(nl + 1);
         this.acceptLine(line);
         continue;

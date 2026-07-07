@@ -67,7 +67,16 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const sendBufBtn = mkBtn(doc, "Send buffer", "frothy-btn");
   const saveBtn = mkBtn(doc, "Save", "frothy-btn");
   const downloadBtn = mkBtn(doc, "Download .fr", "frothy-btn");
-  commandBar.append(sendLineBtn, sendBufBtn, saveBtn, downloadBtn);
+  const echoToggle = doc.createElement("label");
+  echoToggle.className = "frothy-echo-toggle";
+  const echoBox = doc.createElement("input");
+  echoBox.type = "checkbox";
+  echoBox.checked = true;
+  echoBox.addEventListener("change", () => {
+    suppressEcho = echoBox.checked;
+  });
+  echoToggle.append(echoBox, doc.createTextNode(" Hide echo"));
+  commandBar.append(sendLineBtn, sendBufBtn, saveBtn, downloadBtn, echoToggle);
 
   const transcriptHost = doc.createElement("div");
   transcriptHost.className = "frothy-transcript-host";
@@ -92,6 +101,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
 
   let repl: ReplConnector | null = null;
   let unsubscribeLines: (() => void) | null = null;
+  // The device runs an interactive line editor that echoes each input line
+  // back as the first response line. With "Hide echo" on (default), we swallow
+  // exactly one echoed line per request — set to the line we just sent —
+  // so sketch input isn't shown twice. Matching one line means a genuine value
+  // equal to the input (send `7` → echo `7` → result `7`) still shows.
+  let suppressEcho = true;
+  let pendingEcho: string | null = null;
 
   function setConnected(label: string, connected: boolean) {
     connectBtn.textContent = label;
@@ -119,8 +135,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       await port.open({ baudRate: 115200 });
       repl = await createConnector(new WebSerialTransport(port));
       unsubscribeLines = repl.onLine((line) => {
+        if (suppressEcho && pendingEcho !== null && line === pendingEcho) {
+          pendingEcho = null;
+          return;
+        }
         transcript.appendDevice(line);
       });
+      pendingEcho = "status";
       const status = await repl.status();
       setConnected(`connected · ${status.profile}`, true);
       if (opts.onConnect) opts.onConnect(status);
@@ -153,6 +174,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     const line = currentLine().trim();
     if (!line) return;
     transcript.appendHost(line);
+    pendingEcho = line;
     try {
       await repl.sendLine(line);
     } catch (err) {
@@ -173,6 +195,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     }
     for (const line of lines) {
       transcript.appendHost(line);
+      pendingEcho = line;
       try {
         await repl.sendLine(line);
       } catch (err) {
