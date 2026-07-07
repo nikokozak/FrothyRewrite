@@ -6327,6 +6327,42 @@ static void test_parse(void) {
         fr_parse_line("boot is nil", NULL) == FR_ERR_INVALID);
 }
 
+/* Regression: the first definition after wipe-user used to fail with
+ * FR_ERR_INVALID ("bad source"). wipe-user freed a user slot but left
+ * slots.count counting it, so the next definition was assigned an id one past
+ * what the install validator accepts. */
+static void test_first_definition_after_wipe(void) {
+  fr_runtime_t runtime;
+  fr_compile_overlay_update_t update;
+
+  CHECK("wipe-first-def base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("wipe-first-def seed definition",
+        fr_compile_overlay_update_for_runtime(&runtime, "to seed with n [ n + 1 ]",
+                                              &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  fr_persist_wipe_user(&runtime);
+  /* First post-wipe definition, self-recursive (the original report). */
+  CHECK("wipe-first-def recursive compiles",
+        fr_compile_overlay_update_for_runtime(
+            &runtime, "to rec with n [ if n < 1 [ 0 ] else [ rec: n - 1 ] ]",
+            &update) == FR_OK);
+  CHECK("wipe-first-def recursive applies",
+        fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  /* A plain first-def-after-wipe on a fresh runtime must also work (the bug was
+   * not recursion-specific). */
+  CHECK("wipe-first-def plain base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("wipe-first-def plain seed",
+        fr_compile_overlay_update_for_runtime(&runtime, "to seed with n [ n ]",
+                                              &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+  fr_persist_wipe_user(&runtime);
+  CHECK("wipe-first-def plain applies",
+        fr_compile_overlay_update_for_runtime(&runtime, "to plain with n [ n * n ]",
+                                              &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+}
+
 static void test_compile(void) {
   fr_runtime_t runtime;
   fr_runtime_t binding_runtime;
@@ -11323,6 +11359,7 @@ int main(void) {
   test_public_surface();
 #if FR_FEATURE_COMPILER
   test_parse();
+  test_first_definition_after_wipe();
   test_compile();
 #if FR_FEATURE_REPL && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&                       \
     FR_PROFILE_MAX_OVERLAY_NAMES > 0 && !FR_HOST_TINY_NAMES_MODE

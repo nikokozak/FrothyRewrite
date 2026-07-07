@@ -140,6 +140,11 @@ void fr_persist_session_wipe_user_tier(fr_runtime_t *runtime) {
     runtime->slots.overlay_name_count = dst;
   }
 #endif
+  /* Wiping user slots frees the tail of the table; reclaim it so the next
+   * definition is assigned the lowest free id. Without this, slots.count keeps
+   * counting the wiped slots and the first post-wipe definition is assigned an
+   * id the install validator then rejects (bad source). */
+  fr_slot_reclaim_free_tail(runtime);
 }
 
 /* SPEC D10: install-library on receipt drops L1 binds from the runtime so
