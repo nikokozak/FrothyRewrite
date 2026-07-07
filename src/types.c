@@ -94,6 +94,22 @@ const char *fr_diag_message(uint16_t message_id) {
       [FR_DIAG_MSG_PARSE_EXPECTED_TO] = "expected 'to' before the value",
       [FR_DIAG_MSG_PARSE_EXPECTED_EVENT_EDGE] = "expected an event edge",
       [FR_DIAG_MSG_PARSE_TOO_DEEP] = "expression is too deeply nested",
+      [FR_DIAG_MSG_COMPILE_EVENT_BODY_LOCAL] =
+          "event bodies can't use the caller's locals -- lift it to a global",
+      [FR_DIAG_MSG_COMPILE_CONTROL_FLOW_DISABLED] =
+          "control flow is not enabled in this build",
+      [FR_DIAG_MSG_COMPILE_CELLS_DISABLED] =
+          "cells are not enabled in this build",
+      [FR_DIAG_MSG_COMPILE_TEXT_DISABLED] =
+          "text is not enabled in this build",
+      [FR_DIAG_MSG_COMPILE_RECORDS_DISABLED] =
+          "records are not enabled in this build",
+      [FR_DIAG_MSG_COMPILE_EVENTS_DISABLED] =
+          "events are not enabled in this build",
+      [FR_DIAG_MSG_COMPILE_PARAM_SHADOW] =
+          "parameter shadows an existing name",
+      [FR_DIAG_MSG_COMPILE_RECORD_NAME_NOT_SHAPE] =
+          "record name is already used by another value",
   };
 
   if (message_id >= (uint16_t)(sizeof(messages) / sizeof(messages[0]))) {

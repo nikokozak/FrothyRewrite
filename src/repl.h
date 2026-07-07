@@ -9,7 +9,7 @@ enum {
   FR_REPL_APPLY_PREFIX_BYTES = sizeof("apply ") - 1,
   FR_REPL_APPLY_BYTES =
       (FR_REPL_LINE_BYTES - FR_REPL_APPLY_PREFIX_BYTES - 1) / 2,
-  FR_REPL_OUTPUT_BYTES = 128,
+  FR_REPL_OUTPUT_BYTES = 256,
 };
 
 typedef fr_err_t (*fr_repl_read_line_fn)(char *line, uint16_t cap,

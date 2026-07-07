@@ -907,6 +907,36 @@ static fr_err_t fr_repl_append_caret_line(char *out, uint16_t out_cap,
   return fr_repl_append_char(out, out_cap, used, '\n');
 }
 
+static fr_err_t fr_repl_append_arity_line(char *out, uint16_t out_cap,
+                                          uint16_t *used,
+                                          const fr_diagnostic_t *diag) {
+  FR_TRY(fr_repl_append(out, out_cap, used, "expected "));
+  FR_TRY(fr_repl_append_u16(out, out_cap, used, diag->expected));
+  if (diag->expected == 1) {
+    FR_TRY(fr_repl_append(out, out_cap, used, " argument, got "));
+  } else {
+    FR_TRY(fr_repl_append(out, out_cap, used, " arguments, got "));
+  }
+  FR_TRY(fr_repl_append_u16(out, out_cap, used, diag->got));
+  return fr_repl_append_char(out, out_cap, used, '\n');
+}
+
+static fr_err_t fr_repl_append_note_line(char *out, uint16_t out_cap,
+                                         uint16_t *used, const char *message) {
+  FR_TRY(fr_repl_append(out, out_cap, used, "note: "));
+  FR_TRY(fr_repl_append(out, out_cap, used, message));
+  return fr_repl_append_char(out, out_cap, used, '\n');
+}
+
+static fr_err_t fr_repl_append_suggestion_line(char *out, uint16_t out_cap,
+                                               uint16_t *used,
+                                               const fr_diagnostic_t *diag) {
+  FR_TRY(fr_repl_append(out, out_cap, used, "help: did you mean \""));
+  FR_TRY(fr_repl_append_span(out, out_cap, used, diag->suggestion_start,
+                             diag->suggestion_length));
+  return fr_repl_append(out, out_cap, used, "\"?\n");
+}
+
 static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
                                     const char *line,
                                     const fr_diagnostic_t *diag) {
@@ -914,6 +944,7 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
   const char *message = NULL;
   uint16_t used = 0;
   uint16_t base_used = 0;
+  bool source_visible = line == NULL;
 
   if (out == NULL) {
     return FR_ERR_INVALID;
@@ -934,13 +965,8 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
     return FR_OK;
   }
 
-  if (diag->message_id != FR_DIAG_MSG_NONE) {
-    message = fr_diag_message(diag->message_id);
-    if (message == NULL) {
-      return FR_OK;
-    }
-    if (fr_repl_append(out, out_cap, &used, message) != FR_OK ||
-        fr_repl_append_char(out, out_cap, &used, '\n') != FR_OK) {
+  if (diag->kind == FR_DIAG_ARITY) {
+    if (fr_repl_append_arity_line(out, out_cap, &used, diag) != FR_OK) {
       fr_repl_truncate(out, &used, base_used);
       return FR_OK;
     }
@@ -948,6 +974,16 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
     if (fr_repl_append(out, out_cap, &used, "name: ") != FR_OK ||
         fr_repl_append_span(out, out_cap, &used, diag->span_start,
                             diag->span_length) != FR_OK ||
+        fr_repl_append_char(out, out_cap, &used, '\n') != FR_OK) {
+      fr_repl_truncate(out, &used, base_used);
+      return FR_OK;
+    }
+  } else if (diag->message_id != FR_DIAG_MSG_NONE) {
+    message = fr_diag_message(diag->message_id);
+    if (message == NULL) {
+      return FR_OK;
+    }
+    if (fr_repl_append(out, out_cap, &used, message) != FR_OK ||
         fr_repl_append_char(out, out_cap, &used, '\n') != FR_OK) {
       fr_repl_truncate(out, &used, base_used);
       return FR_OK;
@@ -968,6 +1004,7 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
       fr_repl_truncate(out, &used, detail_used);
       return FR_OK;
     }
+    source_visible = true;
     source_used = used;
     if (caret_length == 0) {
       caret_length = 1;
@@ -976,6 +1013,25 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
         fr_repl_append_caret_line(out, out_cap, &used, column, caret_length) !=
             FR_OK) {
       fr_repl_truncate(out, &used, source_used);
+    }
+  }
+
+  if (source_visible && diag->kind == FR_DIAG_NAME &&
+      diag->message_id != FR_DIAG_MSG_NONE) {
+    uint16_t note_used = used;
+
+    message = fr_diag_message(diag->message_id);
+    if (message != NULL &&
+        fr_repl_append_note_line(out, out_cap, &used, message) != FR_OK) {
+      fr_repl_truncate(out, &used, note_used);
+    }
+  }
+
+  if (source_visible && diag->suggestion_start != NULL) {
+    uint16_t help_used = used;
+
+    if (fr_repl_append_suggestion_line(out, out_cap, &used, diag) != FR_OK) {
+      fr_repl_truncate(out, &used, help_used);
     }
   }
 
