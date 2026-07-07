@@ -16,6 +16,7 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "esp_partition.h"
 #if FR_FEATURE_POWER
 #include "esp_sleep.h"
 #include "esp_task_wdt.h"
@@ -43,8 +44,23 @@ enum {
   FR_ESP_BACKSPACE = 8,
   FR_ESP_DELETE = 127,
   FR_ESP_PERSIST_SLOT_COUNT = 2,
+#if FR_FEATURE_PERSISTENCE
+  FR_ESP_PERSIST_PARTITION_SUBTYPE = 0x40,
+  FR_ESP_FLASH_SECTOR_BYTES = 0x1000,
+  FR_ESP_PERSIST_SLOT_BYTES = 0x20000,
+  FR_ESP_PERSIST_PARTITION_BYTES =
+      FR_ESP_PERSIST_SLOT_COUNT * FR_ESP_PERSIST_SLOT_BYTES,
+#endif
   FR_ESP_VM_YIELD_INTERVAL_US = 250000,
 };
+
+#if FR_FEATURE_PERSISTENCE
+_Static_assert((FR_ESP_PERSIST_SLOT_BYTES % FR_ESP_FLASH_SECTOR_BYTES) == 0,
+               "frothy persist slots must be sector aligned");
+_Static_assert(FR_PERSIST_HEADER_BYTES + FR_PROFILE_PERSISTENCE_BYTES <=
+                   FR_ESP_PERSIST_SLOT_BYTES,
+               "frothy persist slot is too small for the S1 envelope");
+#endif
 
 #if FR_FEATURE_UART
 typedef struct fr_esp_app_uart_t {
@@ -218,6 +234,7 @@ static fr_err_t fr_esp_uart_init(void) {
   return FR_OK;
 }
 
+#if FR_FEATURE_NET
 static fr_err_t fr_esp_nvs_init(void) {
   esp_err_t err = nvs_flash_init();
 
@@ -228,6 +245,7 @@ static fr_err_t fr_esp_nvs_init(void) {
   }
   return fr_esp_err(err);
 }
+#endif
 
 static fr_err_t fr_esp_boot_button_init(void) {
 #ifdef FR_BOARD_BOOT_BUTTON
@@ -260,7 +278,7 @@ fr_err_t fr_esp_platform_init(void) {
 
   FR_TRY(fr_esp_uart_init());
   FR_TRY(fr_esp_boot_button_init());
-#if FR_FEATURE_PERSISTENCE
+#if FR_FEATURE_NET
   FR_TRY(fr_esp_nvs_init());
 #endif
   fr_esp_initialized = true;
@@ -1152,69 +1170,79 @@ fr_err_t fr_platform_i2c_close(uint16_t platform_index) {
 #if FR_FEATURE_PERSISTENCE
 static uint8_t fr_esp_persist_image[FR_PROFILE_PERSISTENCE_BYTES];
 static uint8_t fr_esp_persist_best_image[FR_PROFILE_PERSISTENCE_BYTES];
+static const esp_partition_t *fr_esp_persist_partition;
 
-static const char *fr_esp_persist_key(uint8_t slot) {
-  switch (slot) {
-  case 0:
-    return "slot0";
-  case 1:
-    return "slot1";
-  default:
-    return NULL;
-  }
+static uint32_t fr_esp_persist_slot_offset(uint8_t slot) {
+  return (uint32_t)slot * (uint32_t)FR_ESP_PERSIST_SLOT_BYTES;
 }
 
-static fr_err_t fr_esp_persist_open(nvs_open_mode_t mode,
-                                    nvs_handle_t *out_handle) {
-  if (out_handle == NULL) {
+static uint32_t fr_esp_persist_erase_bytes(uint16_t length) {
+  uint32_t sectors =
+      ((uint32_t)length + (uint32_t)FR_ESP_FLASH_SECTOR_BYTES - 1u) /
+      (uint32_t)FR_ESP_FLASH_SECTOR_BYTES;
+  return sectors * (uint32_t)FR_ESP_FLASH_SECTOR_BYTES;
+}
+
+static fr_err_t fr_esp_persist_open(const esp_partition_t **out_partition) {
+  const esp_partition_t *partition = fr_esp_persist_partition;
+
+  if (out_partition == NULL) {
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_esp_platform_init());
-  return fr_esp_err(nvs_open("frothy", mode, out_handle));
-}
-
-static fr_err_t fr_esp_persist_load(nvs_handle_t handle, const char *key,
-                                    uint8_t *image, uint16_t *out_length) {
-  size_t length = 0;
-  esp_err_t err = ESP_OK;
-
-  if (key == NULL || image == NULL || out_length == NULL) {
-    return FR_ERR_INVALID;
+  if (partition == NULL) {
+    partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA,
+        (esp_partition_subtype_t)FR_ESP_PERSIST_PARTITION_SUBTYPE, "frothy");
+    if (partition == NULL) {
+      return FR_ERR_NOT_FOUND;
+    }
+    if (partition->size < FR_ESP_PERSIST_PARTITION_BYTES) {
+      return FR_ERR_CAPACITY;
+    }
+    fr_esp_persist_partition = partition;
   }
-
-  err = nvs_get_blob(handle, key, NULL, &length);
-  if (err == ESP_ERR_NVS_NOT_FOUND) {
-    return FR_ERR_NOT_FOUND;
-  }
-  FR_TRY(fr_esp_err(err));
-  if (length > FR_PROFILE_PERSISTENCE_BYTES || length > UINT16_MAX) {
-    return FR_ERR_CORRUPT;
-  }
-  err = nvs_get_blob(handle, key, image, &length);
-  FR_TRY(fr_esp_err(err));
-  *out_length = (uint16_t)length;
+  *out_partition = partition;
   return FR_OK;
 }
 
-static fr_err_t fr_esp_persist_slot_info(nvs_handle_t handle, uint8_t slot,
-                                         fr_persist_format_info_t *out) {
-  uint16_t length = 0;
-  fr_err_t err = FR_OK;
+static fr_err_t fr_esp_persist_load(const esp_partition_t *partition,
+                                    uint8_t slot, uint8_t *image,
+                                    uint16_t *out_length,
+                                    fr_persist_format_info_t *out_info) {
+  fr_persist_format_info_t info = {0};
 
+  if (partition == NULL || image == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (slot >= FR_ESP_PERSIST_SLOT_COUNT) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_err(esp_partition_read(
+      partition, fr_esp_persist_slot_offset(slot), image,
+      FR_PROFILE_PERSISTENCE_BYTES)));
+  FR_TRY(fr_persist_format_validate(
+      image, (uint16_t)FR_PROFILE_PERSISTENCE_BYTES, &info));
+  if (out_length != NULL) {
+    *out_length = info.total_length;
+  }
+  if (out_info != NULL) {
+    *out_info = info;
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_esp_persist_slot_info(const esp_partition_t *partition,
+                                         uint8_t slot,
+                                         fr_persist_format_info_t *out) {
   if (slot >= FR_ESP_PERSIST_SLOT_COUNT || out == NULL) {
     return FR_ERR_INVALID;
   }
-
-  err = fr_esp_persist_load(handle, fr_esp_persist_key(slot),
-                            fr_esp_persist_image, &length);
-  if (err != FR_OK) {
-    return err;
-  }
-  return fr_persist_format_validate(fr_esp_persist_image, length, out);
+  return fr_esp_persist_load(partition, slot, fr_esp_persist_image, NULL, out);
 }
 
 static fr_err_t fr_esp_persist_pick_read_slot(
-    nvs_handle_t handle, uint8_t image_index, uint8_t *out_slot,
+    const esp_partition_t *partition, uint8_t image_index, uint8_t *out_slot,
     fr_persist_format_info_t *out_info) {
   fr_persist_format_info_t info[FR_ESP_PERSIST_SLOT_COUNT];
   bool valid[FR_ESP_PERSIST_SLOT_COUNT] = {false, false};
@@ -1227,7 +1255,7 @@ static fr_err_t fr_esp_persist_pick_read_slot(
   }
 
   for (uint8_t slot = 0; slot < FR_ESP_PERSIST_SLOT_COUNT; slot++) {
-    fr_err_t err = fr_esp_persist_slot_info(handle, slot, &info[slot]);
+    fr_err_t err = fr_esp_persist_slot_info(partition, slot, &info[slot]);
     valid[slot] = err == FR_OK;
     if (err != FR_OK && err != FR_ERR_NOT_FOUND) {
       saw_corrupt = true;
@@ -1257,7 +1285,7 @@ static fr_err_t fr_esp_persist_pick_read_slot(
   return FR_OK;
 }
 
-static fr_err_t fr_esp_persist_pick_commit_slot(nvs_handle_t handle,
+static fr_err_t fr_esp_persist_pick_commit_slot(const esp_partition_t *partition,
                                                 uint8_t *out_slot,
                                                 uint32_t *out_generation) {
   fr_persist_format_info_t info[FR_ESP_PERSIST_SLOT_COUNT];
@@ -1268,7 +1296,8 @@ static fr_err_t fr_esp_persist_pick_commit_slot(nvs_handle_t handle,
   }
 
   for (uint8_t slot = 0; slot < FR_ESP_PERSIST_SLOT_COUNT; slot++) {
-    valid[slot] = fr_esp_persist_slot_info(handle, slot, &info[slot]) == FR_OK;
+    valid[slot] =
+        fr_esp_persist_slot_info(partition, slot, &info[slot]) == FR_OK;
   }
 
   if (valid[0] && valid[1]) {
@@ -1294,7 +1323,7 @@ static fr_err_t fr_esp_persist_pick_commit_slot(nvs_handle_t handle,
 
 fr_err_t fr_platform_persist_read(uint8_t *bytes, uint16_t cap,
                                   uint16_t *out_length, uint8_t image_index) {
-  nvs_handle_t handle = 0;
+  const esp_partition_t *partition = NULL;
   uint8_t slot = 0;
   fr_persist_format_info_t info = {0};
   fr_err_t err = FR_OK;
@@ -1303,31 +1332,32 @@ fr_err_t fr_platform_persist_read(uint8_t *bytes, uint16_t cap,
     return FR_ERR_INVALID;
   }
 
-  err = fr_esp_persist_open(NVS_READONLY, &handle);
+  err = fr_esp_persist_open(&partition);
   if (err != FR_OK) {
     return err;
   }
-  err = fr_esp_persist_pick_read_slot(handle, image_index, &slot, &info);
+  err = fr_esp_persist_pick_read_slot(partition, image_index, &slot, &info);
   if (err == FR_OK) {
     if (cap < info.total_length) {
       err = FR_ERR_CAPACITY;
     } else {
-      err = fr_esp_persist_load(handle, fr_esp_persist_key(slot),
-                                fr_esp_persist_best_image, out_length);
+      err = fr_esp_persist_load(partition, slot, fr_esp_persist_best_image,
+                                out_length, &info);
       if (err == FR_OK) {
         memcpy(bytes, fr_esp_persist_best_image, info.total_length);
         *out_length = info.total_length;
       }
     }
   }
-  nvs_close(handle);
   return err;
 }
 
 fr_err_t fr_platform_persist_commit(const uint8_t *bytes, uint16_t length) {
-  nvs_handle_t handle = 0;
+  const esp_partition_t *partition = NULL;
   uint8_t slot = 0;
   uint32_t backend_generation = 0;
+  uint32_t erase_bytes = 0;
+  uint32_t slot_offset = 0;
   fr_err_t err = FR_OK;
 
   if (bytes == NULL) {
@@ -1338,47 +1368,45 @@ fr_err_t fr_platform_persist_commit(const uint8_t *bytes, uint16_t length) {
     return FR_ERR_CORRUPT;
   }
 
-  err = fr_esp_persist_open(NVS_READWRITE, &handle);
+  err = fr_esp_persist_open(&partition);
   if (err != FR_OK) {
     return err;
   }
-  err = fr_esp_persist_pick_commit_slot(handle, &slot, &backend_generation);
+  err = fr_esp_persist_pick_commit_slot(partition, &slot, &backend_generation);
   if (err == FR_OK) {
     memcpy(fr_esp_persist_image, bytes, length);
     err = fr_persist_format_stamp_generation(fr_esp_persist_image, length,
                                              backend_generation);
   }
   if (err == FR_OK) {
-    err = fr_esp_err(nvs_set_blob(handle, fr_esp_persist_key(slot),
-                                  fr_esp_persist_image, length));
+    erase_bytes = fr_esp_persist_erase_bytes(length);
+    if (erase_bytes > FR_ESP_PERSIST_SLOT_BYTES) {
+      err = FR_ERR_CAPACITY;
+    }
   }
   if (err == FR_OK) {
-    err = fr_esp_err(nvs_commit(handle));
+    slot_offset = fr_esp_persist_slot_offset(slot);
+    err = fr_esp_err(
+        esp_partition_erase_range(partition, slot_offset, erase_bytes));
   }
-  nvs_close(handle);
+  if (err == FR_OK) {
+    err = fr_esp_err(
+        esp_partition_write(partition, slot_offset, fr_esp_persist_image,
+                            length));
+  }
   return err;
 }
 
 fr_err_t fr_platform_persist_clear(void) {
-  nvs_handle_t handle = 0;
+  const esp_partition_t *partition = NULL;
   fr_err_t err = FR_OK;
 
-  err = fr_esp_persist_open(NVS_READWRITE, &handle);
+  err = fr_esp_persist_open(&partition);
   if (err != FR_OK) {
     return err;
   }
-  for (uint8_t slot = 0; slot < FR_ESP_PERSIST_SLOT_COUNT; slot++) {
-    esp_err_t erase_err = nvs_erase_key(handle, fr_esp_persist_key(slot));
-    if (erase_err != ESP_OK && erase_err != ESP_ERR_NVS_NOT_FOUND) {
-      err = fr_esp_err(erase_err);
-      break;
-    }
-  }
-  if (err == FR_OK) {
-    err = fr_esp_err(nvs_commit(handle));
-  }
-  nvs_close(handle);
-  return err;
+  return fr_esp_err(
+      esp_partition_erase_range(partition, 0, FR_ESP_PERSIST_PARTITION_BYTES));
 }
 #endif
 
