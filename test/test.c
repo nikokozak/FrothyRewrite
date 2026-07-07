@@ -5620,6 +5620,11 @@ static void test_parse(void) {
   CHECK("parse false literal",
         fr_parse_line("boot is false", &parsed) == FR_OK &&
             parsed.exprs[parsed.definition.value].kind == FR_PARSE_EXPR_FALSE);
+  CHECK("parse nil remains accepted as is-definition name",
+        fr_parse_line("nil is 1", &parsed) == FR_OK &&
+            fr_parse_span_equals(parsed.definition.name, "nil") &&
+            parsed.exprs[parsed.definition.value].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[parsed.definition.value].int_value == 1);
   CHECK("parse true rejects as parameter",
         fr_parse_line("to f with true [ 1 ]", &parsed) == FR_ERR_INVALID);
   CHECK("parse false rejects as parameter",
@@ -10660,11 +10665,40 @@ static bool test_repl_run_lines(fr_runtime_t *runtime,
 }
 
 static bool test_error_line_matches_wire_shape(const char *out) {
-  const char expected[] = "error: not found (7)";
+  const char *line = strstr(out, "error: ");
+  const char *end = NULL;
+  const char *open = NULL;
+
+  if (line == NULL) {
+    return false;
+  }
+  end = strchr(line, '\n');
+  if (end == NULL) {
+    return false;
+  }
+  if (end < line + strlen("error: x (0)") || end[-1] != ')') {
+    return false;
+  }
+  for (const char *scan = end - 2; scan > line; scan--) {
+    if (*scan == '(') {
+      open = scan;
+      break;
+    }
+    if (*scan < '0' || *scan > '9') {
+      return false;
+    }
+  }
+  if (open == NULL || open <= line + strlen("error: ") || open[-1] != ' ') {
+    return false;
+  }
+  return open + 1 < end - 1;
+}
+
+static bool test_error_line_equals(const char *out, const char *expected) {
   const char *line = strstr(out, "error: ");
   const char *end = NULL;
 
-  if (line == NULL) {
+  if (line == NULL || expected == NULL) {
     return false;
   }
   end = strchr(line, '\n');
@@ -10679,6 +10713,21 @@ static void test_repl_error_diagnostics(void) {
   fr_runtime_t runtime;
   char out[512] = {0};
   const char *lines[] = {"1 + nope"};
+  const char *stale_probe_lines[] = {"to + 1"};
+  const char *eof_lines[] = {"1 +"};
+  const char *missing_colon_lines[] = {"print 1"};
+#if FR_FEATURE_TEXT
+  const char *unterminated_text_lines[] = {"message is \"ready"};
+#endif
+  const char *malformed_to_lines[] = {"to foo [ 1"};
+  const char *expected_block_end_lines[] = {"boot is fn [ one )"};
+  const char *reserved_name_lines[] = {"true is 1"};
+  const char *nil_definition_lines[] = {"nil is 1"};
+  const char *int_range_lines[] = {"1073741824"};
+#if !FR_FEATURE_TEXT
+  const char *feature_off_lines[] = {"\"ready\""};
+#endif
+  const char *generic_lines[] = {"boot is nil now"};
 #if FR_FEATURE_CELLS
   const char *cell_lines[] = {"missing[0]"};
 #endif
@@ -10693,9 +10742,153 @@ static void test_repl_error_diagnostics(void) {
         test_repl_run_lines(&runtime, lines,
                             (uint8_t)(sizeof(lines) / sizeof(lines[0])), out,
                             (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "name: nope\n") != NULL &&
             strstr(out, "1 + nope\n    ^^^^\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic clears discarded definition probe",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, stale_probe_lines,
+                (uint8_t)(sizeof(stale_probe_lines) /
+                          sizeof(stale_probe_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: to\n") != NULL &&
+            strstr(out, "expected a word name\n") == NULL &&
+            strstr(out, "to + 1\n^^\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders eof caret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, eof_lines,
+                (uint8_t)(sizeof(eof_lines) / sizeof(eof_lines[0])), out,
+                (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "unexpected token\n") != NULL &&
+            strstr(out, "1 +\n   ^\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders missing colon",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, missing_colon_lines,
+                (uint8_t)(sizeof(missing_colon_lines) /
+                          sizeof(missing_colon_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out,
+                   "expected ':' before the argument to a word\n") != NULL &&
+            strstr(out, "print 1\n      ^\n") != NULL);
+
+#if FR_FEATURE_TEXT
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders unterminated text",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, unterminated_text_lines,
+                (uint8_t)(sizeof(unterminated_text_lines) /
+                          sizeof(unterminated_text_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "unterminated text literal\n") != NULL &&
+            strstr(out, "message is \"ready\n           ^\n") != NULL);
+#endif
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic keeps malformed to-definition detail",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, malformed_to_lines,
+                (uint8_t)(sizeof(malformed_to_lines) /
+                          sizeof(malformed_to_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "expected ']' to close the block\n") != NULL &&
+            strstr(out, "to foo [ 1\n          ^\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders expected block end",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, expected_block_end_lines,
+                (uint8_t)(sizeof(expected_block_end_lines) /
+                          sizeof(expected_block_end_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "expected ']' to close the block\n") != NULL &&
+            strstr(out, "boot is fn [ one )\n                 ^\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders reserved definition name",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, reserved_name_lines,
+                (uint8_t)(sizeof(reserved_name_lines) /
+                          sizeof(reserved_name_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "reserved word cannot be used as a name\n") != NULL &&
+            strstr(out, "true is 1\n^^^^\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic leaves nil is definition accepted",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, nil_definition_lines,
+                (uint8_t)(sizeof(nil_definition_lines) /
+                          sizeof(nil_definition_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            strcmp(out, "> ok\n> ") == 0);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders integer range",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, int_range_lines,
+                (uint8_t)(sizeof(int_range_lines) / sizeof(int_range_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: out of range (1)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "integer literal is out of range\n") != NULL &&
+            strstr(out, "1073741824\n^^^^^^^^^^\n") != NULL);
+
+#if !FR_FEATURE_TEXT
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders feature-off parse error",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, feature_off_lines,
+                (uint8_t)(sizeof(feature_off_lines) /
+                          sizeof(feature_off_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: unsupported (9)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "text is not enabled in this build\n") != NULL &&
+            strstr(out, "\"ready\"\n^\n") != NULL);
+#endif
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders generic parser fallback",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(&runtime, generic_lines,
+                                (uint8_t)(sizeof(generic_lines) /
+                                          sizeof(generic_lines[0])),
+                                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "unexpected token\n") != NULL &&
+            strstr(out, "boot is nil now\n            ^^^\n") != NULL);
 
 #if FR_FEATURE_CELLS
   memset(out, 0, sizeof(out));
@@ -10705,6 +10898,7 @@ static void test_repl_error_diagnostics(void) {
                 &runtime, cell_lines,
                 (uint8_t)(sizeof(cell_lines) / sizeof(cell_lines[0])), out,
                 (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "name: missing\n") != NULL &&
             strstr(out, "missing[0]\n^^^^^^^\n") != NULL);
@@ -10718,6 +10912,7 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(set_target_lines) /
                           sizeof(set_target_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "name: missing\n") != NULL &&
             strstr(out, "set missing to 1\n    ^^^^^^^\n") != NULL);

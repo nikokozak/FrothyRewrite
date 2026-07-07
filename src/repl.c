@@ -70,12 +70,63 @@ static bool fr_repl_is_space(char ch) { return ch == ' ' || ch == '\t'; }
 
 static bool fr_repl_is_digit(char ch) { return ch >= '0' && ch <= '9'; }
 
+static bool fr_repl_is_name_start(char ch) {
+  return ch != '\0' && !fr_repl_is_space(ch) && ch != '(' && ch != ')' &&
+         ch != '[' && ch != ']' && ch != ',' && ch != ':' && ch != ';' &&
+         ch != '+' && ch != '-' && ch != '*' && ch != '/' && ch != '%' &&
+         ch != '<' && ch != '>' && ch != '=' && ch != '"';
+}
+
 static bool fr_repl_span_equals(const char *start, uint16_t length,
                                 const char *expected) {
   size_t expected_len = 0;
 
   expected_len = strlen(expected);
   return expected_len == length && memcmp(start, expected, length) == 0;
+}
+
+static bool fr_repl_line_starts_definition(const char *line) {
+  const char *first = line;
+  const char *first_end = NULL;
+  const char *second = NULL;
+  const char *second_end = NULL;
+  uint16_t first_len = 0;
+  uint16_t second_len = 0;
+
+  if (line == NULL) {
+    return false;
+  }
+  while (fr_repl_is_space(*first)) {
+    first += 1;
+  }
+  first_end = first;
+  while (*first_end != '\0' && !fr_repl_is_space(*first_end)) {
+    first_end += 1;
+  }
+  if ((uint32_t)(first_end - first) > UINT16_MAX) {
+    return false;
+  }
+  first_len = (uint16_t)(first_end - first);
+  if (fr_repl_span_equals(first, first_len, "record")) {
+    return true;
+  }
+
+  second = first_end;
+  while (fr_repl_is_space(*second)) {
+    second += 1;
+  }
+  second_end = second;
+  while (*second_end != '\0' && !fr_repl_is_space(*second_end)) {
+    second_end += 1;
+  }
+  if ((uint32_t)(second_end - second) > UINT16_MAX) {
+    return false;
+  }
+  second_len = (uint16_t)(second_end - second);
+  if (fr_repl_span_equals(first, first_len, "to")) {
+    return fr_repl_is_name_start(*second);
+  }
+  return fr_repl_span_equals(second, second_len, "is");
 }
 
 /* `line` is the NUL-terminated REPL line buffer. NONE also covers exact
@@ -806,7 +857,13 @@ static bool fr_repl_diagnostic_span_column(const char *line,
   line_start = (fr_addr_t)line;
   line_end = line_start + (fr_addr_t)line_len;
   span_start = (fr_addr_t)diag->span_start;
-  if (span_start < line_start || span_start >= line_end) {
+  if (span_start < line_start || span_start > line_end) {
+    return false;
+  }
+  if (span_start == line_end && diag->span_length != 0) {
+    return false;
+  }
+  if (span_start < line_end && diag->span_length == 0) {
     return false;
   }
   *out_column = (uint16_t)(span_start - line_start);
@@ -829,6 +886,7 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
                                     const char *line,
                                     const fr_diagnostic_t *diag) {
   const char *name = fr_err_name(err);
+  const char *message = NULL;
   uint16_t used = 0;
   uint16_t base_used = 0;
 
@@ -847,16 +905,29 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
   FR_TRY(fr_repl_append(out, out_cap, &used, ")\n"));
   base_used = used;
 
-  if (diag == NULL || diag->kind != FR_DIAG_NAME ||
-      diag->span_start == NULL) {
+  if (diag == NULL || diag->span_start == NULL) {
     return FR_OK;
   }
 
-  if (fr_repl_append(out, out_cap, &used, "name: ") != FR_OK ||
-      fr_repl_append_span(out, out_cap, &used, diag->span_start,
-                          diag->span_length) != FR_OK ||
-      fr_repl_append_char(out, out_cap, &used, '\n') != FR_OK) {
-    fr_repl_truncate(out, &used, base_used);
+  if (diag->message_id != FR_DIAG_MSG_NONE) {
+    message = fr_diag_message(diag->message_id);
+    if (message == NULL) {
+      return FR_OK;
+    }
+    if (fr_repl_append(out, out_cap, &used, message) != FR_OK ||
+        fr_repl_append_char(out, out_cap, &used, '\n') != FR_OK) {
+      fr_repl_truncate(out, &used, base_used);
+      return FR_OK;
+    }
+  } else if (diag->kind == FR_DIAG_NAME) {
+    if (fr_repl_append(out, out_cap, &used, "name: ") != FR_OK ||
+        fr_repl_append_span(out, out_cap, &used, diag->span_start,
+                            diag->span_length) != FR_OK ||
+        fr_repl_append_char(out, out_cap, &used, '\n') != FR_OK) {
+      fr_repl_truncate(out, &used, base_used);
+      return FR_OK;
+    }
+  } else {
     return FR_OK;
   }
 
@@ -864,9 +935,8 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
     uint16_t detail_used = used;
     uint16_t source_used = used;
     uint16_t column = 0;
-    bool has_caret =
-        fr_repl_diagnostic_span_column(line, diag, &column) &&
-        diag->span_length > 0;
+    uint16_t caret_length = diag->span_length;
+    bool has_caret = fr_repl_diagnostic_span_column(line, diag, &column);
 
     if (fr_repl_append(out, out_cap, &used, line) != FR_OK ||
         fr_repl_append_char(out, out_cap, &used, '\n') != FR_OK) {
@@ -874,9 +944,12 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
       return FR_OK;
     }
     source_used = used;
+    if (caret_length == 0) {
+      caret_length = 1;
+    }
     if (has_caret &&
-        fr_repl_append_caret_line(out, out_cap, &used, column,
-                                  diag->span_length) != FR_OK) {
+        fr_repl_append_caret_line(out, out_cap, &used, column, caret_length) !=
+            FR_OK) {
       fr_repl_truncate(out, &used, source_used);
     }
   }
@@ -1806,6 +1879,9 @@ static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
      * static storage is safe. */
     static fr_compile_overlay_update_t compiled;
     memset(&compiled, 0, sizeof(compiled));
+    if (diag != NULL) {
+      *diag = (fr_diagnostic_t){0};
+    }
     fr_err_t err = fr_compile_overlay_update_for_runtime_with_diagnostic(
         runtime, line, &compiled, diag);
 
@@ -1822,9 +1898,13 @@ static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
     }
     if (err == FR_ERR_UNSUPPORTED) {
       fr_compile_value_binding_t binding = {0};
-      fr_err_t bind_err =
-          fr_compile_value_binding_for_runtime_with_diagnostic(
-              runtime, line, &binding, diag);
+      fr_err_t bind_err = FR_OK;
+
+      if (diag != NULL) {
+        *diag = (fr_diagnostic_t){0};
+      }
+      bind_err = fr_compile_value_binding_for_runtime_with_diagnostic(
+          runtime, line, &binding, diag);
 
       if (bind_err == FR_OK) {
         FR_TRY(fr_repl_eval_value_binding(runtime, &binding, &result));
@@ -1840,6 +1920,9 @@ static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
         return bind_err;
       }
     }
+    if (err == FR_ERR_INVALID && fr_repl_line_starts_definition(line)) {
+      return err;
+    }
     if (err != FR_ERR_INVALID) {
       return err;
     }
@@ -1848,6 +1931,9 @@ static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
   {
     fr_compile_expression_t expression = {0};
 
+    if (diag != NULL) {
+      *diag = (fr_diagnostic_t){0};
+    }
     FR_TRY(fr_compile_expression_for_runtime_with_diagnostic(
         runtime, line, &expression, diag));
     FR_TRY(fr_vm_run_instruction_stream(runtime, &expression.instructions,

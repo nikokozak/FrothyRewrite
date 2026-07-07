@@ -44,6 +44,7 @@ typedef struct fr_parser_t {
   const char *cursor;
   fr_token_t token;
   fr_parse_line_t *out;
+  fr_diagnostic_t *diag;
   uint8_t expr_depth;
   uint8_t call_arg_stop_depth;
   bool stop_plus_before_call;
@@ -55,6 +56,29 @@ typedef uint32_t fr_parse_int_magnitude_t;
   ((fr_parse_int_magnitude_t)FR_TAGGED_INT_MAX)
 #define FR_PARSE_INT_NEG_LIMIT                                                \
   ((fr_parse_int_magnitude_t)(FR_TAGGED_INT_MAX + 1u))
+
+static void fr_parse_note_span(fr_parser_t *parser, uint16_t message_id,
+                               fr_parse_span_t span) {
+  if (parser == NULL || parser->diag == NULL ||
+      parser->diag->kind != FR_DIAG_NONE || message_id == FR_DIAG_MSG_NONE) {
+    return;
+  }
+  parser->diag->kind = FR_DIAG_TOKEN;
+  parser->diag->message_id = message_id;
+  parser->diag->span_start = span.start;
+  parser->diag->span_length = span.length;
+}
+
+static fr_err_t fr_parse_fail_span(fr_parser_t *parser, uint16_t message_id,
+                                   fr_parse_span_t span, fr_err_t err) {
+  fr_parse_note_span(parser, message_id, span);
+  return err;
+}
+
+static fr_err_t fr_parse_fail_token(fr_parser_t *parser, uint16_t message_id,
+                                    fr_err_t err) {
+  return fr_parse_fail_span(parser, message_id, parser->token.span, err);
+}
 
 static bool fr_parse_is_space(char c) {
   return c == ' ' || c == '\t' || c == '\n' || c == '\r';
@@ -136,6 +160,8 @@ static fr_err_t fr_parse_skip_space_and_comments(fr_parser_t *parser,
 
     if ((skipped || fr_parse_comment_after(prev_kind)) &&
         parser->cursor[0] == '-' && parser->cursor[1] == '*') {
+      const char *comment_start = parser->cursor;
+
       skipped = true;
       parser->cursor += 2;
       while (parser->cursor[0] != '\0' &&
@@ -143,7 +169,10 @@ static fr_err_t fr_parse_skip_space_and_comments(fr_parser_t *parser,
         parser->cursor += 1;
       }
       if (parser->cursor[0] == '\0') {
-        return FR_ERR_INVALID;
+        return fr_parse_fail_span(
+            parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+            (fr_parse_span_t){.start = comment_start, .length = 2},
+            FR_ERR_INVALID);
       }
       parser->cursor += 2;
       continue;
@@ -281,22 +310,33 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
 
   if (c == '"') {
 #if !FR_FEATURE_TEXT
-    return FR_ERR_UNSUPPORTED;
+    return fr_parse_fail_span(parser, FR_DIAG_MSG_PARSE_TEXT_DISABLED,
+                              (fr_parse_span_t){.start = span.start,
+                                                .length = 1},
+                              FR_ERR_UNSUPPORTED);
 #else
     bool has_escape = false;
     uint16_t decoded_length = 0;
+    const char *literal_start = span.start;
 
     parser->cursor += 1;
     span.start = parser->cursor;
     while (*parser->cursor != '\0' && *parser->cursor != '"') {
       if (*parser->cursor == '\n' || *parser->cursor == '\r') {
-        return FR_ERR_INVALID;
+        return fr_parse_fail_span(
+            parser, FR_DIAG_MSG_PARSE_UNTERMINATED_TEXT,
+            (fr_parse_span_t){.start = literal_start, .length = 1},
+            FR_ERR_INVALID);
       }
       if (decoded_length >= FR_PROFILE_MAX_TEXT_LENGTH) {
-        return FR_ERR_RANGE;
+        return fr_parse_fail_span(
+            parser, FR_DIAG_MSG_PARSE_TEXT_TOO_LONG,
+            (fr_parse_span_t){.start = literal_start, .length = 1},
+            FR_ERR_RANGE);
       }
       if (*parser->cursor == '\\') {
         char escape = '\0';
+        const char *escape_start = parser->cursor;
 
         has_escape = true;
         parser->cursor += 1;
@@ -308,11 +348,17 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
           if (parser->cursor[1] == '\0' || parser->cursor[2] == '\0' ||
               !fr_parse_is_hex_digit(parser->cursor[1]) ||
               !fr_parse_is_hex_digit(parser->cursor[2])) {
-            return FR_ERR_INVALID;
+            return fr_parse_fail_span(
+                parser, FR_DIAG_MSG_PARSE_BAD_ESCAPE,
+                (fr_parse_span_t){.start = escape_start, .length = 2},
+                FR_ERR_INVALID);
           }
           parser->cursor += 3;
         } else {
-          return FR_ERR_INVALID;
+          return fr_parse_fail_span(
+              parser, FR_DIAG_MSG_PARSE_BAD_ESCAPE,
+              (fr_parse_span_t){.start = escape_start, .length = 2},
+              FR_ERR_INVALID);
         }
       } else {
         parser->cursor += 1;
@@ -320,10 +366,16 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
       decoded_length += 1;
     }
     if (*parser->cursor != '"') {
-      return FR_ERR_INVALID;
+      return fr_parse_fail_span(
+          parser, FR_DIAG_MSG_PARSE_UNTERMINATED_TEXT,
+          (fr_parse_span_t){.start = literal_start, .length = 1},
+          FR_ERR_INVALID);
     }
     if ((uint32_t)(parser->cursor - span.start) > UINT16_MAX) {
-      return FR_ERR_RANGE;
+      return fr_parse_fail_span(
+          parser, FR_DIAG_MSG_PARSE_TEXT_TOO_LONG,
+          (fr_parse_span_t){.start = literal_start, .length = 1},
+          FR_ERR_RANGE);
     }
     span.length = (uint16_t)(parser->cursor - span.start);
     parser->cursor += 1;
@@ -431,7 +483,8 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
            (fr_parse_is_digit(span.start[0]) ||
             fr_parse_is_digit(parser->cursor[1])))) {
     if (span.length >= FR_PARSE_MAX_TOKEN_BYTES) {
-      return FR_ERR_RANGE;
+      return fr_parse_fail_span(parser, FR_DIAG_MSG_PARSE_TOKEN_TOO_LONG, span,
+                                FR_ERR_RANGE);
     }
     span.length += 1;
     parser->cursor += 1;
@@ -444,6 +497,11 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     if (err == FR_OK) {
       parser->token.kind = FR_TOKEN_INT;
     } else if (err != FR_ERR_UNSUPPORTED) {
+      if (err == FR_ERR_RANGE) {
+        fr_parse_note_span(parser, FR_DIAG_MSG_PARSE_INTEGER_RANGE, span);
+      } else {
+        fr_parse_note_span(parser, FR_DIAG_MSG_PARSE_BAD_INTEGER, span);
+      }
       return err;
     }
   }
@@ -454,9 +512,23 @@ static fr_err_t fr_parse_advance(fr_parser_t *parser) {
   return fr_parse_read_token(parser);
 }
 
+static uint16_t fr_parse_expected_message(fr_token_kind_t kind) {
+  switch (kind) {
+  case FR_TOKEN_LBRACKET:
+    return FR_DIAG_MSG_PARSE_EXPECTED_BLOCK_START;
+  case FR_TOKEN_RBRACKET:
+    return FR_DIAG_MSG_PARSE_EXPECTED_BLOCK_END;
+  case FR_TOKEN_RPAREN:
+    return FR_DIAG_MSG_PARSE_EXPECTED_GROUP_END;
+  default:
+    return FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN;
+  }
+}
+
 static fr_err_t fr_parse_expect(fr_parser_t *parser, fr_token_kind_t kind) {
   if (parser->token.kind != kind) {
-    return FR_ERR_INVALID;
+    return fr_parse_fail_token(parser, fr_parse_expected_message(kind),
+                               FR_ERR_INVALID);
   }
   return fr_parse_advance(parser);
 }
@@ -464,7 +536,16 @@ static fr_err_t fr_parse_expect(fr_parser_t *parser, fr_token_kind_t kind) {
 static fr_err_t fr_parse_expect_word(fr_parser_t *parser, const char *word) {
   if (parser->token.kind != FR_TOKEN_NAME ||
       !fr_parse_span_equals(parser->token.span, word)) {
-    return FR_ERR_INVALID;
+    uint16_t message_id = FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN;
+
+    if (word != NULL && word[0] == 'i' && word[1] == 's' &&
+        word[2] == '\0') {
+      message_id = FR_DIAG_MSG_PARSE_EXPECTED_IS;
+    } else if (word != NULL && word[0] == 't' && word[1] == 'o' &&
+               word[2] == '\0') {
+      message_id = FR_DIAG_MSG_PARSE_EXPECTED_TO;
+    }
+    return fr_parse_fail_token(parser, message_id, FR_ERR_INVALID);
   }
   return fr_parse_advance(parser);
 }
@@ -491,7 +572,18 @@ static fr_err_t fr_parse_finish_line(fr_parser_t *parser) {
     FR_TRY(fr_parse_advance(parser));
   }
   if (parser->token.kind != FR_TOKEN_EOF) {
-    return FR_ERR_INVALID;
+    if (parser->token.kind == FR_TOKEN_RBRACKET) {
+      return fr_parse_fail_token(parser,
+                                 FR_DIAG_MSG_PARSE_UNEXPECTED_BLOCK_END,
+                                 FR_ERR_INVALID);
+    }
+    if (parser->token.kind == FR_TOKEN_RPAREN) {
+      return fr_parse_fail_token(parser,
+                                 FR_DIAG_MSG_PARSE_UNEXPECTED_GROUP_END,
+                                 FR_ERR_INVALID);
+    }
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                               FR_ERR_INVALID);
   }
   return FR_OK;
 }
@@ -555,6 +647,36 @@ static bool fr_parse_is_reserved_parameter(fr_parse_span_t name) {
          fr_parse_is_event_keyword(name);
 }
 
+static bool fr_parse_is_reserved_is_definition_name(fr_parse_span_t name) {
+  return fr_parse_span_equals(name, "is") ||
+         fr_parse_span_equals(name, "true") ||
+         fr_parse_span_equals(name, "false") ||
+         fr_parse_span_equals(name, "and") ||
+         fr_parse_span_equals(name, "or") ||
+         fr_parse_span_equals(name, "not") ||
+         fr_parse_is_event_keyword(name);
+}
+
+static bool fr_parse_token_starts_word_argument(const fr_token_t *token) {
+  if (token == NULL) {
+    return false;
+  }
+  if (token->kind == FR_TOKEN_NAME) {
+    return !fr_parse_is_reserved_parameter(token->span);
+  }
+  return token->kind == FR_TOKEN_INT || token->kind == FR_TOKEN_TEXT ||
+         token->kind == FR_TOKEN_LPAREN;
+}
+
+static fr_parse_span_t fr_parse_word_argument_diagnostic_span(
+    const fr_token_t *token) {
+  if (token != NULL && token->kind == FR_TOKEN_TEXT &&
+      token->span.start != NULL) {
+    return (fr_parse_span_t){.start = token->span.start - 1, .length = 1};
+  }
+  return token != NULL ? token->span : (fr_parse_span_t){0};
+}
+
 #if FR_FEATURE_RECORDS
 static fr_err_t fr_parse_check_field_name(fr_parse_span_t name) {
   if (name.start == NULL || name.length == 0 ||
@@ -568,6 +690,18 @@ static fr_err_t fr_parse_check_field_name(fr_parse_span_t name) {
   }
   return FR_OK;
 }
+
+static fr_err_t fr_parse_check_field_name_with_diagnostic(
+    fr_parser_t *parser, fr_parse_span_t name) {
+  fr_err_t err = fr_parse_check_field_name(name);
+
+  if (err == FR_ERR_RANGE) {
+    fr_parse_note_span(parser, FR_DIAG_MSG_PARSE_TOKEN_TOO_LONG, name);
+  } else if (err == FR_ERR_INVALID) {
+    fr_parse_note_span(parser, FR_DIAG_MSG_PARSE_BAD_FIELD, name);
+  }
+  return err;
+}
 #endif
 
 static fr_err_t fr_parse_add_param(fr_parser_t *parser, fr_parse_span_t name,
@@ -576,14 +710,16 @@ static fr_err_t fr_parse_add_param(fr_parser_t *parser, fr_parse_span_t name,
     return FR_ERR_INVALID;
   }
   if (fr_parse_is_reserved_parameter(name)) {
-    return FR_ERR_INVALID;
+    return fr_parse_fail_span(parser, FR_DIAG_MSG_PARSE_RESERVED_PARAMETER,
+                              name, FR_ERR_INVALID);
   }
   if (parser->out->param_count >= FR_PARSE_MAX_PARAMS) {
     return FR_ERR_CAPACITY;
   }
   for (uint8_t i = param_start; i < parser->out->param_count; i++) {
     if (fr_parse_span_same(parser->out->params[i], name)) {
-      return FR_ERR_INVALID;
+      return fr_parse_fail_span(parser, FR_DIAG_MSG_PARSE_DUPLICATE_PARAMETER,
+                                name, FR_ERR_INVALID);
     }
   }
 
@@ -609,14 +745,16 @@ static fr_err_t fr_parse_field_postfix(fr_parser_t *parser,
   }
 #if !FR_FEATURE_RECORDS
   (void)field;
-  return FR_ERR_UNSUPPORTED;
+  return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_RECORDS_DISABLED,
+                             FR_ERR_UNSUPPORTED);
 #else
   FR_TRY(fr_parse_advance(parser));
   if (parser->token.kind != FR_TOKEN_NAME) {
-    return FR_ERR_INVALID;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_EXPECTED_FIELD,
+                               FR_ERR_INVALID);
   }
   field = parser->token.span;
-  FR_TRY(fr_parse_check_field_name(field));
+  FR_TRY(fr_parse_check_field_name_with_diagnostic(parser, field));
   FR_TRY(fr_parse_advance(parser));
   return fr_parse_add_expr(
       parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_FIELD_READ,
@@ -645,7 +783,9 @@ static fr_err_t fr_parse_function_value(fr_parser_t *parser,
     FR_TRY(fr_parse_advance(parser));
     while (true) {
       if (parser->token.kind != FR_TOKEN_NAME) {
-        return FR_ERR_INVALID;
+        return fr_parse_fail_token(parser,
+                                   FR_DIAG_MSG_PARSE_EXPECTED_PARAMETER,
+                                   FR_ERR_INVALID);
       }
       FR_TRY(fr_parse_add_param(parser, parser->token.span, param_start));
       param_count += 1;
@@ -656,7 +796,9 @@ static fr_err_t fr_parse_function_value(fr_parser_t *parser,
       }
       FR_TRY(fr_parse_advance(parser));
       if (parser->token.kind == FR_TOKEN_LBRACKET) {
-        return FR_ERR_INVALID;
+        return fr_parse_fail_token(parser,
+                                   FR_DIAG_MSG_PARSE_EXPECTED_PARAMETER,
+                                   FR_ERR_INVALID);
       }
     }
   }
@@ -706,7 +848,8 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
   if (parser->token.kind == FR_TOKEN_LBRACKET &&
       !parser->token.leading_space) {
 #if !FR_FEATURE_CELLS
-    return FR_ERR_UNSUPPORTED;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_CELLS_DISABLED,
+                               FR_ERR_UNSUPPORTED);
 #else
     fr_parse_expr_id_t index = 0;
 
@@ -733,7 +876,8 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
            parser->token.kind != FR_TOKEN_SEMICOLON) {
       if (parser->token.kind == FR_TOKEN_COMMA ||
           call.child_count >= FR_PARSE_MAX_BODY_EXPRS) {
-        return FR_ERR_INVALID;
+        return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                                   FR_ERR_INVALID);
       }
 
       FR_TRY(fr_parse_call_argument(parser, &call.children[call.child_count]));
@@ -747,7 +891,9 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
         if (parser->token.kind == FR_TOKEN_EOF ||
             parser->token.kind == FR_TOKEN_RBRACKET ||
             parser->token.kind == FR_TOKEN_SEMICOLON) {
-          return FR_ERR_INVALID;
+          return fr_parse_fail_token(parser,
+                                     FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                                     FR_ERR_INVALID);
         }
       } else {
         break;
@@ -755,6 +901,13 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
     }
     FR_TRY(fr_parse_add_expr(parser, call, &base_id));
     return fr_parse_field_postfix(parser, base_id, out_id);
+  }
+
+  if (parser->token.leading_space &&
+      fr_parse_token_starts_word_argument(&parser->token)) {
+    return fr_parse_fail_span(
+        parser, FR_DIAG_MSG_PARSE_EXPECTED_COLON_BEFORE_ARGUMENT,
+        fr_parse_word_argument_diagnostic_span(&parser->token), FR_ERR_INVALID);
   }
 
   FR_TRY(fr_parse_add_expr(
@@ -771,11 +924,13 @@ static fr_err_t fr_parse_cells(fr_parser_t *parser,
   FR_TRY(fr_parse_advance(parser));
   FR_TRY(fr_parse_expect(parser, FR_TOKEN_LPAREN));
   if (parser->token.kind != FR_TOKEN_INT) {
-    return FR_ERR_INVALID;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                               FR_ERR_INVALID);
   }
   length = parser->token.int_value;
   if (length <= 0) {
-    return FR_ERR_RANGE;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_INTEGER_RANGE,
+                               FR_ERR_RANGE);
   }
   FR_TRY(fr_parse_advance(parser));
   FR_TRY(fr_parse_expect(parser, FR_TOKEN_RPAREN));
@@ -796,12 +951,14 @@ static fr_err_t fr_parse_set(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   FR_TRY(fr_parse_expect_word(parser, "to"));
   FR_TRY(fr_parse_expression(parser, &value));
   if (target_id >= parser->out->expr_count) {
-    return FR_ERR_INVALID;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                               FR_ERR_INVALID);
   }
   target = &parser->out->exprs[target_id];
   if (target->kind == FR_PARSE_EXPR_CELL_READ) {
 #if !FR_FEATURE_CELLS
-    return FR_ERR_UNSUPPORTED;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_CELLS_DISABLED,
+                               FR_ERR_UNSUPPORTED);
 #else
     return fr_parse_add_expr(
         parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_CELL_WRITE,
@@ -814,7 +971,8 @@ static fr_err_t fr_parse_set(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   }
   if (target->kind == FR_PARSE_EXPR_FIELD_READ) {
 #if !FR_FEATURE_RECORDS
-    return FR_ERR_UNSUPPORTED;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_RECORDS_DISABLED,
+                               FR_ERR_UNSUPPORTED);
 #else
     return fr_parse_add_expr(
         parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_FIELD_WRITE,
@@ -837,7 +995,8 @@ static fr_err_t fr_parse_set(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
                                   .child_count = 1},
         out_id);
   }
-  return FR_ERR_INVALID;
+  return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                             FR_ERR_INVALID);
 }
 
 static fr_err_t fr_parse_here(fr_parser_t *parser,
@@ -848,7 +1007,12 @@ static fr_err_t fr_parse_here(fr_parser_t *parser,
   FR_TRY(fr_parse_advance(parser));
   if (parser->token.kind != FR_TOKEN_NAME ||
       fr_parse_is_reserved_parameter(parser->token.span)) {
-    return FR_ERR_INVALID;
+    if (parser->token.kind == FR_TOKEN_NAME) {
+      return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_RESERVED_NAME,
+                                 FR_ERR_INVALID);
+    }
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_EXPECTED_WORD_NAME,
+                               FR_ERR_INVALID);
   }
   name = parser->token.span;
   FR_TRY(fr_parse_advance(parser));
@@ -910,7 +1074,8 @@ static fr_err_t fr_parse_when(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   FR_TRY(fr_parse_bracket_block(parser, &when_expr.children[1]));
   if (parser->token.kind == FR_TOKEN_NAME &&
       fr_parse_span_equals(parser->token.span, "else")) {
-    return FR_ERR_INVALID;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                               FR_ERR_INVALID);
   }
   when_expr.child = when_expr.children[0];
   when_expr.child_count = 2;
@@ -931,7 +1096,8 @@ static fr_err_t fr_parse_unless(fr_parser_t *parser,
   FR_TRY(fr_parse_bracket_block(parser, &unless_expr.children[2]));
   if (parser->token.kind == FR_TOKEN_NAME &&
       fr_parse_span_equals(parser->token.span, "else")) {
-    return FR_ERR_INVALID;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                               FR_ERR_INVALID);
   }
   unless_expr.children[1] = nil_id;
   unless_expr.child = unless_expr.children[0];
@@ -1023,7 +1189,8 @@ static fr_err_t fr_parse_on(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   }
   FR_TRY(fr_parse_expression(parser, &reg.children[0]));
   if (parser->token.kind != FR_TOKEN_NAME) {
-    return FR_ERR_INVALID;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_EXPECTED_EVENT_EDGE,
+                               FR_ERR_INVALID);
   }
   if (fr_parse_span_equals(parser->token.span, "rising")) {
     edge = FR_EVENT_KIND_GPIO_RISING;
@@ -1032,7 +1199,8 @@ static fr_err_t fr_parse_on(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   } else if (fr_parse_span_equals(parser->token.span, "changes")) {
     edge = FR_EVENT_KIND_GPIO_CHANGES;
   } else {
-    return FR_ERR_INVALID;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_EXPECTED_EVENT_EDGE,
+                               FR_ERR_INVALID);
   }
   FR_TRY(fr_parse_advance(parser));
   reg.int_value = edge;
@@ -1250,7 +1418,8 @@ static fr_err_t fr_parse_expression(fr_parser_t *parser,
     return FR_ERR_INVALID;
   }
   if (parser->expr_depth >= FR_PARSE_MAX_EXPR_DEPTH) {
-    return FR_ERR_OVERFLOW;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_TOO_DEEP,
+                               FR_ERR_OVERFLOW);
   }
 
   parser->expr_depth += 1;
@@ -1342,7 +1511,8 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     }
     if (fr_parse_span_equals(parser->token.span, "cells")) {
 #if !FR_FEATURE_CELLS
-      return FR_ERR_UNSUPPORTED;
+      return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_CELLS_DISABLED,
+                                 FR_ERR_UNSUPPORTED);
 #else
       return fr_parse_cells(parser, out_id);
 #endif
@@ -1354,12 +1524,22 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
       return fr_parse_here(parser, out_id);
     }
     if (fr_parse_span_equals(parser->token.span, "is")) {
-      return FR_ERR_INVALID;
+      return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                                 FR_ERR_INVALID);
     }
     return fr_parse_name_or_call(parser, out_id);
   }
 
-  return FR_ERR_INVALID;
+  if (parser->token.kind == FR_TOKEN_RBRACKET) {
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_BLOCK_END,
+                               FR_ERR_INVALID);
+  }
+  if (parser->token.kind == FR_TOKEN_RPAREN) {
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_GROUP_END,
+                               FR_ERR_INVALID);
+  }
+  return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                             FR_ERR_INVALID);
 }
 
 static fr_err_t fr_parse_statement_list(fr_parser_t *parser,
@@ -1371,7 +1551,8 @@ static fr_err_t fr_parse_statement_list(fr_parser_t *parser,
   }
   if (parser->token.kind == FR_TOKEN_RBRACKET ||
       parser->token.kind == FR_TOKEN_EOF) {
-    return FR_ERR_INVALID;
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_EMPTY_BLOCK,
+                               FR_ERR_INVALID);
   }
 
   while (parser->token.kind != FR_TOKEN_EOF &&
@@ -1387,7 +1568,8 @@ static fr_err_t fr_parse_statement_list(fr_parser_t *parser,
         break;
       }
       if (parser->token.kind == FR_TOKEN_EOF) {
-        return FR_ERR_INVALID;
+        return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                                   FR_ERR_INVALID);
       }
     } else {
       break;
@@ -1397,8 +1579,9 @@ static fr_err_t fr_parse_statement_list(fr_parser_t *parser,
   return fr_parse_add_expr(parser, list, out_id);
 }
 
-fr_err_t fr_parse_expression_line(const char *source, fr_parse_line_t *out,
-                                  fr_parse_expr_id_t *out_expr) {
+fr_err_t fr_parse_expression_line_with_diagnostic(
+    const char *source, fr_parse_line_t *out, fr_parse_expr_id_t *out_expr,
+    fr_diagnostic_t *diag) {
   fr_parser_t parser = {0};
   fr_parse_expr_t list = {.kind = FR_PARSE_EXPR_LIST};
 
@@ -1409,6 +1592,7 @@ fr_err_t fr_parse_expression_line(const char *source, fr_parse_line_t *out,
   *out = (fr_parse_line_t){0};
   parser.cursor = source;
   parser.out = out;
+  parser.diag = diag;
 
   FR_TRY(fr_parse_advance(&parser));
   FR_TRY(fr_parse_expression(&parser, &list.children[0]));
@@ -1438,7 +1622,13 @@ fr_err_t fr_parse_expression_line(const char *source, fr_parse_line_t *out,
   return fr_parse_finish_line(&parser);
 }
 
-fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
+fr_err_t fr_parse_expression_line(const char *source, fr_parse_line_t *out,
+                                  fr_parse_expr_id_t *out_expr) {
+  return fr_parse_expression_line_with_diagnostic(source, out, out_expr, NULL);
+}
+
+fr_err_t fr_parse_line_with_diagnostic(const char *source, fr_parse_line_t *out,
+                                       fr_diagnostic_t *diag) {
   fr_parser_t parser = {0};
 
   if (source == NULL || out == NULL) {
@@ -1448,34 +1638,43 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
   *out = (fr_parse_line_t){0};
   parser.cursor = source;
   parser.out = out;
+  parser.diag = diag;
 
   FR_TRY(fr_parse_advance(&parser));
   if (parser.token.kind == FR_TOKEN_NAME &&
       fr_parse_span_equals(parser.token.span, "record")) {
 #if !FR_FEATURE_RECORDS
-    return FR_ERR_UNSUPPORTED;
+    return fr_parse_fail_token(&parser, FR_DIAG_MSG_PARSE_RECORDS_DISABLED,
+                               FR_ERR_UNSUPPORTED);
 #else
     FR_TRY(fr_parse_advance(&parser));
     if (parser.token.kind != FR_TOKEN_NAME) {
-      return FR_ERR_INVALID;
+      return fr_parse_fail_token(&parser, FR_DIAG_MSG_PARSE_EXPECTED_WORD_NAME,
+                                 FR_ERR_INVALID);
     }
     out->kind = FR_PARSE_LINE_RECORD_SHAPE;
     out->definition.name = parser.token.span;
-    FR_TRY(fr_parse_check_field_name(out->definition.name));
+    FR_TRY(fr_parse_check_field_name_with_diagnostic(&parser,
+                                                     out->definition.name));
     FR_TRY(fr_parse_advance(&parser));
     FR_TRY(fr_parse_expect(&parser, FR_TOKEN_LBRACKET));
     if (parser.token.kind == FR_TOKEN_RBRACKET) {
-      return FR_ERR_RANGE;
+      return fr_parse_fail_token(&parser, FR_DIAG_MSG_PARSE_EMPTY_RECORD,
+                                 FR_ERR_RANGE);
     }
     while (parser.token.kind != FR_TOKEN_RBRACKET) {
       if (parser.token.kind != FR_TOKEN_NAME ||
           out->record_field_count >= FR_PARSE_MAX_RECORD_FIELDS) {
-        return FR_ERR_INVALID;
+        return fr_parse_fail_token(&parser, FR_DIAG_MSG_PARSE_EXPECTED_FIELD,
+                                   FR_ERR_INVALID);
       }
-      FR_TRY(fr_parse_check_field_name(parser.token.span));
+      FR_TRY(fr_parse_check_field_name_with_diagnostic(&parser,
+                                                       parser.token.span));
       for (uint8_t i = 0; i < out->record_field_count; i++) {
         if (fr_parse_span_same(out->record_fields[i], parser.token.span)) {
-          return FR_ERR_INVALID;
+          return fr_parse_fail_token(&parser,
+                                     FR_DIAG_MSG_PARSE_DUPLICATE_FIELD,
+                                     FR_ERR_INVALID);
         }
       }
       out->record_fields[out->record_field_count] = parser.token.span;
@@ -1484,10 +1683,13 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
       if (parser.token.kind == FR_TOKEN_COMMA) {
         FR_TRY(fr_parse_advance(&parser));
         if (parser.token.kind == FR_TOKEN_RBRACKET) {
-          return FR_ERR_INVALID;
+          return fr_parse_fail_token(&parser,
+                                     FR_DIAG_MSG_PARSE_EXPECTED_FIELD,
+                                     FR_ERR_INVALID);
         }
       } else if (parser.token.kind != FR_TOKEN_RBRACKET) {
-        return FR_ERR_INVALID;
+        return fr_parse_fail_token(&parser, FR_DIAG_MSG_PARSE_EXPECTED_BLOCK_END,
+                                   FR_ERR_INVALID);
       }
     }
     FR_TRY(fr_parse_expect(&parser, FR_TOKEN_RBRACKET));
@@ -1497,8 +1699,11 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
   if (parser.token.kind == FR_TOKEN_NAME &&
       fr_parse_span_equals(parser.token.span, "to")) {
     FR_TRY(fr_parse_advance(&parser));
-    if (parser.token.kind != FR_TOKEN_NAME ||
-        fr_parse_span_equals(parser.token.span, "is") ||
+    if (parser.token.kind != FR_TOKEN_NAME) {
+      return fr_parse_fail_token(&parser, FR_DIAG_MSG_PARSE_EXPECTED_WORD_NAME,
+                                 FR_ERR_INVALID);
+    }
+    if (fr_parse_span_equals(parser.token.span, "is") ||
         fr_parse_span_equals(parser.token.span, "to") ||
         fr_parse_span_equals(parser.token.span, "with") ||
         fr_parse_span_equals(parser.token.span, "true") ||
@@ -1507,27 +1712,58 @@ fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
         fr_parse_span_equals(parser.token.span, "or") ||
         fr_parse_span_equals(parser.token.span, "not") ||
         fr_parse_is_event_keyword(parser.token.span)) {
-      return FR_ERR_INVALID;
+      return fr_parse_fail_token(&parser, FR_DIAG_MSG_PARSE_RESERVED_NAME,
+                                 FR_ERR_INVALID);
     }
     out->definition.name = parser.token.span;
     FR_TRY(fr_parse_advance(&parser));
     FR_TRY(fr_parse_function_value(&parser, &out->definition.value));
     return fr_parse_finish_line(&parser);
   }
-  if (parser.token.kind != FR_TOKEN_NAME ||
-      fr_parse_span_equals(parser.token.span, "is") ||
-      fr_parse_span_equals(parser.token.span, "true") ||
-      fr_parse_span_equals(parser.token.span, "false") ||
-      fr_parse_span_equals(parser.token.span, "and") ||
-      fr_parse_span_equals(parser.token.span, "or") ||
-      fr_parse_span_equals(parser.token.span, "not") ||
-      fr_parse_is_event_keyword(parser.token.span)) {
+  if (parser.token.kind != FR_TOKEN_NAME) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_parse_is_reserved_is_definition_name(parser.token.span)) {
+    fr_parser_t lookahead = parser;
+
+    lookahead.diag = NULL;
+    if (fr_parse_advance(&lookahead) == FR_OK &&
+        lookahead.token.kind == FR_TOKEN_NAME &&
+        fr_parse_span_equals(lookahead.token.span, "is")) {
+      return fr_parse_fail_token(&parser, FR_DIAG_MSG_PARSE_RESERVED_NAME,
+                                 FR_ERR_INVALID);
+    }
     return FR_ERR_INVALID;
   }
   out->definition.name = parser.token.span;
   FR_TRY(fr_parse_advance(&parser));
+  if (parser.token.kind != FR_TOKEN_NAME ||
+      !fr_parse_span_equals(parser.token.span, "is")) {
+    if (parser.token.leading_space &&
+        fr_parse_token_starts_word_argument(&parser.token)) {
+      return fr_parse_fail_span(
+          &parser, FR_DIAG_MSG_PARSE_EXPECTED_COLON_BEFORE_ARGUMENT,
+          fr_parse_word_argument_diagnostic_span(&parser.token),
+          FR_ERR_INVALID);
+    }
+    if (parser.token.kind == FR_TOKEN_RBRACKET) {
+      return fr_parse_fail_token(&parser,
+                                 FR_DIAG_MSG_PARSE_UNEXPECTED_BLOCK_END,
+                                 FR_ERR_INVALID);
+    }
+    if (parser.token.kind == FR_TOKEN_RPAREN) {
+      return fr_parse_fail_token(&parser,
+                                 FR_DIAG_MSG_PARSE_UNEXPECTED_GROUP_END,
+                                 FR_ERR_INVALID);
+    }
+    return FR_ERR_INVALID;
+  }
   FR_TRY(fr_parse_expect_word(&parser, "is"));
   FR_TRY(fr_parse_expression(&parser, &out->definition.value));
 
   return fr_parse_finish_line(&parser);
+}
+
+fr_err_t fr_parse_line(const char *source, fr_parse_line_t *out) {
+  return fr_parse_line_with_diagnostic(source, out, NULL);
 }
