@@ -75,12 +75,21 @@ fr_err_t fr_compile_overlay_update(const char *source,
 fr_err_t fr_compile_overlay_update_for_runtime(fr_runtime_t *runtime,
                                                const char *source,
                                                fr_compile_overlay_update_t *out);
+fr_err_t fr_compile_overlay_update_for_runtime_with_diagnostic(
+    fr_runtime_t *runtime, const char *source, fr_compile_overlay_update_t *out,
+    fr_diagnostic_t *diag);
 /* Compile one runtime-only binding, such as a call result assigned by `is`. */
 fr_err_t fr_compile_value_binding_for_runtime(
     fr_runtime_t *runtime, const char *source, fr_compile_value_binding_t *out);
+fr_err_t fr_compile_value_binding_for_runtime_with_diagnostic(
+    fr_runtime_t *runtime, const char *source, fr_compile_value_binding_t *out,
+    fr_diagnostic_t *diag);
 /* Compile one source expression into a temporary instruction stream. */
 fr_err_t fr_compile_expression(const char *source,
                                fr_compile_expression_t *out);
 fr_err_t fr_compile_expression_for_runtime(fr_runtime_t *runtime,
                                            const char *source,
                                            fr_compile_expression_t *out);
+fr_err_t fr_compile_expression_for_runtime_with_diagnostic(
+    fr_runtime_t *runtime, const char *source, fr_compile_expression_t *out,
+    fr_diagnostic_t *diag);

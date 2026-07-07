@@ -10637,6 +10637,109 @@ static fr_err_t test_repl_write_text(const char *text) {
   return FR_OK;
 }
 
+#if FR_FEATURE_COMPILER
+static bool test_repl_run_lines(fr_runtime_t *runtime,
+                                const char *const *lines, uint8_t line_count,
+                                char *out, uint16_t out_cap) {
+  test_repl_io_state_t state = {
+      .lines = lines,
+      .line_count = line_count,
+      .out = out,
+      .out_cap = out_cap,
+  };
+  const fr_repl_io_t io = {
+      .read_line = test_repl_read_line,
+      .write_text = test_repl_write_text,
+  };
+  fr_err_t err = FR_OK;
+
+  test_repl_io_state = &state;
+  err = fr_repl_run(runtime, &io);
+  test_repl_io_state = NULL;
+  return err == FR_OK;
+}
+
+static bool test_error_line_matches_wire_shape(const char *out) {
+  const char expected[] = "error: not found (7)";
+  const char *line = strstr(out, "error: ");
+  const char *end = NULL;
+
+  if (line == NULL) {
+    return false;
+  }
+  end = strchr(line, '\n');
+  if (end == NULL) {
+    return false;
+  }
+  return (size_t)(end - line) == strlen(expected) &&
+         memcmp(line, expected, strlen(expected)) == 0;
+}
+
+static void test_repl_error_diagnostics(void) {
+  fr_runtime_t runtime;
+  char out[512] = {0};
+  const char *lines[] = {"1 + nope"};
+#if FR_FEATURE_CELLS
+  const char *cell_lines[] = {"missing[0]"};
+#endif
+  const char *set_target_lines[] = {"set missing to 1"};
+  char long_line[FR_REPL_LINE_BYTES];
+  const char *long_lines[] = {long_line};
+  uint16_t spaces = FR_REPL_OUTPUT_BYTES;
+
+  CHECK("repl diagnostic installs base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("repl diagnostic renders undefined name",
+        test_repl_run_lines(&runtime, lines,
+                            (uint8_t)(sizeof(lines) / sizeof(lines[0])), out,
+                            (uint16_t)sizeof(out)) &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: nope\n") != NULL &&
+            strstr(out, "1 + nope\n    ^^^^\n") != NULL);
+
+#if FR_FEATURE_CELLS
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders undefined cell index name",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, cell_lines,
+                (uint8_t)(sizeof(cell_lines) / sizeof(cell_lines[0])), out,
+                (uint16_t)sizeof(out)) &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: missing\n") != NULL &&
+            strstr(out, "missing[0]\n^^^^^^^\n") != NULL);
+#endif
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders undefined set target name",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, set_target_lines,
+                (uint8_t)(sizeof(set_target_lines) /
+                          sizeof(set_target_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: missing\n") != NULL &&
+            strstr(out, "set missing to 1\n    ^^^^^^^\n") != NULL);
+
+  if ((uint32_t)spaces + sizeof("nope") > sizeof(long_line)) {
+    spaces = (uint16_t)(sizeof(long_line) - sizeof("nope"));
+  }
+  memset(long_line, ' ', spaces);
+  memcpy(&long_line[spaces], "nope", sizeof("nope"));
+  memset(out, 0, sizeof(out));
+
+  CHECK("repl diagnostic long line degrades",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, long_lines,
+                (uint8_t)(sizeof(long_lines) / sizeof(long_lines[0])), out,
+                (uint16_t)sizeof(out)) &&
+            strstr(out, "> error: not found (7)\n") == out &&
+            test_error_line_matches_wire_shape(out));
+}
+#endif
+
 #if FR_FEATURE_COMPILER && FR_FEATURE_INTROSPECTION &&                         \
     FR_PROFILE_MAX_OVERLAY_NAMES > 0
 /* A parameter + binop one-liner is the smallest body that exercises the source
@@ -11104,7 +11207,8 @@ static void test_repl_pump(void) {
         strcmp(out, "> " FR_TEST_WORDS "> ok\n> overlay code\n"
                     "to boot [ gpio.write: $led_builtin, 1 ; "
                     "gpio.write: $led_builtin, 0 ; one ]\n"
-                    "ok\n> ok\n> error: not found (7)\n> ") == 0);
+                    "ok\n> ok\n> error: not found (7)\n"
+                    "name: unknown\nunknown\n^^^^^^^\n> ") == 0);
 #elif FR_FEATURE_INTROSPECTION
   CHECK("repl pump transcript output without compiler",
         strcmp(out, "> " FR_TEST_WORDS
@@ -11411,6 +11515,9 @@ int main(void) {
 #endif
 #endif
   test_err_name();
+#if FR_FEATURE_COMPILER
+  test_repl_error_diagnostics();
+#endif
   test_repl_pump();
   test_repl_transcript();
 #if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS

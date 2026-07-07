@@ -159,6 +159,24 @@ func TestSerialReadUntilPromptRequiresTerminalStatus(t *testing.T) {
 	}
 }
 
+func TestSerialReadUntilPromptAcceptsRichErrorStatus(t *testing.T) {
+	dev := serialDeviceWithReadBytes("error: not found (7)\nname: missing\nmissing[0]\n^^^^^^^\n> ")
+
+	response, err := dev.readUntilPrompt(time.Second, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := response, "error: not found (7)\nname: missing\nmissing[0]\n^^^^^^^\n"; got != want {
+		t.Fatalf("response %q, want %q", got, want)
+	}
+	if got, want := responseStatus(response), "error: not found (7)"; got != want {
+		t.Fatalf("responseStatus(%q) = %q, want %q", response, got, want)
+	}
+	if responseOK(response) {
+		t.Fatalf("responseOK(%q) = true, want false", response)
+	}
+}
+
 func TestSerialReadUntilPromptAcceptsBareSyncPrompt(t *testing.T) {
 	dev := serialDeviceWithReadBytes("> ")
 

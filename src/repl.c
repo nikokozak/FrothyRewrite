@@ -767,10 +767,70 @@ fr_repl_writer_write_eval_response(const fr_repl_writer_t *writer,
   return fr_repl_writer_write_tagged_response(writer, runtime, tagged);
 }
 
-static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap,
-                                    fr_err_t err) {
+static void fr_repl_truncate(char *out, uint16_t *used, uint16_t keep) {
+  if (out == NULL || used == NULL) {
+    return;
+  }
+  *used = keep;
+  out[*used] = '\0';
+}
+
+static fr_err_t fr_repl_append_span(char *out, uint16_t out_cap,
+                                    uint16_t *used, const char *start,
+                                    uint16_t length) {
+  if (start == NULL) {
+    return FR_ERR_INVALID;
+  }
+  for (uint16_t i = 0; i < length; i++) {
+    FR_TRY(fr_repl_append_char(out, out_cap, used, start[i]));
+  }
+  return FR_OK;
+}
+
+static bool fr_repl_diagnostic_span_column(const char *line,
+                                           const fr_diagnostic_t *diag,
+                                           uint16_t *out_column) {
+  size_t line_len = 0;
+  fr_addr_t line_start = 0;
+  fr_addr_t line_end = 0;
+  fr_addr_t span_start = 0;
+
+  if (line == NULL || diag == NULL || diag->span_start == NULL ||
+      out_column == NULL) {
+    return false;
+  }
+  line_len = strlen(line);
+  if (line_len > UINT16_MAX) {
+    return false;
+  }
+  line_start = (fr_addr_t)line;
+  line_end = line_start + (fr_addr_t)line_len;
+  span_start = (fr_addr_t)diag->span_start;
+  if (span_start < line_start || span_start >= line_end) {
+    return false;
+  }
+  *out_column = (uint16_t)(span_start - line_start);
+  return true;
+}
+
+static fr_err_t fr_repl_append_caret_line(char *out, uint16_t out_cap,
+                                          uint16_t *used, uint16_t column,
+                                          uint16_t length) {
+  for (uint16_t i = 0; i < column; i++) {
+    FR_TRY(fr_repl_append_char(out, out_cap, used, ' '));
+  }
+  for (uint16_t i = 0; i < length; i++) {
+    FR_TRY(fr_repl_append_char(out, out_cap, used, '^'));
+  }
+  return fr_repl_append_char(out, out_cap, used, '\n');
+}
+
+static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
+                                    const char *line,
+                                    const fr_diagnostic_t *diag) {
   const char *name = fr_err_name(err);
   uint16_t used = 0;
+  uint16_t base_used = 0;
 
   if (out == NULL) {
     return FR_ERR_INVALID;
@@ -784,14 +844,52 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap,
   FR_TRY(fr_repl_append(out, out_cap, &used, name));
   FR_TRY(fr_repl_append(out, out_cap, &used, " ("));
   FR_TRY(fr_repl_append_u16(out, out_cap, &used, (uint16_t)err));
-  return fr_repl_append(out, out_cap, &used, ")\n");
+  FR_TRY(fr_repl_append(out, out_cap, &used, ")\n"));
+  base_used = used;
+
+  if (diag == NULL || diag->kind != FR_DIAG_NAME ||
+      diag->span_start == NULL) {
+    return FR_OK;
+  }
+
+  if (fr_repl_append(out, out_cap, &used, "name: ") != FR_OK ||
+      fr_repl_append_span(out, out_cap, &used, diag->span_start,
+                          diag->span_length) != FR_OK ||
+      fr_repl_append_char(out, out_cap, &used, '\n') != FR_OK) {
+    fr_repl_truncate(out, &used, base_used);
+    return FR_OK;
+  }
+
+  if (line != NULL) {
+    uint16_t detail_used = used;
+    uint16_t source_used = used;
+    uint16_t column = 0;
+    bool has_caret =
+        fr_repl_diagnostic_span_column(line, diag, &column) &&
+        diag->span_length > 0;
+
+    if (fr_repl_append(out, out_cap, &used, line) != FR_OK ||
+        fr_repl_append_char(out, out_cap, &used, '\n') != FR_OK) {
+      fr_repl_truncate(out, &used, detail_used);
+      return FR_OK;
+    }
+    source_used = used;
+    if (has_caret &&
+        fr_repl_append_caret_line(out, out_cap, &used, column,
+                                  diag->span_length) != FR_OK) {
+      fr_repl_truncate(out, &used, source_used);
+    }
+  }
+
+  return FR_OK;
 }
 
 #if FR_FEATURE_PERSISTENCE
 static void fr_repl_write_startup_error(fr_err_t err) {
   char response[FR_REPL_OUTPUT_BYTES];
 
-  if (fr_repl_write_error(response, (uint16_t)sizeof(response), err) == FR_OK) {
+  if (fr_repl_write_error(response, (uint16_t)sizeof(response), err, NULL,
+                          NULL) == FR_OK) {
     (void)fr_platform_write_text(response);
   }
 }
@@ -1591,7 +1689,8 @@ fr_repl_eval_value_binding(fr_runtime_t *runtime,
 
 static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
                                                   const char *line,
-                                                  const fr_repl_writer_t *writer) {
+                                                  const fr_repl_writer_t *writer,
+                                                  fr_diagnostic_t *diag) {
   fr_repl_command_t command = {0};
   fr_tagged_t result = 0;
   bool matched = false;
@@ -1707,8 +1806,8 @@ static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
      * static storage is safe. */
     static fr_compile_overlay_update_t compiled;
     memset(&compiled, 0, sizeof(compiled));
-    fr_err_t err =
-        fr_compile_overlay_update_for_runtime(runtime, line, &compiled);
+    fr_err_t err = fr_compile_overlay_update_for_runtime_with_diagnostic(
+        runtime, line, &compiled, diag);
 
     if (err == FR_OK) {
       FR_TRY(fr_overlay_apply(runtime, &compiled.overlay_update));
@@ -1724,7 +1823,8 @@ static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
     if (err == FR_ERR_UNSUPPORTED) {
       fr_compile_value_binding_t binding = {0};
       fr_err_t bind_err =
-          fr_compile_value_binding_for_runtime(runtime, line, &binding);
+          fr_compile_value_binding_for_runtime_with_diagnostic(
+              runtime, line, &binding, diag);
 
       if (bind_err == FR_OK) {
         FR_TRY(fr_repl_eval_value_binding(runtime, &binding, &result));
@@ -1748,7 +1848,8 @@ static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
   {
     fr_compile_expression_t expression = {0};
 
-    FR_TRY(fr_compile_expression_for_runtime(runtime, line, &expression));
+    FR_TRY(fr_compile_expression_for_runtime_with_diagnostic(
+        runtime, line, &expression, diag));
     FR_TRY(fr_vm_run_instruction_stream(runtime, &expression.instructions,
                                         &result));
     return fr_repl_writer_write_eval_response(writer, runtime, result);
@@ -1760,8 +1861,14 @@ static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
 
 static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
                                             const char *line,
-                                            const fr_repl_writer_t *writer) {
-  fr_err_t err = fr_repl_eval_line_to_writer_inner(runtime, line, writer);
+                                            const fr_repl_writer_t *writer,
+                                            fr_diagnostic_t *diag) {
+  fr_err_t err = FR_OK;
+
+  if (diag != NULL) {
+    *diag = (fr_diagnostic_t){0};
+  }
+  err = fr_repl_eval_line_to_writer_inner(runtime, line, writer, diag);
 #if FR_FEATURE_BYTES
   fr_bytes_reset_if_outermost(runtime);
 #endif
@@ -1778,12 +1885,13 @@ fr_err_t fr_repl_eval_line(fr_runtime_t *runtime, const char *line, char *out,
       .ctx = &buffer,
       .write = fr_repl_buffer_writer_write,
   };
+  fr_diagnostic_t diag = {0};
 
   if (runtime == NULL || line == NULL || out == NULL || out_cap == 0) {
     return FR_ERR_INVALID;
   }
   out[0] = '\0';
-  return fr_repl_eval_line_to_writer(runtime, line, &writer);
+  return fr_repl_eval_line_to_writer(runtime, line, &writer, &diag);
 }
 
 /* Idle-servicing body: drain queued interrupt/timer candidates and run any
@@ -1807,7 +1915,8 @@ static fr_err_t fr_repl_service_events(void *ctx) {
   err = fr_event_dispatch(runtime);
   if (err != FR_OK && err != FR_ERR_INTERRUPTED) {
     char response[FR_REPL_OUTPUT_BYTES];
-    if (fr_repl_write_error(response, (uint16_t)sizeof(response), err) == FR_OK) {
+    if (fr_repl_write_error(response, (uint16_t)sizeof(response), err, NULL,
+                            NULL) == FR_OK) {
       (void)fr_platform_write_text("! ");
       (void)fr_platform_write_text(response);
     }
@@ -1840,11 +1949,13 @@ fr_err_t fr_repl_run(fr_runtime_t *runtime, const fr_repl_io_t *io) {
       return FR_OK;
     }
 
-    fr_err_t err = fr_repl_eval_line_to_writer(runtime, line, &writer);
+    fr_diagnostic_t diag = {0};
+    fr_err_t err = fr_repl_eval_line_to_writer(runtime, line, &writer, &diag);
     if (err != FR_OK) {
       char response[FR_REPL_OUTPUT_BYTES];
 
-      FR_TRY(fr_repl_write_error(response, (uint16_t)sizeof(response), err));
+      FR_TRY(fr_repl_write_error(response, (uint16_t)sizeof(response), err,
+                                 line, &diag));
       FR_TRY(io->write_text(response));
     }
   }
