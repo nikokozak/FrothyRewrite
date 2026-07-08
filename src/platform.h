@@ -164,6 +164,12 @@ fr_err_t fr_platform_persist_mount_commit(void);
 void fr_platform_persist_mount_discard(void);
 void fr_platform_persist_unmount(void);
 bool fr_platform_persist_pointer_is_mounted(const void *ptr, uint16_t length);
+bool fr_platform_persist_code_pointer_is_direct(const void *ptr,
+                                                uint16_t length);
+fr_err_t fr_platform_persist_mounted_offset(const void *ptr, uint16_t length,
+                                            uint16_t *out_offset);
+fr_err_t fr_platform_persist_read_mounted(uint16_t offset, uint8_t *dst,
+                                          uint16_t length);
 /* Stream a replacement image into the inactive slot. The platform erases the
  * inactive slot on begin, appends payload bytes after the reserved S1 header
  * area, and writes the final stamped header last. Until finalize succeeds, the
@@ -183,6 +189,7 @@ fr_err_t fr_host_persist_debug_corrupt_newest(uint16_t offset, uint8_t value);
 void fr_host_persist_debug_interrupt_next_header_write(void);
 void fr_host_persist_debug_fail_next_mount_commit(void);
 void fr_host_persist_debug_shadow_mounts(bool enabled);
+void fr_host_persist_debug_direct_code_pointers(bool enabled);
 #endif
 #endif
 

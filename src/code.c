@@ -20,6 +20,21 @@ static bool fr_code_pointer_in_range(const void *ptr, uint16_t length,
   return (uint32_t)(p - b) + length <= used;
 }
 
+static uint16_t fr_code_read_u16_little_endian(const uint8_t bytes[2]) {
+  return (uint16_t)(bytes[0] | ((uint16_t)bytes[1] << 8));
+}
+
+static bool fr_code_storage_kind_valid(fr_code_storage_kind_t kind) {
+  return kind == FR_CODE_STORAGE_BASE_RAM || kind == FR_CODE_STORAGE_IMAGE ||
+         kind == FR_CODE_STORAGE_PERSIST_IMAGE ||
+         kind == FR_CODE_STORAGE_OVERLAY_RAM;
+}
+
+static bool fr_code_storage_kind_image(fr_code_storage_kind_t kind) {
+  return kind == FR_CODE_STORAGE_IMAGE ||
+         kind == FR_CODE_STORAGE_PERSIST_IMAGE;
+}
+
 void fr_code_reset(fr_runtime_t *runtime) {
   if (runtime == NULL) {
     return;
@@ -205,6 +220,7 @@ fr_code_install_in_ram(fr_runtime_t *runtime, fr_code_storage_kind_t kind,
       &runtime->code.overlay_instruction_bytes
            [runtime->code.overlay_used_instruction_bytes];
   entry->instruction_byte_length = view->length;
+  entry->instruction_storage_offset = 0;
   entry->param_names =
       &runtime->code.overlay_param_name_bytes
            [runtime->code.overlay_used_param_name_bytes];
@@ -272,8 +288,25 @@ fr_err_t fr_code_mount_image(fr_runtime_t *runtime,
   entry->storage_kind = FR_CODE_STORAGE_IMAGE;
   entry->instruction_bytes = view->bytes;
   entry->instruction_byte_length = view->length;
+  entry->instruction_storage_offset = 0;
   entry->param_names = param_names;
   entry->param_name_byte_length = param_names_length;
+
+#if FR_FEATURE_PERSISTENCE
+  {
+    uint16_t offset = 0;
+    fr_err_t offset_err =
+        fr_platform_persist_mounted_offset(view->bytes, view->length, &offset);
+
+    if (offset_err == FR_OK) {
+      entry->instruction_storage_offset = offset;
+      if (!fr_platform_persist_code_pointer_is_direct(view->bytes,
+                                                      view->length)) {
+        entry->instruction_bytes = NULL;
+      }
+    }
+  }
+#endif
 
   *out_code_object_id = runtime->code.count;
   runtime->code.count = (uint16_t)(runtime->code.count + 1u);
@@ -320,8 +353,21 @@ fr_err_t fr_code_get_instructions(const fr_runtime_t *runtime,
   }
 
   entry = &runtime->code.entries[code_object_id];
-  if (entry->instruction_byte_length == 0 || entry->instruction_bytes == NULL) {
+  if (entry->instruction_byte_length == 0) {
     return FR_ERR_CORRUPT;
+  }
+  if (!fr_code_storage_kind_valid(entry->storage_kind)) {
+    return FR_ERR_CORRUPT;
+  }
+  if (entry->instruction_bytes == NULL) {
+    if (!fr_code_storage_kind_image(entry->storage_kind)) {
+      return FR_ERR_CORRUPT;
+    }
+
+    out_instructions->bytes = NULL;
+    out_instructions->length = entry->instruction_byte_length;
+    out_instructions->code_id = code_object_id;
+    return FR_OK;
   }
   if ((entry->storage_kind == FR_CODE_STORAGE_BASE_RAM ||
        entry->storage_kind == FR_CODE_STORAGE_OVERLAY_RAM) &&
@@ -338,15 +384,71 @@ fr_err_t fr_code_get_instructions(const fr_runtime_t *runtime,
     return FR_ERR_CORRUPT;
   }
 #endif
-  if (entry->storage_kind != FR_CODE_STORAGE_BASE_RAM &&
-      entry->storage_kind != FR_CODE_STORAGE_IMAGE &&
-      entry->storage_kind != FR_CODE_STORAGE_PERSIST_IMAGE &&
-      entry->storage_kind != FR_CODE_STORAGE_OVERLAY_RAM) {
-    return FR_ERR_CORRUPT;
-  }
 
   out_instructions->bytes = entry->instruction_bytes;
   out_instructions->length = entry->instruction_byte_length;
+  out_instructions->code_id = code_object_id;
+  return FR_OK;
+}
+
+fr_err_t fr_code_read(const fr_runtime_t *runtime,
+                      fr_code_object_id_t code_object_id, uint16_t offset,
+                      uint8_t *dst, uint16_t len) {
+  fr_instruction_stream_t view;
+  const fr_code_object_t *entry = NULL;
+
+  if ((dst == NULL && len > 0) || runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_code_get_instructions(runtime, code_object_id, &view));
+  if (offset > view.length || len > view.length - offset) {
+    return FR_ERR_RANGE;
+  }
+  if (len == 0) {
+    return FR_OK;
+  }
+  if (view.bytes != NULL) {
+    memcpy(dst, &view.bytes[offset], len);
+    return FR_OK;
+  }
+
+  entry = &runtime->code.entries[code_object_id];
+#if FR_FEATURE_PERSISTENCE
+  if (fr_code_storage_kind_image(entry->storage_kind)) {
+    uint32_t storage_offset =
+        (uint32_t)entry->instruction_storage_offset + offset;
+
+    if (storage_offset > UINT16_MAX) {
+      return FR_ERR_RANGE;
+    }
+    return fr_platform_persist_read_mounted((uint16_t)storage_offset, dst, len);
+  }
+#else
+  (void)entry;
+#endif
+  return FR_ERR_CORRUPT;
+}
+
+fr_err_t fr_code_read_u8(const fr_runtime_t *runtime,
+                         fr_code_object_id_t code_object_id, uint16_t offset,
+                         uint8_t *out) {
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  return fr_code_read(runtime, code_object_id, offset, out, 1);
+}
+
+fr_err_t fr_code_read_u16(const fr_runtime_t *runtime,
+                          fr_code_object_id_t code_object_id, uint16_t offset,
+                          uint16_t *out) {
+  uint8_t bytes[2];
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_code_read(runtime, code_object_id, offset, bytes,
+                      (uint16_t)sizeof(bytes)));
+  *out = fr_code_read_u16_little_endian(bytes);
   return FR_OK;
 }
 

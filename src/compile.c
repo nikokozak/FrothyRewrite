@@ -374,6 +374,32 @@ static fr_err_t fr_compile_emit_slot_op(uint8_t instruction_bytes[],
   return fr_compile_write_u16(instruction_bytes, offset, slot_id);
 }
 
+static fr_err_t fr_compile_read_code_header(fr_runtime_t *runtime,
+                                            fr_code_object_id_t code_object_id,
+                                            fr_instruction_header_t *header) {
+  fr_instruction_stream_t instructions;
+
+  FR_TRY(fr_code_get_instructions(runtime, code_object_id, &instructions));
+  if (instructions.bytes != NULL) {
+    return fr_instruction_read_header(&instructions, header);
+  }
+
+  {
+    uint8_t header_bytes[FR_INSTRUCTION_MAX_HEADER_SIZE];
+    uint8_t header_size = 0;
+    fr_instruction_stream_t header_view;
+
+    FR_TRY(fr_code_read_u8(runtime, code_object_id, 1, &header_size));
+    if (header_size < FR_INSTRUCTION_MIN_HEADER_SIZE ||
+        header_size > FR_INSTRUCTION_MAX_HEADER_SIZE) {
+      return FR_ERR_INVALID;
+    }
+    FR_TRY(fr_code_read(runtime, code_object_id, 0, header_bytes, header_size));
+    FR_TRY(fr_instruction_stream_init(&header_view, header_bytes, header_size));
+    return fr_instruction_read_header(&header_view, header);
+  }
+}
+
 static fr_err_t fr_compile_emit_call_slot_arg(uint8_t instruction_bytes[],
                                               uint16_t *offset,
                                               fr_slot_id_t slot_id,
@@ -783,12 +809,10 @@ static fr_err_t fr_compile_emit_call(const fr_compile_context_t *ctx,
                                      FR_OP_CALL_NATIVE_SLOT, slot_id);
     }
     if (fr_tagged_decode_code_object_id(tagged, &code_object_id) == FR_OK) {
-      fr_instruction_stream_t instructions;
       fr_instruction_header_t header;
 
-      FR_TRY(fr_code_get_instructions(ctx->runtime, code_object_id,
-                                      &instructions));
-      FR_TRY(fr_instruction_read_header(&instructions, &header));
+      FR_TRY(fr_compile_read_code_header(ctx->runtime, code_object_id,
+                                         &header));
       if (expr->child_count != header.arity) {
         return FR_ERR_INVALID;
       }

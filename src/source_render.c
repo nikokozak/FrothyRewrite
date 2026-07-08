@@ -22,6 +22,27 @@
 /* Single-shot scratch: see finishes before the next REPL line, the same
  * lifetime the apply/run wire buffers in repl.c rely on. */
 static char fr_source_render_arena[FR_PROFILE_MAX_SOURCE_RENDER_BYTES];
+static uint8_t fr_source_render_instruction_scratch[FR_PROFILE_TOTAL_IMAGE_BYTES];
+
+fr_err_t fr_source_render_instruction_view(fr_runtime_t *runtime,
+                                           fr_code_object_id_t code_object_id,
+                                           fr_instruction_stream_t *out_view) {
+  if (runtime == NULL || out_view == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_code_get_instructions(runtime, code_object_id, out_view));
+  if (out_view->bytes != NULL) {
+    return FR_OK;
+  }
+  if (out_view->length > sizeof(fr_source_render_instruction_scratch)) {
+    return FR_ERR_CAPACITY;
+  }
+  FR_TRY(fr_code_read(runtime, code_object_id, 0,
+                      fr_source_render_instruction_scratch, out_view->length));
+  return fr_instruction_stream_init(out_view, fr_source_render_instruction_scratch,
+                                    out_view->length);
+}
 
 typedef struct fr_source_frag_t {
   uint16_t start;     /* offset of a NUL-terminated string in the arena */
@@ -962,7 +983,7 @@ static fr_err_t fr_source_build(fr_source_render_t *r,
                                 uint16_t *out_names_len) {
   fr_instruction_stream_t view;
 
-  FR_TRY(fr_code_get_instructions(r->runtime, code_object_id, &view));
+  FR_TRY(fr_source_render_instruction_view(r->runtime, code_object_id, &view));
   FR_TRY(fr_instruction_read_header(&view, out_header));
   FR_TRY(fr_code_get_param_names(r->runtime, code_object_id, out_names,
                                  out_names_len));

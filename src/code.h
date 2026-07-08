@@ -16,6 +16,7 @@ typedef struct fr_code_object_t {
   fr_code_storage_kind_t storage_kind;
   const uint8_t *instruction_bytes;
   uint16_t instruction_byte_length;
+  uint16_t instruction_storage_offset;
   const char *param_names;
   uint16_t param_name_byte_length;
 } fr_code_object_t;
@@ -78,6 +79,15 @@ fr_err_t fr_code_install(fr_runtime_t *runtime,
 fr_err_t fr_code_get_instructions(const fr_runtime_t *runtime,
                                   fr_code_object_id_t code_object_id,
                                   fr_instruction_stream_t *out_instructions);
+fr_err_t fr_code_read(const fr_runtime_t *runtime,
+                      fr_code_object_id_t code_object_id, uint16_t offset,
+                      uint8_t *dst, uint16_t len);
+fr_err_t fr_code_read_u8(const fr_runtime_t *runtime,
+                         fr_code_object_id_t code_object_id, uint16_t offset,
+                         uint8_t *out);
+fr_err_t fr_code_read_u16(const fr_runtime_t *runtime,
+                          fr_code_object_id_t code_object_id, uint16_t offset,
+                          uint16_t *out);
 fr_err_t fr_code_get_param_names(const fr_runtime_t *runtime,
                                  fr_code_object_id_t code_object_id,
                                  const char **out_param_names,

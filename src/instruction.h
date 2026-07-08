@@ -20,6 +20,7 @@ enum {
 typedef struct fr_instruction_stream_t {
   const uint8_t *bytes;
   uint16_t length;
+  fr_code_object_id_t code_id;
 } fr_instruction_stream_t;
 
 typedef struct fr_instruction_header_t {
