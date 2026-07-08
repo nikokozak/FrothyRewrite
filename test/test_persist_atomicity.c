@@ -18,12 +18,14 @@
 #include "platform.h"
 #include "repl.h"
 #include "runtime.h"
+#include "slot.h"
 #include "tagged.h"
 #include "vm.h"
 
 #include "unity/unity.h"
 
 #include <stdint.h>
+#include <string.h>
 
 static fr_runtime_t s_runtime;
 
@@ -256,6 +258,115 @@ static void test_failed_restore_cleans_candidate_code_before_fallback(void) {
 }
 #endif
 
+#if FR_FEATURE_COMPILER && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+static void save_library_and_user_words(fr_runtime_t *runtime) {
+  char buf[128];
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(runtime, "install-library", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(runtime, "lib_word is fn [ one ]", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(runtime, "install-user", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(runtime,
+                                      "usr_word is fn [ lib_word: ]", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(runtime));
+}
+
+static void test_restore_repoints_library_name_after_remount(void) {
+  fr_runtime_t runtime;
+  fr_slot_id_t lib_slot = 0;
+  fr_slot_id_t usr_slot = 0;
+  fr_slot_id_t resolved = 0;
+  char buf[160];
+
+  fr_platform_persist_clear();
+  save_library_and_user_words(&runtime);
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&runtime, "lib_word",
+                                               &lib_slot));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&runtime, "usr_word",
+                                               &usr_slot));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_user(&runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&runtime, "lib_word",
+                                               &resolved));
+  TEST_ASSERT_EQUAL(lib_slot, resolved);
+
+  fr_host_persist_debug_shadow_mounts(true);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&runtime));
+  fr_host_persist_debug_shadow_mounts(false);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&runtime, "lib_word",
+                                               &resolved));
+  TEST_ASSERT_EQUAL(lib_slot, resolved);
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&runtime, "usr_word",
+                                               &resolved));
+  TEST_ASSERT_EQUAL(usr_slot, resolved);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&runtime, "see lib_word", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "to lib_word [ one ]"));
+}
+
+static void test_boot_user_slot_name_survives_clear(void) {
+  fr_runtime_t runtime;
+  fr_slot_id_t usr_slot = 0;
+  fr_slot_id_t resolved = 0;
+  char buf[128];
+
+  fr_platform_persist_clear();
+  save_library_and_user_words(&runtime);
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&runtime, "usr_word",
+                                               &usr_slot));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_user(&runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_runtime_clear_project(&runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_id_for_name(&runtime, "usr_word",
+                                               &resolved));
+  TEST_ASSERT_EQUAL(usr_slot, resolved);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&runtime, "usr_word:", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("1\nok\n", buf);
+}
+
+static void test_failed_mount_commit_drops_candidate_slot_names(void) {
+  fr_runtime_t runtime;
+  char buf[128];
+  fr_slot_id_t resolved = 0;
+
+  fr_platform_persist_clear();
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "leak_word is fn [ one ]",
+                                      buf, (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&runtime));
+  fr_host_persist_debug_fail_next_mount_commit();
+  TEST_ASSERT_EQUAL(FR_ERR_IO, fr_persist_restore(&runtime));
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                    fr_slot_id_for_name(&runtime, "leak_word", &resolved));
+  TEST_ASSERT_EQUAL_UINT16(0, runtime.slots.overlay_name_count);
+}
+#endif
+
 static void test_clear_reports_not_found(void) {
   fr_runtime_t restore_runtime;
 
@@ -302,6 +413,11 @@ int main(void) {
 #if FR_FEATURE_COMPILER && FR_FEATURE_EVENTS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
   RUN_TEST(test_failed_restore_drops_candidate_code_without_fallback);
   RUN_TEST(test_failed_restore_cleans_candidate_code_before_fallback);
+#endif
+#if FR_FEATURE_COMPILER && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  RUN_TEST(test_restore_repoints_library_name_after_remount);
+  RUN_TEST(test_boot_user_slot_name_survives_clear);
+  RUN_TEST(test_failed_mount_commit_drops_candidate_slot_names);
 #endif
   RUN_TEST(test_clear_reports_not_found);
 #if FR_FEATURE_TEXT

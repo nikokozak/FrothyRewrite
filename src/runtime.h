@@ -30,6 +30,21 @@ typedef struct fr_runtime_limits_t {
   uint16_t max_pad_bytes;
 } fr_runtime_limits_t;
 
+typedef enum fr_slot_name_storage_kind_t {
+  FR_SLOT_NAME_STORAGE_OVERLAY_RAM = 0,
+  FR_SLOT_NAME_STORAGE_IMAGE = 1,
+  FR_SLOT_NAME_STORAGE_PERSIST_IMAGE = 2,
+} fr_slot_name_storage_kind_t;
+
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+typedef struct fr_slot_project_name_entry_t {
+  fr_slot_name_storage_kind_t storage_kind;
+  fr_slot_id_t slot_id;
+  const char *bytes;
+  uint8_t length;
+} fr_slot_project_name_entry_t;
+#endif
+
 /* Base is the installed reset tagged word; current is the live tagged word. */
 typedef struct fr_slot_table_t {
   fr_tagged_t current[FR_PROFILE_MAX_SLOTS];
@@ -43,9 +58,9 @@ typedef struct fr_slot_table_t {
    * Overlay is the clearable runtime layer; project names are the public view
    * of that layer in profiles that keep live names on-device.
    */
-  char overlay_names[FR_PROFILE_MAX_OVERLAY_NAMES]
-                    [FR_PROFILE_MAX_NAME_BYTES + 1];
-  fr_slot_id_t overlay_name_slots[FR_PROFILE_MAX_OVERLAY_NAMES];
+  fr_slot_project_name_entry_t overlay_names[FR_PROFILE_MAX_OVERLAY_NAMES];
+  char overlay_name_bytes[FR_PROFILE_MAX_OVERLAY_NAMES]
+                         [FR_PROFILE_MAX_NAME_BYTES + 1];
   uint16_t overlay_name_count;
 #endif
   uint16_t base_count;

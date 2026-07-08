@@ -13,6 +13,7 @@
 #include "persist_payload.h"
 #include "platform.h"
 #include "profile.h"
+#include "slot.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -187,11 +188,22 @@ fr_persist_restore_read_and_apply(fr_runtime_t *runtime,
       }
     }
     if (err == FR_OK) {
+      err = fr_platform_persist_mount_commit();
+      if (err != FR_OK) {
+        fr_err_t cleanup_err = fr_persist_cleanup_failed_apply(runtime);
+
+        fr_platform_persist_mount_discard();
+        if (cleanup_err != FR_OK) {
+          return cleanup_err;
+        }
+        return err;
+      }
       if (out_applied_payload_length != NULL) {
         *out_applied_payload_length = payload_length;
       }
       fr_code_mark_persist_image(runtime);
-      FR_TRY(fr_platform_persist_mount_commit());
+      fr_object_mark_persist_image(runtime);
+      fr_slot_mark_persist_image(runtime);
       if (apply == fr_persist_payload_restore_library) {
         fr_persist_boot_payload_bytes = payload;
         fr_persist_boot_payload_length = payload_length;
@@ -308,6 +320,9 @@ fr_err_t fr_persist_restore_user(fr_runtime_t *runtime) {
                                  fr_persist_boot_payload_length,
                                  fr_persist_payload_restore_user_after_library,
                                  false);
+  if (err == FR_OK) {
+    fr_slot_mark_persist_image(runtime);
+  }
   if (err == FR_OK || err == FR_ERR_NOT_FOUND) {
     fr_persist_forget_boot_image();
   }

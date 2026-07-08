@@ -3955,8 +3955,9 @@ static void test_text_natives(void) {
 
   memset(long_bytes, 'a', sizeof(long_bytes));
   CHECK("text.concat rejects joined length over the per-text cap",
-        fr_text_install(&runtime, long_bytes, (uint16_t)sizeof(long_bytes),
-                        &long_id) == FR_OK &&
+        fr_text_mount_image_since(&runtime, long_bytes,
+                                  (uint16_t)sizeof(long_bytes), 0,
+                                  &long_id) == FR_OK &&
             test_text_native_id(&runtime, FR_SLOT_TEXT_CONCAT, &concat_entry) ==
                 FR_OK &&
             fr_tagged_encode_object_id(long_id, &concat_args[0]) == FR_OK &&
@@ -9395,6 +9396,27 @@ static void test_compiler_overlay_wire_parity(void) {
 #endif
 #endif
 
+#if FR_FEATURE_PERSISTENCE && FR_FEATURE_COMPILER && FR_FEATURE_TEXT
+static bool test_text_object_is_persist_image(fr_runtime_t *runtime,
+                                              fr_object_id_t object_id,
+                                              const uint8_t *expected,
+                                              uint16_t expected_length) {
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || expected == NULL ||
+      object_id >= runtime->objects.count ||
+      runtime->objects.entries[object_id].storage_kind !=
+          FR_OBJECT_STORAGE_PERSIST_IMAGE) {
+    return false;
+  }
+  return fr_text_view(runtime, object_id, &bytes, &length) == FR_OK &&
+         length == expected_length &&
+         memcmp(bytes, expected, expected_length) == 0 &&
+         fr_platform_persist_pointer_is_mounted(bytes, length);
+}
+#endif
+
 #if FR_FEATURE_PERSISTENCE && FR_FEATURE_COMPILER
 static void test_persist(void) {
   fr_runtime_t runtime;
@@ -9414,6 +9436,7 @@ static void test_persist(void) {
   const uint8_t binary_text[] = {'a', '\0', 'b'};
   const uint8_t *text_bytes = NULL;
   fr_object_id_t object_id = 0;
+  fr_object_id_t saved_text_id = 0;
   fr_object_id_t text_id = 0;
   fr_tagged_t text_tagged = 0;
   uint16_t text_length = 0;
@@ -9797,11 +9820,39 @@ static void test_persist(void) {
             fr_persist_restore(&runtime) == FR_OK &&
             fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
             fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+            (saved_text_id = object_id, true) &&
+            test_text_object_is_persist_image(&runtime, object_id,
+                                              (const uint8_t *)"ready", 5));
+  CHECK("persist clear keeps saved text flash-backed",
+        fr_runtime_clear_project(&runtime) == FR_OK &&
+            fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+            object_id == saved_text_id &&
+            test_text_object_is_persist_image(&runtime, object_id,
+                                              (const uint8_t *)"ready", 5));
+  CHECK("persist text object id survives redefine clear",
+        fr_compile_overlay_update_for_runtime(&runtime,
+                                              "message is \"later\"",
+                                              &update) == FR_OK &&
+            update.slot_inits[0].slot_id == slot_id &&
+            test_persist_apply_user_overlay(&runtime,
+                                            &update.overlay_update) == FR_OK &&
+            fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+            object_id >= runtime.objects.image_count &&
+            runtime.objects.entries[object_id].storage_kind ==
+                FR_OBJECT_STORAGE_OVERLAY_RAM &&
             fr_text_view(&runtime, object_id, &text_bytes, &text_length) ==
                 FR_OK &&
-            text_length == 5 && memcmp(text_bytes, "ready", 5) == 0);
+            text_length == 5 && memcmp(text_bytes, "later", 5) == 0 &&
+            fr_runtime_clear_project(&runtime) == FR_OK &&
+            fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+            object_id == saved_text_id &&
+            test_text_object_is_persist_image(&runtime, object_id,
+                                              (const uint8_t *)"ready", 5));
   {
-    char out[64];
+    char out[128];
 
     CHECK("persist restores function with embedded text literal",
           fr_base_image_install(&runtime) == FR_OK &&
@@ -9812,6 +9863,13 @@ static void test_persist(void) {
               fr_persist_save(&runtime) == FR_OK &&
               fr_base_image_install(&runtime) == FR_OK &&
               fr_persist_restore(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime, "see greet", out, sizeof(out)) ==
+                  FR_OK &&
+              strcmp(out,
+                     "overlay code\n"
+                     "to greet with arg0 [ text.concat: \"led=\", "
+                     "text.from-int: arg0 ]\n"
+                     "ok\n") == 0 &&
               fr_repl_eval_line(&runtime, "labeled is greet: 1", out,
                                 sizeof(out)) == FR_OK &&
               fr_repl_eval_line(&runtime, "text.length: labeled", out,
@@ -9845,7 +9903,9 @@ static void test_persist(void) {
             fr_text_view(&runtime, text_id, &text_bytes, &text_length) ==
                 FR_OK &&
             text_length == sizeof(binary_text) &&
-            memcmp(text_bytes, binary_text, sizeof(binary_text)) == 0);
+            memcmp(text_bytes, binary_text, sizeof(binary_text)) == 0 &&
+            test_text_object_is_persist_image(&runtime, text_id, binary_text,
+                                              (uint16_t)sizeof(binary_text)));
 #endif
 #endif
   {
@@ -9982,6 +10042,41 @@ static void test_persist(void) {
             fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
             decoded == FR_TEST_PERSIST_RECORD_VALUE);
 #endif
+  {
+    fr_object_id_t shape_id = 0;
+    fr_record_name_t shape_name = {0};
+    fr_record_name_t field_name = {0};
+    uint16_t field_count = 0;
+
+    CHECK("persist clear keeps record shape names flash-backed",
+          fr_base_image_install(&runtime) == FR_OK &&
+              fr_compile_overlay_update_for_runtime(
+                  &runtime, "record Point [ x, label ]", &update) ==
+                  FR_OK &&
+              (slot_id = update.slot_inits[0].slot_id, true) &&
+              test_persist_apply_user_overlay(&runtime,
+                                              &update.overlay_update) ==
+                  FR_OK &&
+              fr_persist_save(&runtime) == FR_OK &&
+              fr_runtime_clear_project(&runtime) == FR_OK &&
+              fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
+              fr_tagged_decode_object_id(tagged, &shape_id) == FR_OK &&
+              shape_id < runtime.objects.image_count &&
+              runtime.objects.entries[shape_id].storage_kind ==
+                  FR_OBJECT_STORAGE_PERSIST_IMAGE &&
+              fr_record_shape_view(&runtime, shape_id, &shape_name,
+                                   &field_count) == FR_OK &&
+              field_count == 2 && shape_name.length == 5 &&
+              memcmp(shape_name.bytes, "Point", 5) == 0 &&
+              fr_platform_persist_pointer_is_mounted(shape_name.bytes,
+                                                     shape_name.length) &&
+              fr_record_shape_field_name(&runtime, shape_id, 1,
+                                         &field_name) == FR_OK &&
+              field_name.length == 5 &&
+              memcmp(field_name.bytes, "label", 5) == 0 &&
+              fr_platform_persist_pointer_is_mounted(field_name.bytes,
+                                                     field_name.length));
+  }
 #endif
   CHECK("persist wipe clears stored overlay",
         fr_persist_wipe(&runtime) == FR_OK &&
@@ -10130,6 +10225,64 @@ static void test_persist_restore_capacity_uses_base_code_boundary(void) {
         runtime.code.image_count == runtime.code.base_image_count + 1u &&
             fr_repl_eval_line(&runtime, "saved:", out, sizeof(out)) == FR_OK &&
             strcmp(out, "1\nok\n") == 0);
+}
+#endif
+
+#if FR_FEATURE_TEXT && FR_FEATURE_RECORDS && FR_FEATURE_EVENTS &&            \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+static void test_persist_failed_restore_drops_image_object_views(void) {
+  fr_runtime_t runtime;
+  fr_tagged_t tagged = 0;
+  fr_slot_id_t slot_id = 0;
+  fr_object_id_t text_id = 0;
+  fr_object_id_t shape_id = 0;
+  const uint8_t *text_bytes = NULL;
+  uint16_t text_length = 0;
+  fr_record_name_t shape_name = {0};
+  uint16_t field_count = 0;
+  bool filled_events = true;
+  char out[128];
+
+  fr_platform_persist_clear();
+  CHECK("failed restore image views seed text and shape",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "message is \"ready\"", out,
+                              sizeof(out)) == FR_OK &&
+            fr_slot_id_for_name(&runtime, "message", &slot_id) == FR_OK &&
+            fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &text_id) == FR_OK &&
+            fr_repl_eval_line(&runtime, "record Point [ x, label ]", out,
+                              sizeof(out)) == FR_OK &&
+            fr_slot_id_for_name(&runtime, "Point", &slot_id) == FR_OK &&
+            fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &shape_id) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime, "boot is fn [ every 10 [ message ] ]", out,
+                sizeof(out)) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_persist_save(&runtime) == FR_OK);
+
+  CHECK("failed restore image views reinstall base",
+        fr_base_image_install(&runtime) == FR_OK);
+  for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
+    if (fr_event_register(&runtime, FR_EVENT_KIND_AFTER,
+                          (uint16_t)(100u + i), 0, 0) != FR_OK) {
+      filled_events = false;
+    }
+  }
+  CHECK("failed restore image views fill event table", filled_events);
+  CHECK("failed restore drops image text and name views",
+        fr_persist_restore(&runtime) == FR_ERR_CAPACITY &&
+            runtime.objects.count == runtime.objects.base_count &&
+            fr_text_view(&runtime, text_id, &text_bytes, &text_length) ==
+                FR_ERR_NOT_FOUND &&
+            fr_slot_id_for_name(&runtime, "message", &slot_id) ==
+                FR_ERR_NOT_FOUND &&
+            fr_slot_id_for_name(&runtime, "Point", &slot_id) ==
+                FR_ERR_NOT_FOUND &&
+            runtime.slots.overlay_name_count == 0 &&
+            fr_record_shape_view(&runtime, shape_id, &shape_name,
+                                 &field_count) == FR_ERR_NOT_FOUND);
 }
 #endif
 #elif FR_FEATURE_PERSISTENCE
@@ -12893,6 +13046,10 @@ int main(void) {
   test_persist_full_restore_code_ids_are_idempotent();
   test_persist_restored_code_drops_on_reset();
   test_persist_restore_capacity_uses_base_code_boundary();
+#if FR_FEATURE_TEXT && FR_FEATURE_RECORDS && FR_FEATURE_EVENTS &&            \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  test_persist_failed_restore_drops_image_object_views();
+#endif
 #endif
   test_persist_code_id_round_trip();
 #if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&                  \

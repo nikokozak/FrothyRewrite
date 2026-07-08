@@ -27,9 +27,14 @@ bool fr_slot_is_project_id(fr_slot_id_t slot_id);
 
 fr_err_t fr_slot_id_for_name(const fr_runtime_t *runtime, const char *name,
                              fr_slot_id_t *out_slot_id);
+fr_err_t fr_slot_name_view(const fr_runtime_t *runtime, fr_slot_id_t slot_id,
+                           const char **out_name, uint8_t *out_length);
 const char *fr_slot_name(const fr_runtime_t *runtime, fr_slot_id_t slot_id);
 /* Project names are retained only when the active profile keeps live names. */
 uint16_t fr_slot_project_name_count(const fr_runtime_t *runtime);
+fr_err_t fr_slot_project_name_view_at(const fr_runtime_t *runtime,
+                                      uint16_t index, const char **out_name,
+                                      uint8_t *out_length);
 const char *fr_slot_project_name_at(const fr_runtime_t *runtime,
                                     uint16_t index);
 fr_err_t fr_slot_prepare_project_name(const fr_runtime_t *runtime,
@@ -48,3 +53,7 @@ fr_err_t fr_slot_validate_project_names(const fr_runtime_t *runtime,
                                         fr_slot_id_t slot_count_after_writes);
 fr_err_t fr_slot_bind_project_name(fr_runtime_t *runtime, const char *name,
                                    fr_slot_id_t slot_id);
+fr_err_t fr_slot_mount_project_name(fr_runtime_t *runtime, const char *name,
+                                    uint8_t length, fr_slot_id_t slot_id);
+void fr_slot_mark_persist_image(fr_runtime_t *runtime);
+void fr_slot_clear_project_names(fr_runtime_t *runtime);

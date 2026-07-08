@@ -680,7 +680,7 @@ static fr_err_t fr_image_check_apply(const fr_runtime_t *runtime,
 
 #if FR_FEATURE_TEXT
   if ((uint32_t)runtime->objects.used_text_bytes + new_text_bytes >
-      FR_PROFILE_MAX_TEXT_BYTES) {
+      FR_TEXT_BYTE_CAPACITY) {
     return FR_ERR_CAPACITY;
   }
 #else
@@ -1124,6 +1124,7 @@ fr_err_t fr_image_install(fr_runtime_t *runtime, const fr_image_t *image) {
 
   *runtime = next;
   fr_code_rebase_ram_pointers(runtime, &next);
+  fr_object_rebase_ram_pointers(runtime, &next);
   return FR_OK;
 }
 

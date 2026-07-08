@@ -10,7 +10,8 @@
 #define FR_CELL_WORD_CAPACITY                                                \
   (FR_PROFILE_MAX_CELL_WORDS > 0 ? FR_PROFILE_MAX_CELL_WORDS : 1)
 #define FR_TEXT_BYTE_CAPACITY                                                \
-  (FR_PROFILE_MAX_TEXT_BYTES > 0 ? FR_PROFILE_MAX_TEXT_BYTES : 1)
+  (FR_PROFILE_MAX_OVERLAY_TEXT_BYTES > 0 ? FR_PROFILE_MAX_OVERLAY_TEXT_BYTES \
+                                         : 1)
 #if FR_FEATURE_RECORDS
 #define FR_RECORD_NAME_BYTE_CAPACITY                                         \
   (FR_PROFILE_MAX_RECORD_NAME_BYTES > 0 ? FR_PROFILE_MAX_RECORD_NAME_BYTES    \
@@ -45,8 +46,16 @@ typedef enum fr_object_kind_t {
   FR_OBJECT_RECORD = 4,
 } fr_object_kind_t;
 
+typedef enum fr_object_storage_kind_t {
+  FR_OBJECT_STORAGE_OVERLAY_RAM = 0,
+  FR_OBJECT_STORAGE_IMAGE = 1,
+  FR_OBJECT_STORAGE_PERSIST_IMAGE = 2,
+} fr_object_storage_kind_t;
+
 typedef struct fr_object_entry_t {
   fr_object_kind_t kind;
+  fr_object_storage_kind_t storage_kind;
+  const uint8_t *bytes;
   uint16_t first;
   uint16_t length;
 #if FR_FEATURE_RECORDS
@@ -64,6 +73,8 @@ typedef struct fr_record_name_t {
 } fr_record_name_t;
 
 typedef struct fr_record_name_entry_t {
+  fr_object_storage_kind_t storage_kind;
+  const uint8_t *bytes;
   uint16_t first;
   uint16_t length;
 } fr_record_name_entry_t;
@@ -74,7 +85,6 @@ typedef struct fr_object_table_t {
   fr_tagged_t cell_values[FR_CELL_WORD_CAPACITY];
   fr_tagged_t base_cell_values[FR_CELL_WORD_CAPACITY];
   uint8_t text_bytes[FR_TEXT_BYTE_CAPACITY];
-  uint8_t base_text_bytes[FR_TEXT_BYTE_CAPACITY];
 #if FR_FEATURE_RECORDS
   fr_record_name_entry_t record_names[FR_RECORD_NAME_ENTRY_CAPACITY];
   fr_record_name_entry_t base_record_names[FR_RECORD_NAME_ENTRY_CAPACITY];
@@ -83,7 +93,6 @@ typedef struct fr_object_table_t {
   fr_tagged_t record_values[FR_RECORD_VALUE_FIELD_CAPACITY];
   fr_tagged_t base_record_values[FR_RECORD_VALUE_FIELD_CAPACITY];
   uint8_t record_name_bytes[FR_RECORD_NAME_BYTE_CAPACITY];
-  uint8_t base_record_name_bytes[FR_RECORD_NAME_BYTE_CAPACITY];
 #endif
   bool overlay[FR_OBJECT_TABLE_CAPACITY];
   uint16_t count;
@@ -116,8 +125,11 @@ typedef struct fr_object_table_t {
 void fr_object_reset(fr_runtime_t *runtime);
 void fr_object_mark_base(fr_runtime_t *runtime);
 void fr_object_mark_image(fr_runtime_t *runtime);
+void fr_object_mark_persist_image(fr_runtime_t *runtime);
 void fr_object_restore_base(fr_runtime_t *runtime);
 void fr_object_clear_overlay(fr_runtime_t *runtime);
+void fr_object_rebase_ram_pointers(fr_runtime_t *runtime,
+                                   const fr_runtime_t *source);
 
 bool fr_cells_value_allowed(const fr_runtime_t *runtime, fr_tagged_t tagged);
 fr_err_t fr_cells_check_install(const fr_runtime_t *runtime, uint16_t length,
@@ -151,6 +163,10 @@ fr_err_t fr_text_install_since(fr_runtime_t *runtime, const uint8_t *bytes,
                                uint16_t length,
                                fr_object_id_t first_object_id,
                                fr_object_id_t *out_object_id);
+fr_err_t fr_text_mount_image_since(fr_runtime_t *runtime, const uint8_t *bytes,
+                                   uint16_t length,
+                                   fr_object_id_t first_object_id,
+                                   fr_object_id_t *out_object_id);
 fr_err_t fr_text_view(const fr_runtime_t *runtime, fr_object_id_t object_id,
                       const uint8_t **out_bytes, uint16_t *out_length);
 bool fr_record_field_value_allowed(const fr_runtime_t *runtime,
@@ -172,6 +188,10 @@ fr_err_t fr_record_shape_install_since(fr_runtime_t *runtime,
                                        uint16_t field_count,
                                        fr_object_id_t first_object_id,
                                        fr_object_id_t *out_object_id);
+fr_err_t fr_record_shape_mount_image_since(
+    fr_runtime_t *runtime, fr_record_name_t name,
+    const fr_record_name_t fields[], uint16_t field_count,
+    fr_object_id_t first_object_id, fr_object_id_t *out_object_id);
 fr_err_t fr_record_shape_view(const fr_runtime_t *runtime,
                               fr_object_id_t object_id,
                               fr_record_name_t *out_name,
