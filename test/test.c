@@ -248,10 +248,11 @@ enum {
    user words in a fully installed base image start above them, and `words`
    lists them between the base and overlay names. */
 #if FR_FEATURE_SOURCE_BASE
-#define FR_TEST_SOURCE_BASE_WORD_COUNT 12
+#define FR_TEST_SOURCE_BASE_WORD_COUNT 15
 #define FR_TEST_SOURCE_WORDS                                                 \
-  " gpio.high gpio.low gpio.toggle led.on led.off led.toggle blink "         \
-  "led.blink wrap random.chance? random.percent? sign"
+  " gpio.high gpio.low gpio.toggle gpio.output gpio.input led.on led.off "   \
+  "led.toggle blink led.blink wrap random.chance? random.percent? sign "     \
+  "adc.percent"
 #else
 #define FR_TEST_SOURCE_BASE_WORD_COUNT 0
 #define FR_TEST_SOURCE_WORDS ""
@@ -11767,10 +11768,10 @@ static void test_repl(void) {
             strcmp(out, "ok\n") == 0);
 #if FR_FEATURE_SOURCE_BASE
   /* Source-base words take code object ids 0..N-1 at boot compile, so boot's
-     id is the source-word count (12 today). */
+     id is the source-word count (15 today). */
   CHECK("repl displays bare compiled boot",
         fr_repl_eval_line(&runtime, "boot", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "code 12\nok\n") == 0);
+            strcmp(out, "code 15\nok\n") == 0);
 #else
   CHECK("repl displays bare compiled boot",
         fr_repl_eval_line(&runtime, "boot", out, sizeof(out)) == FR_OK &&
@@ -12781,6 +12782,8 @@ static void test_source_base_word_proofs(void) {
       {"gpio.low", "to gpio.low with pin [ gpio.write: pin, 0 ]"},
       {"gpio.toggle",
        "to gpio.toggle with pin [ gpio.write: pin, 1 - gpio.read: pin ]"},
+      {"gpio.output", "to gpio.output with pin [ gpio.mode: pin, 1 ]"},
+      {"gpio.input", "to gpio.input with pin [ gpio.mode: pin, 0 ]"},
       {"led.on", "to led.on [ gpio.high: $led_builtin ]"},
       {"led.off", "to led.off [ gpio.low: $led_builtin ]"},
       {"led.toggle", "to led.toggle [ gpio.toggle: $led_builtin ]"},
@@ -12795,6 +12798,8 @@ static void test_source_base_word_proofs(void) {
       {"random.percent?",
        "to random.percent? with percent [ random.chance?: percent, 100 ]"},
       {"sign", "to sign with n [ clamp: n, -1, 1 ]"},
+      {"adc.percent", "to adc.percent with pin [ here local0 is adc.read: pin ; "
+                      "map: local0, 0, 4095, 0, 100 ]"},
   };
   fr_runtime_t runtime;
   char out[256];
@@ -12922,7 +12927,7 @@ static void test_repl_pump(void) {
 
 static void test_repl_transcript(void) {
   fr_runtime_t runtime;
-  char out[1024];
+  char out[2048];
 
 #if FR_FEATURE_PERSISTENCE
   fr_platform_persist_clear();
