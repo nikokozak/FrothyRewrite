@@ -35,6 +35,11 @@ typedef struct fr_source_render_t {
   fr_source_frag_t stack[FR_PROFILE_MAX_STACK_DEPTH + 1];
 } fr_source_render_t;
 
+typedef struct fr_source_name_t {
+  const char *bytes;
+  uint8_t length;
+} fr_source_name_t;
+
 static fr_err_t fr_source_putc(fr_source_render_t *r, char ch) {
   if ((uint32_t)r->used + 2u > sizeof(fr_source_render_arena)) {
     return FR_ERR_CAPACITY;
@@ -125,10 +130,29 @@ static fr_err_t fr_source_seal(fr_source_render_t *r, uint16_t start,
   return FR_OK;
 }
 
+static fr_err_t fr_source_put_name(fr_source_render_t *r,
+                                   fr_source_name_t name) {
+  if (name.bytes == NULL || name.length == 0) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  for (uint8_t i = 0; i < name.length; i++) {
+    FR_TRY(fr_source_putc(r, name.bytes[i]));
+  }
+  return FR_OK;
+}
+
 static fr_err_t fr_source_push_text(fr_source_render_t *r, const char *text) {
   uint16_t start = r->used;
 
   FR_TRY(fr_source_puts(r, text));
+  return fr_source_seal(r, start, false);
+}
+
+static fr_err_t fr_source_push_name(fr_source_render_t *r,
+                                    fr_source_name_t name) {
+  uint16_t start = r->used;
+
+  FR_TRY(fr_source_put_name(r, name));
   return fr_source_seal(r, start, false);
 }
 
@@ -172,7 +196,8 @@ static fr_err_t fr_source_reduce_binop(fr_source_render_t *r,
   return fr_source_seal(r, start, true);
 }
 
-static fr_err_t fr_source_reduce_call(fr_source_render_t *r, const char *name,
+static fr_err_t fr_source_reduce_call(fr_source_render_t *r,
+                                      fr_source_name_t name,
                                       uint8_t arg_count) {
   uint16_t start = r->used;
   uint8_t base = 0;
@@ -184,7 +209,7 @@ static fr_err_t fr_source_reduce_call(fr_source_render_t *r, const char *name,
   }
   base = (uint8_t)(r->depth - arg_count);
 
-  FR_TRY(fr_source_puts(r, name));
+  FR_TRY(fr_source_put_name(r, name));
   FR_TRY(fr_source_puts(r, ": "));
   for (uint8_t i = 0; i < arg_count; i++) {
     if (i > 0) {
@@ -198,26 +223,26 @@ static fr_err_t fr_source_reduce_call(fr_source_render_t *r, const char *name,
 }
 
 static fr_err_t fr_source_write_slot_write(fr_source_render_t *r,
-                                           const char *name,
+                                           fr_source_name_t name,
                                            fr_source_frag_t value) {
   FR_TRY(fr_source_puts(r, "set "));
-  FR_TRY(fr_source_puts(r, name));
+  FR_TRY(fr_source_put_name(r, name));
   FR_TRY(fr_source_puts(r, " to "));
   return fr_source_puts(r, &fr_source_render_arena[value.start]);
 }
 
 #if FR_FEATURE_CELLS
 static fr_err_t fr_source_write_cell_read(fr_source_render_t *r,
-                                          const char *name,
+                                          fr_source_name_t name,
                                           fr_source_frag_t index) {
-  FR_TRY(fr_source_puts(r, name));
+  FR_TRY(fr_source_put_name(r, name));
   FR_TRY(fr_source_putc(r, '['));
   FR_TRY(fr_source_puts(r, &fr_source_render_arena[index.start]));
   return fr_source_putc(r, ']');
 }
 
 static fr_err_t fr_source_write_cell_write(fr_source_render_t *r,
-                                           const char *name,
+                                           fr_source_name_t name,
                                            fr_source_frag_t index,
                                            fr_source_frag_t value) {
   FR_TRY(fr_source_puts(r, "set "));
@@ -227,14 +252,14 @@ static fr_err_t fr_source_write_cell_write(fr_source_render_t *r,
 }
 #endif
 
-static const char *fr_source_slot_name(fr_source_render_t *r,
-                                       fr_slot_id_t slot_id) {
-  const char *name = fr_base_slot_name(slot_id);
-
-  if (name != NULL) {
-    return name;
+static fr_err_t fr_source_slot_name(fr_source_render_t *r,
+                                    fr_slot_id_t slot_id,
+                                    fr_source_name_t *out_name) {
+  if (r == NULL || out_name == NULL) {
+    return FR_ERR_INVALID;
   }
-  return fr_slot_name(r->runtime, slot_id);
+  return fr_slot_name_view(r->runtime, slot_id, &out_name->bytes,
+                           &out_name->length);
 }
 
 static fr_err_t fr_source_native_arity(fr_source_render_t *r,
@@ -672,26 +697,23 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
     }
     case FR_OP_LOAD_SLOT: {
       fr_slot_id_t slot_id = 0;
-      const char *name = NULL;
+      fr_source_name_t name = {0};
 
       FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
-      name = fr_source_slot_name(r, slot_id);
-      if (name == NULL) {
-        return FR_ERR_UNSUPPORTED;
-      }
-      FR_TRY(fr_source_push_text(r, name));
+      FR_TRY(fr_source_slot_name(r, slot_id, &name));
+      FR_TRY(fr_source_push_name(r, name));
       ip = (fr_code_offset_t)(ip + 3u);
       break;
     }
     case FR_OP_STORE_SLOT: {
       fr_slot_id_t slot_id = 0;
       fr_source_frag_t value;
-      const char *name = NULL;
+      fr_source_name_t name = {0};
       uint16_t start = r->used;
 
       FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
-      name = fr_source_slot_name(r, slot_id);
-      if (name == NULL || r->depth < 1) {
+      FR_TRY(fr_source_slot_name(r, slot_id, &name));
+      if (r->depth < 1) {
         return FR_ERR_UNSUPPORTED;
       }
       value = r->stack[r->depth - 1];
@@ -706,15 +728,12 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       fr_slot_id_t slot_id = 0;
       uint16_t index_value = 0;
       fr_source_frag_t index;
-      const char *name = NULL;
+      fr_source_name_t name = {0};
       uint16_t start = 0;
 
       FR_TRY(fr_instruction_read_cell_operands(view, ip, &slot_id,
                                                &index_value));
-      name = fr_source_slot_name(r, slot_id);
-      if (name == NULL) {
-        return FR_ERR_UNSUPPORTED;
-      }
+      FR_TRY(fr_source_slot_name(r, slot_id, &name));
       FR_TRY(fr_source_push_int(r, (fr_int_t)index_value));
       index = r->stack[r->depth - 1];
       r->depth = (uint8_t)(r->depth - 1u);
@@ -729,13 +748,13 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       uint16_t index_value = 0;
       fr_source_frag_t index;
       fr_source_frag_t value;
-      const char *name = NULL;
+      fr_source_name_t name = {0};
       uint16_t start = 0;
 
       FR_TRY(fr_instruction_read_cell_operands(view, ip, &slot_id,
                                                &index_value));
-      name = fr_source_slot_name(r, slot_id);
-      if (name == NULL || r->depth < 1) {
+      FR_TRY(fr_source_slot_name(r, slot_id, &name));
+      if (r->depth < 1) {
         return FR_ERR_UNSUPPORTED;
       }
       value = r->stack[r->depth - 1];
@@ -752,12 +771,12 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
     case FR_OP_LOAD_CELL_DYNAMIC: {
       fr_slot_id_t slot_id = 0;
       fr_source_frag_t index;
-      const char *name = NULL;
+      fr_source_name_t name = {0};
       uint16_t start = r->used;
 
       FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
-      name = fr_source_slot_name(r, slot_id);
-      if (name == NULL || r->depth < 1) {
+      FR_TRY(fr_source_slot_name(r, slot_id, &name));
+      if (r->depth < 1) {
         return FR_ERR_UNSUPPORTED;
       }
       index = r->stack[r->depth - 1];
@@ -771,12 +790,12 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       fr_slot_id_t slot_id = 0;
       fr_source_frag_t index;
       fr_source_frag_t value;
-      const char *name = NULL;
+      fr_source_name_t name = {0};
       uint16_t start = r->used;
 
       FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
-      name = fr_source_slot_name(r, slot_id);
-      if (name == NULL || r->depth < 2) {
+      FR_TRY(fr_source_slot_name(r, slot_id, &name));
+      if (r->depth < 2) {
         return FR_ERR_UNSUPPORTED;
       }
       index = r->stack[r->depth - 1];
@@ -862,7 +881,7 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       break;
     case FR_OP_CALL_SLOT: {
       fr_slot_id_t slot_id = 0;
-      const char *name = NULL;
+      fr_source_name_t name = {0};
       uint16_t start = r->used;
 
       /* A zero-arg call to a source-defined word: the opcode (not LOAD_SLOT)
@@ -873,11 +892,8 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
         return FR_ERR_UNSUPPORTED;
       }
       FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
-      name = fr_source_slot_name(r, slot_id);
-      if (name == NULL) {
-        return FR_ERR_UNSUPPORTED;
-      }
-      FR_TRY(fr_source_puts(r, name));
+      FR_TRY(fr_source_slot_name(r, slot_id, &name));
+      FR_TRY(fr_source_put_name(r, name));
       FR_TRY(fr_source_putc(r, ':'));
       FR_TRY(fr_source_seal(r, start, false));
       ip = (fr_code_offset_t)(ip + 3u);
@@ -886,13 +902,10 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
     case FR_OP_CALL_NATIVE_SLOT: {
       fr_slot_id_t slot_id = 0;
       uint8_t arity = 0;
-      const char *name = NULL;
+      fr_source_name_t name = {0};
 
       FR_TRY(fr_instruction_read_slot_operand(view, ip, &slot_id));
-      name = fr_source_slot_name(r, slot_id);
-      if (name == NULL) {
-        return FR_ERR_UNSUPPORTED;
-      }
+      FR_TRY(fr_source_slot_name(r, slot_id, &name));
       FR_TRY(fr_source_native_arity(r, slot_id, &arity));
 #if FR_FEATURE_MATH
       if (slot_id == FR_SLOT_MOD && arity == 2) {
@@ -908,14 +921,11 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
     case FR_OP_CALL_SLOT_ARG: {
       fr_slot_id_t slot_id = 0;
       uint8_t arg_count = 0;
-      const char *name = NULL;
+      fr_source_name_t name = {0};
 
       FR_TRY(fr_instruction_read_call_slot_arg_operands(view, ip, &slot_id,
                                                         &arg_count));
-      name = fr_source_slot_name(r, slot_id);
-      if (name == NULL) {
-        return FR_ERR_UNSUPPORTED;
-      }
+      FR_TRY(fr_source_slot_name(r, slot_id, &name));
       FR_TRY(fr_source_reduce_call(r, name, arg_count));
       ip = (fr_code_offset_t)(ip + 4u);
       break;

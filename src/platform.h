@@ -181,6 +181,8 @@ fr_err_t fr_platform_persist_clear(void);
  * stored image without exposing the backend's slot layout. */
 fr_err_t fr_host_persist_debug_corrupt_newest(uint16_t offset, uint8_t value);
 void fr_host_persist_debug_interrupt_next_header_write(void);
+void fr_host_persist_debug_fail_next_mount_commit(void);
+void fr_host_persist_debug_shadow_mounts(bool enabled);
 #endif
 #endif
 

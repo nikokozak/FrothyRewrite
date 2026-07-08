@@ -23,8 +23,13 @@ fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
   }
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   for (uint16_t i = 0; i < FR_PROFILE_MAX_OVERLAY_NAMES; i++) {
-    runtime->slots.overlay_names[i][0] = '\0';
-    runtime->slots.overlay_name_slots[i] = 0;
+    runtime->slots.overlay_names[i] = (fr_slot_project_name_entry_t){
+        .storage_kind = FR_SLOT_NAME_STORAGE_OVERLAY_RAM,
+        .slot_id = 0,
+        .bytes = NULL,
+        .length = 0,
+    };
+    runtime->slots.overlay_name_bytes[i][0] = '\0';
   }
   runtime->slots.overlay_name_count = 0;
 #endif
@@ -70,22 +75,34 @@ fr_err_t fr_runtime_clear_project(fr_runtime_t *runtime) {
   {
     uint16_t dst = 0;
     for (uint16_t src = 0; src < runtime->slots.overlay_name_count; src++) {
-      fr_slot_id_t slot_id = runtime->slots.overlay_name_slots[src];
+      fr_slot_id_t slot_id = runtime->slots.overlay_names[src].slot_id;
 
       if (slot_id < runtime->slots.base_count &&
-          runtime->slots.base_tier[slot_id] != 0) {
+          runtime->slots.base_tier[slot_id] != 0 &&
+          runtime->slots.overlay_names[src].storage_kind !=
+              FR_SLOT_NAME_STORAGE_IMAGE) {
         if (dst != src) {
-          memcpy(runtime->slots.overlay_names[dst],
-                 runtime->slots.overlay_names[src],
-                 (size_t)FR_PROFILE_MAX_NAME_BYTES + 1);
-          runtime->slots.overlay_name_slots[dst] = slot_id;
+          runtime->slots.overlay_names[dst] = runtime->slots.overlay_names[src];
+          if (runtime->slots.overlay_names[src].storage_kind ==
+              FR_SLOT_NAME_STORAGE_OVERLAY_RAM) {
+            memcpy(runtime->slots.overlay_name_bytes[dst],
+                   runtime->slots.overlay_name_bytes[src],
+                   (size_t)FR_PROFILE_MAX_NAME_BYTES + 1);
+            runtime->slots.overlay_names[dst].bytes =
+                runtime->slots.overlay_name_bytes[dst];
+          }
         }
         dst = (uint16_t)(dst + 1);
       }
     }
     for (uint16_t i = dst; i < runtime->slots.overlay_name_count; i++) {
-      runtime->slots.overlay_names[i][0] = '\0';
-      runtime->slots.overlay_name_slots[i] = 0;
+      runtime->slots.overlay_names[i] = (fr_slot_project_name_entry_t){
+          .storage_kind = FR_SLOT_NAME_STORAGE_OVERLAY_RAM,
+          .slot_id = 0,
+          .bytes = NULL,
+          .length = 0,
+      };
+      runtime->slots.overlay_name_bytes[i][0] = '\0';
     }
     runtime->slots.overlay_name_count = dst;
   }

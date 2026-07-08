@@ -1735,18 +1735,46 @@ static fr_err_t fr_repl_eval_bare_word(fr_runtime_t *runtime, const char *line,
                                        fr_tagged_t *out, bool *out_matched,
                                        bool *out_ran_command) {
   const fr_native_entry_t *entry = NULL;
+  const char *start = line;
+  const char *end = NULL;
   fr_native_id_t native_id = 0;
   fr_slot_id_t slot_id = 0;
   fr_tagged_t tagged = 0;
   fr_err_t err = FR_OK;
+  char name[FR_PROFILE_MAX_NAME_BYTES + 1];
+  uint16_t name_len = 0;
 
-  if (out == NULL || out_matched == NULL || out_ran_command == NULL) {
+  if (line == NULL || out == NULL || out_matched == NULL ||
+      out_ran_command == NULL) {
     return FR_ERR_INVALID;
   }
   *out_matched = false;
   *out_ran_command = false;
 
-  err = fr_slot_id_for_name(runtime, line, &slot_id);
+  while (fr_repl_is_space(*start)) {
+    start += 1;
+  }
+  if (*start == '\0') {
+    return FR_OK;
+  }
+  end = start;
+  while (*end != '\0' && !fr_repl_is_space(*end)) {
+    end += 1;
+  }
+  name_len = (uint16_t)(end - start);
+  while (fr_repl_is_space(*end)) {
+    end += 1;
+  }
+  if (*end != '\0') {
+    return FR_OK;
+  }
+  if ((uint32_t)name_len + 1 > sizeof(name)) {
+    return FR_ERR_RANGE;
+  }
+  memcpy(name, start, name_len);
+  name[name_len] = '\0';
+
+  err = fr_slot_id_for_name(runtime, name, &slot_id);
   if (err == FR_ERR_NOT_FOUND) {
     return FR_OK;
   }

@@ -176,6 +176,10 @@ static void seed_persist_from_runtime(fr_runtime_t *runtime) {
   TEST_ASSERT_EQUAL(FR_OK, test_persist_commit_image(image, image_length));
 }
 
+static void replace_persist_from_runtime(fr_runtime_t *runtime) {
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save_full(runtime));
+}
+
 static void read_committed_payload(uint8_t *header, uint8_t *payload,
                                    uint16_t *out_payload_length) {
   uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
@@ -990,11 +994,9 @@ static void test_restore_preserves_runtime_library_tier(void) {
 
   /* R54 made install-library + the L1-mode compile path auto-save the
    * runtime to NVS so library replacement persists across a power cycle.
-   * The seed below models a single both-tier save; clear the in-session
-   * auto-saves first so that seed is the only valid image the public
-   * restore can pick. */
-  fr_platform_persist_clear();
-  seed_persist_from_runtime(&s_runtime);
+   * The seed below models a single both-tier save and replaces the in-session
+   * auto-saves so that it is the only valid image the public restore can pick. */
+  replace_persist_from_runtime(&s_runtime);
 
   TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(99, &mutated_lib));
   TEST_ASSERT_EQUAL(FR_OK, fr_slot_write(&s_runtime, lib_slot, mutated_lib));
@@ -1364,10 +1366,9 @@ static void test_install_library_drops_l1_runtime_and_nvs_preserves_user(void) {
   /* Both-tier committed image. The test models the post-save state where the
    * user has issued `save` after an install-library + install-user round.
    * R54's per-line install save has already written intermediate images
-   * during the REPL session above; wipe them so this seed is the only valid
-   * payload. */
-  fr_platform_persist_clear();
-  seed_persist_from_runtime(&s_runtime);
+   * during the REPL session above; replace them so this seed is the only
+   * valid payload. */
+  replace_persist_from_runtime(&s_runtime);
 
   read_committed_payload(NULL, pre_payload, &pre_length);
   TEST_ASSERT_EQUAL_INT(FR_TEST_TIER_LIBRARY,

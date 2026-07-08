@@ -1,10 +1,48 @@
 #include "object.h"
 
+#include "platform.h"
 #include "runtime.h"
 
+#include <stdint.h>
 #include <string.h>
 
 #if FR_FEATURE_OBJECTS
+#if FR_FEATURE_TEXT || FR_FEATURE_RECORDS
+static bool fr_object_pointer_in_range(const void *ptr, uint16_t length,
+                                       const void *base, uint16_t used) {
+  uintptr_t p = (uintptr_t)ptr;
+  uintptr_t b = (uintptr_t)base;
+
+  if (length == 0) {
+    return true;
+  }
+  if (ptr == NULL || base == NULL || p < b) {
+    return false;
+  }
+  return (uint32_t)(p - b) + length <= used;
+}
+
+static bool fr_object_view_is_valid(fr_object_storage_kind_t storage_kind,
+                                    const void *ptr, uint16_t length,
+                                    const void *ram_base,
+                                    uint16_t ram_used) {
+  switch (storage_kind) {
+  case FR_OBJECT_STORAGE_OVERLAY_RAM:
+    return fr_object_pointer_in_range(ptr, length, ram_base, ram_used);
+  case FR_OBJECT_STORAGE_IMAGE:
+    return length == 0 || ptr != NULL;
+  case FR_OBJECT_STORAGE_PERSIST_IMAGE:
+#if FR_FEATURE_PERSISTENCE
+    return fr_platform_persist_pointer_is_mounted(ptr, length);
+#else
+    return false;
+#endif
+  default:
+    return false;
+  }
+}
+#endif
+
 static void fr_object_zero_entries(fr_object_entry_t entries[],
                                    uint16_t start) {
   if (start >= FR_OBJECT_TABLE_CAPACITY) {
@@ -104,8 +142,6 @@ void fr_object_reset(fr_runtime_t *runtime) {
   memset(runtime->objects.base_cell_values, 0,
          sizeof(runtime->objects.base_cell_values));
   memset(runtime->objects.text_bytes, 0, sizeof(runtime->objects.text_bytes));
-  memset(runtime->objects.base_text_bytes, 0,
-         sizeof(runtime->objects.base_text_bytes));
 #if FR_FEATURE_RECORDS
   memset(runtime->objects.record_names, 0,
          sizeof(runtime->objects.record_names));
@@ -121,8 +157,6 @@ void fr_object_reset(fr_runtime_t *runtime) {
          sizeof(runtime->objects.base_record_values));
   memset(runtime->objects.record_name_bytes, 0,
          sizeof(runtime->objects.record_name_bytes));
-  memset(runtime->objects.base_record_name_bytes, 0,
-         sizeof(runtime->objects.base_record_name_bytes));
 #endif
   memset(runtime->objects.overlay, 0, sizeof(runtime->objects.overlay));
 #endif
@@ -165,9 +199,6 @@ void fr_object_mark_base(fr_runtime_t *runtime) {
   memcpy(runtime->objects.base_cell_values, runtime->objects.cell_values,
          runtime->objects.used_cell_words *
              sizeof(runtime->objects.cell_values[0]));
-  memcpy(runtime->objects.base_text_bytes, runtime->objects.text_bytes,
-         runtime->objects.used_text_bytes *
-             sizeof(runtime->objects.text_bytes[0]));
 #if FR_FEATURE_RECORDS
   memcpy(runtime->objects.base_record_names, runtime->objects.record_names,
          runtime->objects.used_record_names *
@@ -179,10 +210,6 @@ void fr_object_mark_base(fr_runtime_t *runtime) {
   memcpy(runtime->objects.base_record_values, runtime->objects.record_values,
          runtime->objects.used_record_values *
              sizeof(runtime->objects.record_values[0]));
-  memcpy(runtime->objects.base_record_name_bytes,
-         runtime->objects.record_name_bytes,
-         runtime->objects.used_record_name_bytes *
-             sizeof(runtime->objects.record_name_bytes[0]));
 #endif
   for (fr_object_id_t object_id = 0; object_id < runtime->objects.count;
        object_id++) {
@@ -216,6 +243,35 @@ void fr_object_mark_image(fr_runtime_t *runtime) {
        object_id++) {
     runtime->objects.overlay[object_id] = false;
   }
+#endif
+}
+
+void fr_object_mark_persist_image(fr_runtime_t *runtime) {
+#if !FR_FEATURE_OBJECTS
+  (void)runtime;
+#else
+  if (runtime == NULL) {
+    return;
+  }
+
+  for (fr_object_id_t object_id = runtime->objects.base_count;
+       object_id < runtime->objects.image_count; object_id++) {
+    if (runtime->objects.entries[object_id].storage_kind ==
+        FR_OBJECT_STORAGE_IMAGE) {
+      runtime->objects.entries[object_id].storage_kind =
+          FR_OBJECT_STORAGE_PERSIST_IMAGE;
+    }
+  }
+#if FR_FEATURE_RECORDS
+  for (uint16_t name_id = runtime->objects.base_used_record_names;
+       name_id < runtime->objects.image_used_record_names; name_id++) {
+    if (runtime->objects.record_names[name_id].storage_kind ==
+        FR_OBJECT_STORAGE_IMAGE) {
+      runtime->objects.record_names[name_id].storage_kind =
+          FR_OBJECT_STORAGE_PERSIST_IMAGE;
+    }
+  }
+#endif
 #endif
 }
 
@@ -257,9 +313,6 @@ void fr_object_restore_base(fr_runtime_t *runtime) {
   memcpy(runtime->objects.cell_values, runtime->objects.base_cell_values,
          runtime->objects.base_used_cell_words *
              sizeof(runtime->objects.cell_values[0]));
-  memcpy(runtime->objects.text_bytes, runtime->objects.base_text_bytes,
-         runtime->objects.base_used_text_bytes *
-             sizeof(runtime->objects.text_bytes[0]));
 #if FR_FEATURE_RECORDS
   memcpy(runtime->objects.record_names, runtime->objects.base_record_names,
          runtime->objects.base_used_record_names *
@@ -271,10 +324,6 @@ void fr_object_restore_base(fr_runtime_t *runtime) {
   memcpy(runtime->objects.record_values, runtime->objects.base_record_values,
          runtime->objects.base_used_record_values *
              sizeof(runtime->objects.record_values[0]));
-  memcpy(runtime->objects.record_name_bytes,
-         runtime->objects.base_record_name_bytes,
-         runtime->objects.base_used_record_name_bytes *
-             sizeof(runtime->objects.record_name_bytes[0]));
 #endif
   fr_object_zero_entries(runtime->objects.entries, runtime->objects.count);
   fr_object_zero_cells(runtime->objects.cell_values,
@@ -309,9 +358,6 @@ void fr_object_clear_overlay(fr_runtime_t *runtime) {
   memcpy(runtime->objects.cell_values, runtime->objects.base_cell_values,
          runtime->objects.base_used_cell_words *
              sizeof(runtime->objects.cell_values[0]));
-  memcpy(runtime->objects.text_bytes, runtime->objects.base_text_bytes,
-         runtime->objects.base_used_text_bytes *
-             sizeof(runtime->objects.text_bytes[0]));
 #if FR_FEATURE_RECORDS
   memcpy(runtime->objects.record_names, runtime->objects.base_record_names,
          runtime->objects.base_used_record_names *
@@ -323,10 +369,6 @@ void fr_object_clear_overlay(fr_runtime_t *runtime) {
   memcpy(runtime->objects.record_values, runtime->objects.base_record_values,
          runtime->objects.base_used_record_values *
              sizeof(runtime->objects.record_values[0]));
-  memcpy(runtime->objects.record_name_bytes,
-         runtime->objects.base_record_name_bytes,
-         runtime->objects.base_used_record_name_bytes *
-             sizeof(runtime->objects.record_name_bytes[0]));
 #endif
   runtime->objects.count = runtime->objects.image_count;
   runtime->objects.used_cell_words = runtime->objects.image_used_cell_words;
@@ -364,6 +406,88 @@ void fr_object_clear_overlay(fr_runtime_t *runtime) {
            (FR_OBJECT_TABLE_CAPACITY - runtime->objects.image_count) *
                sizeof(runtime->objects.overlay[0]));
   }
+#endif
+}
+
+#if FR_FEATURE_TEXT
+static void fr_object_rebase_text_entry(fr_object_entry_t *entry,
+                                        fr_runtime_t *runtime,
+                                        const fr_runtime_t *source) {
+  if (entry == NULL || entry->storage_kind != FR_OBJECT_STORAGE_OVERLAY_RAM ||
+      entry->kind != FR_OBJECT_TEXT || entry->bytes == NULL) {
+    return;
+  }
+  {
+    uintptr_t src = (uintptr_t)source->objects.text_bytes;
+    uintptr_t ptr = (uintptr_t)entry->bytes;
+
+    if (ptr >= src) {
+      uintptr_t offset = ptr - src;
+      if (offset < sizeof(runtime->objects.text_bytes)) {
+        entry->bytes = &runtime->objects.text_bytes[offset];
+      }
+    }
+  }
+}
+#endif
+
+#if FR_FEATURE_RECORDS
+static void fr_object_rebase_record_name(fr_record_name_entry_t *entry,
+                                         fr_runtime_t *runtime,
+                                         const fr_runtime_t *source) {
+  if (entry == NULL ||
+      entry->storage_kind != FR_OBJECT_STORAGE_OVERLAY_RAM ||
+      entry->bytes == NULL) {
+    return;
+  }
+  {
+    uintptr_t src = (uintptr_t)source->objects.record_name_bytes;
+    uintptr_t ptr = (uintptr_t)entry->bytes;
+
+    if (ptr >= src) {
+      uintptr_t offset = ptr - src;
+      if (offset < sizeof(runtime->objects.record_name_bytes)) {
+        entry->bytes = &runtime->objects.record_name_bytes[offset];
+      }
+    }
+  }
+}
+#endif
+
+void fr_object_rebase_ram_pointers(fr_runtime_t *runtime,
+                                   const fr_runtime_t *source) {
+#if !FR_FEATURE_OBJECTS
+  (void)runtime;
+  (void)source;
+#else
+  if (runtime == NULL || source == NULL) {
+    return;
+  }
+
+#if FR_FEATURE_TEXT
+  for (fr_object_id_t object_id = 0; object_id < runtime->objects.count;
+       object_id++) {
+    fr_object_rebase_text_entry(&runtime->objects.entries[object_id], runtime,
+                                source);
+  }
+  for (fr_object_id_t object_id = 0; object_id < runtime->objects.base_count;
+       object_id++) {
+    fr_object_rebase_text_entry(&runtime->objects.base_entries[object_id],
+                                runtime, source);
+  }
+#endif
+#if FR_FEATURE_RECORDS
+  for (uint16_t name_id = 0; name_id < runtime->objects.used_record_names;
+       name_id++) {
+    fr_object_rebase_record_name(&runtime->objects.record_names[name_id],
+                                 runtime, source);
+  }
+  for (uint16_t name_id = 0; name_id < runtime->objects.base_used_record_names;
+       name_id++) {
+    fr_object_rebase_record_name(&runtime->objects.base_record_names[name_id],
+                                 runtime, source);
+  }
+#endif
 #endif
 }
 
@@ -491,6 +615,8 @@ fr_err_t fr_cells_install(fr_runtime_t *runtime, uint16_t length,
   entry = &runtime->objects.entries[*out_object_id];
   *entry = (fr_object_entry_t){
       .kind = FR_OBJECT_CELLS,
+      .storage_kind = FR_OBJECT_STORAGE_OVERLAY_RAM,
+      .bytes = NULL,
       .first = first_cell,
       .length = length,
   };
@@ -587,13 +713,15 @@ fr_err_t fr_text_find(const fr_runtime_t *runtime, const uint8_t *bytes,
   for (fr_object_id_t object_id = first_object_id;
        object_id < runtime->objects.count; object_id++) {
     const fr_object_entry_t *entry = &runtime->objects.entries[object_id];
+    const uint8_t *stored = NULL;
+    uint16_t stored_length = 0;
 
     if (entry->kind != FR_OBJECT_TEXT || entry->length != length) {
       continue;
     }
-    if (length == 0 ||
-        memcmp(&runtime->objects.text_bytes[entry->first], bytes, length) ==
-            0) {
+    FR_TRY(fr_text_view(runtime, object_id, &stored, &stored_length));
+    if (stored_length == length &&
+        (length == 0 || memcmp(stored, bytes, length) == 0)) {
       *out_object_id = object_id;
       return FR_OK;
     }
@@ -627,7 +755,7 @@ fr_err_t fr_text_check_install(const fr_runtime_t *runtime,
   }
   if (runtime->objects.count >= FR_PROFILE_OBJECT_TABLE_SIZE ||
       (uint32_t)runtime->objects.used_text_bytes + length >
-          FR_PROFILE_MAX_TEXT_BYTES) {
+          FR_TEXT_BYTE_CAPACITY) {
     return FR_ERR_CAPACITY;
   }
   return FR_OK;
@@ -666,7 +794,7 @@ fr_err_t fr_text_install_since(fr_runtime_t *runtime, const uint8_t *bytes,
   }
   if (runtime->objects.count >= FR_PROFILE_OBJECT_TABLE_SIZE ||
       (uint32_t)runtime->objects.used_text_bytes + length >
-          FR_PROFILE_MAX_TEXT_BYTES) {
+          FR_TEXT_BYTE_CAPACITY) {
     return FR_ERR_CAPACITY;
   }
 
@@ -675,6 +803,8 @@ fr_err_t fr_text_install_since(fr_runtime_t *runtime, const uint8_t *bytes,
   entry = &runtime->objects.entries[*out_object_id];
   *entry = (fr_object_entry_t){
       .kind = FR_OBJECT_TEXT,
+      .storage_kind = FR_OBJECT_STORAGE_OVERLAY_RAM,
+      .bytes = &runtime->objects.text_bytes[first_byte],
       .first = first_byte,
       .length = length,
   };
@@ -694,6 +824,54 @@ fr_err_t fr_text_install(fr_runtime_t *runtime, const uint8_t *bytes,
   return fr_text_install_since(runtime, bytes, length, 0, out_object_id);
 }
 
+fr_err_t fr_text_mount_image_since(fr_runtime_t *runtime, const uint8_t *bytes,
+                                   uint16_t length,
+                                   fr_object_id_t first_object_id,
+                                   fr_object_id_t *out_object_id) {
+#if !FR_FEATURE_TEXT
+  (void)runtime;
+  (void)bytes;
+  (void)length;
+  (void)first_object_id;
+  (void)out_object_id;
+  return FR_ERR_UNSUPPORTED;
+#else
+  fr_object_entry_t *entry = NULL;
+  fr_err_t find_err = FR_OK;
+  fr_object_id_t existing_id = 0;
+
+  if (runtime == NULL || out_object_id == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_text_check_input(bytes, length));
+  find_err = fr_text_find(runtime, bytes, length, first_object_id,
+                          &existing_id);
+  if (find_err == FR_OK) {
+    *out_object_id = existing_id;
+    return FR_OK;
+  }
+  if (find_err != FR_ERR_NOT_FOUND) {
+    return find_err;
+  }
+  if (runtime->objects.count >= FR_PROFILE_OBJECT_TABLE_SIZE) {
+    return FR_ERR_CAPACITY;
+  }
+
+  *out_object_id = runtime->objects.count;
+  entry = &runtime->objects.entries[*out_object_id];
+  *entry = (fr_object_entry_t){
+      .kind = FR_OBJECT_TEXT,
+      .storage_kind = FR_OBJECT_STORAGE_IMAGE,
+      .bytes = bytes,
+      .first = 0,
+      .length = length,
+  };
+  runtime->objects.overlay[*out_object_id] = true;
+  runtime->objects.count = (uint16_t)(runtime->objects.count + 1);
+  return FR_OK;
+#endif
+}
+
 fr_err_t fr_text_view(const fr_runtime_t *runtime, fr_object_id_t object_id,
                       const uint8_t **out_bytes, uint16_t *out_length) {
 #if !FR_FEATURE_TEXT
@@ -709,7 +887,13 @@ fr_err_t fr_text_view(const fr_runtime_t *runtime, fr_object_id_t object_id,
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_object_entry_of_kind(runtime, object_id, FR_OBJECT_TEXT, &entry));
-  *out_bytes = &runtime->objects.text_bytes[entry->first];
+  if (!fr_object_view_is_valid(entry->storage_kind, entry->bytes,
+                               entry->length,
+                               runtime->objects.text_bytes,
+                               runtime->objects.used_text_bytes)) {
+    return FR_ERR_CORRUPT;
+  }
+  *out_bytes = entry->bytes;
   *out_length = entry->length;
   return FR_OK;
 #endif
@@ -756,12 +940,14 @@ static fr_err_t fr_record_name_entry_view(const fr_runtime_t *runtime,
     return FR_ERR_CORRUPT;
   }
   entry = &runtime->objects.record_names[name_entry];
-  if ((uint32_t)entry->first + entry->length >
-      runtime->objects.used_record_name_bytes) {
+  if (!fr_object_view_is_valid(entry->storage_kind, entry->bytes,
+                               entry->length,
+                               runtime->objects.record_name_bytes,
+                               runtime->objects.used_record_name_bytes)) {
     return FR_ERR_CORRUPT;
   }
   *out_name = (fr_record_name_t){
-      .bytes = &runtime->objects.record_name_bytes[entry->first],
+      .bytes = entry->bytes,
       .length = entry->length,
   };
   return FR_OK;
@@ -786,13 +972,45 @@ static fr_err_t fr_record_store_name(fr_runtime_t *runtime,
   entry_index = runtime->objects.used_record_names;
   first_byte = runtime->objects.used_record_name_bytes;
   runtime->objects.record_names[entry_index] =
-      (fr_record_name_entry_t){.first = first_byte, .length = name.length};
+      (fr_record_name_entry_t){
+          .storage_kind = FR_OBJECT_STORAGE_OVERLAY_RAM,
+          .bytes = &runtime->objects.record_name_bytes[first_byte],
+          .first = first_byte,
+          .length = name.length,
+      };
   memcpy(&runtime->objects.record_name_bytes[first_byte], name.bytes,
          name.length);
   runtime->objects.used_record_names =
       (uint16_t)(runtime->objects.used_record_names + 1);
   runtime->objects.used_record_name_bytes =
       (uint16_t)(runtime->objects.used_record_name_bytes + name.length);
+  *out_name_entry = entry_index;
+  return FR_OK;
+}
+
+static fr_err_t fr_record_mount_name(fr_runtime_t *runtime,
+                                     fr_record_name_t name,
+                                     uint16_t *out_name_entry) {
+  uint16_t entry_index = 0;
+
+  if (runtime == NULL || out_name_entry == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_record_check_name(name));
+  if (runtime->objects.used_record_names >= FR_RECORD_NAME_ENTRY_CAPACITY) {
+    return FR_ERR_CAPACITY;
+  }
+
+  entry_index = runtime->objects.used_record_names;
+  runtime->objects.record_names[entry_index] =
+      (fr_record_name_entry_t){
+          .storage_kind = FR_OBJECT_STORAGE_IMAGE,
+          .bytes = (const uint8_t *)name.bytes,
+          .first = 0,
+          .length = name.length,
+      };
+  runtime->objects.used_record_names =
+      (uint16_t)(runtime->objects.used_record_names + 1);
   *out_name_entry = entry_index;
   return FR_OK;
 }
@@ -914,18 +1132,18 @@ fr_err_t fr_record_shape_find(const fr_runtime_t *runtime,
 #endif
 }
 
-fr_err_t fr_record_shape_install_since(fr_runtime_t *runtime,
-                                       fr_record_name_t name,
-                                       const fr_record_name_t fields[],
-                                       uint16_t field_count,
-                                       fr_object_id_t first_object_id,
-                                       fr_object_id_t *out_object_id) {
+static fr_err_t fr_record_shape_install_since_kind(
+    fr_runtime_t *runtime, fr_record_name_t name,
+    const fr_record_name_t fields[], uint16_t field_count,
+    fr_object_id_t first_object_id, bool mount_image,
+    fr_object_id_t *out_object_id) {
 #if !FR_FEATURE_RECORDS
   (void)runtime;
   (void)name;
   (void)fields;
   (void)field_count;
   (void)first_object_id;
+  (void)mount_image;
   (void)out_object_id;
   return FR_ERR_UNSUPPORTED;
 #else
@@ -956,7 +1174,7 @@ fr_err_t fr_record_shape_install_since(fr_runtime_t *runtime,
           FR_RECORD_NAME_ENTRY_CAPACITY) {
     return FR_ERR_CAPACITY;
   }
-  {
+  if (!mount_image) {
     uint32_t name_bytes = name.length;
     for (uint16_t i = 0; i < field_count; i++) {
       name_bytes += fields[i].length;
@@ -967,12 +1185,20 @@ fr_err_t fr_record_shape_install_since(fr_runtime_t *runtime,
     }
   }
 
-  FR_TRY(fr_record_store_name(runtime, name, &shape_name_entry));
+  if (mount_image) {
+    FR_TRY(fr_record_mount_name(runtime, name, &shape_name_entry));
+  } else {
+    FR_TRY(fr_record_store_name(runtime, name, &shape_name_entry));
+  }
   first_field = runtime->objects.used_record_shape_fields;
   for (uint16_t i = 0; i < field_count; i++) {
     uint16_t field_name_entry = 0;
 
-    FR_TRY(fr_record_store_name(runtime, fields[i], &field_name_entry));
+    if (mount_image) {
+      FR_TRY(fr_record_mount_name(runtime, fields[i], &field_name_entry));
+    } else {
+      FR_TRY(fr_record_store_name(runtime, fields[i], &field_name_entry));
+    }
     runtime->objects.record_shape_fields[first_field + i] = field_name_entry;
   }
   runtime->objects.used_record_shape_fields =
@@ -982,6 +1208,9 @@ fr_err_t fr_record_shape_install_since(fr_runtime_t *runtime,
   entry = &runtime->objects.entries[*out_object_id];
   *entry = (fr_object_entry_t){
       .kind = FR_OBJECT_RECORD_SHAPE,
+      .storage_kind = mount_image ? FR_OBJECT_STORAGE_IMAGE
+                                  : FR_OBJECT_STORAGE_OVERLAY_RAM,
+      .bytes = NULL,
       .first = first_field,
       .length = field_count,
       .aux = shape_name_entry,
@@ -992,12 +1221,32 @@ fr_err_t fr_record_shape_install_since(fr_runtime_t *runtime,
 #endif
 }
 
+fr_err_t fr_record_shape_install_since(fr_runtime_t *runtime,
+                                       fr_record_name_t name,
+                                       const fr_record_name_t fields[],
+                                       uint16_t field_count,
+                                       fr_object_id_t first_object_id,
+                                       fr_object_id_t *out_object_id) {
+  return fr_record_shape_install_since_kind(runtime, name, fields, field_count,
+                                            first_object_id, false,
+                                            out_object_id);
+}
+
 fr_err_t fr_record_shape_install(fr_runtime_t *runtime, fr_record_name_t name,
                                  const fr_record_name_t fields[],
                                  uint16_t field_count,
                                  fr_object_id_t *out_object_id) {
   return fr_record_shape_install_since(runtime, name, fields, field_count, 0,
                                        out_object_id);
+}
+
+fr_err_t fr_record_shape_mount_image_since(
+    fr_runtime_t *runtime, fr_record_name_t name,
+    const fr_record_name_t fields[], uint16_t field_count,
+    fr_object_id_t first_object_id, fr_object_id_t *out_object_id) {
+  return fr_record_shape_install_since_kind(runtime, name, fields, field_count,
+                                            first_object_id, true,
+                                            out_object_id);
 }
 
 fr_err_t fr_record_shape_view(const fr_runtime_t *runtime,
@@ -1127,6 +1376,8 @@ fr_err_t fr_record_install(fr_runtime_t *runtime,
   entry = &runtime->objects.entries[*out_object_id];
   *entry = (fr_object_entry_t){
       .kind = FR_OBJECT_RECORD,
+      .storage_kind = FR_OBJECT_STORAGE_OVERLAY_RAM,
+      .bytes = NULL,
       .first = first_field,
       .length = field_count,
       .aux = shape_object_id,

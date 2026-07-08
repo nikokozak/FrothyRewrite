@@ -128,23 +128,33 @@ void fr_persist_session_wipe_user_tier(fr_runtime_t *runtime) {
   {
     uint16_t dst = 0;
     for (uint16_t src = 0; src < runtime->slots.overlay_name_count; src++) {
-      fr_slot_id_t s = runtime->slots.overlay_name_slots[src];
+      fr_slot_id_t s = runtime->slots.overlay_names[src].slot_id;
 
       if (fr_slot_is_overlay(runtime, s) ||
           (s < FR_PROFILE_MAX_SLOTS &&
            runtime->slots.base_tier[s] == FR_INSTALL_TIER_LIBRARY)) {
         if (dst != src) {
-          memcpy(runtime->slots.overlay_names[dst],
-                 runtime->slots.overlay_names[src],
-                 (size_t)FR_PROFILE_MAX_NAME_BYTES + 1);
-          runtime->slots.overlay_name_slots[dst] = s;
+          runtime->slots.overlay_names[dst] = runtime->slots.overlay_names[src];
+          if (runtime->slots.overlay_names[src].storage_kind ==
+              FR_SLOT_NAME_STORAGE_OVERLAY_RAM) {
+            memcpy(runtime->slots.overlay_name_bytes[dst],
+                   runtime->slots.overlay_name_bytes[src],
+                   (size_t)FR_PROFILE_MAX_NAME_BYTES + 1);
+            runtime->slots.overlay_names[dst].bytes =
+                runtime->slots.overlay_name_bytes[dst];
+          }
         }
         dst = (uint16_t)(dst + 1);
       }
     }
     for (uint16_t i = dst; i < runtime->slots.overlay_name_count; i++) {
-      runtime->slots.overlay_names[i][0] = '\0';
-      runtime->slots.overlay_name_slots[i] = 0;
+      runtime->slots.overlay_names[i] = (fr_slot_project_name_entry_t){
+          .storage_kind = FR_SLOT_NAME_STORAGE_OVERLAY_RAM,
+          .slot_id = 0,
+          .bytes = NULL,
+          .length = 0,
+      };
+      runtime->slots.overlay_name_bytes[i][0] = '\0';
     }
     runtime->slots.overlay_name_count = dst;
   }
@@ -189,22 +199,32 @@ void fr_persist_session_wipe_library_tier(fr_runtime_t *runtime) {
   {
     uint16_t dst = 0;
     for (uint16_t src = 0; src < runtime->slots.overlay_name_count; src++) {
-      fr_slot_id_t s = runtime->slots.overlay_name_slots[src];
+      fr_slot_id_t s = runtime->slots.overlay_names[src].slot_id;
 
       if (fr_slot_is_overlay(runtime, s) ||
           (s < FR_PROFILE_MAX_SLOTS && runtime->slots.base_tier[s] != 0)) {
         if (dst != src) {
-          memcpy(runtime->slots.overlay_names[dst],
-                 runtime->slots.overlay_names[src],
-                 (size_t)FR_PROFILE_MAX_NAME_BYTES + 1);
-          runtime->slots.overlay_name_slots[dst] = s;
+          runtime->slots.overlay_names[dst] = runtime->slots.overlay_names[src];
+          if (runtime->slots.overlay_names[src].storage_kind ==
+              FR_SLOT_NAME_STORAGE_OVERLAY_RAM) {
+            memcpy(runtime->slots.overlay_name_bytes[dst],
+                   runtime->slots.overlay_name_bytes[src],
+                   (size_t)FR_PROFILE_MAX_NAME_BYTES + 1);
+            runtime->slots.overlay_names[dst].bytes =
+                runtime->slots.overlay_name_bytes[dst];
+          }
         }
         dst = (uint16_t)(dst + 1);
       }
     }
     for (uint16_t i = dst; i < runtime->slots.overlay_name_count; i++) {
-      runtime->slots.overlay_names[i][0] = '\0';
-      runtime->slots.overlay_name_slots[i] = 0;
+      runtime->slots.overlay_names[i] = (fr_slot_project_name_entry_t){
+          .storage_kind = FR_SLOT_NAME_STORAGE_OVERLAY_RAM,
+          .slot_id = 0,
+          .bytes = NULL,
+          .length = 0,
+      };
+      runtime->slots.overlay_name_bytes[i][0] = '\0';
     }
     runtime->slots.overlay_name_count = dst;
   }
@@ -275,7 +295,8 @@ typedef struct fr_persist_record_record_t {
 
 typedef struct fr_persist_name_record_t {
   fr_slot_id_t slot_id;
-  char name[FR_PROFILE_MAX_NAME_BYTES + 1];
+  const char *name;
+  uint8_t length;
 } fr_persist_name_record_t;
 
 typedef struct fr_persist_decoded_payload_t {
@@ -399,29 +420,6 @@ static fr_err_t fr_persist_writer_bytes(fr_persist_writer_t *writer,
   writer->used = (uint16_t)next;
   return FR_OK;
 }
-
-#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
-static fr_err_t fr_persist_name_length(const char *name,
-                                       uint8_t *out_length) {
-  uint16_t length = 0;
-
-  if (name == NULL || out_length == NULL) {
-    return FR_ERR_INVALID;
-  }
-  while (length <= FR_PROFILE_MAX_NAME_BYTES && name[length] != '\0') {
-    length += 1;
-  }
-  if (length == 0) {
-    return FR_ERR_INVALID;
-  }
-  if (length > FR_PROFILE_MAX_NAME_BYTES) {
-    return FR_ERR_RANGE;
-  }
-
-  *out_length = (uint8_t)length;
-  return FR_OK;
-}
-#endif
 
 static fr_err_t fr_persist_reader_u8(fr_persist_reader_t *reader,
                                      uint8_t *out) {
@@ -1456,18 +1454,18 @@ static fr_err_t fr_persist_payload_write_finalized(
 
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   for (uint16_t i = 0; i < fr_slot_project_name_count(runtime); i++) {
-    const char *name = fr_slot_project_name_at(runtime, i);
+    const char *name = NULL;
     fr_slot_id_t slot_id = 0;
     uint8_t name_length = 0;
+    char name_scratch[FR_PROFILE_MAX_NAME_BYTES + 1];
 
-    if (name == NULL) {
-      return FR_ERR_INVALID;
-    }
-    FR_TRY(fr_slot_id_for_name(runtime, name, &slot_id));
+    FR_TRY(fr_slot_project_name_view_at(runtime, i, &name, &name_length));
+    memcpy(name_scratch, name, name_length);
+    name_scratch[name_length] = '\0';
+    FR_TRY(fr_slot_id_for_name(runtime, name_scratch, &slot_id));
     if (!fr_persist_slot_should_encode(runtime, slot_id, tier_filter)) {
       continue;
     }
-    FR_TRY(fr_persist_name_length(name, &name_length));
 
     FR_TRY(fr_persist_writer_u8(writer, FR_PERSIST_RECORD_NAME));
     FR_TRY(fr_persist_writer_u16(writer, slot_id));
@@ -2912,9 +2910,9 @@ static fr_err_t fr_persist_decode_payload(
         if (name_bytes[i] == '\0') {
           return FR_ERR_CORRUPT;
         }
-        name->name[i] = (char)name_bytes[i];
       }
-      name->name[name_length] = '\0';
+      name->name = (const char *)name_bytes;
+      name->length = name_length;
       *out_name_count = (uint16_t)(*out_name_count + 1);
     }
 #else
@@ -3319,6 +3317,7 @@ static fr_err_t fr_persist_check_name_records(
     fr_slot_id_t slot_count_after_writes) {
   fr_slot_id_t base_slot_id = 0;
   fr_slot_id_t first_project_id = fr_slot_first_project_id();
+  char scratch[FR_PROFILE_MAX_NAME_BYTES + 1];
 
   if (name_records == NULL && name_count > 0) {
     return FR_ERR_INVALID;
@@ -3332,12 +3331,20 @@ static fr_err_t fr_persist_check_name_records(
         name_records[i].slot_id >= slot_count_after_writes) {
       return FR_ERR_CORRUPT;
     }
-    if (fr_base_slot_id_for_name(name_records[i].name, &base_slot_id) ==
+    if (name_records[i].name == NULL || name_records[i].length == 0 ||
+        name_records[i].length > FR_PROFILE_MAX_NAME_BYTES) {
+      return FR_ERR_CORRUPT;
+    }
+    memcpy(scratch, name_records[i].name, name_records[i].length);
+    scratch[name_records[i].length] = '\0';
+    if (fr_base_slot_id_for_name(scratch, &base_slot_id) ==
         FR_OK) {
       return FR_ERR_CORRUPT;
     }
     for (uint16_t j = 0; j < i; j++) {
-      if (strcmp(name_records[i].name, name_records[j].name) == 0 ||
+      if ((name_records[i].length == name_records[j].length &&
+           memcmp(name_records[i].name, name_records[j].name,
+                  name_records[i].length) == 0) ||
           name_records[i].slot_id == name_records[j].slot_id) {
         return FR_ERR_CORRUPT;
       }
@@ -3529,9 +3536,9 @@ fr_persist_install_resources(fr_runtime_t *runtime,
 
       FR_TRY(fr_persist_find_text_record(text_records, text_count, object_id,
                                          &text));
-      FR_TRY(fr_text_install_since(runtime, text->bytes, text->length,
-                                   runtime->objects.base_count,
-                                   &installed_id));
+      FR_TRY(fr_text_mount_image_since(runtime, text->bytes, text->length,
+                                       runtime->objects.base_count,
+                                       &installed_id));
 #endif
     } else if (object_kinds[object_id] == FR_PERSIST_OBJECT_RECORD_SHAPE) {
 #if !FR_FEATURE_RECORDS
@@ -3545,7 +3552,7 @@ fr_persist_install_resources(fr_runtime_t *runtime,
       for (uint16_t j = 0; j < shape->field_count; j++) {
         install_fields[j] = record_fields[shape->first_field + j];
       }
-      FR_TRY(fr_record_shape_install_since(
+      FR_TRY(fr_record_shape_mount_image_since(
           runtime, shape->name, install_fields, shape->field_count,
           runtime->objects.base_count, &installed_id));
 #endif
@@ -3675,8 +3682,9 @@ fr_persist_apply_names(fr_runtime_t *runtime,
         continue;
       }
     }
-    FR_TRY(fr_slot_bind_project_name(runtime, decoded->name_records[i].name,
-                                     decoded->name_records[i].slot_id));
+    FR_TRY(fr_slot_mount_project_name(runtime, decoded->name_records[i].name,
+                                      decoded->name_records[i].length,
+                                      decoded->name_records[i].slot_id));
   }
 #else
   (void)runtime;
@@ -3750,6 +3758,7 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
   FR_TRY(fr_runtime_reset(runtime));
   fr_code_restore_base(runtime);
   fr_object_restore_base(runtime);
+  fr_slot_clear_project_names(runtime);
   FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL));
   fr_object_mark_image(runtime);
   /* D6 single-call path applies both tiers in tier order so user definitions
@@ -3778,6 +3787,7 @@ fr_err_t fr_persist_payload_restore_library(fr_runtime_t *runtime,
   FR_TRY(fr_runtime_reset(runtime));
   fr_code_restore_base(runtime);
   fr_object_restore_base(runtime);
+  fr_slot_clear_project_names(runtime);
   FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL));
   fr_object_mark_image(runtime);
   FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded,
@@ -4313,6 +4323,8 @@ fr_err_t fr_persist_payload_restore_user_only(fr_runtime_t *runtime,
   fr_object_restore_base(runtime);
   FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL));
   fr_object_mark_image(runtime);
+  FR_TRY(fr_persist_apply_names(runtime, &decoded,
+                                (uint8_t)FR_PERSIST_TIER_LIBRARY));
   FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded,
                                        (uint8_t)FR_PERSIST_TIER_USER, false,
                                        true));
