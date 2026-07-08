@@ -16,8 +16,15 @@ enum {
   FR_PERSIST_PAYLOAD_VERSION = 5,
 };
 
+typedef fr_err_t (*fr_persist_payload_write_fn_t)(void *ctx,
+                                                  const uint8_t *bytes,
+                                                  uint16_t length);
+
 fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
                                    uint16_t cap, uint16_t *out_length);
+fr_err_t fr_persist_payload_encode_stream(
+    const fr_runtime_t *runtime, fr_persist_payload_write_fn_t write, void *ctx,
+    uint16_t *out_length);
 fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
                                     uint16_t length);
 
@@ -35,6 +42,10 @@ fr_err_t fr_persist_payload_save_encode(const fr_runtime_t *runtime,
                                         uint16_t library_prefix_length,
                                         uint8_t *bytes, uint16_t cap,
                                         uint16_t *out_length);
+fr_err_t fr_persist_payload_save_stream(
+    const fr_runtime_t *runtime, const uint8_t *old_payload,
+    uint16_t old_payload_length, fr_persist_payload_write_fn_t write,
+    void *ctx, uint16_t *out_length);
 
 /* Wipe the module-global per-slot tier stamps. Called when a fresh base image
  * is installed so stamps from a prior runtime cannot leak across. */

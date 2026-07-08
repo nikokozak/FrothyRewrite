@@ -756,20 +756,23 @@ enum {
 typedef struct fr_host_persist_slot_t {
   bool in_use;
   uint16_t length;
-  uint8_t bytes[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t bytes[FR_PERSIST_STORAGE_BYTES];
 } fr_host_persist_slot_t;
 
 static fr_host_persist_slot_t fr_host_persist_slots[FR_HOST_PERSIST_SLOT_COUNT];
-static uint8_t fr_host_persist_mount_bytes[2][FR_PROFILE_PERSISTENCE_BYTES];
-static uint16_t fr_host_persist_mount_lengths[2];
-static uint8_t fr_host_persist_active_mount;
-static uint8_t fr_host_persist_candidate_mount = 1;
+static uint8_t fr_host_persist_active_mount_slot;
+static uint8_t fr_host_persist_candidate_mount_slot;
 static bool fr_host_persist_active_mounted;
 static bool fr_host_persist_candidate_mounted;
+static struct {
+  bool active;
+  uint8_t slot;
+  uint16_t cursor;
+  uint32_t backend_generation;
+} fr_host_persist_stream;
 
 #ifdef FR_HOST_TEST_HELPERS
-static bool fr_host_persist_interrupt_armed;
-static uint16_t fr_host_persist_interrupt_length;
+static bool fr_host_persist_interrupt_header_write;
 #endif
 
 static fr_err_t fr_host_persist_slot_info(uint8_t slot,
@@ -861,25 +864,22 @@ static fr_err_t fr_host_persist_pick_commit_slot(uint8_t *out_slot,
   return FR_OK;
 }
 
-static void fr_host_persist_poison_mount(uint8_t mount_index) {
-  memset(fr_host_persist_mount_bytes[mount_index], 0xa5,
-         sizeof(fr_host_persist_mount_bytes[mount_index]));
-  fr_host_persist_mount_lengths[mount_index] = 0;
-}
-
-static bool fr_host_persist_pointer_in_mount(uint8_t mount_index,
-                                             const void *ptr,
-                                             uint16_t length) {
+static bool fr_host_persist_pointer_in_slot(uint8_t slot, const void *ptr,
+                                            uint16_t length) {
   uintptr_t p = (uintptr_t)ptr;
-  uintptr_t b = (uintptr_t)fr_host_persist_mount_bytes[mount_index];
+  uintptr_t b = 0;
 
   if (length == 0) {
     return true;
   }
-  if (ptr == NULL || p < b) {
+  if (slot >= FR_HOST_PERSIST_SLOT_COUNT || ptr == NULL) {
     return false;
   }
-  return (uint32_t)(p - b) + length <= fr_host_persist_mount_lengths[mount_index];
+  b = (uintptr_t)fr_host_persist_slots[slot].bytes;
+  if (p < b) {
+    return false;
+  }
+  return (uint32_t)(p - b) + length <= fr_host_persist_slots[slot].length;
 }
 
 fr_err_t fr_platform_persist_read(uint8_t *bytes, uint16_t cap,
@@ -908,7 +908,6 @@ fr_err_t fr_platform_persist_mount(uint8_t image_index,
                                    uint16_t *out_length) {
   uint8_t slot = 0;
   fr_persist_format_info_t info = {0};
-  uint8_t mount_index = 0;
 
   if (out_bytes == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
@@ -919,107 +918,123 @@ fr_err_t fr_platform_persist_mount(uint8_t image_index,
     return FR_ERR_CAPACITY;
   }
 
-  mount_index = fr_host_persist_active_mounted
-                    ? (uint8_t)(1u - fr_host_persist_active_mount)
-                    : fr_host_persist_candidate_mount;
-  memcpy(fr_host_persist_mount_bytes[mount_index],
-         fr_host_persist_slots[slot].bytes, (uint16_t)info.total_length);
-  fr_host_persist_mount_lengths[mount_index] = (uint16_t)info.total_length;
-  fr_host_persist_candidate_mount = mount_index;
+  fr_host_persist_candidate_mount_slot = slot;
   fr_host_persist_candidate_mounted = true;
-  *out_bytes = fr_host_persist_mount_bytes[mount_index];
+  *out_bytes = fr_host_persist_slots[slot].bytes;
   *out_length = (uint16_t)info.total_length;
   return FR_OK;
 }
 
 void fr_platform_persist_unmount(void) {
   fr_platform_persist_mount_discard();
-  if (fr_host_persist_active_mounted) {
-    fr_host_persist_poison_mount(fr_host_persist_active_mount);
-    fr_host_persist_active_mounted = false;
-  }
+  fr_host_persist_active_mounted = false;
 }
 
 fr_err_t fr_platform_persist_mount_commit(void) {
-  uint8_t old_active = fr_host_persist_active_mount;
-  bool had_active = fr_host_persist_active_mounted;
-
   if (!fr_host_persist_candidate_mounted) {
     return FR_ERR_INVALID;
   }
-  fr_host_persist_active_mount = fr_host_persist_candidate_mount;
+  fr_host_persist_active_mount_slot = fr_host_persist_candidate_mount_slot;
   fr_host_persist_active_mounted = true;
   fr_host_persist_candidate_mounted = false;
-  if (had_active) {
-    fr_host_persist_poison_mount(old_active);
-    fr_host_persist_candidate_mount = old_active;
-  } else {
-    fr_host_persist_candidate_mount = (uint8_t)(1u - fr_host_persist_active_mount);
-  }
   return FR_OK;
 }
 
 void fr_platform_persist_mount_discard(void) {
-  if (fr_host_persist_candidate_mounted) {
-    fr_host_persist_poison_mount(fr_host_persist_candidate_mount);
-    fr_host_persist_candidate_mounted = false;
-  }
+  fr_host_persist_candidate_mounted = false;
 }
 
 bool fr_platform_persist_pointer_is_mounted(const void *ptr, uint16_t length) {
   return fr_host_persist_active_mounted &&
-         fr_host_persist_pointer_in_mount(fr_host_persist_active_mount, ptr,
-                                          length);
+         fr_host_persist_pointer_in_slot(fr_host_persist_active_mount_slot, ptr,
+                                         length);
 }
 
-fr_err_t fr_platform_persist_commit(const uint8_t *bytes, uint16_t length) {
+fr_err_t fr_platform_persist_stream_begin(void) {
   uint8_t slot = 0;
   uint32_t backend_generation = 0;
-  uint8_t staged[FR_PROFILE_PERSISTENCE_BYTES];
 
-  if (bytes == NULL) {
+  fr_platform_persist_stream_abort();
+  FR_TRY(fr_host_persist_pick_commit_slot(&slot, &backend_generation));
+  memset(fr_host_persist_slots[slot].bytes, 0xff,
+         sizeof(fr_host_persist_slots[slot].bytes));
+  fr_host_persist_slots[slot].length = FR_PERSIST_HEADER_BYTES;
+  fr_host_persist_slots[slot].in_use = true;
+  fr_host_persist_stream.active = true;
+  fr_host_persist_stream.slot = slot;
+  fr_host_persist_stream.cursor = FR_PERSIST_HEADER_BYTES;
+  fr_host_persist_stream.backend_generation = backend_generation;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_persist_stream_write(const uint8_t *bytes,
+                                          uint16_t length) {
+  fr_host_persist_slot_t *slot = NULL;
+  uint32_t next = 0;
+
+  if (bytes == NULL && length > 0) {
     return FR_ERR_INVALID;
   }
-  if (length < FR_PERSIST_HEADER_BYTES ||
-      length > FR_PROFILE_PERSISTENCE_BYTES) {
-    return FR_ERR_CORRUPT;
+  if (!fr_host_persist_stream.active ||
+      fr_host_persist_stream.slot >= FR_HOST_PERSIST_SLOT_COUNT) {
+    return FR_ERR_INVALID;
   }
+  next = (uint32_t)fr_host_persist_stream.cursor + length;
+  if (next > FR_PERSIST_STORAGE_BYTES) {
+    return FR_ERR_CAPACITY;
+  }
+  slot = &fr_host_persist_slots[fr_host_persist_stream.slot];
+  if (length > 0) {
+    memcpy(&slot->bytes[fr_host_persist_stream.cursor], bytes, length);
+  }
+  fr_host_persist_stream.cursor = (uint16_t)next;
+  slot->length = fr_host_persist_stream.cursor;
+  return FR_OK;
+}
 
-  FR_TRY(fr_host_persist_pick_commit_slot(&slot, &backend_generation));
-  memcpy(staged, bytes, length);
-  FR_TRY(
-      fr_persist_format_stamp_generation(staged, length, backend_generation));
+fr_err_t fr_platform_persist_stream_finalize(
+    const uint8_t header[FR_PERSIST_HEADER_BYTES]) {
+  uint8_t stamped[FR_PERSIST_HEADER_BYTES];
+  fr_host_persist_slot_t *slot = NULL;
+
+  if (header == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_host_persist_stream.active ||
+      fr_host_persist_stream.slot >= FR_HOST_PERSIST_SLOT_COUNT) {
+    return FR_ERR_INVALID;
+  }
+  slot = &fr_host_persist_slots[fr_host_persist_stream.slot];
+  memcpy(stamped, header, sizeof(stamped));
+  FR_TRY(fr_persist_format_stamp_generation(
+      stamped, fr_host_persist_stream.backend_generation));
 #ifdef FR_HOST_TEST_HELPERS
-  if (fr_host_persist_interrupt_armed) {
-    uint16_t written = fr_host_persist_interrupt_length;
-
-    fr_host_persist_interrupt_armed = false;
-    if (written > length) {
-      written = length;
-    }
-    if (written > 0) {
-      memcpy(fr_host_persist_slots[slot].bytes, staged, written);
-    }
-    fr_host_persist_slots[slot].length = written;
-    fr_host_persist_slots[slot].in_use = true;
+  if (fr_host_persist_interrupt_header_write) {
+    fr_host_persist_interrupt_header_write = false;
+    fr_host_persist_stream.active = false;
     return FR_ERR_IO;
   }
 #endif
-  memcpy(fr_host_persist_slots[slot].bytes, staged, length);
-  fr_host_persist_slots[slot].length = length;
-  fr_host_persist_slots[slot].in_use = true;
+  memcpy(slot->bytes, stamped, sizeof(stamped));
+  slot->length = fr_host_persist_stream.cursor;
+  slot->in_use = true;
+  fr_host_persist_stream.active = false;
   return FR_OK;
+}
+
+void fr_platform_persist_stream_abort(void) {
+  fr_host_persist_stream.active = false;
 }
 
 fr_err_t fr_platform_persist_clear(void) {
   fr_platform_persist_unmount();
+  fr_platform_persist_stream_abort();
   for (uint8_t slot = 0; slot < FR_HOST_PERSIST_SLOT_COUNT; slot++) {
     memset(&fr_host_persist_slots[slot], 0,
            sizeof(fr_host_persist_slots[slot]));
   }
 #ifdef FR_HOST_TEST_HELPERS
-  fr_host_persist_interrupt_armed = false;
-  fr_host_persist_interrupt_length = 0;
+  fr_host_persist_interrupt_header_write = false;
 #endif
   return FR_OK;
 }
@@ -1037,9 +1052,8 @@ fr_err_t fr_host_persist_debug_corrupt_newest(uint16_t offset, uint8_t value) {
   return FR_OK;
 }
 
-void fr_host_persist_debug_interrupt_next_commit(uint16_t written_length) {
-  fr_host_persist_interrupt_armed = true;
-  fr_host_persist_interrupt_length = written_length;
+void fr_host_persist_debug_interrupt_next_header_write(void) {
+  fr_host_persist_interrupt_header_write = true;
 }
 #endif
 #endif

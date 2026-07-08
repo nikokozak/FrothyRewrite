@@ -1,4 +1,5 @@
 #pragma once
+#include "persist_format.h"
 #include "types.h"
 
 #include <stdbool.h>
@@ -163,16 +164,23 @@ fr_err_t fr_platform_persist_mount_commit(void);
 void fr_platform_persist_mount_discard(void);
 void fr_platform_persist_unmount(void);
 bool fr_platform_persist_pointer_is_mounted(const void *ptr, uint16_t length);
-/* Atomically replace the committed image. After power loss, read returns the
- * old image or the new image, never a mixed image. */
-fr_err_t fr_platform_persist_commit(const uint8_t *bytes, uint16_t length);
+/* Stream a replacement image into the inactive slot. The platform erases the
+ * inactive slot on begin, appends payload bytes after the reserved S1 header
+ * area, and writes the final stamped header last. Until finalize succeeds, the
+ * previous committed image remains the newest good image. */
+fr_err_t fr_platform_persist_stream_begin(void);
+fr_err_t fr_platform_persist_stream_write(const uint8_t *bytes,
+                                          uint16_t length);
+fr_err_t fr_platform_persist_stream_finalize(
+    const uint8_t header[FR_PERSIST_HEADER_BYTES]);
+void fr_platform_persist_stream_abort(void);
 fr_err_t fr_platform_persist_clear(void);
 
 #ifdef FR_HOST_TEST_HELPERS
 /* Host fault injection for durability tests. Corrupts the newest internally
  * stored image without exposing the backend's slot layout. */
 fr_err_t fr_host_persist_debug_corrupt_newest(uint16_t offset, uint8_t value);
-void fr_host_persist_debug_interrupt_next_commit(uint16_t written_length);
+void fr_host_persist_debug_interrupt_next_header_write(void);
 #endif
 #endif
 
