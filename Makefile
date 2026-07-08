@@ -500,7 +500,7 @@ test-host-normal-transcript: host-normal
 		'to gpio.high with pin [ gpio.write: pin, 1 ]' \
 		'true' \
 		'false' \
-		'wrap random.chance? random.percent? sign time myblink blink_times'; do \
+		'wrap random.chance? random.percent? sign adc.percent time myblink blink_times'; do \
 		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
 			printf '%s\nmissing expected text: %s\n' "$$out" "$$expected"; \
 			exit 1; \
