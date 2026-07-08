@@ -322,7 +322,9 @@ static uint8_t fr_compile_count_local_binds(const fr_parse_line_t *parsed) {
     return 0;
   }
   for (uint8_t i = 0; i < parsed->expr_count; i++) {
-    if (parsed->exprs[i].kind == FR_PARSE_EXPR_LOCAL_BIND) {
+    if (parsed->exprs[i].kind == FR_PARSE_EXPR_LOCAL_BIND ||
+        (parsed->exprs[i].kind == FR_PARSE_EXPR_REPEAT &&
+         parsed->exprs[i].name.start != NULL)) {
       count = (uint8_t)(count + 1);
     }
   }
@@ -1002,6 +1004,9 @@ static fr_err_t fr_compile_emit_repeat(const fr_compile_context_t *ctx,
   const fr_parse_expr_t *count = NULL;
   uint16_t done_target_operand = 0;
   uint16_t body_offset = 0;
+  uint8_t saved_locals_count = 0;
+  uint8_t index_local = 0;
+  bool has_index = false;
 
   if (expr == NULL || expr->child_count != 2) {
     return FR_ERR_INVALID;
@@ -1018,10 +1023,24 @@ static fr_err_t fr_compile_emit_repeat(const fr_compile_context_t *ctx,
     }
   }
 
+  has_index = expr->name.start != NULL;
   FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
                               instruction_bytes, offset));
-  FR_TRY(fr_compile_emit_jump_placeholder(
-      instruction_bytes, offset, FR_OP_REPEAT_BEGIN, &done_target_operand));
+  if (has_index) {
+    if (ctx == NULL || ctx->locals == NULL) {
+      return FR_ERR_INVALID;
+    }
+    saved_locals_count = ctx->locals->count;
+    FR_TRY(fr_compile_add_local(ctx, expr->name, &index_local));
+    FR_TRY(fr_compile_write_byte(instruction_bytes, offset,
+                                 FR_OP_REPEAT_BEGIN_AS));
+    done_target_operand = *offset;
+    FR_TRY(fr_compile_write_u16(instruction_bytes, offset, 0));
+    FR_TRY(fr_compile_write_byte(instruction_bytes, offset, index_local));
+  } else {
+    FR_TRY(fr_compile_emit_jump_placeholder(
+        instruction_bytes, offset, FR_OP_REPEAT_BEGIN, &done_target_operand));
+  }
   body_offset = *offset;
   FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[1],
                               instruction_bytes, offset));
@@ -1029,8 +1048,16 @@ static fr_err_t fr_compile_emit_repeat(const fr_compile_context_t *ctx,
 #if FR_FEATURE_BYTES
   FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_BYTES_RESET));
 #endif
-  FR_TRY(fr_compile_emit_jump_target(instruction_bytes, offset,
-                                     FR_OP_REPEAT_NEXT, body_offset));
+  if (has_index) {
+    FR_TRY(fr_compile_write_byte(instruction_bytes, offset,
+                                 FR_OP_REPEAT_NEXT_AS));
+    FR_TRY(fr_compile_write_u16(instruction_bytes, offset, body_offset));
+    FR_TRY(fr_compile_write_byte(instruction_bytes, offset, index_local));
+    ctx->locals->count = saved_locals_count;
+  } else {
+    FR_TRY(fr_compile_emit_jump_target(instruction_bytes, offset,
+                                       FR_OP_REPEAT_NEXT, body_offset));
+  }
   FR_TRY(fr_compile_patch_u16(instruction_bytes, done_target_operand, *offset));
   return fr_compile_emit_push_nil(instruction_bytes, offset);
 }
@@ -1196,6 +1223,7 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   uint16_t cell_index = 0;
 #endif
   uint8_t arg_index = 0;
+  uint8_t local_index = 0;
 
   if (expr == NULL || instruction_bytes == NULL || offset == NULL) {
     return FR_ERR_INVALID;
@@ -1322,9 +1350,15 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
   case FR_PARSE_EXPR_FIELD_WRITE:
     return FR_ERR_UNSUPPORTED;
 #endif
-  case FR_PARSE_EXPR_SLOT_WRITE:
+  case FR_PARSE_EXPR_NAME_WRITE:
     if (expr->child_count != 1) {
       return FR_ERR_INVALID;
+    }
+    if (fr_compile_local_for_name(ctx, expr->name, &local_index)) {
+      FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->child, instruction_bytes,
+                                  offset));
+      FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_SET_LOCAL));
+      return fr_compile_write_byte(instruction_bytes, offset, local_index);
     }
     /* Parameters are immutable; trying to `set arg to ...` is a source bug. */
     if (fr_compile_param_for_name(ctx, expr->name, &arg_index)) {
