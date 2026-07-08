@@ -57,6 +57,10 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
     fr_runtime_t *runtime, const fr_instruction_stream_t *view,
     const fr_tagged_t *args, uint8_t arg_count, fr_tagged_t *out_tagged,
     uint16_t call_depth);
+static fr_err_t fr_vm_run_reader_code_object_depth(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    const fr_tagged_t *args, uint8_t arg_count, fr_tagged_t *out_tagged,
+    uint16_t call_depth);
 static fr_err_t fr_vm_run_code_object_depth(fr_runtime_t *runtime,
                                             fr_code_object_id_t code_object_id,
                                             const fr_tagged_t *args,
@@ -386,7 +390,20 @@ static fr_err_t fr_vm_run_code_object_depth(fr_runtime_t *runtime,
     return FR_ERR_INVALID;
   }
 
+  /* ponytail: two opcode runners on purpose. The direct runner keeps the
+   * borrowed-pointer hot loop (view->bytes[ip]) untouched so XIP/RAM code pays
+   * zero per-op overhead; the reader runner exists only for non-XIP backends
+   * that cannot lend a stable pointer. The decision is hoisted here, once per
+   * code-object entry, not per opcode. The cost is duplicated opcode logic that
+   * must stay in sync -- test_persist_fake_non_xip_code_reader runs the same
+   * nested + recursive program through both runners and asserts identical
+   * results, so any divergence fails a test rather than shipping. */
   FR_TRY(fr_code_get_instructions(runtime, code_object_id, &view));
+  if (view.bytes == NULL) {
+    return fr_vm_run_reader_code_object_depth(runtime, code_object_id,
+                                             view.length, args, arg_count,
+                                             out_tagged, call_depth);
+  }
   return fr_vm_run_instruction_stream_depth(runtime, &view, args, arg_count,
                                             out_tagged, call_depth);
 }
@@ -674,6 +691,729 @@ static fr_err_t fr_vm_repeat_next(const fr_instruction_stream_t *view,
   return FR_OK;
 }
 
+static fr_err_t fr_vm_reader_require(uint16_t length, fr_code_offset_t ip,
+                                     uint16_t width) {
+  if (ip > length || width > length - ip) {
+    return FR_ERR_INVALID;
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_read_header(fr_runtime_t *runtime,
+                                         fr_code_object_id_t code_object_id,
+                                         uint16_t length,
+                                         fr_instruction_header_t *header) {
+  if (runtime == NULL || header == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (length < FR_INSTRUCTION_MIN_HEADER_SIZE) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_code_read_u8(runtime, code_object_id, 0, &header->format_version));
+  FR_TRY(fr_code_read_u8(runtime, code_object_id, 1, &header->header_size));
+  header->arity = 0;
+  header->local_count = 0;
+
+  if (header->format_version != FR_INSTRUCTION_FORMAT_VERSION) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  if (header->header_size < FR_INSTRUCTION_MIN_HEADER_SIZE) {
+    return FR_ERR_INVALID;
+  }
+  if (header->header_size > length) {
+    return FR_ERR_INVALID;
+  }
+  if (header->header_size > FR_INSTRUCTION_MAX_HEADER_SIZE) {
+    return FR_ERR_INVALID;
+  }
+  if (header->header_size >= FR_INSTRUCTION_ARITY_HEADER_SIZE) {
+    FR_TRY(fr_code_read_u8(runtime, code_object_id, 2, &header->arity));
+    if (header->arity > FR_PROFILE_MAX_STACK_DEPTH) {
+      return FR_ERR_RANGE;
+    }
+  }
+  if (header->header_size >= FR_INSTRUCTION_LOCALS_HEADER_SIZE) {
+    FR_TRY(fr_code_read_u8(runtime, code_object_id, 3, &header->local_count));
+    if ((uint16_t)header->arity + header->local_count >
+        FR_PROFILE_MAX_STACK_DEPTH) {
+      return FR_ERR_RANGE;
+    }
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_read_opcode(fr_runtime_t *runtime,
+                                         fr_code_object_id_t code_object_id,
+                                         uint16_t length, fr_code_offset_t ip,
+                                         fr_opcode_t *out_op) {
+  uint8_t byte = 0;
+
+  if (out_op == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_vm_reader_require(length, ip, 1));
+  FR_TRY(fr_code_read_u8(runtime, code_object_id, ip, &byte));
+  *out_op = (fr_opcode_t)byte;
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_read_slot_operand(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_code_offset_t ip, fr_slot_id_t *out_slot_id) {
+  uint16_t raw = 0;
+
+  FR_TRY(fr_vm_reader_require(length, ip, 3));
+  FR_TRY(fr_code_read_u16(runtime, code_object_id, (uint16_t)(ip + 1u), &raw));
+  *out_slot_id = raw;
+  if (*out_slot_id >= FR_PROFILE_MAX_SLOTS) {
+    return FR_ERR_RANGE;
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_read_int_operand(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_code_offset_t ip, fr_int_t *out_int) {
+  uint8_t bytes[FR_INSTRUCTION_INT_OPERAND_BYTES];
+
+  FR_TRY(fr_vm_reader_require(length, ip, FR_INSTRUCTION_PUSH_INT_SIZE));
+  FR_TRY(fr_code_read(runtime, code_object_id, (uint16_t)(ip + 1u), bytes,
+                      FR_INSTRUCTION_INT_OPERAND_BYTES));
+  *out_int = (fr_int_t)(int32_t)fr_read_u32_le(bytes);
+  if (!fr_tagged_can_encode_int(*out_int)) {
+    return FR_ERR_RANGE;
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_read_object_id_operand(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_code_offset_t ip, fr_object_id_t *out_object_id) {
+  uint16_t raw = 0;
+
+  FR_TRY(fr_vm_reader_require(length, ip, FR_INSTRUCTION_PUSH_OBJECT_ID_SIZE));
+  FR_TRY(fr_code_read_u16(runtime, code_object_id, (uint16_t)(ip + 1u), &raw));
+  *out_object_id = (fr_object_id_t)raw;
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_read_code_id_operand(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_code_offset_t ip, fr_code_object_id_t *out_code_object_id) {
+  uint16_t raw = 0;
+
+  FR_TRY(fr_vm_reader_require(length, ip, FR_INSTRUCTION_PUSH_CODE_ID_SIZE));
+  FR_TRY(fr_code_read_u16(runtime, code_object_id, (uint16_t)(ip + 1u), &raw));
+  *out_code_object_id = (fr_code_object_id_t)raw;
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_read_jump_operand(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_code_offset_t ip, fr_code_offset_t *out_target) {
+  uint16_t raw = 0;
+
+  FR_TRY(fr_vm_reader_require(length, ip, 3));
+  FR_TRY(fr_code_read_u16(runtime, code_object_id, (uint16_t)(ip + 1u), &raw));
+  *out_target = (fr_code_offset_t)raw;
+  if (*out_target >= length) {
+    return FR_ERR_INVALID;
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_read_arg_operand(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_code_offset_t ip, uint8_t *out_arg_index) {
+  fr_instruction_header_t header;
+
+  FR_TRY(fr_vm_reader_require(length, ip, 2));
+  FR_TRY(fr_vm_reader_read_header(runtime, code_object_id, length, &header));
+  FR_TRY(fr_code_read_u8(runtime, code_object_id, (uint16_t)(ip + 1u),
+                         out_arg_index));
+  if (*out_arg_index >= header.arity) {
+    return FR_ERR_RANGE;
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_read_local_operand(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_code_offset_t ip, uint8_t *out_local_index) {
+  fr_instruction_header_t header;
+
+  FR_TRY(fr_vm_reader_require(length, ip, 2));
+  FR_TRY(fr_vm_reader_read_header(runtime, code_object_id, length, &header));
+  FR_TRY(fr_code_read_u8(runtime, code_object_id, (uint16_t)(ip + 1u),
+                         out_local_index));
+  if (*out_local_index >= header.local_count) {
+    return FR_ERR_RANGE;
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_read_call_slot_arg_operands(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_code_offset_t ip, fr_slot_id_t *out_slot_id, uint8_t *out_arg_count) {
+  uint16_t raw = 0;
+
+  FR_TRY(fr_vm_reader_require(length, ip, 4));
+  FR_TRY(fr_code_read_u16(runtime, code_object_id, (uint16_t)(ip + 1u), &raw));
+  FR_TRY(fr_code_read_u8(runtime, code_object_id, (uint16_t)(ip + 3u),
+                         out_arg_count));
+  *out_slot_id = (fr_slot_id_t)raw;
+  if (*out_slot_id >= FR_PROFILE_MAX_SLOTS) {
+    return FR_ERR_RANGE;
+  }
+  if (*out_arg_count > FR_PROFILE_MAX_STACK_DEPTH) {
+    return FR_ERR_RANGE;
+  }
+  return FR_OK;
+}
+
+#if FR_FEATURE_CELLS
+static fr_err_t fr_vm_reader_read_cell_operands(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_code_offset_t ip, fr_slot_id_t *out_slot_id, uint16_t *out_index) {
+  uint16_t raw_slot = 0;
+
+  FR_TRY(fr_vm_reader_require(length, ip, 5));
+  FR_TRY(fr_code_read_u16(runtime, code_object_id, (uint16_t)(ip + 1u),
+                          &raw_slot));
+  FR_TRY(fr_code_read_u16(runtime, code_object_id, (uint16_t)(ip + 3u),
+                          out_index));
+  *out_slot_id = (fr_slot_id_t)raw_slot;
+  if (*out_slot_id >= FR_PROFILE_MAX_SLOTS) {
+    return FR_ERR_RANGE;
+  }
+  return FR_OK;
+}
+#endif
+
+#if FR_FEATURE_RECORDS
+static fr_err_t fr_vm_reader_read_field_operand(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_code_offset_t ip, uint8_t field_name[FR_PROFILE_MAX_NAME_BYTES],
+    uint8_t *out_length) {
+  FR_TRY(fr_vm_reader_require(length, ip, 2));
+  FR_TRY(fr_code_read_u8(runtime, code_object_id, (uint16_t)(ip + 1u),
+                         out_length));
+  if (*out_length == 0 || *out_length > FR_PROFILE_MAX_NAME_BYTES) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_vm_reader_require(length, ip, (uint16_t)(2u + *out_length)));
+  return fr_code_read(runtime, code_object_id, (uint16_t)(ip + 2u),
+                      field_name, *out_length);
+}
+#endif
+
+static fr_err_t fr_vm_reader_load_slot(fr_runtime_t *runtime,
+                                       fr_code_object_id_t code_object_id,
+                                       uint16_t length,
+                                       fr_vm_state_t *state) {
+  fr_slot_id_t slot_id = 0;
+  fr_tagged_t tagged = 0;
+
+  FR_TRY(fr_vm_reader_read_slot_operand(runtime, code_object_id, length,
+                                        state->ip, &slot_id));
+  FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
+
+  state->ip += 3;
+  return fr_vm_push(state, tagged);
+}
+
+static fr_err_t fr_vm_reader_store_slot(fr_runtime_t *runtime,
+                                        fr_code_object_id_t code_object_id,
+                                        uint16_t length,
+                                        fr_vm_state_t *state) {
+  fr_slot_id_t slot_id = 0;
+  fr_tagged_t tagged = 0;
+
+  FR_TRY(fr_vm_reader_read_slot_operand(runtime, code_object_id, length,
+                                        state->ip, &slot_id));
+  FR_TRY(fr_vm_pop(state, &tagged));
+  FR_TRY(fr_slot_write(runtime, slot_id, tagged));
+
+  state->ip += 3;
+  return fr_vm_push(state, fr_tagged_nil());
+}
+
+static fr_err_t fr_vm_reader_push_int(fr_runtime_t *runtime,
+                                      fr_code_object_id_t code_object_id,
+                                      uint16_t length,
+                                      fr_vm_state_t *state) {
+  fr_int_t int_operand = 0;
+  fr_tagged_t tagged = 0;
+
+  FR_TRY(fr_vm_reader_read_int_operand(runtime, code_object_id, length,
+                                       state->ip, &int_operand));
+  FR_TRY(fr_tagged_encode_int(int_operand, &tagged));
+
+  state->ip += FR_INSTRUCTION_PUSH_INT_SIZE;
+  return fr_vm_push(state, tagged);
+}
+
+static fr_err_t fr_vm_reader_push_object_id(fr_runtime_t *runtime,
+                                            fr_code_object_id_t code_object_id,
+                                            uint16_t length,
+                                            fr_vm_state_t *state) {
+  fr_object_id_t object_id = 0;
+  fr_tagged_t tagged = 0;
+
+  FR_TRY(fr_vm_reader_read_object_id_operand(runtime, code_object_id, length,
+                                             state->ip, &object_id));
+  FR_TRY(fr_tagged_encode_object_id(object_id, &tagged));
+
+  state->ip += FR_INSTRUCTION_PUSH_OBJECT_ID_SIZE;
+  return fr_vm_push(state, tagged);
+}
+
+static fr_err_t fr_vm_reader_push_code_id(fr_runtime_t *runtime,
+                                          fr_code_object_id_t code_object_id,
+                                          uint16_t length,
+                                          fr_vm_state_t *state) {
+  fr_code_object_id_t pushed_code_id = 0;
+  fr_tagged_t tagged = 0;
+
+  FR_TRY(fr_vm_reader_read_code_id_operand(runtime, code_object_id, length,
+                                           state->ip, &pushed_code_id));
+  FR_TRY(fr_tagged_encode_int((fr_int_t)pushed_code_id, &tagged));
+
+  state->ip += FR_INSTRUCTION_PUSH_CODE_ID_SIZE;
+  return fr_vm_push(state, tagged);
+}
+
+static fr_err_t fr_vm_reader_load_arg(fr_runtime_t *runtime,
+                                      fr_code_object_id_t code_object_id,
+                                      uint16_t length,
+                                      fr_vm_state_t *state) {
+  uint8_t arg_index = 0;
+
+  FR_TRY(fr_vm_reader_read_arg_operand(runtime, code_object_id, length,
+                                       state->ip, &arg_index));
+  if (arg_index >= state->arg_count) {
+    return FR_ERR_INVALID;
+  }
+
+  state->ip += 2;
+  return fr_vm_push(state, state->frame[arg_index]);
+}
+
+static fr_err_t fr_vm_reader_load_local(fr_runtime_t *runtime,
+                                        fr_code_object_id_t code_object_id,
+                                        uint16_t length,
+                                        fr_vm_state_t *state) {
+  uint8_t local_index = 0;
+
+  FR_TRY(fr_vm_reader_read_local_operand(runtime, code_object_id, length,
+                                         state->ip, &local_index));
+  if (local_index >= state->local_count) {
+    return FR_ERR_INVALID;
+  }
+
+  state->ip += 2;
+  return fr_vm_push(state, state->frame[state->arg_count + local_index]);
+}
+
+static fr_err_t fr_vm_reader_store_local(fr_runtime_t *runtime,
+                                         fr_code_object_id_t code_object_id,
+                                         uint16_t length,
+                                         fr_vm_state_t *state) {
+  uint8_t local_index = 0;
+  fr_tagged_t value = 0;
+
+  FR_TRY(fr_vm_reader_read_local_operand(runtime, code_object_id, length,
+                                         state->ip, &local_index));
+  if (local_index >= state->local_count) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_vm_pop(state, &value));
+
+  state->frame[state->arg_count + local_index] = value;
+  state->ip += 2;
+  return fr_vm_push(state, fr_tagged_nil());
+}
+
+#if FR_FEATURE_CELLS
+static fr_err_t fr_vm_reader_load_cell(fr_runtime_t *runtime,
+                                       fr_code_object_id_t code_object_id,
+                                       uint16_t length,
+                                       fr_vm_state_t *state) {
+  fr_slot_id_t slot_id = 0;
+  uint16_t index = 0;
+  fr_tagged_t tagged = 0;
+  fr_object_id_t object_id = 0;
+
+  FR_TRY(fr_vm_reader_read_cell_operands(runtime, code_object_id, length,
+                                         state->ip, &slot_id, &index));
+  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
+  FR_TRY(fr_cells_read(runtime, object_id, index, &tagged));
+
+  state->ip += 5;
+  return fr_vm_push(state, tagged);
+}
+
+static fr_err_t fr_vm_reader_store_cell(fr_runtime_t *runtime,
+                                        fr_code_object_id_t code_object_id,
+                                        uint16_t length,
+                                        fr_vm_state_t *state) {
+  fr_slot_id_t slot_id = 0;
+  uint16_t index = 0;
+  fr_tagged_t value = 0;
+  fr_object_id_t object_id = 0;
+
+  FR_TRY(fr_vm_reader_read_cell_operands(runtime, code_object_id, length,
+                                         state->ip, &slot_id, &index));
+  FR_TRY(fr_vm_pop(state, &value));
+  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
+  FR_TRY(fr_cells_write(runtime, object_id, index, value));
+
+  state->ip += 5;
+  return fr_vm_push(state, fr_tagged_nil());
+}
+
+static fr_err_t fr_vm_reader_load_cell_dynamic(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_vm_state_t *state) {
+  fr_slot_id_t slot_id = 0;
+  uint16_t index = 0;
+  fr_tagged_t tagged = 0;
+  fr_object_id_t object_id = 0;
+
+  FR_TRY(fr_vm_reader_read_slot_operand(runtime, code_object_id, length,
+                                        state->ip, &slot_id));
+  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
+  FR_TRY(fr_vm_pop_cell_index(runtime, state, object_id, &index));
+  FR_TRY(fr_cells_read(runtime, object_id, index, &tagged));
+
+  state->ip += 3;
+  return fr_vm_push(state, tagged);
+}
+
+static fr_err_t fr_vm_reader_store_cell_dynamic(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_vm_state_t *state) {
+  fr_slot_id_t slot_id = 0;
+  uint16_t index = 0;
+  fr_tagged_t value = 0;
+  fr_object_id_t object_id = 0;
+
+  FR_TRY(fr_vm_reader_read_slot_operand(runtime, code_object_id, length,
+                                        state->ip, &slot_id));
+  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
+  FR_TRY(fr_vm_pop_cell_index(runtime, state, object_id, &index));
+  FR_TRY(fr_vm_pop(state, &value));
+  FR_TRY(fr_cells_write(runtime, object_id, index, value));
+
+  state->ip += 3;
+  return fr_vm_push(state, fr_tagged_nil());
+}
+#endif
+
+#if FR_FEATURE_RECORDS
+static fr_err_t fr_vm_reader_load_field(fr_runtime_t *runtime,
+                                        fr_code_object_id_t code_object_id,
+                                        uint16_t length,
+                                        fr_vm_state_t *state) {
+  uint8_t field_name[FR_PROFILE_MAX_NAME_BYTES];
+  uint8_t field_length = 0;
+  fr_tagged_t tagged = 0;
+  fr_object_id_t object_id = 0;
+
+  FR_TRY(fr_vm_reader_read_field_operand(runtime, code_object_id, length,
+                                         state->ip, field_name,
+                                         &field_length));
+  FR_TRY(fr_vm_pop(state, &tagged));
+  FR_TRY(fr_tagged_decode_object_id(tagged, &object_id));
+  FR_TRY(fr_record_read_field(
+      runtime, object_id,
+      (fr_record_name_t){.bytes = field_name, .length = field_length},
+      &tagged));
+
+  state->ip = (fr_code_offset_t)(state->ip + 2u + field_length);
+  return fr_vm_push(state, tagged);
+}
+
+static fr_err_t fr_vm_reader_store_field(fr_runtime_t *runtime,
+                                         fr_code_object_id_t code_object_id,
+                                         uint16_t length,
+                                         fr_vm_state_t *state) {
+  uint8_t field_name[FR_PROFILE_MAX_NAME_BYTES];
+  uint8_t field_length = 0;
+  fr_tagged_t value = 0;
+  fr_tagged_t record = 0;
+  fr_object_id_t object_id = 0;
+
+  FR_TRY(fr_vm_reader_read_field_operand(runtime, code_object_id, length,
+                                         state->ip, field_name,
+                                         &field_length));
+  FR_TRY(fr_vm_pop(state, &value));
+  FR_TRY(fr_vm_pop(state, &record));
+  FR_TRY(fr_tagged_decode_object_id(record, &object_id));
+  FR_TRY(fr_record_write_field(
+      runtime, object_id,
+      (fr_record_name_t){.bytes = field_name, .length = field_length}, value));
+
+  state->ip = (fr_code_offset_t)(state->ip + 2u + field_length);
+  return fr_vm_push(state, fr_tagged_nil());
+}
+#endif
+
+static fr_err_t fr_vm_reader_call_slot(fr_runtime_t *runtime,
+                                       fr_code_object_id_t code_object_id,
+                                       uint16_t length,
+                                       fr_vm_state_t *state) {
+  fr_slot_id_t slot_id = 0;
+  fr_tagged_t result = 0;
+
+  FR_TRY(fr_vm_reader_read_slot_operand(runtime, code_object_id, length,
+                                        state->ip, &slot_id));
+  FR_TRY(fr_vm_run_slot_depth(runtime, slot_id, NULL, 0, &result,
+                              (uint16_t)(state->call_depth + 1)));
+
+  state->ip += 3;
+  return fr_vm_push(state, result);
+}
+
+static fr_err_t fr_vm_reader_call_slot_arg(fr_runtime_t *runtime,
+                                           fr_code_object_id_t code_object_id,
+                                           uint16_t length,
+                                           fr_vm_state_t *state) {
+  fr_slot_id_t slot_id = 0;
+  uint8_t arg_count = 0;
+  fr_tagged_t result = 0;
+  fr_tagged_t args[FR_PROFILE_MAX_STACK_DEPTH];
+
+  FR_TRY(fr_vm_reader_read_call_slot_arg_operands(
+      runtime, code_object_id, length, state->ip, &slot_id, &arg_count));
+  if (state->depth < arg_count) {
+    return FR_ERR_UNDERFLOW;
+  }
+  for (uint8_t i = 0; i < arg_count; i++) {
+    FR_TRY(fr_vm_pop(state, &args[arg_count - 1 - i]));
+  }
+  FR_TRY(fr_vm_run_slot_depth(runtime, slot_id, args, arg_count, &result,
+                              (uint16_t)(state->call_depth + 1)));
+
+  state->ip += 4;
+  return fr_vm_push(state, result);
+}
+
+static fr_err_t fr_vm_reader_call_native_slot(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_vm_state_t *state) {
+  const fr_native_entry_t *entry = NULL;
+  fr_slot_id_t slot_id = 0;
+  fr_native_id_t native_id = 0;
+  fr_tagged_t slot_tagged = 0;
+  fr_tagged_t result = 0;
+  fr_tagged_t args[FR_PROFILE_MAX_STACK_DEPTH];
+
+  FR_TRY(fr_vm_reader_read_slot_operand(runtime, code_object_id, length,
+                                        state->ip, &slot_id));
+  FR_TRY(fr_slot_read(runtime, slot_id, &slot_tagged));
+  FR_TRY(fr_tagged_decode_native_id(slot_tagged, &native_id));
+  FR_TRY(fr_native_get(runtime, native_id, &entry));
+  if (state->depth < entry->arity) {
+    return FR_ERR_UNDERFLOW;
+  }
+  for (uint8_t i = 0; i < entry->arity; i++) {
+    FR_TRY(fr_vm_pop(state, &args[entry->arity - 1 - i]));
+  }
+
+  FR_TRY(fr_native_call(runtime, entry, args, entry->arity, &result));
+
+  state->ip += 3;
+  return fr_vm_push(state, result);
+}
+
+static fr_err_t fr_vm_reader_jump(fr_runtime_t *runtime,
+                                  fr_code_object_id_t code_object_id,
+                                  uint16_t length, fr_vm_state_t *state) {
+  fr_code_offset_t target = 0;
+
+  FR_TRY(fr_vm_reader_read_jump_operand(runtime, code_object_id, length,
+                                        state->ip, &target));
+  state->ip = target;
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_jump_if_falsy(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_vm_state_t *state) {
+  fr_code_offset_t target = 0;
+  fr_tagged_t condition = 0;
+
+  FR_TRY(fr_vm_pop(state, &condition));
+  FR_TRY(fr_vm_reader_read_jump_operand(runtime, code_object_id, length,
+                                        state->ip, &target));
+
+  if (fr_tagged_is_falsy(condition)) {
+    state->ip = target;
+  } else {
+    state->ip += 3;
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_repeat_begin(fr_runtime_t *runtime,
+                                          fr_code_object_id_t code_object_id,
+                                          uint16_t length,
+                                          fr_vm_state_t *state) {
+  fr_code_offset_t target = 0;
+  fr_tagged_t tagged = 0;
+  fr_int_t count = 0;
+
+  FR_TRY(fr_vm_reader_read_jump_operand(runtime, code_object_id, length,
+                                        state->ip, &target));
+  if (state->depth == 0) {
+    return FR_ERR_UNDERFLOW;
+  }
+
+  tagged = state->stack[state->depth - 1];
+  FR_TRY(fr_tagged_decode_int(tagged, &count));
+  if (count < 0) {
+    return FR_ERR_RANGE;
+  }
+  if (count == 0) {
+    state->depth -= 1;
+    state->ip = target;
+  } else {
+    state->ip += 3;
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_repeat_next(fr_runtime_t *runtime,
+                                         fr_code_object_id_t code_object_id,
+                                         uint16_t length,
+                                         fr_vm_state_t *state) {
+  fr_code_offset_t target = 0;
+  fr_tagged_t tagged = 0;
+  fr_int_t count = 0;
+
+  FR_TRY(fr_vm_reader_read_jump_operand(runtime, code_object_id, length,
+                                        state->ip, &target));
+  if (state->depth == 0) {
+    return FR_ERR_UNDERFLOW;
+  }
+
+  tagged = state->stack[state->depth - 1];
+  FR_TRY(fr_tagged_decode_int(tagged, &count));
+  if (count <= 0) {
+    return FR_ERR_INVALID;
+  }
+  if (count == 1) {
+    state->depth -= 1;
+    state->ip += 3;
+    return FR_OK;
+  }
+
+  FR_TRY(fr_tagged_encode_int((fr_int_t)(count - 1),
+                              &state->stack[state->depth - 1]));
+  state->ip = target;
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_step(fr_runtime_t *runtime,
+                                  fr_code_object_id_t code_object_id,
+                                  uint16_t length, fr_vm_state_t *state,
+                                  fr_opcode_t op) {
+  switch (op) {
+  case FR_OP_RETURN:
+    return fr_vm_return(state);
+  case FR_OP_LOAD_SLOT:
+    return fr_vm_reader_load_slot(runtime, code_object_id, length, state);
+  case FR_OP_STORE_SLOT:
+    return fr_vm_reader_store_slot(runtime, code_object_id, length, state);
+  case FR_OP_PUSH_INT:
+    return fr_vm_reader_push_int(runtime, code_object_id, length, state);
+  case FR_OP_PUSH_OBJECT_ID:
+    return fr_vm_reader_push_object_id(runtime, code_object_id, length, state);
+  case FR_OP_PUSH_CODE_ID:
+    return fr_vm_reader_push_code_id(runtime, code_object_id, length, state);
+  case FR_OP_LOAD_ARG:
+    return fr_vm_reader_load_arg(runtime, code_object_id, length, state);
+  case FR_OP_LOAD_LOCAL:
+    return fr_vm_reader_load_local(runtime, code_object_id, length, state);
+  case FR_OP_STORE_LOCAL:
+    return fr_vm_reader_store_local(runtime, code_object_id, length, state);
+#if FR_FEATURE_CELLS
+  case FR_OP_LOAD_CELL:
+    return fr_vm_reader_load_cell(runtime, code_object_id, length, state);
+  case FR_OP_STORE_CELL:
+    return fr_vm_reader_store_cell(runtime, code_object_id, length, state);
+  case FR_OP_LOAD_CELL_DYNAMIC:
+    return fr_vm_reader_load_cell_dynamic(runtime, code_object_id, length,
+                                          state);
+  case FR_OP_STORE_CELL_DYNAMIC:
+    return fr_vm_reader_store_cell_dynamic(runtime, code_object_id, length,
+                                           state);
+#else
+  case FR_OP_LOAD_CELL:
+  case FR_OP_STORE_CELL:
+  case FR_OP_LOAD_CELL_DYNAMIC:
+  case FR_OP_STORE_CELL_DYNAMIC:
+    return FR_ERR_UNSUPPORTED;
+#endif
+#if FR_FEATURE_RECORDS
+  case FR_OP_LOAD_FIELD:
+    return fr_vm_reader_load_field(runtime, code_object_id, length, state);
+  case FR_OP_STORE_FIELD:
+    return fr_vm_reader_store_field(runtime, code_object_id, length, state);
+#else
+  case FR_OP_LOAD_FIELD:
+  case FR_OP_STORE_FIELD:
+    return FR_ERR_UNSUPPORTED;
+#endif
+  case FR_OP_CALL_SLOT:
+    return fr_vm_reader_call_slot(runtime, code_object_id, length, state);
+  case FR_OP_CALL_SLOT_ARG:
+    return fr_vm_reader_call_slot_arg(runtime, code_object_id, length, state);
+  case FR_OP_CALL_NATIVE_SLOT:
+    return fr_vm_reader_call_native_slot(runtime, code_object_id, length,
+                                         state);
+  case FR_OP_ADD_INT:
+    return fr_vm_add_int(state);
+  case FR_OP_SUB_INT:
+  case FR_OP_MUL_INT:
+  case FR_OP_DIV_INT:
+    return fr_vm_arith_int(state, op);
+  case FR_OP_LT_INT:
+  case FR_OP_GT_INT:
+  case FR_OP_LE_INT:
+  case FR_OP_GE_INT:
+  case FR_OP_EQ_INT:
+  case FR_OP_NE_INT:
+    return fr_vm_compare_int(state, op);
+  case FR_OP_JUMP:
+    return fr_vm_reader_jump(runtime, code_object_id, length, state);
+  case FR_OP_JUMP_IF_FALSY:
+    return fr_vm_reader_jump_if_falsy(runtime, code_object_id, length, state);
+  case FR_OP_DROP:
+    return fr_vm_drop(state);
+  case FR_OP_PUSH_NIL:
+    return fr_vm_push_nil(state);
+  case FR_OP_PUSH_FALSE:
+    return fr_vm_push_bool(state, false);
+  case FR_OP_PUSH_TRUE:
+    return fr_vm_push_bool(state, true);
+  case FR_OP_REPEAT_BEGIN:
+    return fr_vm_reader_repeat_begin(runtime, code_object_id, length, state);
+  case FR_OP_REPEAT_NEXT:
+    return fr_vm_reader_repeat_next(runtime, code_object_id, length, state);
+  case FR_OP_BYTES_RESET:
+#if FR_FEATURE_BYTES
+    fr_bytes_reset_if_outermost(runtime);
+#endif
+    state->ip++;
+    return FR_OK;
+  default:
+    return FR_ERR_INVALID;
+  }
+}
+
 static fr_err_t fr_vm_step(fr_runtime_t *runtime,
                            const fr_instruction_stream_t *view,
                            fr_vm_state_t *state) {
@@ -809,6 +1549,77 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
     /* Spec §9 safe points: statement boundary (DROP) and end of any body
        (RETURN). Loop back-edges in repeat/while/forever emit DROP before
        the jump, so DROP also covers each loop iteration. */
+    if (op == FR_OP_DROP || op == FR_OP_RETURN) {
+      poll_countdown--;
+      if (poll_countdown == 0) {
+        FR_TRY(fr_platform_poll_interrupt(runtime));
+        poll_countdown = FR_VM_POLL_SAFE_POINTS;
+      }
+      if (fr_runtime_is_interrupted(runtime)) {
+        return FR_ERR_INTERRUPTED;
+      }
+      if (runtime->events.active_count > 0) {
+        FR_TRY(fr_event_drain(runtime));
+      }
+      yield_countdown--;
+      if (yield_countdown == 0) {
+        fr_platform_yield();
+        yield_countdown = FR_VM_YIELD_SAFE_POINTS;
+      }
+      if (runtime->events.active_count > 0) {
+        fr_event_report_overflow(runtime);
+        FR_TRY(fr_event_dispatch(runtime));
+      }
+    }
+  }
+
+  if (state.depth == 0) {
+    *out_tagged = fr_tagged_nil();
+  } else {
+    *out_tagged = state.stack[state.depth - 1];
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_run_reader_code_object_depth(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    const fr_tagged_t *args, uint8_t arg_count, fr_tagged_t *out_tagged,
+    uint16_t call_depth) {
+  fr_vm_state_t state = {.call_depth = call_depth};
+  fr_instruction_header_t header;
+  uint16_t yield_countdown = FR_VM_YIELD_SAFE_POINTS;
+  uint16_t poll_countdown = FR_VM_POLL_SAFE_POINTS;
+
+  if (call_depth >= FR_PROFILE_MAX_CALL_DEPTH) {
+    return FR_ERR_OVERFLOW;
+  }
+  if (runtime == NULL || out_tagged == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (arg_count > 0 && args == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_vm_reader_read_header(runtime, code_object_id, length, &header));
+  if (header.arity != arg_count) {
+    return FR_ERR_INVALID;
+  }
+
+  for (uint8_t i = 0; i < arg_count; i++) {
+    state.frame[i] = args[i];
+  }
+  for (uint8_t i = 0; i < header.local_count; i++) {
+    state.frame[arg_count + i] = fr_tagged_nil();
+  }
+  state.arg_count = arg_count;
+  state.local_count = header.local_count;
+  state.ip = header.header_size;
+  while (state.ip < length && !state.returned) {
+    fr_opcode_t op;
+
+    FR_TRY(fr_vm_reader_read_opcode(runtime, code_object_id, length, state.ip,
+                                    &op));
+    FR_TRY(fr_vm_reader_step(runtime, code_object_id, length, &state, op));
     if (op == FR_OP_DROP || op == FR_OP_RETURN) {
       poll_countdown--;
       if (poll_countdown == 0) {

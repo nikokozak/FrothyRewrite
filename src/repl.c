@@ -1437,7 +1437,7 @@ static fr_err_t fr_repl_write_code_listing(fr_runtime_t *runtime,
    * answers, marked so the reader knows it's the fallback form. */
   FR_TRY(fr_repl_writer_write(writer,
                               ";; source reconstruction unavailable\n"));
-  FR_TRY(fr_code_get_instructions(runtime, code_object_id, &view));
+  FR_TRY(fr_source_render_instruction_view(runtime, code_object_id, &view));
   FR_TRY(fr_instruction_read_header(&view, &header));
   if (view.length == header.header_size) {
     return FR_ERR_INVALID;

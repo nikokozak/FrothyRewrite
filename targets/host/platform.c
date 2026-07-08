@@ -775,6 +775,7 @@ static struct {
 static bool fr_host_persist_interrupt_header_write;
 static bool fr_host_persist_fail_next_mount_commit;
 static bool fr_host_persist_shadow_mounts;
+static bool fr_host_persist_direct_code_pointers = true;
 static uint8_t fr_host_persist_mount_maps[2][FR_PERSIST_STORAGE_BYTES];
 static uint16_t fr_host_persist_mount_map_lengths[2];
 static uint8_t fr_host_persist_active_map;
@@ -902,6 +903,24 @@ static bool fr_host_persist_pointer_in_slot(uint8_t slot, const void *ptr,
                                           ptr, length);
 }
 
+static fr_err_t fr_host_persist_offset_in_range(const uint8_t *bytes,
+                                                uint16_t bytes_length,
+                                                const void *ptr,
+                                                uint16_t length,
+                                                uint16_t *out_offset) {
+  uintptr_t p = (uintptr_t)ptr;
+  uintptr_t b = (uintptr_t)bytes;
+
+  if (out_offset == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_host_persist_pointer_in_range(bytes, bytes_length, ptr, length)) {
+    return FR_ERR_NOT_FOUND;
+  }
+  *out_offset = (uint16_t)(p - b);
+  return FR_OK;
+}
+
 fr_err_t fr_platform_persist_read(uint8_t *bytes, uint16_t cap,
                                   uint16_t *out_length, uint8_t image_index) {
   uint8_t slot = 0;
@@ -1018,6 +1037,125 @@ bool fr_platform_persist_pointer_is_mounted(const void *ptr, uint16_t length) {
                                         length);
 }
 
+bool fr_platform_persist_code_pointer_is_direct(const void *ptr,
+                                                uint16_t length) {
+#ifdef FR_HOST_TEST_HELPERS
+  if (!fr_host_persist_direct_code_pointers) {
+    (void)ptr;
+    (void)length;
+    return false;
+  }
+#endif
+  if (fr_host_persist_candidate_mounted) {
+#ifdef FR_HOST_TEST_HELPERS
+    if (fr_host_persist_candidate_map_mounted) {
+      return fr_host_persist_pointer_in_range(
+          fr_host_persist_mount_maps[fr_host_persist_candidate_map],
+          fr_host_persist_mount_map_lengths[fr_host_persist_candidate_map],
+          ptr, length);
+    }
+#endif
+    return fr_host_persist_pointer_in_slot(fr_host_persist_candidate_mount_slot,
+                                           ptr, length);
+  }
+  return fr_platform_persist_pointer_is_mounted(ptr, length);
+}
+
+fr_err_t fr_platform_persist_mounted_offset(const void *ptr, uint16_t length,
+                                            uint16_t *out_offset) {
+  if (out_offset == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_host_persist_candidate_mounted) {
+#ifdef FR_HOST_TEST_HELPERS
+    if (fr_host_persist_candidate_map_mounted) {
+      fr_err_t err = fr_host_persist_offset_in_range(
+          fr_host_persist_mount_maps[fr_host_persist_candidate_map],
+          fr_host_persist_mount_map_lengths[fr_host_persist_candidate_map],
+          ptr, length, out_offset);
+      if (err == FR_OK) {
+        return FR_OK;
+      }
+    }
+#endif
+    {
+      fr_host_persist_slot_t *slot =
+          &fr_host_persist_slots[fr_host_persist_candidate_mount_slot];
+      fr_err_t err = fr_host_persist_offset_in_range(
+          slot->bytes, slot->length, ptr, length, out_offset);
+      if (err == FR_OK) {
+        return FR_OK;
+      }
+    }
+  }
+  if (fr_host_persist_active_mounted) {
+#ifdef FR_HOST_TEST_HELPERS
+    if (fr_host_persist_active_map_mounted) {
+      fr_err_t err = fr_host_persist_offset_in_range(
+          fr_host_persist_mount_maps[fr_host_persist_active_map],
+          fr_host_persist_mount_map_lengths[fr_host_persist_active_map], ptr,
+          length, out_offset);
+      if (err == FR_OK) {
+        return FR_OK;
+      }
+    }
+#endif
+    {
+      fr_host_persist_slot_t *slot =
+          &fr_host_persist_slots[fr_host_persist_active_mount_slot];
+      return fr_host_persist_offset_in_range(slot->bytes, slot->length, ptr,
+                                             length, out_offset);
+    }
+  }
+  return FR_ERR_NOT_FOUND;
+}
+
+fr_err_t fr_platform_persist_read_mounted(uint16_t offset, uint8_t *dst,
+                                          uint16_t length) {
+  const uint8_t *bytes = NULL;
+  uint16_t bytes_length = 0;
+
+  if (dst == NULL && length > 0) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_host_persist_candidate_mounted) {
+#ifdef FR_HOST_TEST_HELPERS
+    if (fr_host_persist_candidate_map_mounted) {
+      bytes = fr_host_persist_mount_maps[fr_host_persist_candidate_map];
+      bytes_length =
+          fr_host_persist_mount_map_lengths[fr_host_persist_candidate_map];
+    } else
+#endif
+    {
+      bytes = fr_host_persist_slots[fr_host_persist_candidate_mount_slot].bytes;
+      bytes_length =
+          fr_host_persist_slots[fr_host_persist_candidate_mount_slot].length;
+    }
+  } else if (fr_host_persist_active_mounted) {
+#ifdef FR_HOST_TEST_HELPERS
+    if (fr_host_persist_active_map_mounted) {
+      bytes = fr_host_persist_mount_maps[fr_host_persist_active_map];
+      bytes_length =
+          fr_host_persist_mount_map_lengths[fr_host_persist_active_map];
+    } else
+#endif
+    {
+      bytes = fr_host_persist_slots[fr_host_persist_active_mount_slot].bytes;
+      bytes_length =
+          fr_host_persist_slots[fr_host_persist_active_mount_slot].length;
+    }
+  } else {
+    return FR_ERR_NOT_FOUND;
+  }
+  if (offset > bytes_length || length > bytes_length - offset) {
+    return FR_ERR_RANGE;
+  }
+  if (length > 0) {
+    memcpy(dst, &bytes[offset], length);
+  }
+  return FR_OK;
+}
+
 fr_err_t fr_platform_persist_stream_begin(void) {
   uint8_t slot = 0;
   uint32_t backend_generation = 0;
@@ -1105,6 +1243,7 @@ fr_err_t fr_platform_persist_clear(void) {
   fr_host_persist_interrupt_header_write = false;
   fr_host_persist_fail_next_mount_commit = false;
   fr_host_persist_shadow_mounts = false;
+  fr_host_persist_direct_code_pointers = true;
   fr_host_persist_active_map_mounted = false;
   fr_host_persist_candidate_map_mounted = false;
 #endif
@@ -1134,6 +1273,10 @@ void fr_host_persist_debug_fail_next_mount_commit(void) {
 
 void fr_host_persist_debug_shadow_mounts(bool enabled) {
   fr_host_persist_shadow_mounts = enabled;
+}
+
+void fr_host_persist_debug_direct_code_pointers(bool enabled) {
+  fr_host_persist_direct_code_pointers = enabled;
 }
 #endif
 #endif

@@ -681,7 +681,7 @@ test-install-host:
 	printf 'install host dry-run ok\n'
 
 $(TEST_BINARY): $(TEST_DEPS)
-	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 $(TEST_SOURCES) $(FR_LDFLAGS) -o $@
+	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 -DFR_HOST_TEST_HELPERS=1 $(TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
 $(UNITY_TEST_BINARY): $(UNITY_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) \
 		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)

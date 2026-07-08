@@ -1191,6 +1191,41 @@ static struct {
   uint8_t tail_length;
 } fr_esp_persist_stream;
 
+static bool fr_esp_persist_pointer_in_mmap(const uint8_t *bytes,
+                                           uint16_t bytes_length,
+                                           bool active, const void *ptr,
+                                           uint16_t length) {
+  uintptr_t p = (uintptr_t)ptr;
+  uintptr_t b = (uintptr_t)bytes;
+
+  if (!active || bytes == NULL) {
+    return false;
+  }
+  if (length == 0) {
+    return true;
+  }
+  if (ptr == NULL || p < b) {
+    return false;
+  }
+  return (uint32_t)(p - b) + length <= bytes_length;
+}
+
+static fr_err_t fr_esp_persist_offset_in_mmap(const uint8_t *bytes,
+                                              uint16_t bytes_length,
+                                              bool active, const void *ptr,
+                                              uint16_t length,
+                                              uint16_t *out_offset) {
+  if (out_offset == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_esp_persist_pointer_in_mmap(bytes, bytes_length, active, ptr,
+                                      length)) {
+    return FR_ERR_NOT_FOUND;
+  }
+  *out_offset = (uint16_t)((uintptr_t)ptr - (uintptr_t)bytes);
+  return FR_OK;
+}
+
 static uint32_t fr_esp_persist_slot_offset(uint8_t slot) {
   return (uint32_t)slot * (uint32_t)FR_ESP_PERSIST_SLOT_BYTES;
 }
@@ -1431,19 +1466,61 @@ fr_err_t fr_platform_persist_mount_commit(void) {
 }
 
 bool fr_platform_persist_pointer_is_mounted(const void *ptr, uint16_t length) {
-  uintptr_t p = (uintptr_t)ptr;
-  uintptr_t b = (uintptr_t)fr_esp_persist_mmap_bytes;
+  return fr_esp_persist_pointer_in_mmap(fr_esp_persist_mmap_bytes,
+                                        fr_esp_persist_mmap_length,
+                                        fr_esp_persist_mmap_active, ptr,
+                                        length);
+}
 
-  if (!fr_esp_persist_mmap_active || fr_esp_persist_mmap_bytes == NULL) {
-    return false;
+bool fr_platform_persist_code_pointer_is_direct(const void *ptr,
+                                                uint16_t length) {
+  return fr_esp_persist_pointer_in_mmap(
+             fr_esp_persist_candidate_mmap_bytes,
+             fr_esp_persist_candidate_mmap_length,
+             fr_esp_persist_candidate_mmap_active, ptr, length) ||
+         fr_platform_persist_pointer_is_mounted(ptr, length);
+}
+
+fr_err_t fr_platform_persist_mounted_offset(const void *ptr, uint16_t length,
+                                            uint16_t *out_offset) {
+  fr_err_t err = fr_esp_persist_offset_in_mmap(
+      fr_esp_persist_candidate_mmap_bytes,
+      fr_esp_persist_candidate_mmap_length,
+      fr_esp_persist_candidate_mmap_active, ptr, length, out_offset);
+
+  if (err == FR_OK) {
+    return FR_OK;
   }
-  if (length == 0) {
-    return true;
+  return fr_esp_persist_offset_in_mmap(fr_esp_persist_mmap_bytes,
+                                       fr_esp_persist_mmap_length,
+                                       fr_esp_persist_mmap_active, ptr, length,
+                                       out_offset);
+}
+
+fr_err_t fr_platform_persist_read_mounted(uint16_t offset, uint8_t *dst,
+                                          uint16_t length) {
+  const uint8_t *bytes = NULL;
+  uint16_t bytes_length = 0;
+
+  if (dst == NULL && length > 0) {
+    return FR_ERR_INVALID;
   }
-  if (ptr == NULL || p < b) {
-    return false;
+  if (fr_esp_persist_candidate_mmap_active) {
+    bytes = fr_esp_persist_candidate_mmap_bytes;
+    bytes_length = fr_esp_persist_candidate_mmap_length;
+  } else if (fr_esp_persist_mmap_active) {
+    bytes = fr_esp_persist_mmap_bytes;
+    bytes_length = fr_esp_persist_mmap_length;
+  } else {
+    return FR_ERR_NOT_FOUND;
   }
-  return (uint32_t)(p - b) + length <= fr_esp_persist_mmap_length;
+  if (offset > bytes_length || length > bytes_length - offset) {
+    return FR_ERR_RANGE;
+  }
+  if (length > 0) {
+    memcpy(dst, &bytes[offset], length);
+  }
+  return FR_OK;
 }
 
 fr_err_t fr_platform_persist_mount(uint8_t image_index,

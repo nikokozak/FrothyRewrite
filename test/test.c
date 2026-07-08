@@ -869,6 +869,93 @@ static void test_persist_mmap_event_body_survives_remount(void) {
 }
 #endif
 
+#if FR_FEATURE_COMPILER && FR_FEATURE_PERSISTENCE && FR_BASE_IMAGE_INCLUDE_SYMBOLS && \
+    FR_HOST_TEST_HELPERS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+static void test_persist_fake_non_xip_code_reader(void) {
+  fr_runtime_t saved;
+  fr_runtime_t direct;
+  fr_runtime_t fake;
+  fr_slot_id_t top_slot = 0;
+  fr_tagged_t tagged = 0;
+  fr_code_object_id_t top_code_id = 0;
+  fr_instruction_stream_t top_view;
+  char out[256];
+  char direct_top[64];
+  char direct_depth[64];
+  char fake_top[64];
+  char fake_depth[64];
+
+  fr_platform_persist_clear();
+  CHECK("nonxip reader base", fr_base_image_install(&saved) == FR_OK);
+  CHECK("nonxip reader leaf",
+        fr_repl_eval_line(&saved, "leaf is fn [ 7 ]", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("nonxip reader mid",
+        fr_repl_eval_line(&saved, "mid is fn [ leaf: ; 8 ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("nonxip reader top",
+        fr_repl_eval_line(&saved, "top is fn [ mid: ; 9 ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("nonxip reader tail",
+        fr_repl_eval_line(&saved, "tail is fn [ leaf: ]", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("nonxip reader recursive",
+        fr_repl_eval_line(
+            &saved,
+            "depth is fn with n [ if n < 1 [ 0 ] else [ (depth: n - 1) + 1 ] ]",
+            out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("nonxip reader save", fr_persist_save(&saved) == FR_OK);
+
+  fr_host_persist_debug_direct_code_pointers(true);
+  CHECK("nonxip direct restore",
+        fr_base_image_install(&direct) == FR_OK &&
+            fr_persist_restore(&direct) == FR_OK);
+  CHECK("nonxip direct top",
+        fr_repl_eval_line(&direct, "top:", direct_top,
+                          (uint16_t)sizeof(direct_top)) == FR_OK &&
+            strcmp(direct_top, "9\nok\n") == 0);
+  CHECK("nonxip direct depth",
+        fr_repl_eval_line(&direct, "depth: 5", direct_depth,
+                          (uint16_t)sizeof(direct_depth)) == FR_OK &&
+            strcmp(direct_depth, "5\nok\n") == 0);
+
+  fr_host_persist_debug_direct_code_pointers(false);
+  CHECK("nonxip fake restore",
+        fr_base_image_install(&fake) == FR_OK &&
+            fr_persist_restore(&fake) == FR_OK);
+  CHECK("nonxip fake has no direct code pointer",
+        fr_slot_id_for_name(&fake, "top", &top_slot) == FR_OK &&
+            fr_slot_read(&fake, top_slot, &tagged) == FR_OK &&
+            fr_tagged_decode_code_object_id(tagged, &top_code_id) == FR_OK &&
+            fr_code_get_instructions(&fake, top_code_id, &top_view) == FR_OK &&
+            top_view.bytes == NULL && top_view.length > 0);
+  CHECK("nonxip fake nested resume",
+        fr_repl_eval_line(&fake, "top:", fake_top,
+                          (uint16_t)sizeof(fake_top)) == FR_OK &&
+            strcmp(fake_top, "9\nok\n") == 0);
+  CHECK("nonxip fake recursive reader",
+        fr_repl_eval_line(&fake, "depth: 5", fake_depth,
+                          (uint16_t)sizeof(fake_depth)) == FR_OK &&
+            strcmp(fake_depth, "5\nok\n") == 0);
+  CHECK("nonxip parity top", strcmp(direct_top, fake_top) == 0);
+  CHECK("nonxip parity depth", strcmp(direct_depth, fake_depth) == 0);
+  CHECK("nonxip source see uses reader scratch",
+        fr_repl_eval_line(&fake, "see tail", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "overlay code\nto tail [ leaf: ]\nok\n") == 0);
+  CHECK("nonxip disassembly see uses reader scratch",
+        fr_repl_eval_line(&fake, "see top", out, sizeof(out)) == FR_OK &&
+            strstr(out, "CALL_SLOT") != NULL);
+  CHECK("nonxip fake re-save reads through reader",
+        fr_persist_save(&fake) == FR_OK);
+  fr_host_persist_debug_direct_code_pointers(true);
+}
+#endif
+
 static void test_persist_repl_contract_proof(void) {
   fr_runtime_t runtime;
   char out[128];
@@ -5005,7 +5092,7 @@ static void test_event_compile_on_form(void) {
             entry->debounce_ms == 30);
 
   {
-    fr_instruction_stream_t body_view = {NULL, 0};
+    fr_instruction_stream_t body_view = {0};
     fr_instruction_header_t body_header = {0};
 
     CHECK("compile on with here base image",
@@ -5515,7 +5602,7 @@ static void test_event_compiled_changes_body_fires(void) {
 static void test_code(void) {
   fr_runtime_t runtime;
   fr_instruction_stream_t view;
-  fr_instruction_stream_t empty_view = {NULL, 0};
+  fr_instruction_stream_t empty_view = {0};
   fr_instruction_stream_t owned_view;
   fr_instruction_stream_t too_large_view;
   fr_code_object_id_t code_object_id = 0;
@@ -5699,8 +5786,8 @@ static void test_image(void) {
       {3, {FR_IMAGE_REF_NATIVE, 0, 1}},
   };
   const fr_image_code_object_t image_a_code[] = {
-      {{push_one, sizeof(push_one)}, NULL, 0},
-      {{push_two, sizeof(push_two)}, NULL, 0},
+      {{.bytes = push_one, .length = sizeof(push_one)}, NULL, 0},
+      {{.bytes = push_two, .length = sizeof(push_two)}, NULL, 0},
   };
   const fr_image_native_t image_a_natives[] = {
       {.fn = test_native_one, .arity = 0},
@@ -5721,7 +5808,7 @@ static void test_image(void) {
       {3, {FR_IMAGE_REF_NATIVE, 0, 0}},
   };
   const fr_image_code_object_t image_b_code[] = {
-      {{push_three, sizeof(push_three)}, NULL, 0},
+      {{.bytes = push_three, .length = sizeof(push_three)}, NULL, 0},
   };
   const fr_image_native_t image_b_natives[] = {
       {.fn = test_native_error, .arity = 0},
@@ -5752,7 +5839,7 @@ static void test_image(void) {
       {4, {FR_IMAGE_REF_CODE_OBJECT, 0, 0}},
   };
   const fr_image_code_object_t update_code[] = {
-      {{push_three, sizeof(push_three)}, NULL, 0},
+      {{.bytes = push_three, .length = sizeof(push_three)}, NULL, 0},
   };
   const fr_overlay_update_t overlay_update = {
       .slot_inits = update_slots,
@@ -5832,7 +5919,7 @@ static void test_image(void) {
       {FR_TEST_FIRST_USER_SLOT, {FR_IMAGE_REF_CODE_OBJECT, 0, 0}},
   };
   const fr_image_code_object_t invalid_code_update_code[] = {
-      {{invalid_opcode, sizeof(invalid_opcode)}, NULL, 0},
+      {{.bytes = invalid_opcode, .length = sizeof(invalid_opcode)}, NULL, 0},
   };
   const fr_overlay_update_t invalid_code_update = {
       .slot_inits = invalid_code_slots,
@@ -5841,7 +5928,8 @@ static void test_image(void) {
       .code_object_count = 1,
   };
   const fr_image_code_object_t old_version_update_code[] = {
-      {{old_version_code, sizeof(old_version_code)}, NULL, 0},
+      {{.bytes = old_version_code, .length = sizeof(old_version_code)}, NULL,
+       0},
   };
   const fr_overlay_update_t old_version_update = {
       .slot_inits = invalid_code_slots,
@@ -13096,6 +13184,10 @@ int main(void) {
     FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_FEATURE_TEXT && FR_FEATURE_CELLS && \
     FR_FEATURE_RECORDS && FR_FEATURE_EVENTS && FR_INCLUDE_TEST_NATIVES
   test_persist_mmap_event_body_survives_remount();
+#endif
+#if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&                  \
+    FR_HOST_TEST_HELPERS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  test_persist_fake_non_xip_code_reader();
 #endif
 #endif
   test_vm();

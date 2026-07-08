@@ -351,7 +351,18 @@ static fr_err_t fr_persist_code_bytes_equal(
     *out_equal = false;
     return FR_OK;
   }
-  *out_equal = lhs.length == 0 || memcmp(lhs.bytes, rhs.bytes, lhs.length) == 0;
+  for (uint16_t i = 0; i < lhs.length; i++) {
+    uint8_t lhs_byte = 0;
+    uint8_t rhs_byte = 0;
+
+    FR_TRY(fr_code_read_u8(runtime, lhs_id, i, &lhs_byte));
+    FR_TRY(fr_code_read_u8(runtime, rhs_id, i, &rhs_byte));
+    if (lhs_byte != rhs_byte) {
+      *out_equal = false;
+      return FR_OK;
+    }
+  }
+  *out_equal = true;
   return FR_OK;
 }
 
@@ -548,7 +559,8 @@ static fr_err_t fr_persist_encode_code_ref(
   if (instructions.length > (uint16_t)sizeof(patched)) {
     return FR_ERR_CAPACITY;
   }
-  memcpy(patched, instructions.bytes, instructions.length);
+  FR_TRY(fr_code_read(runtime, runtime_code_id, 0, patched,
+                      instructions.length));
   FR_TRY(fr_instruction_stream_init(&view, patched, instructions.length));
   FR_TRY(fr_instruction_read_header(&view, &header));
   ip = (fr_code_offset_t)header.header_size;

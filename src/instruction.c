@@ -140,6 +140,7 @@ fr_err_t fr_instruction_stream_init(fr_instruction_stream_t *view,
 
   view->bytes = bytes;
   view->length = length;
+  view->code_id = 0;
   return FR_OK;
 }
 
