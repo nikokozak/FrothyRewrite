@@ -48,6 +48,7 @@ typedef struct fr_parser_t {
   uint8_t expr_depth;
   uint8_t call_arg_stop_depth;
   bool stop_plus_before_call;
+  bool stop_before_repeat_as;
 } fr_parser_t;
 
 typedef uint32_t fr_parse_int_magnitude_t;
@@ -874,6 +875,10 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
            parser->token.kind != FR_TOKEN_RBRACKET &&
            parser->token.kind != FR_TOKEN_LBRACKET &&
            parser->token.kind != FR_TOKEN_SEMICOLON) {
+      if (parser->stop_before_repeat_as &&
+          fr_parse_span_equals(parser->token.span, "as")) {
+        break;
+      }
       if (parser->token.kind == FR_TOKEN_COMMA ||
           call.child_count >= FR_PARSE_MAX_BODY_EXPRS) {
         return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
@@ -900,6 +905,14 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
       }
     }
     FR_TRY(fr_parse_add_expr(parser, call, &base_id));
+    return fr_parse_field_postfix(parser, base_id, out_id);
+  }
+
+  if (parser->token.leading_space && parser->stop_before_repeat_as &&
+      fr_parse_span_equals(parser->token.span, "as")) {
+    FR_TRY(fr_parse_add_expr(
+        parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_NAME, .name = name},
+        &base_id));
     return fr_parse_field_postfix(parser, base_id, out_id);
   }
 
@@ -983,13 +996,11 @@ static fr_err_t fr_parse_set(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
         out_id);
 #endif
   }
-  /* `set name to expr` mutates an existing top-level slot. `is` still
-   * declares-and-rebinds for live-coding ergonomics; `set` is the
-   * documented mutation form and errors at compile time if the slot has
-   * not been declared. */
+  /* Scope belongs to compile, so a bare-name write stays neutral here:
+   * compile resolves it as local, immutable parameter, then slot. */
   if (target->kind == FR_PARSE_EXPR_NAME) {
     return fr_parse_add_expr(
-        parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_SLOT_WRITE,
+        parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_NAME_WRITE,
                                   .name = target->name,
                                   .child = value,
                                   .child_count = 1},
@@ -1108,9 +1119,30 @@ static fr_err_t fr_parse_unless(fr_parser_t *parser,
 static fr_err_t fr_parse_repeat(fr_parser_t *parser,
                                 fr_parse_expr_id_t *out_id) {
   fr_parse_expr_t repeat = {.kind = FR_PARSE_EXPR_REPEAT};
+  bool saved_stop_before_repeat_as = false;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_parse_advance(parser));
-  FR_TRY(fr_parse_expression(parser, &repeat.children[0]));
+  saved_stop_before_repeat_as = parser->stop_before_repeat_as;
+  parser->stop_before_repeat_as = true;
+  err = fr_parse_expression(parser, &repeat.children[0]);
+  parser->stop_before_repeat_as = saved_stop_before_repeat_as;
+  FR_TRY(err);
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "as")) {
+    FR_TRY(fr_parse_advance(parser));
+    if (parser->token.kind != FR_TOKEN_NAME ||
+        fr_parse_is_reserved_parameter(parser->token.span)) {
+      if (parser->token.kind == FR_TOKEN_NAME) {
+        return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_RESERVED_NAME,
+                                   FR_ERR_INVALID);
+      }
+      return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_EXPECTED_WORD_NAME,
+                                 FR_ERR_INVALID);
+    }
+    repeat.name = parser->token.span;
+    FR_TRY(fr_parse_advance(parser));
+  }
   FR_TRY(fr_parse_bracket_block(parser, &repeat.children[1]));
   repeat.child = repeat.children[0];
   repeat.child_count = 2;

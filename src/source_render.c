@@ -424,11 +424,16 @@ static fr_err_t fr_source_reduce_while(fr_source_render_t *r,
 
 static fr_err_t fr_source_reduce_repeat(fr_source_render_t *r,
                                         fr_source_frag_t count,
+                                        const char *index_name,
                                         uint16_t body_start) {
   uint16_t start = r->used;
 
   FR_TRY(fr_source_puts(r, "repeat "));
   FR_TRY(fr_source_puts(r, &fr_source_render_arena[count.start]));
+  if (index_name != NULL) {
+    FR_TRY(fr_source_puts(r, " as "));
+    FR_TRY(fr_source_puts(r, index_name));
+  }
   FR_TRY(fr_source_puts(r, " [ "));
   FR_TRY(fr_source_puts(r, &fr_source_render_arena[body_start]));
   FR_TRY(fr_source_puts(r, " ]"));
@@ -571,8 +576,7 @@ static fr_err_t fr_source_render_if(fr_source_render_t *r,
 
 /* When bytes scratch is enabled the compiler emits one FR_OP_BYTES_RESET byte
  * at each loop back-edge, between the body's trailing DROP and the
- * REPEAT_NEXT/JUMP (src/compile.c). The back-edge op stays a fixed distance
- * before the done target, so only the DROP sits one byte earlier. */
+ * REPEAT_NEXT/JUMP (src/compile.c). */
 #if FR_FEATURE_BYTES
 #define FR_SOURCE_LOOP_RESET 1u
 #else
@@ -623,27 +627,58 @@ static fr_err_t fr_source_render_repeat(fr_source_render_t *r,
   fr_code_offset_t drop_ip = 0;
   fr_code_offset_t next_ip = 0;
   fr_code_offset_t next_target = 0;
-  fr_code_offset_t body_ip = (fr_code_offset_t)(ip + 3u);
+  fr_code_offset_t body_ip = 0;
   fr_source_frag_t count;
   uint16_t body_start = 0;
+  uint8_t index_local = 0;
+  uint8_t next_index_local = 0;
+  uint8_t begin_width = 3;
+  uint8_t next_width = 3;
+  char index_name[9];
+  bool has_index = (fr_opcode_t)view->bytes[ip] == FR_OP_REPEAT_BEGIN_AS;
 
   if (r->depth < 1) {
     return FR_ERR_UNSUPPORTED;
   }
-  FR_TRY(fr_instruction_read_jump_operand(view, ip, &done_target));
-  if (done_target < (fr_code_offset_t)(ip + 8u)) {
+  if (has_index) {
+    begin_width = 4;
+    next_width = 4;
+    FR_TRY(fr_instruction_read_jump_local_operands(view, ip, &done_target,
+                                                   &index_local));
+    fr_source_local_name(index_local, index_name);
+  } else {
+    index_name[0] = '\0';
+    FR_TRY(fr_instruction_read_jump_operand(view, ip, &done_target));
+  }
+  body_ip = (fr_code_offset_t)(ip + begin_width);
+  if (done_target <
+      (fr_code_offset_t)(ip + begin_width + next_width + 2u)) {
     return FR_ERR_UNSUPPORTED;
   }
-  drop_ip = (fr_code_offset_t)(done_target - 4u - FR_SOURCE_LOOP_RESET);
-  next_ip = (fr_code_offset_t)(done_target - 3u);
+  drop_ip = (fr_code_offset_t)(done_target - next_width - 1u -
+                               FR_SOURCE_LOOP_RESET);
+  next_ip = (fr_code_offset_t)(done_target - next_width);
   if ((fr_opcode_t)view->bytes[drop_ip] != FR_OP_DROP ||
-      (fr_opcode_t)view->bytes[next_ip] != FR_OP_REPEAT_NEXT ||
       (fr_opcode_t)view->bytes[done_target] != FR_OP_PUSH_NIL) {
     return FR_ERR_UNSUPPORTED;
   }
   /* REPEAT_NEXT must loop back to the body start, else this is some other
    * shape that happens to share the tail opcodes. */
-  FR_TRY(fr_instruction_read_jump_operand(view, next_ip, &next_target));
+  if (has_index) {
+    if ((fr_opcode_t)view->bytes[next_ip] != FR_OP_REPEAT_NEXT_AS) {
+      return FR_ERR_UNSUPPORTED;
+    }
+    FR_TRY(fr_instruction_read_jump_local_operands(view, next_ip, &next_target,
+                                                   &next_index_local));
+    if (next_index_local != index_local) {
+      return FR_ERR_UNSUPPORTED;
+    }
+  } else {
+    if ((fr_opcode_t)view->bytes[next_ip] != FR_OP_REPEAT_NEXT) {
+      return FR_ERR_UNSUPPORTED;
+    }
+    FR_TRY(fr_instruction_read_jump_operand(view, next_ip, &next_target));
+  }
   if (next_target != body_ip) {
     return FR_ERR_UNSUPPORTED;
   }
@@ -652,7 +687,8 @@ static fr_err_t fr_source_render_repeat(fr_source_render_t *r,
 
   FR_TRY(fr_source_render_branch(r, view, names, names_len, body_ip, drop_ip,
                                  &body_start));
-  FR_TRY(fr_source_reduce_repeat(r, count, body_start));
+  FR_TRY(fr_source_reduce_repeat(r, count, has_index ? index_name : NULL,
+                                 body_start));
   *out_ip = (fr_code_offset_t)(done_target + 1u);
   return FR_OK;
 }
@@ -860,6 +896,28 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       ip = (fr_code_offset_t)(ip + 2u);
       break;
     }
+    case FR_OP_SET_LOCAL: {
+      uint8_t local_index = 0;
+      fr_source_frag_t value;
+      uint16_t start = r->used;
+      char canon[9];
+
+      FR_TRY(fr_instruction_read_local_operand(view, ip, &local_index));
+      if (r->depth < 1) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      value = r->stack[r->depth - 1];
+      r->depth = (uint8_t)(r->depth - 1);
+
+      fr_source_local_name(local_index, canon);
+      FR_TRY(fr_source_puts(r, "set "));
+      FR_TRY(fr_source_puts(r, canon));
+      FR_TRY(fr_source_puts(r, " to "));
+      FR_TRY(fr_source_puts(r, &fr_source_render_arena[value.start]));
+      FR_TRY(fr_source_seal(r, start, false));
+      ip = (fr_code_offset_t)(ip + 2u);
+      break;
+    }
     case FR_OP_LT_INT:
       FR_TRY(fr_source_reduce_binop(r, "<"));
       ip = (fr_code_offset_t)(ip + 1u);
@@ -964,6 +1022,7 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       break;
     }
     case FR_OP_REPEAT_BEGIN:
+    case FR_OP_REPEAT_BEGIN_AS:
       FR_TRY(fr_source_render_repeat(r, view, names, names_len, ip, &ip));
       break;
     default:

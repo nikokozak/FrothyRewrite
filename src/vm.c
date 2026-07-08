@@ -227,6 +227,79 @@ static fr_err_t fr_vm_store_local(const fr_instruction_stream_t *view,
   return fr_vm_push(state, fr_tagged_nil());
 }
 
+static fr_err_t fr_vm_repeat_begin_as(const fr_instruction_stream_t *view,
+                                      fr_vm_state_t *state) {
+  fr_code_offset_t target = 0;
+  uint8_t local_index = 0;
+  fr_tagged_t tagged = 0;
+  fr_int_t count = 0;
+
+  FR_TRY(fr_instruction_read_jump_local_operands(view, state->ip, &target,
+                                                 &local_index));
+  if (local_index >= state->local_count) {
+    return FR_ERR_INVALID;
+  }
+  if (state->depth == 0) {
+    return FR_ERR_UNDERFLOW;
+  }
+
+  tagged = state->stack[state->depth - 1];
+  FR_TRY(fr_tagged_decode_int(tagged, &count));
+  if (count < 0) {
+    return FR_ERR_RANGE;
+  }
+  if (count == 0) {
+    state->depth -= 1;
+    state->ip = target;
+    return FR_OK;
+  }
+
+  FR_TRY(fr_tagged_encode_int(0, &state->frame[state->arg_count + local_index]));
+  state->ip += 4;
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_repeat_next_as(const fr_instruction_stream_t *view,
+                                     fr_vm_state_t *state) {
+  fr_code_offset_t target = 0;
+  uint8_t local_index = 0;
+  fr_tagged_t tagged = 0;
+  fr_int_t count = 0;
+  fr_int_t index = 0;
+
+  FR_TRY(fr_instruction_read_jump_local_operands(view, state->ip, &target,
+                                                 &local_index));
+  if (local_index >= state->local_count) {
+    return FR_ERR_INVALID;
+  }
+  if (state->depth == 0) {
+    return FR_ERR_UNDERFLOW;
+  }
+
+  tagged = state->stack[state->depth - 1];
+  FR_TRY(fr_tagged_decode_int(tagged, &count));
+  if (count <= 0) {
+    return FR_ERR_INVALID;
+  }
+  if (count == 1) {
+    state->depth -= 1;
+    state->ip += 4;
+    return FR_OK;
+  }
+
+  FR_TRY(fr_tagged_encode_int((fr_int_t)(count - 1),
+                              &state->stack[state->depth - 1]));
+  FR_TRY(fr_tagged_decode_int(state->frame[state->arg_count + local_index],
+                              &index));
+  if (index >= FR_TAGGED_INT_MAX) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_tagged_encode_int((fr_int_t)(index + 1),
+                              &state->frame[state->arg_count + local_index]));
+  state->ip = target;
+  return FR_OK;
+}
+
 #if FR_FEATURE_CELLS
 static fr_err_t fr_vm_cell_object_for_slot(fr_runtime_t *runtime,
                                            fr_slot_id_t slot_id,
@@ -853,6 +926,29 @@ static fr_err_t fr_vm_reader_read_local_operand(
   return FR_OK;
 }
 
+static fr_err_t fr_vm_reader_read_jump_local_operands(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_code_offset_t ip, fr_code_offset_t *out_target,
+    uint8_t *out_local_index) {
+  fr_instruction_header_t header;
+  uint16_t raw = 0;
+
+  FR_TRY(fr_vm_reader_require(length, ip, 4));
+  FR_TRY(fr_vm_reader_read_header(runtime, code_object_id, length, &header));
+  FR_TRY(fr_code_read_u16(runtime, code_object_id, (uint16_t)(ip + 1u),
+                          &raw));
+  FR_TRY(fr_code_read_u8(runtime, code_object_id, (uint16_t)(ip + 3u),
+                         out_local_index));
+  *out_target = (fr_code_offset_t)raw;
+  if (*out_target >= length) {
+    return FR_ERR_INVALID;
+  }
+  if (*out_local_index >= header.local_count) {
+    return FR_ERR_RANGE;
+  }
+  return FR_OK;
+}
+
 static fr_err_t fr_vm_reader_read_call_slot_arg_operands(
     fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
     fr_code_offset_t ip, fr_slot_id_t *out_slot_id, uint8_t *out_arg_count) {
@@ -1316,6 +1412,81 @@ static fr_err_t fr_vm_reader_repeat_next(fr_runtime_t *runtime,
   return FR_OK;
 }
 
+static fr_err_t fr_vm_reader_repeat_begin_as(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_vm_state_t *state) {
+  fr_code_offset_t target = 0;
+  uint8_t local_index = 0;
+  fr_tagged_t tagged = 0;
+  fr_int_t count = 0;
+
+  FR_TRY(fr_vm_reader_read_jump_local_operands(
+      runtime, code_object_id, length, state->ip, &target, &local_index));
+  if (local_index >= state->local_count) {
+    return FR_ERR_INVALID;
+  }
+  if (state->depth == 0) {
+    return FR_ERR_UNDERFLOW;
+  }
+
+  tagged = state->stack[state->depth - 1];
+  FR_TRY(fr_tagged_decode_int(tagged, &count));
+  if (count < 0) {
+    return FR_ERR_RANGE;
+  }
+  if (count == 0) {
+    state->depth -= 1;
+    state->ip = target;
+    return FR_OK;
+  }
+
+  FR_TRY(fr_tagged_encode_int(0, &state->frame[state->arg_count + local_index]));
+  state->ip += 4;
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_repeat_next_as(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_vm_state_t *state) {
+  fr_code_offset_t target = 0;
+  uint8_t local_index = 0;
+  fr_tagged_t tagged = 0;
+  fr_int_t count = 0;
+  fr_int_t index = 0;
+
+  FR_TRY(fr_vm_reader_read_jump_local_operands(
+      runtime, code_object_id, length, state->ip, &target, &local_index));
+  if (local_index >= state->local_count) {
+    return FR_ERR_INVALID;
+  }
+  if (state->depth == 0) {
+    return FR_ERR_UNDERFLOW;
+  }
+
+  tagged = state->stack[state->depth - 1];
+  FR_TRY(fr_tagged_decode_int(tagged, &count));
+  if (count <= 0) {
+    return FR_ERR_INVALID;
+  }
+  if (count == 1) {
+    state->depth -= 1;
+    state->ip += 4;
+    return FR_OK;
+  }
+
+  FR_TRY(fr_tagged_encode_int((fr_int_t)(count - 1),
+                              &state->stack[state->depth - 1]));
+  FR_TRY(fr_tagged_decode_int(state->frame[state->arg_count + local_index],
+                              &index));
+  if (index >= FR_TAGGED_INT_MAX) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_tagged_encode_int((fr_int_t)(index + 1),
+                              &state->frame[state->arg_count + local_index]));
+  state->ip = target;
+  return FR_OK;
+}
+
 static fr_err_t fr_vm_reader_step(fr_runtime_t *runtime,
                                   fr_code_object_id_t code_object_id,
                                   uint16_t length, fr_vm_state_t *state,
@@ -1338,6 +1509,7 @@ static fr_err_t fr_vm_reader_step(fr_runtime_t *runtime,
   case FR_OP_LOAD_LOCAL:
     return fr_vm_reader_load_local(runtime, code_object_id, length, state);
   case FR_OP_STORE_LOCAL:
+  case FR_OP_SET_LOCAL:
     return fr_vm_reader_store_local(runtime, code_object_id, length, state);
 #if FR_FEATURE_CELLS
   case FR_OP_LOAD_CELL:
@@ -1403,6 +1575,10 @@ static fr_err_t fr_vm_reader_step(fr_runtime_t *runtime,
     return fr_vm_reader_repeat_begin(runtime, code_object_id, length, state);
   case FR_OP_REPEAT_NEXT:
     return fr_vm_reader_repeat_next(runtime, code_object_id, length, state);
+  case FR_OP_REPEAT_BEGIN_AS:
+    return fr_vm_reader_repeat_begin_as(runtime, code_object_id, length, state);
+  case FR_OP_REPEAT_NEXT_AS:
+    return fr_vm_reader_repeat_next_as(runtime, code_object_id, length, state);
   case FR_OP_BYTES_RESET:
 #if FR_FEATURE_BYTES
     fr_bytes_reset_if_outermost(runtime);
@@ -1435,6 +1611,7 @@ static fr_err_t fr_vm_step(fr_runtime_t *runtime,
   case FR_OP_LOAD_LOCAL:
     return fr_vm_load_local(view, state);
   case FR_OP_STORE_LOCAL:
+  case FR_OP_SET_LOCAL:
     return fr_vm_store_local(view, state);
 #if FR_FEATURE_CELLS
   case FR_OP_LOAD_CELL:
@@ -1497,6 +1674,10 @@ static fr_err_t fr_vm_step(fr_runtime_t *runtime,
     return fr_vm_repeat_begin(view, state);
   case FR_OP_REPEAT_NEXT:
     return fr_vm_repeat_next(view, state);
+  case FR_OP_REPEAT_BEGIN_AS:
+    return fr_vm_repeat_begin_as(view, state);
+  case FR_OP_REPEAT_NEXT_AS:
+    return fr_vm_repeat_next_as(view, state);
   case FR_OP_BYTES_RESET:
 #if FR_FEATURE_BYTES
     fr_bytes_reset_if_outermost(runtime);

@@ -279,6 +279,25 @@ fr_err_t fr_instruction_read_local_operand(const fr_instruction_stream_t *view,
   return FR_OK;
 }
 
+fr_err_t fr_instruction_read_jump_local_operands(
+    const fr_instruction_stream_t *view, fr_code_offset_t ip,
+    fr_code_offset_t *out_target, uint8_t *out_local_index) {
+  fr_instruction_header_t header;
+
+  FR_TRY(fr_require_bytes(view, ip, 4));
+  FR_TRY(fr_instruction_read_header(view, &header));
+
+  *out_target = fr_read_u16_little_endian(&view->bytes[ip + 1]);
+  *out_local_index = view->bytes[ip + 3];
+  if (*out_target >= view->length) {
+    return FR_ERR_INVALID;
+  }
+  if (*out_local_index >= header.local_count) {
+    return FR_ERR_RANGE;
+  }
+  return FR_OK;
+}
+
 fr_err_t fr_instruction_read_call_slot_arg_operands(
     const fr_instruction_stream_t *view, fr_code_offset_t ip,
     fr_slot_id_t *out_slot_id, uint8_t *out_arg_count) {
@@ -423,6 +442,14 @@ fr_err_t fr_instruction_disassemble_at(const fr_instruction_stream_t *view,
     uint8_t local_index = 0;
     FR_TRY(fr_instruction_read_local_operand(view, ip, &local_index));
     FR_TRY(fr_append_text(out, out_cap, &used, "STORE_LOCAL "));
+    FR_TRY(fr_append_u32(out, out_cap, &used, local_index));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 2),
+                                      next_ip);
+  }
+  case FR_OP_SET_LOCAL: {
+    uint8_t local_index = 0;
+    FR_TRY(fr_instruction_read_local_operand(view, ip, &local_index));
+    FR_TRY(fr_append_text(out, out_cap, &used, "SET_LOCAL "));
     FR_TRY(fr_append_u32(out, out_cap, &used, local_index));
     return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 2),
                                       next_ip);
@@ -593,6 +620,23 @@ fr_err_t fr_instruction_disassemble_at(const fr_instruction_stream_t *view,
     FR_TRY(fr_append_text(out, out_cap, &used, "REPEAT_NEXT "));
     FR_TRY(fr_append_u32(out, out_cap, &used, target));
     return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 3),
+                                      next_ip);
+  }
+  case FR_OP_REPEAT_BEGIN_AS:
+  case FR_OP_REPEAT_NEXT_AS: {
+    fr_code_offset_t target = 0;
+    uint8_t local_index = 0;
+    const char *op_name = view->bytes[ip] == FR_OP_REPEAT_BEGIN_AS
+                              ? "REPEAT_BEGIN_AS "
+                              : "REPEAT_NEXT_AS ";
+
+    FR_TRY(fr_instruction_read_jump_local_operands(view, ip, &target,
+                                                   &local_index));
+    FR_TRY(fr_append_text(out, out_cap, &used, op_name));
+    FR_TRY(fr_append_u32(out, out_cap, &used, target));
+    FR_TRY(fr_append_char(out, out_cap, &used, ' '));
+    FR_TRY(fr_append_u32(out, out_cap, &used, local_index));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 4),
                                       next_ip);
   }
   case FR_OP_BYTES_RESET:

@@ -7221,6 +7221,26 @@ static void test_parse(void) {
             body->child_count == 1 &&
             parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_CALL &&
             fr_parse_span_equals(parsed.exprs[body->children[0]].name, "ms"));
+  CHECK("parse repeat as expression keeps index name on repeat",
+        fr_parse_line("boot is fn with count [ repeat count as i [ i ] ]",
+                      &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_REPEAT &&
+            value->child_count == 2 && fr_parse_span_equals(value->name, "i") &&
+            parsed.exprs[value->children[0]].kind == FR_PARSE_EXPR_NAME &&
+            fr_parse_span_equals(parsed.exprs[value->children[0]].name,
+                                 "count") &&
+            (body = &parsed.exprs[value->children[1]])->kind ==
+                FR_PARSE_EXPR_LIST &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_NAME &&
+            fr_parse_span_equals(parsed.exprs[body->children[0]].name, "i"));
+  CHECK("parse as remains an ordinary name outside repeat index",
+        fr_parse_expression_line("as", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_NAME &&
+            fr_parse_span_equals(parsed.exprs[expr_id].name, "as"));
   CHECK("parse while expression",
         fr_parse_line("boot is fn [ while 1 [ one ] ]", &parsed) == FR_OK &&
             (value = &parsed.exprs[parsed.definition.value])->kind ==
@@ -7253,10 +7273,10 @@ static void test_parse(void) {
             body->child_count == 1 &&
             parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_CALL &&
             fr_parse_span_equals(parsed.exprs[body->children[0]].name, "ms"));
-  CHECK("parse set name to expr is slot write",
+  CHECK("parse set name to expr is name write",
         fr_parse_expression_line("set count to 7", &parsed, &expr_id) ==
                 FR_OK &&
-            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_SLOT_WRITE &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_NAME_WRITE &&
             fr_parse_span_equals(parsed.exprs[expr_id].name, "count") &&
             parsed.exprs[parsed.exprs[expr_id].child].kind ==
                 FR_PARSE_EXPR_INT &&
@@ -7547,6 +7567,21 @@ static void test_first_definition_after_wipe(void) {
         fr_compile_overlay_update_for_runtime(&runtime, "to plain with n [ n * n ]",
                                               &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK);
+}
+
+static bool test_run_boot_source_int(const char *source, fr_int_t expected) {
+  fr_runtime_t runtime = {0};
+  fr_compile_overlay_update_t update;
+  fr_tagged_t tagged = 0;
+  fr_int_t decoded = 0;
+
+  return fr_runtime_init(&runtime) == FR_OK &&
+         fr_base_image_install(&runtime) == FR_OK &&
+         fr_compile_overlay_update_for_runtime(&runtime, source, &update) ==
+             FR_OK &&
+         fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+         fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+         fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == expected;
 }
 
 static void test_compile(void) {
@@ -9170,6 +9205,55 @@ static void test_compile(void) {
             update.instruction_bytes[13u + (push_size * 2u) +
                                      FR_TEST_LOOP_RESET] ==
                 FR_OP_RETURN);
+  CHECK("compiled repeat-as owns index in loop opcodes",
+        fr_compile_overlay_update("boot is fn [ repeat 2 as i [ i ] ]",
+                                  &update) == FR_OK &&
+            update.code_object.instructions.length ==
+                17u + push_size + FR_TEST_LOOP_RESET &&
+            update.instruction_bytes[1] == FR_INSTRUCTION_LOCALS_HEADER_SIZE &&
+            update.instruction_bytes[3] == 1 &&
+            update.instruction_bytes[4] == FR_OP_PUSH_INT &&
+            update.instruction_bytes[5] == 2 &&
+            update.instruction_bytes[4u + push_size] ==
+                FR_OP_REPEAT_BEGIN_AS &&
+            update.instruction_bytes[5u + push_size] ==
+                15u + push_size + FR_TEST_LOOP_RESET &&
+            update.instruction_bytes[7u + push_size] == 0 &&
+            update.instruction_bytes[8u + push_size] == FR_OP_LOAD_LOCAL &&
+            update.instruction_bytes[9u + push_size] == 0 &&
+            update.instruction_bytes[10u + push_size] == FR_OP_DROP &&
+            (FR_TEST_LOOP_RESET == 0u ||
+             update.instruction_bytes[11u + push_size] == FR_OP_BYTES_RESET) &&
+            update.instruction_bytes[11u + push_size + FR_TEST_LOOP_RESET] ==
+                FR_OP_REPEAT_NEXT_AS &&
+            update.instruction_bytes[12u + push_size + FR_TEST_LOOP_RESET] ==
+                8u + push_size &&
+            update.instruction_bytes[14u + push_size + FR_TEST_LOOP_RESET] ==
+                0 &&
+            update.instruction_bytes[15u + push_size + FR_TEST_LOOP_RESET] ==
+                FR_OP_PUSH_NIL &&
+            update.instruction_bytes[16u + push_size + FR_TEST_LOOP_RESET] ==
+                FR_OP_RETURN);
+  CHECK("repeat-as sums zero-based index",
+        test_run_boot_source_int("boot is fn [ here t is 0 ; repeat 4 as i "
+                                 "[ set t to t + i ] ; t ]",
+                                 6));
+  CHECK("nested repeat-as keeps distinct indexes",
+        test_run_boot_source_int(
+            "boot is fn [ here t is 0 ; repeat 3 as i [ repeat 2 as j [ "
+            "set t to t + (i * 10) + j ] ] ; t ]",
+            63));
+  CHECK("bare repeat still returns nil",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ repeat 2 [ one ] ]",
+                                      &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged));
+  CHECK("repeat-as zero count skips body",
+        test_run_boot_source_int("boot is fn [ here hit is 0 ; repeat 0 as i "
+                                 "[ set hit to 1 ] ; hit ]",
+                                 0));
   CHECK("compiled repeat returns nil",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ repeat 2 [ ms: 1 ] ]",
@@ -9395,6 +9479,36 @@ static void test_compile(void) {
                 FR_SLOT_GPIO_WRITE);
   CHECK("compiled expression rejects definition",
         fr_compile_expression("boot is 1", &expression) == FR_ERR_INVALID);
+  CHECK("set here-local stores through SET_LOCAL",
+        fr_compile_expression("here n is 0 ; set n to 5 ; n", &expression) ==
+                FR_OK &&
+            expression.instruction_bytes[1] ==
+                FR_INSTRUCTION_LOCALS_HEADER_SIZE &&
+            expression.instruction_bytes[3] == 1 &&
+            expression.instruction_bytes[4u + push_size] ==
+                FR_OP_STORE_LOCAL &&
+            expression.instruction_bytes[7u + (push_size * 2u)] ==
+                FR_OP_SET_LOCAL &&
+            fr_runtime_init(&runtime) == FR_OK &&
+            fr_vm_run_instruction_stream(&runtime, &expression.instructions,
+                                         &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 5);
+  CHECK("set here-local updates local value",
+        test_run_boot_source_int("boot is fn [ here n is 0 ; set n to 5 ; n ]",
+                                 5));
+  CHECK("set here-local works in while loop",
+        test_run_boot_source_int("boot is fn [ here n is 0 ; while n < 3 "
+                                 "[ set n to n + 1 ] ; n ]",
+                                 3));
+  CHECK("set outer local inside repeat-as body accumulates index",
+        test_run_boot_source_int("boot is fn [ here t is 0 ; repeat 4 as i "
+                                 "[ set t to t + i ] ; t ]",
+                                 6));
+  CHECK("set local writes nearest shadow",
+        test_run_boot_source_int(
+            "boot is fn [ here n is 1 ; here seen is if true [ here n is 10 ; "
+            "set n to 11 ; n ] else [ 0 ] ; seen + n ]",
+            12));
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   CHECK("compile set name to expr stores into existing slot",
         fr_base_image_install(&binding_runtime) == FR_OK &&
@@ -12440,6 +12554,64 @@ static void test_repl_error_diagnostics(void) {
 
 #if FR_FEATURE_COMPILER && FR_FEATURE_INTROSPECTION &&                         \
     FR_PROFILE_MAX_OVERLAY_NAMES > 0
+static bool test_see_round_trip_line_int(const char *source, const char *name,
+                                         const char *expected_line,
+                                         fr_int_t expected) {
+  fr_runtime_t original = {0};
+  fr_runtime_t round_trip = {0};
+  char out[1024];
+  char command[64];
+  char rendered[512];
+  char *line_start = NULL;
+  char *line_end = NULL;
+  size_t rendered_len = 0;
+  fr_slot_id_t slot_id = 0;
+  fr_tagged_t tagged = 0;
+  fr_int_t decoded = 0;
+
+  if (fr_runtime_init(&original) != FR_OK ||
+      fr_base_image_install(&original) != FR_OK ||
+      fr_repl_eval_line(&original, source, out, sizeof(out)) != FR_OK ||
+      fr_slot_id_for_name(&original, name, &slot_id) != FR_OK ||
+      fr_vm_run_slot(&original, slot_id, &tagged) != FR_OK ||
+      fr_tagged_decode_int(tagged, &decoded) != FR_OK || decoded != expected) {
+    return false;
+  }
+
+  snprintf(command, sizeof(command), "see %s", name);
+  if (fr_repl_eval_line(&original, command, out, sizeof(out)) != FR_OK) {
+    return false;
+  }
+  line_start = strchr(out, '\n');
+  if (line_start == NULL) {
+    return false;
+  }
+  line_start += 1;
+  line_end = strchr(line_start, '\n');
+  if (line_end == NULL) {
+    return false;
+  }
+  rendered_len = (size_t)(line_end - line_start);
+  if (rendered_len + 1u > sizeof(rendered)) {
+    return false;
+  }
+  memcpy(rendered, line_start, rendered_len);
+  rendered[rendered_len] = '\0';
+  if (strcmp(rendered, expected_line) != 0) {
+    return false;
+  }
+
+  if (fr_runtime_init(&round_trip) != FR_OK ||
+      fr_base_image_install(&round_trip) != FR_OK ||
+      fr_repl_eval_line(&round_trip, rendered, out, sizeof(out)) != FR_OK ||
+      fr_slot_id_for_name(&round_trip, name, &slot_id) != FR_OK ||
+      fr_vm_run_slot(&round_trip, slot_id, &tagged) != FR_OK ||
+      fr_tagged_decode_int(tagged, &decoded) != FR_OK) {
+    return false;
+  }
+  return decoded == expected;
+}
+
 /* A parameter + binop one-liner is the smallest body that exercises the source
  * renderer's arg-name lookup and infix reduction; pin its exact form. */
 static void test_repl_see_source_form(void) {
@@ -12527,6 +12699,12 @@ static void test_repl_see_source_form(void) {
             strcmp(out, "overlay code\n"
                         "to g [ here local0 is 5 ; local0 + 1 ]\n"
                         "ok\n") == 0);
+  CHECK("see round-trip set local keeps assignment source",
+        test_see_round_trip_line_int(
+            "bump-local is fn [ here n is 0 ; set n to 5 ; n ]",
+            "bump-local",
+            "to bump-local [ here local0 is 0 ; set local0 to 5 ; local0 ]",
+            5));
 #if FR_PARSE_MAX_LOCALS > 10
   {
     char local_out[1024];
@@ -12624,6 +12802,14 @@ static void test_repl_see_source_form(void) {
             strcmp(out, "overlay code\n"
                         "to myblink with p [ repeat 3 [ gpio.write: p, 1 ] ]\n"
                         "ok\n") == 0);
+  CHECK("see round-trip repeat-as keeps indexed repeat source",
+        test_see_round_trip_line_int(
+            "sum-index is fn [ here t is 0 ; repeat 4 as i "
+            "[ set t to t + i ] ; t ]",
+            "sum-index",
+            "to sum-index [ here local0 is 0 ; repeat 4 as local1 [ "
+            "set local0 to local0 + local1 ] ; local0 ]",
+            6));
   /* Nested form: an if/else inside a while. The while body must reduce to one
    * fragment, and the if/else does, so the span walk renders both. Fresh
    * install for the overlay-name budget. */
