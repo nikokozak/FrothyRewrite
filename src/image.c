@@ -13,6 +13,7 @@
 #include "runtime.h"
 #include "slot.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 /* config.h cannot include runtime.h, so pin the overlay event-record cap to the
@@ -1107,25 +1108,40 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
 }
 
 fr_err_t fr_image_install(fr_runtime_t *runtime, const fr_image_t *image) {
-  fr_runtime_t next;
+  fr_runtime_t *next = NULL;
   fr_image_records_t records;
+  fr_err_t err = FR_OK;
 
   if (runtime == NULL || image == NULL) {
     return FR_ERR_INVALID;
   }
+  /* fr_runtime_t is profile-sized. Stage it off-stack so image install stays
+   * below the ESP main-task stack budget, matching base image install. */
+  next = (fr_runtime_t *)malloc(sizeof(*next));
+  if (next == NULL) {
+    return FR_ERR_CAPACITY;
+  }
   records = fr_image_records_from_image(image);
-  FR_TRY(fr_image_check_tables(&records));
-  FR_TRY(fr_runtime_init(&next));
-  FR_TRY(fr_image_check_apply(&next, &records, FR_IMAGE_APPLY_BASE));
-  FR_TRY(fr_image_apply_to_runtime(&next, &records, FR_IMAGE_APPLY_BASE));
-  fr_code_mark_base(&next);
-  fr_native_mark_base(&next);
-  fr_object_mark_base(&next);
-
-  *runtime = next;
-  fr_code_rebase_ram_pointers(runtime, &next);
-  fr_object_rebase_ram_pointers(runtime, &next);
-  return FR_OK;
+  err = fr_image_check_tables(&records);
+  if (err == FR_OK) {
+    err = fr_runtime_init(next);
+  }
+  if (err == FR_OK) {
+    err = fr_image_check_apply(next, &records, FR_IMAGE_APPLY_BASE);
+  }
+  if (err == FR_OK) {
+    err = fr_image_apply_to_runtime(next, &records, FR_IMAGE_APPLY_BASE);
+  }
+  if (err == FR_OK) {
+    fr_code_mark_base(next);
+    fr_native_mark_base(next);
+    fr_object_mark_base(next);
+    *runtime = *next;
+    fr_code_rebase_ram_pointers(runtime, next);
+    fr_object_rebase_ram_pointers(runtime, next);
+  }
+  free(next);
+  return err;
 }
 
 fr_err_t fr_overlay_apply(fr_runtime_t *runtime,
