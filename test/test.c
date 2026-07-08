@@ -1133,6 +1133,76 @@ static void test_persist_stream_save_exceeds_legacy_staging_cap(void) {
             fr_slot_id_for_name(&runtime, "big_31", &slot_id) == FR_OK);
 }
 #endif
+
+#define FR_TEST_OLD_CODE_OBJECT_CAP 96u
+#define FR_TEST_CAPACITY_CODE_RECORDS 104u
+#define FR_TEST_CAPACITY_CODE_BYTES 8u
+
+#if FR_PROFILE_CODE_OBJECT_TABLE_SIZE > FR_TEST_OLD_CODE_OBJECT_CAP &&       \
+    FR_PROFILE_MAX_OVERLAY_NAMES >= FR_TEST_CAPACITY_CODE_RECORDS
+static void test_persist_capacity_bump_round_trip(void) {
+  fr_runtime_t runtime;
+  char out[FR_REPL_OUTPUT_BYTES];
+  char name[16];
+  char call[16];
+  char expected[32];
+  uint8_t code_bytes[FR_TEST_CAPACITY_CODE_RECORDS]
+                    [FR_TEST_CAPACITY_CODE_BYTES];
+  fr_instruction_stream_t view;
+  fr_code_object_id_t code_id = 0;
+  fr_tagged_t tagged = 0;
+  bool installed = true;
+
+  fr_platform_persist_clear();
+  CHECK("capacity bump base", fr_base_image_install(&runtime) == FR_OK);
+  for (uint16_t i = 0; i < FR_TEST_CAPACITY_CODE_RECORDS; i++) {
+    fr_slot_id_t slot_id = (fr_slot_id_t)(FR_TEST_FIRST_USER_SLOT + i);
+    int used = snprintf(name, sizeof(name), "cap_%03u", (unsigned)i);
+
+    write_instruction_header(code_bytes[i], FR_INSTRUCTION_MIN_HEADER_SIZE);
+    code_bytes[i][2] = FR_OP_PUSH_INT;
+    write_u32_little_endian(&code_bytes[i][3], 2000u + i);
+    code_bytes[i][7] = FR_OP_RETURN;
+
+    if (used <= 0 || (size_t)used >= sizeof(name) ||
+        slot_id >= FR_PROFILE_MAX_SLOTS ||
+        fr_instruction_stream_init(&view, code_bytes[i],
+                                   FR_TEST_CAPACITY_CODE_BYTES) != FR_OK ||
+        fr_code_mount_image(&runtime, &view, NULL, 0, &code_id) != FR_OK ||
+        fr_tagged_encode_code_object_id(code_id, &tagged) != FR_OK ||
+        fr_slot_write(&runtime, slot_id, tagged) != FR_OK ||
+        fr_slot_bind_project_name(&runtime, name, slot_id) != FR_OK) {
+      installed = false;
+      break;
+    }
+    fr_persist_session_install_tier_stamp_slot(&runtime, slot_id);
+  }
+
+  CHECK("capacity bump installs past old code cap",
+        installed && runtime.code.count > FR_TEST_OLD_CODE_OBJECT_CAP);
+  if (!installed || runtime.code.count <= FR_TEST_OLD_CODE_OBJECT_CAP) {
+    return;
+  }
+
+  (void)snprintf(call, sizeof(call), "cap_%03u:",
+                 (unsigned)(FR_TEST_CAPACITY_CODE_RECORDS - 1u));
+  (void)snprintf(expected, sizeof(expected), "%u\nok\n",
+                 2000u + (unsigned)(FR_TEST_CAPACITY_CODE_RECORDS - 1u));
+  CHECK("capacity bump last word runs before save",
+        fr_repl_eval_line(&runtime, call, out, (uint16_t)sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, expected) == 0);
+  CHECK("capacity bump saves", fr_persist_save(&runtime) == FR_OK);
+  CHECK("capacity bump restores",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK &&
+            runtime.code.count > FR_TEST_OLD_CODE_OBJECT_CAP);
+  CHECK("capacity bump last word runs after restore",
+        fr_repl_eval_line(&runtime, call, out, (uint16_t)sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, expected) == 0);
+}
+#endif
 #endif
 
 #if FR_FEATURE_TEXT
@@ -3590,12 +3660,13 @@ static void test_cells(void) {
             fr_object_count(&runtime) == 1 &&
             fr_cells_length(&runtime, 1, &length) == FR_ERR_NOT_FOUND);
 
-  CHECK("cells object capacity reset", fr_runtime_init(&runtime) == FR_OK);
-  for (uint16_t i = 0; i < FR_PROFILE_OBJECT_TABLE_SIZE; i++) {
-    CHECK("cells fill object table",
-          fr_cells_install(&runtime, 1, NULL, &object_id) == FR_OK);
+  CHECK("cells capacity reset", fr_runtime_init(&runtime) == FR_OK);
+  while (fr_cells_install(&runtime, 1, NULL, &object_id) == FR_OK) {
   }
-  CHECK("cells object table full",
+  CHECK("cells capacity stops at object or word table",
+        fr_object_count(&runtime) == FR_PROFILE_OBJECT_TABLE_SIZE ||
+            runtime.objects.used_cell_words == FR_PROFILE_MAX_CELL_WORDS);
+  CHECK("cells capacity full",
         fr_cells_install(&runtime, 1, NULL, &object_id) == FR_ERR_CAPACITY);
 
   CHECK("cells word capacity reset", fr_runtime_init(&runtime) == FR_OK);
@@ -9767,7 +9838,7 @@ static void test_persist(void) {
           fr_persist_save(&runtime) == FR_OK &&
               (saturated_bytes = fr_persist_debug_last_payload_bytes()) >
                   1024 &&
-              saturated_bytes < FR_PROFILE_PERSISTENCE_BYTES);
+              saturated_bytes < FR_PERSIST_STORAGE_BYTES);
     CHECK("persist 32-bit saturated payload round-trips",
           fr_base_image_install(&runtime) == FR_OK &&
               fr_persist_restore(&runtime) == FR_OK);
@@ -13149,6 +13220,10 @@ int main(void) {
     FR_PROFILE_MAX_OVERLAY_NAMES >= 32 &&                                    \
     FR_PROFILE_CODE_OBJECT_TABLE_SIZE >= 48
   test_persist_stream_save_exceeds_legacy_staging_cap();
+#endif
+#if FR_PROFILE_CODE_OBJECT_TABLE_SIZE > FR_TEST_OLD_CODE_OBJECT_CAP &&       \
+    FR_PROFILE_MAX_OVERLAY_NAMES >= FR_TEST_CAPACITY_CODE_RECORDS
+  test_persist_capacity_bump_round_trip();
 #endif
   test_persist_restore_falls_back_from_semantic_corrupt_newer();
 #endif
