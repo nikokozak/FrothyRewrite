@@ -10,23 +10,14 @@
 #include <string.h>
 
 enum {
-  FR_PERSIST_FORMAT_VERSION = 1,
+  FR_PERSIST_FORMAT_VERSION = 2,
 };
 
 static const uint8_t fr_persist_format_magic[4] = {'F', 'R', 'P', 'H'};
 
-static uint16_t fr_persist_format_read_u16(const uint8_t *bytes) {
-  return (uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8);
-}
-
 static uint32_t fr_persist_format_read_u32(const uint8_t *bytes) {
   return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
          ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
-}
-
-static void fr_persist_format_write_u16(uint8_t *bytes, uint16_t value) {
-  bytes[0] = (uint8_t)(value & 0xffu);
-  bytes[1] = (uint8_t)(value >> 8);
 }
 
 static void fr_persist_format_write_u32(uint8_t *bytes, uint32_t value) {
@@ -36,8 +27,9 @@ static void fr_persist_format_write_u32(uint8_t *bytes, uint32_t value) {
   bytes[3] = (uint8_t)((value >> 24) & 0xffu);
 }
 
-static uint16_t fr_persist_format_payload_cap(void) {
-  return (uint16_t)(FR_PROFILE_PERSISTENCE_BYTES - FR_PERSIST_HEADER_BYTES);
+static uint32_t fr_persist_format_payload_cap(void) {
+  return (uint32_t)FR_PROFILE_PERSISTENCE_BYTES -
+         (uint32_t)FR_PERSIST_HEADER_BYTES;
 }
 
 static void fr_persist_format_write_header_crc(uint8_t *bytes) {
@@ -48,7 +40,7 @@ static void fr_persist_format_write_header_crc(uint8_t *bytes) {
 }
 
 fr_err_t fr_persist_format_build_header(uint8_t *bytes,
-                                        uint16_t payload_length,
+                                        uint32_t payload_length,
                                         uint32_t payload_crc) {
   if (bytes == NULL) {
     return FR_ERR_INVALID;
@@ -63,7 +55,7 @@ fr_err_t fr_persist_format_build_header(uint8_t *bytes,
   bytes[5] = FR_PERSIST_HEADER_BYTES;
   fr_persist_format_write_u32(&bytes[FR_PERSIST_PROFILE_HASH_OFFSET],
                               fr_profile_hash());
-  fr_persist_format_write_u16(&bytes[FR_PERSIST_PAYLOAD_LENGTH_OFFSET],
+  fr_persist_format_write_u32(&bytes[FR_PERSIST_PAYLOAD_LENGTH_OFFSET],
                               payload_length);
   fr_persist_format_write_u32(&bytes[FR_PERSIST_PAYLOAD_CRC_OFFSET],
                               payload_crc);
@@ -75,8 +67,8 @@ fr_err_t fr_persist_format_validate(const uint8_t *bytes,
                                     uint16_t stored_length,
                                     fr_persist_format_info_t *out) {
   uint8_t scratch[FR_PERSIST_HEADER_BYTES];
-  uint16_t payload_length = 0;
-  uint16_t total_length = 0;
+  uint32_t payload_length = 0;
+  uint32_t total_length = 0;
   uint32_t stored_crc = 0;
   uint32_t payload_crc = 0;
 
@@ -109,11 +101,11 @@ fr_err_t fr_persist_format_validate(const uint8_t *bytes,
   }
 
   payload_length =
-      fr_persist_format_read_u16(&bytes[FR_PERSIST_PAYLOAD_LENGTH_OFFSET]);
+      fr_persist_format_read_u32(&bytes[FR_PERSIST_PAYLOAD_LENGTH_OFFSET]);
   if (payload_length > fr_persist_format_payload_cap()) {
     return FR_ERR_CORRUPT;
   }
-  total_length = (uint16_t)(FR_PERSIST_HEADER_BYTES + payload_length);
+  total_length = (uint32_t)FR_PERSIST_HEADER_BYTES + payload_length;
   if (stored_length < total_length) {
     return FR_ERR_CORRUPT;
   }

@@ -1500,6 +1500,7 @@ static fr_err_t fr_repl_eval_see_arg(fr_runtime_t *runtime, const char *arg,
   base_name = fr_base_slot_name(slot_id);
   slot_name = fr_slot_name(runtime, slot_id);
   if (fr_slot_is_overlay(runtime, slot_id) ||
+      runtime->slots.base_tier[slot_id] != 0 ||
       (base_name == NULL && slot_name != NULL)) {
     /* A project name is overlay state even when the stored value is nil. */
     FR_TRY(fr_repl_append(response, (uint16_t)sizeof(response), &used,

@@ -159,6 +159,7 @@ static fr_err_t test_persist_apply_user_overlay(
 #endif
 
 enum {
+  FR_TEST_PERSIST_RECORD_CODE = 1,
   FR_TEST_PERSIST_RECORD_BIND = 2,
   FR_TEST_PERSIST_RECORD_NAME = 3,
   FR_TEST_PERSIST_RECORD_CELLS = 4,
@@ -169,7 +170,9 @@ enum {
   FR_TEST_PERSIST_RECORD_END = 0xff,
   FR_TEST_PERSIST_VALUE_NIL = 0,
   FR_TEST_PERSIST_VALUE_INT = 3,
+  FR_TEST_PERSIST_VALUE_CODE = 4,
   FR_TEST_PERSIST_VALUE_OBJECT = 6,
+  FR_TEST_PERSIST_TIER_USER = 2,
 };
 
 #if FR_FEATURE_PERSISTENCE
@@ -315,6 +318,22 @@ static void write_overlay_crc(uint8_t *bytes, uint16_t length) {
 static void write_instruction_header(uint8_t *bytes, uint8_t header_size) {
   bytes[0] = FR_INSTRUCTION_FORMAT_VERSION;
   bytes[1] = header_size;
+}
+
+static fr_err_t test_persist_commit_payload(const uint8_t *payload,
+                                            uint16_t payload_length) {
+  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
+
+  if (payload == NULL ||
+      (uint32_t)FR_PERSIST_HEADER_BYTES + payload_length > sizeof(image)) {
+    return FR_ERR_CAPACITY;
+  }
+  memset(image, 0, sizeof(image));
+  memcpy(&image[FR_PERSIST_HEADER_BYTES], payload, payload_length);
+  FR_TRY(fr_persist_format_build_header(image, payload_length,
+                                        fr_crc32(payload, payload_length)));
+  return fr_platform_persist_commit(
+      image, (uint16_t)(FR_PERSIST_HEADER_BYTES + payload_length));
 }
 
 static void write_instruction_header_arity(uint8_t *bytes, uint8_t arity) {
@@ -618,6 +637,767 @@ static void test_persist_code_id_round_trip(void) {
   CHECK("code-id round-trip restored inner returns 42",
         fr_vm_run_code_object(&runtime, restored_inner_id, &result) == FR_OK &&
             fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 42);
+}
+
+#if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&                  \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+#if FR_FEATURE_TEXT && FR_FEATURE_CELLS && FR_FEATURE_RECORDS &&             \
+    FR_FEATURE_EVENTS && FR_INCLUDE_TEST_NATIVES
+static void test_persist_build_deep_ref_program(fr_runtime_t *runtime,
+                                                char *out,
+                                                uint16_t out_cap) {
+  CHECK("deep refs base", fr_base_image_install(runtime) == FR_OK);
+  CHECK("deep refs helper",
+        fr_repl_eval_line(runtime, "helper is fn [ 41 ]", out, out_cap) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("deep refs answer",
+        fr_repl_eval_line(runtime, "answer is fn [ helper: ]", out,
+                          out_cap) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("deep refs text literal body",
+        fr_repl_eval_line(runtime, "say is fn [ \"ready\" ]", out,
+                          out_cap) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("deep refs text bind",
+        fr_repl_eval_line(runtime, "message is \"ready\"", out, out_cap) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("deep refs shape",
+        fr_repl_eval_line(runtime, "record Point [ x, label ]", out,
+                          out_cap) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("deep refs record",
+        fr_repl_eval_line(runtime, "point is Point: 5, message", out,
+                          out_cap) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("deep refs cells",
+        fr_repl_eval_line(runtime, "holder is cells(2)", out, out_cap) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("deep refs cell record",
+        fr_repl_eval_line(runtime, "set holder[0] to point", out,
+                          out_cap) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("deep refs cell text",
+        fr_repl_eval_line(runtime, "set holder[1] to message", out,
+                          out_cap) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("deep refs event target",
+        fr_repl_eval_line(runtime, "mark is fn [ set holder[0] to point ]",
+                          out, out_cap) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("deep refs event boot word",
+        fr_repl_eval_line(runtime, "boot is fn [ on 7 rising [ mark: ] ]",
+                          out, out_cap) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("deep refs event install",
+        fr_repl_eval_line(runtime, "boot:", out, out_cap) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+}
+
+static void test_persist_assert_deep_ref_program(fr_runtime_t *runtime,
+                                                 char *out,
+                                                 uint16_t out_cap) {
+  fr_slot_id_t slot_id = 0;
+  fr_tagged_t tagged = 0;
+  fr_tagged_t message = 0;
+  fr_object_id_t object_id = 0;
+  fr_object_id_t holder_id = 0;
+  fr_int_t decoded = 0;
+  const uint8_t *text = NULL;
+  uint16_t text_length = 0;
+
+  CHECK("deep refs answer runs",
+        fr_repl_eval_line(runtime, "answer:", out, out_cap) == FR_OK &&
+            strcmp(out, "41\nok\n") == 0);
+  CHECK("deep refs text literal runs",
+        fr_repl_eval_line(runtime, "say:", out, out_cap) == FR_OK &&
+            strcmp(out, "\"ready\"\nok\n") == 0);
+  CHECK("deep refs record field runs",
+        fr_repl_eval_line(runtime, "point->x", out, out_cap) == FR_OK &&
+            strcmp(out, "5\nok\n") == 0);
+  CHECK("deep refs message slot",
+        fr_slot_id_for_name(runtime, "message", &slot_id) == FR_OK &&
+            fr_slot_read(runtime, slot_id, &message) == FR_OK);
+  CHECK("deep refs holder slot",
+        fr_slot_id_for_name(runtime, "holder", &slot_id) == FR_OK &&
+            fr_slot_read(runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &holder_id) == FR_OK);
+  CHECK("deep refs holder text",
+        fr_cells_read(runtime, holder_id, 1, &tagged) == FR_OK &&
+            tagged == message &&
+            fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+            fr_text_view(runtime, object_id, &text, &text_length) == FR_OK &&
+            text_length == 5 && memcmp(text, "ready", 5) == 0);
+  CHECK("deep refs event mutates cell",
+        fr_cells_write(runtime, holder_id, 0, message) == FR_OK &&
+            fr_repl_eval_line(runtime, "frothy.fire-event: \"on\", 7, "
+                                       "\"rising\"",
+                              out, out_cap) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_cells_read(runtime, holder_id, 0, &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+            fr_record_read_field(
+                runtime, object_id,
+                (fr_record_name_t){.bytes = (const uint8_t *)"x",
+                                   .length = 1},
+                &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 5);
+}
+
+static void test_persist_mmap_event_body_survives_remount(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t body_view;
+  fr_tagged_t tagged = 0;
+  fr_object_id_t holder_id = 0;
+  fr_object_id_t object_id = 0;
+  fr_int_t decoded = 0;
+  fr_slot_id_t slot_id = 0;
+  char line[64];
+  char out[160];
+
+  fr_platform_persist_clear();
+  CHECK("mmap event remount base", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("mmap event helper",
+        fr_repl_eval_line(&runtime, "helper is fn [ 41 ]", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  for (uint8_t i = 0; i < 12; i++) {
+    (void)snprintf(line, sizeof(line), "w%02u is fn [ helper: ]",
+                   (unsigned)i);
+    CHECK("mmap event filler word",
+          fr_repl_eval_line(&runtime, line, out, (uint16_t)sizeof(out)) ==
+                  FR_OK &&
+              strcmp(out, "ok\n") == 0);
+  }
+  CHECK("mmap event text",
+        fr_repl_eval_line(&runtime, "message is \"ready\"", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("mmap event shape",
+        fr_repl_eval_line(&runtime, "record Point [ x, label ]", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("mmap event record",
+        fr_repl_eval_line(&runtime, "point is Point: 5, message", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("mmap event cells",
+        fr_repl_eval_line(&runtime, "holder is cells(2)", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("mmap event cell text",
+        fr_repl_eval_line(&runtime, "set holder[0] to message", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("mmap event cell record",
+        fr_repl_eval_line(&runtime, "set holder[1] to point", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("mmap event target",
+        fr_repl_eval_line(&runtime, "mark is fn [ set holder[0] to point ]",
+                          out, (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("mmap event every boot",
+        fr_repl_eval_line(&runtime, "boot is fn [ every 50 [ mark: ] ]", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("mmap event register before save",
+        fr_repl_eval_line(&runtime, "boot:", out, (uint16_t)sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            runtime.events.entries[0].kind == FR_EVENT_KIND_EVERY &&
+            runtime.events.entries[0].source == 50);
+  CHECK("mmap event save", fr_persist_save(&runtime) == FR_OK);
+
+  CHECK("mmap event boot two-pass restore",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore_library(&runtime) == FR_OK &&
+            fr_persist_restore_user(&runtime) == FR_OK);
+  CHECK("mmap event public remount poisons old host mapping",
+        fr_persist_restore(&runtime) == FR_OK);
+  CHECK("mmap event binding survived remount",
+        runtime.events.entries[0].kind == FR_EVENT_KIND_EVERY &&
+            runtime.events.entries[0].source == 50);
+  CHECK("mmap event body points into active mount",
+        fr_code_get_instructions(&runtime, runtime.events.entries[0].body,
+                                 &body_view) == FR_OK &&
+            body_view.length > 0);
+  CHECK("mmap event fires from active mount",
+        fr_repl_eval_line(&runtime, "frothy.fire-event: \"every\", 50, nil",
+                          out, (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("mmap event body used restored record",
+        fr_slot_id_for_name(&runtime, "holder", &slot_id) == FR_OK &&
+            fr_slot_read(&runtime, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &holder_id) == FR_OK &&
+            fr_cells_read(&runtime, holder_id, 0, &tagged) == FR_OK &&
+            fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+            fr_record_read_field(
+                &runtime, object_id,
+                (fr_record_name_t){.bytes = (const uint8_t *)"x",
+                                   .length = 1},
+                &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 5);
+}
+#endif
+
+static void test_persist_repl_contract_proof(void) {
+  fr_runtime_t runtime;
+  char out[128];
+
+  fr_platform_persist_clear();
+  CHECK("repl contract base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("repl contract define one",
+        fr_repl_eval_line(&runtime, "answer is 1", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("repl contract read one",
+        fr_repl_eval_line(&runtime, "answer", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+  CHECK("repl contract save one",
+        fr_repl_eval_line(&runtime, "save", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("repl contract clear reveals saved one",
+        fr_repl_eval_line(&runtime, "clear", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "answer", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+  CHECK("repl contract redefine two",
+        fr_repl_eval_line(&runtime, "answer is 2", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "answer", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "2\nok\n") == 0);
+  CHECK("repl contract clear reveals one again",
+        fr_repl_eval_line(&runtime, "clear", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "answer", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+  CHECK("repl contract redefine three and save",
+        fr_repl_eval_line(&runtime, "answer is 3", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "save", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("repl contract clear reveals three",
+        fr_repl_eval_line(&runtime, "clear", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "answer", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "3\nok\n") == 0);
+  CHECK("repl contract reboot restores three",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "answer", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "3\nok\n") == 0);
+}
+
+static void test_persist_round_trip_payload_identity(void) {
+  fr_runtime_t runtime;
+  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t encoded[FR_PROFILE_PERSISTENCE_BYTES];
+  uint16_t image_length = 0;
+  uint16_t payload_length = 0;
+  uint16_t encoded_length = 0;
+  char out[160];
+
+  fr_platform_persist_clear();
+#if FR_FEATURE_TEXT && FR_FEATURE_CELLS && FR_FEATURE_RECORDS &&             \
+    FR_FEATURE_EVENTS && FR_INCLUDE_TEST_NATIVES
+  test_persist_build_deep_ref_program(&runtime, out, (uint16_t)sizeof(out));
+#else
+  CHECK("payload identity base", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("payload identity define helper",
+        fr_repl_eval_line(&runtime, "helper is fn [ 41 ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("payload identity define answer",
+        fr_repl_eval_line(&runtime, "answer is fn [ helper: ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+#endif
+  CHECK("payload identity save",
+        fr_persist_save(&runtime) == FR_OK &&
+            fr_platform_persist_read(image, (uint16_t)sizeof(image),
+                                     &image_length, 0) == FR_OK &&
+            image_length > FR_PERSIST_HEADER_BYTES);
+  payload_length = (uint16_t)(image_length - FR_PERSIST_HEADER_BYTES);
+  CHECK("payload identity reencode",
+        fr_persist_payload_encode(&runtime, encoded,
+                                  (uint16_t)sizeof(encoded),
+                                  &encoded_length) == FR_OK &&
+            encoded_length == payload_length &&
+            memcmp(encoded, &image[FR_PERSIST_HEADER_BYTES],
+                   payload_length) == 0);
+}
+
+static void test_persist_resolve_equivalence(void) {
+  fr_runtime_t runtime;
+  char out[160];
+
+  fr_platform_persist_clear();
+#if FR_FEATURE_TEXT && FR_FEATURE_CELLS && FR_FEATURE_RECORDS &&             \
+    FR_FEATURE_EVENTS && FR_INCLUDE_TEST_NATIVES
+  test_persist_build_deep_ref_program(&runtime, out, (uint16_t)sizeof(out));
+  test_persist_assert_deep_ref_program(&runtime, out, (uint16_t)sizeof(out));
+  CHECK("resolve equivalence save and reboot",
+        fr_persist_save(&runtime) == FR_OK &&
+            fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK);
+  test_persist_assert_deep_ref_program(&runtime, out, (uint16_t)sizeof(out));
+#else
+  CHECK("resolve equivalence base", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("resolve equivalence define helper",
+        fr_repl_eval_line(&runtime, "helper is fn [ 42 ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("resolve equivalence define answer",
+        fr_repl_eval_line(&runtime, "answer is fn [ helper: ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("resolve equivalence before save",
+        fr_repl_eval_line(&runtime, "answer:", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "42\nok\n") == 0);
+  CHECK("resolve equivalence save and reboot",
+        fr_persist_save(&runtime) == FR_OK &&
+            fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK);
+  CHECK("resolve equivalence after restore",
+        fr_repl_eval_line(&runtime, "answer:", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "42\nok\n") == 0);
+#endif
+}
+#endif
+
+#if FR_FEATURE_TEXT
+static void test_persist_rejects_object_record_below_base_partition(void) {
+  fr_runtime_t runtime;
+  fr_object_id_t base_object_id = 0;
+  uint8_t payload[64];
+  uint16_t off = 0;
+  uint16_t slot_count = 0;
+
+  fr_platform_persist_clear();
+  CHECK("below-base object base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("below-base object seed base object",
+        fr_text_install(&runtime, (const uint8_t *)"base", 4,
+                        &base_object_id) == FR_OK &&
+            base_object_id == runtime.objects.base_count);
+  fr_object_mark_base(&runtime);
+  slot_count = runtime.slots.count;
+
+  payload[off++] = 'F';
+  payload[off++] = 'R';
+  payload[off++] = 'P';
+  payload[off++] = 'O';
+  payload[off++] = FR_PERSIST_PAYLOAD_VERSION;
+  payload[off++] = FR_TEST_PERSIST_RECORD_TEXT;
+  write_u16_little_endian(&payload[off], 0);
+  off = (uint16_t)(off + 2);
+  write_u16_little_endian(&payload[off], 5);
+  off = (uint16_t)(off + 2);
+  memcpy(&payload[off], "wrong", 5);
+  off = (uint16_t)(off + 5);
+  payload[off++] = FR_TEST_PERSIST_RECORD_BIND;
+  write_u16_little_endian(&payload[off], FR_TEST_FIRST_USER_SLOT);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_TIER_USER;
+  payload[off++] = FR_TEST_PERSIST_VALUE_OBJECT;
+  write_u16_little_endian(&payload[off], 0);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_RECORD_END;
+
+  CHECK("below-base object commit",
+        test_persist_commit_payload(payload, off) == FR_OK);
+  CHECK("below-base object restore rejects before bind",
+        fr_persist_restore(&runtime) == FR_ERR_CORRUPT &&
+            runtime.slots.count == slot_count &&
+            runtime.objects.count == runtime.objects.base_count);
+}
+#endif
+
+#if FR_FEATURE_CELLS
+static void test_persist_rejects_cells_record_below_base_partition(void) {
+  fr_runtime_t runtime;
+  fr_object_id_t base_object_id = 0;
+  uint8_t payload[64];
+  uint16_t off = 0;
+  uint16_t slot_count = 0;
+
+  fr_platform_persist_clear();
+  CHECK("below-base cells base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("below-base cells seed base object",
+        fr_cells_install(&runtime, 1, NULL, &base_object_id) == FR_OK &&
+            base_object_id == runtime.objects.base_count);
+  fr_object_mark_base(&runtime);
+  slot_count = runtime.slots.count;
+
+  payload[off++] = 'F';
+  payload[off++] = 'R';
+  payload[off++] = 'P';
+  payload[off++] = 'O';
+  payload[off++] = FR_PERSIST_PAYLOAD_VERSION;
+  payload[off++] = FR_TEST_PERSIST_RECORD_CELLS;
+  write_u16_little_endian(&payload[off], 0);
+  off = (uint16_t)(off + 2);
+  write_u16_little_endian(&payload[off], 1);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_VALUE_NIL;
+  payload[off++] = FR_TEST_PERSIST_RECORD_BIND;
+  write_u16_little_endian(&payload[off], FR_TEST_FIRST_USER_SLOT);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_TIER_USER;
+  payload[off++] = FR_TEST_PERSIST_VALUE_OBJECT;
+  write_u16_little_endian(&payload[off], 0);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_RECORD_END;
+
+  CHECK("below-base cells commit",
+        test_persist_commit_payload(payload, off) == FR_OK);
+  CHECK("below-base cells restore rejects before bind",
+        fr_persist_restore(&runtime) == FR_ERR_CORRUPT &&
+            runtime.slots.count == slot_count &&
+            runtime.objects.count == runtime.objects.base_count);
+}
+#endif
+
+#if FR_FEATURE_RECORDS
+static void test_persist_rejects_record_shape_below_base_partition(void) {
+  fr_runtime_t runtime;
+  fr_object_id_t base_object_id = 0;
+  const uint8_t base_name[] = "Base";
+  const uint8_t x_name[] = "x";
+  fr_record_name_t fields[] = {
+      {.bytes = x_name, .length = (uint16_t)(sizeof(x_name) - 1u)}};
+  uint8_t payload[64];
+  uint16_t off = 0;
+  uint16_t slot_count = 0;
+
+  fr_platform_persist_clear();
+  CHECK("below-base shape base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("below-base shape seed base object",
+        fr_record_shape_install(
+            &runtime,
+            (fr_record_name_t){.bytes = base_name,
+                               .length = (uint16_t)(sizeof(base_name) - 1u)},
+            fields, 1, &base_object_id) == FR_OK &&
+            base_object_id == runtime.objects.base_count);
+  fr_object_mark_base(&runtime);
+  slot_count = runtime.slots.count;
+
+  payload[off++] = 'F';
+  payload[off++] = 'R';
+  payload[off++] = 'P';
+  payload[off++] = 'O';
+  payload[off++] = FR_PERSIST_PAYLOAD_VERSION;
+  payload[off++] = FR_TEST_PERSIST_RECORD_RECORD_SHAPE;
+  write_u16_little_endian(&payload[off], 0);
+  off = (uint16_t)(off + 2);
+  write_u16_little_endian(&payload[off], 3);
+  off = (uint16_t)(off + 2);
+  memcpy(&payload[off], "Bad", 3);
+  off = (uint16_t)(off + 3);
+  write_u16_little_endian(&payload[off], 1);
+  off = (uint16_t)(off + 2);
+  write_u16_little_endian(&payload[off], 1);
+  off = (uint16_t)(off + 2);
+  payload[off++] = 'x';
+  payload[off++] = FR_TEST_PERSIST_RECORD_BIND;
+  write_u16_little_endian(&payload[off], FR_TEST_FIRST_USER_SLOT);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_TIER_USER;
+  payload[off++] = FR_TEST_PERSIST_VALUE_OBJECT;
+  write_u16_little_endian(&payload[off], 0);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_RECORD_END;
+
+  CHECK("below-base shape commit",
+        test_persist_commit_payload(payload, off) == FR_OK);
+  CHECK("below-base shape restore rejects before bind",
+        fr_persist_restore(&runtime) == FR_ERR_CORRUPT &&
+            runtime.slots.count == slot_count &&
+            runtime.objects.count == runtime.objects.base_count);
+}
+
+static void test_persist_rejects_record_object_below_base_partition(void) {
+  fr_runtime_t runtime;
+  fr_object_id_t base_object_id = 0;
+  uint16_t shape_final_id = 0;
+  const uint8_t base_name[] = "Base";
+  const uint8_t x_name[] = "x";
+  fr_record_name_t fields[] = {
+      {.bytes = x_name, .length = (uint16_t)(sizeof(x_name) - 1u)}};
+  uint8_t payload[96];
+  uint16_t off = 0;
+  uint16_t slot_count = 0;
+
+  fr_platform_persist_clear();
+  CHECK("below-base record base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("below-base record seed base object",
+        fr_record_shape_install(
+            &runtime,
+            (fr_record_name_t){.bytes = base_name,
+                               .length = (uint16_t)(sizeof(base_name) - 1u)},
+            fields, 1, &base_object_id) == FR_OK &&
+            base_object_id == runtime.objects.base_count);
+  fr_object_mark_base(&runtime);
+  shape_final_id = runtime.objects.base_count;
+  slot_count = runtime.slots.count;
+
+  payload[off++] = 'F';
+  payload[off++] = 'R';
+  payload[off++] = 'P';
+  payload[off++] = 'O';
+  payload[off++] = FR_PERSIST_PAYLOAD_VERSION;
+  payload[off++] = FR_TEST_PERSIST_RECORD_RECORD_SHAPE;
+  write_u16_little_endian(&payload[off], shape_final_id);
+  off = (uint16_t)(off + 2);
+  write_u16_little_endian(&payload[off], 5);
+  off = (uint16_t)(off + 2);
+  memcpy(&payload[off], "Other", 5);
+  off = (uint16_t)(off + 5);
+  write_u16_little_endian(&payload[off], 1);
+  off = (uint16_t)(off + 2);
+  write_u16_little_endian(&payload[off], 1);
+  off = (uint16_t)(off + 2);
+  payload[off++] = 'x';
+  payload[off++] = FR_TEST_PERSIST_RECORD_RECORD;
+  write_u16_little_endian(&payload[off], 0);
+  off = (uint16_t)(off + 2);
+  write_u16_little_endian(&payload[off], shape_final_id);
+  off = (uint16_t)(off + 2);
+  write_u16_little_endian(&payload[off], 1);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_VALUE_INT;
+  write_u32_little_endian(&payload[off], 7);
+  off = (uint16_t)(off + 4);
+  payload[off++] = FR_TEST_PERSIST_RECORD_BIND;
+  write_u16_little_endian(&payload[off], FR_TEST_FIRST_USER_SLOT);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_TIER_USER;
+  payload[off++] = FR_TEST_PERSIST_VALUE_OBJECT;
+  write_u16_little_endian(&payload[off], 0);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_RECORD_END;
+
+  CHECK("below-base record commit",
+        test_persist_commit_payload(payload, off) == FR_OK);
+  CHECK("below-base record restore rejects before bind",
+        fr_persist_restore(&runtime) == FR_ERR_CORRUPT &&
+            runtime.slots.count == slot_count &&
+            runtime.objects.count == runtime.objects.base_count);
+}
+#endif
+
+static void test_persist_rejects_code_record_below_base_partition(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t base_code_id = 0;
+  uint8_t base_bytes[] = {0x00, FR_INSTRUCTION_MIN_HEADER_SIZE,
+                          FR_OP_RETURN};
+  uint8_t body_bytes[] = {0x00, FR_INSTRUCTION_MIN_HEADER_SIZE,
+                          FR_TEST_PUSH_INT(9), FR_OP_RETURN};
+  uint8_t payload[96];
+  uint16_t off = 0;
+  uint16_t code_count = 0;
+
+  fr_platform_persist_clear();
+  write_instruction_header(base_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  CHECK("below-base code base image", fr_base_image_install(&runtime) == FR_OK);
+  if (runtime.code.base_image_count == 0) {
+    CHECK("below-base code seed base code",
+          fr_instruction_stream_init(&view, base_bytes,
+                                     (uint16_t)sizeof(base_bytes)) == FR_OK &&
+              fr_code_install_base(&runtime, &view, NULL, 0, &base_code_id) ==
+                  FR_OK);
+    fr_code_mark_base(&runtime);
+  }
+  code_count = runtime.code.count;
+
+  payload[off++] = 'F';
+  payload[off++] = 'R';
+  payload[off++] = 'P';
+  payload[off++] = 'O';
+  payload[off++] = FR_PERSIST_PAYLOAD_VERSION;
+  payload[off++] = FR_TEST_PERSIST_RECORD_CODE;
+  write_u16_little_endian(&payload[off], 0);
+  off = (uint16_t)(off + 2);
+  write_u16_little_endian(&payload[off], (uint16_t)sizeof(body_bytes));
+  off = (uint16_t)(off + 2);
+  memcpy(&payload[off], body_bytes, sizeof(body_bytes));
+  off = (uint16_t)(off + sizeof(body_bytes));
+  payload[off++] = FR_TEST_PERSIST_RECORD_BIND;
+  write_u16_little_endian(&payload[off], FR_TEST_FIRST_USER_SLOT);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_TIER_USER;
+  payload[off++] = FR_TEST_PERSIST_VALUE_CODE;
+  write_u16_little_endian(&payload[off], 0);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_TEST_PERSIST_RECORD_END;
+
+  CHECK("below-base code payload rejects without append",
+        fr_persist_payload_restore(&runtime, payload, off) == FR_ERR_CORRUPT &&
+            runtime.code.count == code_count);
+}
+
+static void test_persist_restore_falls_back_from_semantic_corrupt_newer(void) {
+  fr_runtime_t runtime;
+  uint8_t payload[32];
+  uint16_t off = 0;
+  uint16_t final_code_id = 0;
+  char out[64];
+
+  fr_platform_persist_clear();
+  CHECK("semantic fallback base", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("semantic fallback save good",
+        fr_repl_eval_line(&runtime, "answer is fn [ 1 ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 && fr_persist_save(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "answer:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+
+  final_code_id = runtime.code.base_image_count;
+  payload[off++] = 'F';
+  payload[off++] = 'R';
+  payload[off++] = 'P';
+  payload[off++] = 'O';
+  payload[off++] = FR_PERSIST_PAYLOAD_VERSION;
+  payload[off++] = FR_TEST_PERSIST_RECORD_CODE;
+  write_u16_little_endian(&payload[off], final_code_id);
+  off = (uint16_t)(off + 2);
+  write_u16_little_endian(&payload[off], 2);
+  off = (uint16_t)(off + 2);
+  payload[off++] = FR_INSTRUCTION_FORMAT_VERSION;
+  payload[off++] = 1;
+  payload[off++] = FR_TEST_PERSIST_RECORD_END;
+
+  CHECK("semantic fallback commit corrupt newer",
+        test_persist_commit_payload(payload, off) == FR_OK);
+  CHECK("semantic fallback restores older good image",
+        fr_persist_restore(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "answer:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+}
+
+static void test_persist_rejects_cyclic_code_ref_on_save(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t predicted_id = 0;
+  fr_code_object_id_t code_id = 0;
+  fr_tagged_t tagged = 0;
+  uint8_t self_bytes[] = {0x00, FR_INSTRUCTION_MIN_HEADER_SIZE,
+                          FR_OP_PUSH_CODE_ID, 0x00, 0x00, FR_OP_RETURN};
+  const size_t operand = FR_INSTRUCTION_MIN_HEADER_SIZE + 1u;
+
+  fr_platform_persist_clear();
+  write_instruction_header(self_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  CHECK("cyclic code base", fr_base_image_install(&runtime) == FR_OK);
+  predicted_id = runtime.code.count;
+  write_u16_little_endian(&self_bytes[operand], predicted_id);
+  CHECK("cyclic code install self ref",
+        fr_instruction_stream_init(&view, self_bytes,
+                                   (uint16_t)sizeof(self_bytes)) == FR_OK &&
+            fr_code_install(&runtime, &view, NULL, 0, &code_id) == FR_OK &&
+            code_id == predicted_id);
+  CHECK("cyclic code bind slot",
+        fr_tagged_encode_code_object_id(code_id, &tagged) == FR_OK &&
+            fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, tagged) ==
+                FR_OK);
+  fr_persist_session_install_tier_stamp_slot(&runtime,
+                                             FR_TEST_FIRST_USER_SLOT);
+  CHECK("cyclic code save rejects", fr_persist_save(&runtime) == FR_ERR_INVALID);
+}
+
+static void test_persist_rejects_mutual_cyclic_code_ref_on_save(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t view;
+  fr_code_object_id_t first_id = 0;
+  fr_code_object_id_t second_id = 0;
+  fr_code_object_id_t code_a = 0;
+  fr_code_object_id_t code_b = 0;
+  fr_tagged_t tagged = 0;
+  uint8_t a_bytes[] = {0x00, FR_INSTRUCTION_MIN_HEADER_SIZE,
+                       FR_OP_PUSH_CODE_ID, 0x00, 0x00, FR_OP_RETURN};
+  uint8_t b_bytes[] = {0x00, FR_INSTRUCTION_MIN_HEADER_SIZE,
+                       FR_OP_PUSH_CODE_ID, 0x00, 0x00, FR_OP_RETURN};
+  const size_t operand = FR_INSTRUCTION_MIN_HEADER_SIZE + 1u;
+
+  fr_platform_persist_clear();
+  write_instruction_header(a_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(b_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  CHECK("mutual cyclic code base", fr_base_image_install(&runtime) == FR_OK);
+  first_id = runtime.code.count;
+  second_id = (fr_code_object_id_t)(first_id + 1u);
+  write_u16_little_endian(&a_bytes[operand], second_id);
+  write_u16_little_endian(&b_bytes[operand], first_id);
+  CHECK("mutual cyclic code install a",
+        fr_instruction_stream_init(&view, a_bytes,
+                                   (uint16_t)sizeof(a_bytes)) == FR_OK &&
+            fr_code_install(&runtime, &view, NULL, 0, &code_a) == FR_OK &&
+            code_a == first_id);
+  CHECK("mutual cyclic code install b",
+        fr_instruction_stream_init(&view, b_bytes,
+                                   (uint16_t)sizeof(b_bytes)) == FR_OK &&
+            fr_code_install(&runtime, &view, NULL, 0, &code_b) == FR_OK &&
+            code_b == second_id);
+  CHECK("mutual cyclic code bind slot",
+        fr_tagged_encode_code_object_id(code_a, &tagged) == FR_OK &&
+            fr_slot_write(&runtime, FR_TEST_FIRST_USER_SLOT, tagged) ==
+                FR_OK);
+  fr_persist_session_install_tier_stamp_slot(&runtime,
+                                             FR_TEST_FIRST_USER_SLOT);
+  CHECK("mutual cyclic code save rejects",
+        fr_persist_save(&runtime) == FR_ERR_INVALID);
+}
+
+static void test_persist_old_format_rejection(void) {
+  fr_runtime_t runtime;
+  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t payload[] = {
+      'F',
+      'R',
+      'P',
+      'O',
+      4,
+      FR_TEST_PERSIST_RECORD_END,
+  };
+  uint16_t image_length = 0;
+  fr_slot_id_t slot_id = 0;
+
+  memset(image, 0, sizeof(image));
+  memcpy(&image[FR_PERSIST_HEADER_BYTES], payload, sizeof(payload));
+  CHECK("old format build v2 image",
+        fr_persist_format_build_header(image, (uint32_t)sizeof(payload),
+                                       fr_crc32(payload,
+                                                (uint16_t)sizeof(payload))) ==
+            FR_OK);
+  image[4] = 1;
+  memset(&image[FR_PERSIST_HEADER_CRC_OFFSET], 0, 4);
+  fr_write_u32_le(&image[FR_PERSIST_HEADER_CRC_OFFSET],
+                  fr_crc32(image, FR_PERSIST_HEADER_BYTES));
+  image_length = (uint16_t)(FR_PERSIST_HEADER_BYTES + sizeof(payload));
+
+  CHECK("old format commit",
+        fr_platform_persist_clear() == FR_OK &&
+            fr_platform_persist_commit(image, image_length) == FR_OK);
+  CHECK("old format restore rejects cleanly",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_ERR_CORRUPT &&
+            fr_slot_id_for_name(&runtime, "answer", &slot_id) ==
+                FR_ERR_NOT_FOUND);
 }
 
 #if FR_FEATURE_SOURCE_BASE
@@ -4669,7 +5449,7 @@ static void test_code(void) {
   fr_code_object_id_t overlay_code_id = 0;
   fr_tagged_t base_code_tagged = 0;
   fr_tagged_t overlay_code_tagged = 0;
-  uint32_t image_bytes_before = 0;
+  const uint8_t *image_bytes_before = NULL;
   fr_tagged_t result = 0;
   fr_int_t decoded = 0;
   uint8_t push_one[] = {0x00, 0x00, FR_TEST_PUSH_INT(1), FR_OP_RETURN};
@@ -4692,7 +5472,7 @@ static void test_code(void) {
         fr_code_install(&runtime, &view, NULL, 0, &code_object_id) == FR_OK &&
             code_object_id == 0 &&
             runtime.code.entries[code_object_id].storage_kind ==
-                FR_CODE_STORAGE_IMAGE &&
+                FR_CODE_STORAGE_BASE_RAM &&
             runtime.code.image_count == 1);
   push_one[3] = 0x02;
   push_one[4] = 0x00;
@@ -4708,7 +5488,7 @@ static void test_code(void) {
             fr_code_install(&runtime, &view, NULL, 0, &code_object_id) == FR_OK &&
             code_object_id == 1 &&
             runtime.code.entries[code_object_id].storage_kind ==
-                FR_CODE_STORAGE_IMAGE &&
+                FR_CODE_STORAGE_BASE_RAM &&
             runtime.code.image_count == 2);
   fr_code_mark_base(&runtime);
   CHECK("code restore keeps base",
@@ -4741,9 +5521,7 @@ static void test_code(void) {
                 FR_CODE_STORAGE_IMAGE &&
             fr_code_get_instructions(&runtime, base_code_id, &owned_view) ==
                 FR_OK &&
-            owned_view.bytes >= runtime.code.image_instruction_bytes &&
-            owned_view.bytes < runtime.code.image_instruction_bytes +
-                                   sizeof(runtime.code.image_instruction_bytes));
+            owned_view.bytes == stable_one);
   CHECK("base slot calls image code",
         fr_tagged_encode_code_object_id(base_code_id, &base_code_tagged) ==
                 FR_OK &&
@@ -4787,7 +5565,7 @@ static void test_code(void) {
             base_code_id == 0 &&
             runtime.code.entries[base_code_id].storage_kind ==
                 FR_CODE_STORAGE_IMAGE);
-  image_bytes_before = runtime.code.image_used_instruction_bytes;
+  image_bytes_before = runtime.code.entries[base_code_id].instruction_bytes;
   too_large_view = (fr_instruction_stream_t){
       .bytes = stable_two,
       .length = (uint16_t)(FR_PROFILE_MAX_OVERLAY_CODE_BYTES + 1u),
@@ -4796,7 +5574,8 @@ static void test_code(void) {
         (fr_code_clear_overlay(&runtime), true) &&
             fr_code_install_overlay(&runtime, &too_large_view, NULL, 0,
                                     &overlay_code_id) == FR_ERR_CAPACITY &&
-            runtime.code.image_used_instruction_bytes == image_bytes_before &&
+            runtime.code.entries[base_code_id].instruction_bytes ==
+                image_bytes_before &&
             runtime.code.count == runtime.code.image_count &&
             fr_vm_run_slot(&runtime, 0, &result) == FR_OK &&
             fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 1);
@@ -8850,10 +9629,11 @@ static void test_persist(void) {
                                             &update.overlay_update) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK &&
             fr_runtime_clear_project(&runtime) == FR_OK &&
-            fr_slot_id_for_name(&runtime, "led", &slot_id) ==
-                FR_ERR_NOT_FOUND &&
+            fr_slot_id_for_name(&runtime, "led", &slot_id) == FR_OK &&
+            slot_id == FR_TEST_FIRST_USER_SLOT &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
-            fr_tagged_is_nil(tagged) &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
+            decoded == 13 &&
             fr_persist_restore(&runtime) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 13 &&
@@ -9228,14 +10008,13 @@ static void test_persist_restored_code_drops_on_reset(void) {
   CHECK("restored code reset mounted image code",
         fr_code_get_instructions(&runtime, first_restored_code_id, &view) ==
             FR_OK);
-  CHECK("restored code reset drops restored image code",
+  CHECK("restored code reset keeps mounted image code",
         fr_runtime_reset(&runtime) == FR_OK &&
-            runtime.code.count == runtime.code.base_image_count &&
-            runtime.code.image_count == runtime.code.base_image_count &&
+            runtime.code.count == runtime.code.image_count &&
+            runtime.code.image_count > runtime.code.base_image_count &&
             fr_code_get_instructions(&runtime, first_restored_code_id, &view) ==
-                FR_ERR_NOT_FOUND &&
-            fr_slot_id_for_name(&runtime, "saved", &slot_id) ==
-                FR_ERR_NOT_FOUND);
+                FR_OK &&
+            fr_slot_id_for_name(&runtime, "saved", &slot_id) == FR_OK);
 }
 
 static void test_persist_restore_capacity_uses_base_code_boundary(void) {
@@ -12041,6 +12820,27 @@ int main(void) {
   test_persist_restore_capacity_uses_base_code_boundary();
 #endif
   test_persist_code_id_round_trip();
+#if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&                  \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  test_persist_repl_contract_proof();
+  test_persist_round_trip_payload_identity();
+  test_persist_resolve_equivalence();
+  test_persist_restore_falls_back_from_semantic_corrupt_newer();
+#endif
+#if FR_FEATURE_TEXT
+  test_persist_rejects_object_record_below_base_partition();
+#endif
+#if FR_FEATURE_CELLS
+  test_persist_rejects_cells_record_below_base_partition();
+#endif
+#if FR_FEATURE_RECORDS
+  test_persist_rejects_record_shape_below_base_partition();
+  test_persist_rejects_record_object_below_base_partition();
+#endif
+  test_persist_rejects_code_record_below_base_partition();
+  test_persist_rejects_cyclic_code_ref_on_save();
+  test_persist_rejects_mutual_cyclic_code_ref_on_save();
+  test_persist_old_format_rejection();
   test_persist_cross_width_header_rejection();
 #if FR_FEATURE_SOURCE_BASE
   test_persist_source_change_header_rejection();
@@ -12054,6 +12854,11 @@ int main(void) {
 #if FR_FEATURE_COMPILER && FR_FEATURE_EVENTS && FR_INCLUDE_TEST_NATIVES &&    \
     FR_FEATURE_TEXT && FR_PROFILE_MAX_OVERLAY_NAMES > 0
   test_persist_events_round_trip();
+#endif
+#if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&                  \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0 && FR_FEATURE_TEXT && FR_FEATURE_CELLS && \
+    FR_FEATURE_RECORDS && FR_FEATURE_EVENTS && FR_INCLUDE_TEST_NATIVES
+  test_persist_mmap_event_body_survives_remount();
 #endif
 #endif
   test_vm();

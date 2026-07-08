@@ -58,15 +58,10 @@ static const uint8_t fr_persist_payload_magic[4] = {'F', 'R', 'P', 'O'};
  * (runtime->install_tier) per SPEC D3. */
 static uint8_t fr_persist_slot_tier[FR_PROFILE_MAX_SLOTS];
 
-/* D6 boot two-call sequence: the L1 pass populates these maps while it
- * installs codes and objects; the L2 pass reads them to translate decoded
- * local ids back to runtime ids without re-installing. The validity flag
- * keeps the L2 pass honest — it must come after an L1 pass on the same
- * payload, with nothing in between. */
-static fr_code_object_id_t
-    fr_persist_boot_code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
-static fr_object_id_t fr_persist_boot_object_map[FR_OBJECT_TABLE_CAPACITY];
-static bool fr_persist_boot_maps_valid;
+/* D6 boot two-call sequence: the L2 pass must follow a successful L1 pass on
+ * the same payload. Code and object ids are already final image ids, so no
+ * restore-side id map carries between passes. */
+static bool fr_persist_boot_library_valid;
 
 /* Clear the per-slot tier stamps for a fresh image. The table is module-global
  * session state, not per-runtime, so installing a new base image must wipe it
@@ -109,13 +104,24 @@ void fr_persist_session_wipe_user_tier(fr_runtime_t *runtime) {
     return;
   }
   for (fr_slot_id_t slot_id = 0; slot_id < runtime->slots.count; slot_id++) {
-    if (!fr_slot_is_overlay(runtime, slot_id)) {
-      continue;
+    if (runtime->slots.base_tier[slot_id] == FR_INSTALL_TIER_USER) {
+      if (runtime->slots.library_base_present[slot_id]) {
+        runtime->slots.base[slot_id] = runtime->slots.library_base[slot_id];
+        runtime->slots.current[slot_id] = runtime->slots.library_base[slot_id];
+        runtime->slots.base_tier[slot_id] = FR_INSTALL_TIER_LIBRARY;
+        fr_persist_slot_tier[slot_id] = FR_PERSIST_TIER_LIBRARY;
+      } else {
+        runtime->slots.base[slot_id] = fr_tagged_nil();
+        runtime->slots.current[slot_id] = fr_tagged_nil();
+        runtime->slots.base_tier[slot_id] = 0;
+        fr_persist_slot_tier[slot_id] = 0;
+      }
+      runtime->slots.overlay[slot_id] = false;
     }
-    if (fr_persist_slot_tier[slot_id] == FR_PERSIST_TIER_LIBRARY) {
-      continue;
+    if (fr_slot_is_overlay(runtime, slot_id) &&
+        fr_persist_slot_tier[slot_id] != FR_PERSIST_TIER_LIBRARY) {
+      (void)fr_slot_restore(runtime, slot_id);
     }
-    (void)fr_slot_restore(runtime, slot_id);
   }
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   {
@@ -123,7 +129,9 @@ void fr_persist_session_wipe_user_tier(fr_runtime_t *runtime) {
     for (uint16_t src = 0; src < runtime->slots.overlay_name_count; src++) {
       fr_slot_id_t s = runtime->slots.overlay_name_slots[src];
 
-      if (fr_slot_is_overlay(runtime, s)) {
+      if (fr_slot_is_overlay(runtime, s) ||
+          (s < FR_PROFILE_MAX_SLOTS &&
+           runtime->slots.base_tier[s] == FR_INSTALL_TIER_LIBRARY)) {
         if (dst != src) {
           memcpy(runtime->slots.overlay_names[dst],
                  runtime->slots.overlay_names[src],
@@ -158,14 +166,21 @@ void fr_persist_session_wipe_library_tier(fr_runtime_t *runtime) {
     return;
   }
   for (fr_slot_id_t slot_id = 0; slot_id < runtime->slots.count; slot_id++) {
-    if (!fr_slot_is_overlay(runtime, slot_id)) {
-      continue;
+    if (runtime->slots.base_tier[slot_id] == FR_INSTALL_TIER_LIBRARY) {
+      runtime->slots.base[slot_id] = fr_tagged_nil();
+      runtime->slots.current[slot_id] = fr_tagged_nil();
+      runtime->slots.base_tier[slot_id] = 0;
+      runtime->slots.library_base[slot_id] = fr_tagged_nil();
+      runtime->slots.library_base_present[slot_id] = false;
+      fr_persist_slot_tier[slot_id] = 0;
+      runtime->slots.overlay[slot_id] = false;
+    } else if (runtime->slots.library_base_present[slot_id]) {
+      runtime->slots.library_base[slot_id] = fr_tagged_nil();
+      runtime->slots.library_base_present[slot_id] = false;
     }
-    if (fr_persist_slot_tier[slot_id] != FR_PERSIST_TIER_LIBRARY) {
-      continue;
-    }
-    (void)fr_slot_restore(runtime, slot_id);
-    if (slot_id < FR_PROFILE_MAX_SLOTS) {
+    if (fr_slot_is_overlay(runtime, slot_id) &&
+        fr_persist_slot_tier[slot_id] == FR_PERSIST_TIER_LIBRARY) {
+      (void)fr_slot_restore(runtime, slot_id);
       fr_persist_slot_tier[slot_id] = 0;
     }
   }
@@ -175,7 +190,8 @@ void fr_persist_session_wipe_library_tier(fr_runtime_t *runtime) {
     for (uint16_t src = 0; src < runtime->slots.overlay_name_count; src++) {
       fr_slot_id_t s = runtime->slots.overlay_name_slots[src];
 
-      if (fr_slot_is_overlay(runtime, s)) {
+      if (fr_slot_is_overlay(runtime, s) ||
+          (s < FR_PROFILE_MAX_SLOTS && runtime->slots.base_tier[s] != 0)) {
         if (dst != src) {
           memcpy(runtime->slots.overlay_names[dst],
                  runtime->slots.overlay_names[src],
@@ -192,6 +208,7 @@ void fr_persist_session_wipe_library_tier(fr_runtime_t *runtime) {
     runtime->slots.overlay_name_count = dst;
   }
 #endif
+  fr_slot_reclaim_free_tail(runtime);
 }
 
 /* Writer/reader cursors stay uint16_t; this asserts the payload buffer fits. */
@@ -260,6 +277,7 @@ typedef struct fr_persist_name_record_t {
 
 typedef struct fr_persist_decoded_payload_t {
   fr_persist_code_record_t code_records[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  bool code_present[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
   fr_persist_text_record_t text_records[FR_OBJECT_TABLE_CAPACITY];
   fr_persist_record_shape_record_t shape_records[FR_OBJECT_TABLE_CAPACITY];
   fr_record_name_t record_fields[FR_RECORD_SHAPE_FIELD_CAPACITY];
@@ -268,6 +286,7 @@ typedef struct fr_persist_decoded_payload_t {
   fr_persist_cell_record_t cell_records[FR_OBJECT_TABLE_CAPACITY];
   fr_tagged_t cell_values[FR_CELL_WORD_CAPACITY];
   fr_persist_object_record_kind_t object_kinds[FR_OBJECT_TABLE_CAPACITY];
+  bool object_present[FR_OBJECT_TABLE_CAPACITY];
   fr_persist_bind_record_t bind_records[FR_PROFILE_MAX_SLOTS];
   fr_persist_name_record_t name_records[FR_PROFILE_MAX_OVERLAY_NAMES > 0
                                              ? FR_PROFILE_MAX_OVERLAY_NAMES
@@ -289,9 +308,7 @@ typedef struct fr_persist_decoded_payload_t {
 
 static void
 fr_persist_decoded_payload_reset(fr_persist_decoded_payload_t *decoded) {
-  memset(&decoded->code_count, 0,
-         sizeof(*decoded) -
-             offsetof(fr_persist_decoded_payload_t, code_count));
+  memset(decoded, 0, sizeof(*decoded));
 }
 
 static fr_err_t fr_persist_code_bytes_equal(
@@ -477,11 +494,12 @@ static fr_err_t fr_persist_encode_text_ref(
 static fr_err_t fr_persist_encode_code_ref(
     fr_persist_writer_t *writer, const fr_runtime_t *runtime,
     fr_code_object_id_t runtime_code_id, fr_code_object_id_t runtime_code_ids[],
-    uint16_t *code_count, fr_object_id_t runtime_object_ids[],
+    bool code_visiting[], uint16_t *code_count,
+    fr_object_id_t runtime_object_ids[],
     fr_persist_object_record_kind_t object_kinds[], uint16_t *object_count,
     uint16_t *out_local_id) {
   fr_instruction_stream_t instructions;
-  /* Restore/save-path buffer holds one whole-image code object, which can be
+  /* Save/finalize scratch holds one whole-image code object, which can be
    * larger than a single device-compiled definition; size off the image cap. */
   uint8_t patched[FR_PROFILE_TOTAL_IMAGE_BYTES];
   fr_instruction_stream_t view;
@@ -489,11 +507,17 @@ static fr_err_t fr_persist_encode_code_ref(
   fr_code_offset_t ip = 0;
   char scratch[64];
 
+  if (runtime_code_id >= FR_PROFILE_CODE_OBJECT_TABLE_SIZE) {
+    return FR_ERR_CORRUPT;
+  }
   FR_TRY(fr_code_get_instructions(runtime, runtime_code_id, &instructions));
 
   for (uint16_t i = 0; i < *code_count; i++) {
     bool same_code = false;
 
+    if (runtime_code_ids[i] >= runtime->code.count) {
+      continue;
+    }
     if (runtime_code_ids[i] == runtime_code_id) {
       *out_local_id = i;
       return FR_OK;
@@ -509,6 +533,10 @@ static fr_err_t fr_persist_encode_code_ref(
   if (*code_count >= FR_PROFILE_CODE_OBJECT_TABLE_SIZE) {
     return FR_ERR_CAPACITY;
   }
+  if (code_visiting[runtime_code_id]) {
+    return FR_ERR_INVALID;
+  }
+  code_visiting[runtime_code_id] = true;
 
   if (instructions.length > (uint16_t)sizeof(patched)) {
     return FR_ERR_CAPACITY;
@@ -538,11 +566,12 @@ static fr_err_t fr_persist_encode_code_ref(
       uint16_t inner_local_id = 0;
 
       FR_TRY(fr_instruction_read_code_id_operand(&view, ip, &inner_runtime_id));
-      /* Encode the inner body first so it gets a smaller local id; the
-       * record we are about to write then carries that local id, and the
-       * restore walk resolves local -> runtime in dependency order. */
+      /* Encode the inner body first so it gets a smaller final id; the
+       * record we are about to write then carries that final id. Mount
+       * validates the id order and does not patch these bytes. */
       FR_TRY(fr_persist_encode_code_ref(writer, runtime, inner_runtime_id,
-                                        runtime_code_ids, code_count,
+                                        runtime_code_ids, code_visiting,
+                                        code_count,
                                         runtime_object_ids, object_kinds,
                                         object_count, &inner_local_id));
       patched[ip + 1] = (uint8_t)(inner_local_id & 0xffu);
@@ -570,6 +599,7 @@ static fr_err_t fr_persist_encode_code_ref(
   runtime_code_ids[*code_count] = runtime_code_id;
   *out_local_id = *code_count;
   *code_count = (uint16_t)(*code_count + 1);
+  code_visiting[runtime_code_id] = false;
   return FR_OK;
 }
 
@@ -581,9 +611,12 @@ static fr_err_t fr_persist_find_code_ref(
     return FR_ERR_INVALID;
   }
 
-  for (uint16_t i = 0; i < code_count; i++) {
+  for (uint16_t i = runtime->code.base_image_count; i < code_count; i++) {
     bool same_code = false;
 
+    if (runtime_code_ids[i] >= runtime->code.count) {
+      continue;
+    }
     if (runtime_code_ids[i] == runtime_code_id) {
       *out_local_id = i;
       return FR_OK;
@@ -670,6 +703,9 @@ static fr_err_t fr_persist_encode_text_ref(
     bool same_text = false;
 
     if (object_kinds[i] != FR_PERSIST_OBJECT_TEXT) {
+      continue;
+    }
+    if (runtime_object_ids[i] >= runtime->objects.count) {
       continue;
     }
     if (runtime_object_ids[i] == runtime_object_id) {
@@ -766,6 +802,9 @@ static fr_err_t fr_persist_find_record_shape_ref(
     bool same_shape = false;
 
     if (object_kinds[i] != FR_PERSIST_OBJECT_RECORD_SHAPE) {
+      continue;
+    }
+    if (runtime_object_ids[i] >= runtime->objects.count) {
       continue;
     }
     if (runtime_object_ids[i] == runtime_object_id) {
@@ -878,6 +917,7 @@ static fr_err_t fr_persist_encode_record_ref(
   }
   for (uint16_t i = 0; i < *object_count; i++) {
     if (object_kinds[i] == FR_PERSIST_OBJECT_RECORD &&
+        runtime_object_ids[i] < runtime->objects.count &&
         runtime_object_ids[i] == runtime_object_id) {
       *out_local_id = i;
       return FR_OK;
@@ -1001,6 +1041,7 @@ static fr_err_t fr_persist_encode_cell_ref(
 
   for (uint16_t i = 0; i < *object_count; i++) {
     if (object_kinds[i] == FR_PERSIST_OBJECT_CELLS &&
+        runtime_object_ids[i] < runtime->objects.count &&
         runtime_object_ids[i] == runtime_object_id) {
       *out_local_id = i;
       return FR_OK;
@@ -1085,6 +1126,9 @@ static fr_err_t fr_persist_find_object_ref(
 
   for (uint16_t i = 0; i < object_count; i++) {
     if (object_kinds[i] != kind) {
+      continue;
+    }
+    if (runtime_object_ids[i] >= runtime->objects.count) {
       continue;
     }
     if (runtime_object_ids[i] == runtime_object_id) {
@@ -1212,7 +1256,51 @@ static fr_err_t fr_persist_check_no_volatile_handles(
   return FR_OK;
 }
 
-/* tier_filter == 0 walks every overlay slot (the historical full-encode).
+static uint8_t fr_persist_slot_encode_tier(const fr_runtime_t *runtime,
+                                           fr_slot_id_t slot_id) {
+  uint8_t tier = 0;
+
+  if (runtime == NULL || slot_id >= FR_PROFILE_MAX_SLOTS) {
+    return (uint8_t)FR_PERSIST_TIER_USER;
+  }
+  if (fr_slot_is_overlay(runtime, slot_id)) {
+    tier = fr_persist_slot_tier[slot_id];
+  } else if (runtime->slots.base_tier[slot_id] == FR_INSTALL_TIER_LIBRARY) {
+    tier = (uint8_t)FR_PERSIST_TIER_LIBRARY;
+  } else if (runtime->slots.base_tier[slot_id] == FR_INSTALL_TIER_USER) {
+    tier = (uint8_t)FR_PERSIST_TIER_USER;
+  }
+  if (tier != FR_PERSIST_TIER_LIBRARY && tier != FR_PERSIST_TIER_USER) {
+    tier = (uint8_t)FR_PERSIST_TIER_USER;
+  }
+  return tier;
+}
+
+static bool fr_persist_slot_should_encode(const fr_runtime_t *runtime,
+                                          fr_slot_id_t slot_id,
+                                          uint8_t tier_filter) {
+  uint8_t tier = 0;
+
+  if (runtime == NULL || slot_id >= FR_PROFILE_MAX_SLOTS) {
+    return false;
+  }
+  if (!fr_slot_is_overlay(runtime, slot_id) &&
+      runtime->slots.base_tier[slot_id] == 0) {
+    return false;
+  }
+  tier = fr_persist_slot_encode_tier(runtime, slot_id);
+  return tier_filter == 0 || tier == tier_filter;
+}
+
+/* Finalize/remap coverage for payload v5:
+ * 1. PUSH_CODE_ID operands in code bytes become final code ids.
+ * 2. PUSH_OBJECT_ID operands become final object ids.
+ * 3. Slot-init / BIND CODE, NATIVE, and OBJECT values become final ids.
+ * 4. Record shape refs and record field value refs become final object ids.
+ * 5. Event body refs become final code ids.
+ * 6. Tagged words stored in cells become final object ids.
+ *
+ * tier_filter == 0 walks every overlay slot (the historical full-encode).
  * tier_filter == FR_PERSIST_TIER_USER skips slots stamped L1; that's the save
  * path which trusts NVS for L1 (D5) and only writes L2 from the runtime.
  * library_prefix is an optional pre-encoded byte span pasted immediately
@@ -1223,13 +1311,14 @@ static fr_err_t fr_persist_check_no_volatile_handles(
  * L2 encode writes new CODE/OBJECT records with local ids continuing from
  * the prefix's last id, which is what the decoder's strict local-id sequence
  * check at fr_persist_decode_payload requires. */
-static fr_err_t fr_persist_payload_encode_impl(
+static fr_err_t fr_persist_payload_finalize_encode(
     const fr_runtime_t *runtime, uint8_t tier_filter,
     uint16_t code_count_initial, uint16_t object_count_initial,
     const uint8_t *library_prefix, uint16_t library_prefix_length,
     uint8_t *bytes, uint16_t cap, uint16_t *out_length) {
   fr_persist_writer_t writer = {bytes, 0, cap};
   fr_code_object_id_t runtime_code_ids[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  bool code_visiting[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
   fr_object_id_t runtime_object_ids[FR_OBJECT_TABLE_CAPACITY];
   fr_persist_object_record_kind_t object_kinds[FR_OBJECT_TABLE_CAPACITY];
   uint16_t code_count = code_count_initial;
@@ -1242,9 +1331,27 @@ static fr_err_t fr_persist_payload_encode_impl(
     return FR_ERR_INVALID;
   }
 
-  memset(runtime_code_ids, 0, sizeof(runtime_code_ids));
-  memset(runtime_object_ids, 0, sizeof(runtime_object_ids));
+  for (uint16_t i = 0; i < FR_PROFILE_CODE_OBJECT_TABLE_SIZE; i++) {
+    runtime_code_ids[i] = FR_PROFILE_CODE_OBJECT_TABLE_SIZE;
+  }
+  memset(code_visiting, 0, sizeof(code_visiting));
+  for (uint16_t i = 0; i < FR_OBJECT_TABLE_CAPACITY; i++) {
+    runtime_object_ids[i] = FR_OBJECT_TABLE_CAPACITY;
+  }
   memset(object_kinds, 0, sizeof(object_kinds));
+  for (fr_code_object_id_t i = 0;
+       i < code_count && i < runtime->code.count &&
+       i < FR_PROFILE_CODE_OBJECT_TABLE_SIZE;
+       i++) {
+    runtime_code_ids[i] = i;
+  }
+  for (fr_object_id_t i = 0;
+       i < object_count && i < runtime->objects.count &&
+       i < FR_OBJECT_TABLE_CAPACITY;
+       i++) {
+    runtime_object_ids[i] = i;
+    (void)fr_persist_object_kind(runtime, i, &object_kinds[i]);
+  }
   FR_TRY(fr_persist_check_no_volatile_handles(runtime));
   FR_TRY(fr_persist_writer_bytes(&writer, fr_persist_payload_magic,
                                  (uint16_t)sizeof(fr_persist_payload_magic)));
@@ -1258,16 +1365,14 @@ static fr_err_t fr_persist_payload_encode_impl(
     fr_code_object_id_t code_id = 0;
     uint16_t ignored = 0;
 
-    if (!fr_slot_is_overlay(runtime, slot_id)) {
-      continue;
-    }
-    if (tier_filter != 0 && fr_persist_slot_tier[slot_id] != tier_filter) {
+    if (!fr_persist_slot_should_encode(runtime, slot_id, tier_filter)) {
       continue;
     }
     if (fr_tagged_decode_code_object_id(runtime->slots.current[slot_id],
                                         &code_id) == FR_OK) {
       FR_TRY(fr_persist_encode_code_ref(&writer, runtime, code_id,
-                                        runtime_code_ids, &code_count,
+                                        runtime_code_ids, code_visiting,
+                                        &code_count,
                                         runtime_object_ids, object_kinds,
                                         &object_count, &ignored));
     }
@@ -1277,10 +1382,7 @@ static fr_err_t fr_persist_payload_encode_impl(
     fr_object_id_t object_id = 0;
     uint16_t ignored = 0;
 
-    if (!fr_slot_is_overlay(runtime, slot_id)) {
-      continue;
-    }
-    if (tier_filter != 0 && fr_persist_slot_tier[slot_id] != tier_filter) {
+    if (!fr_persist_slot_should_encode(runtime, slot_id, tier_filter)) {
       continue;
     }
     if (fr_tagged_decode_object_id(runtime->slots.current[slot_id],
@@ -1323,21 +1425,15 @@ static fr_err_t fr_persist_payload_encode_impl(
   }
 
   for (fr_slot_id_t slot_id = 0; slot_id < runtime->slots.count; slot_id++) {
-    if (!fr_slot_is_overlay(runtime, slot_id)) {
-      continue;
-    }
-    if (tier_filter != 0 && fr_persist_slot_tier[slot_id] != tier_filter) {
+    if (!fr_persist_slot_should_encode(runtime, slot_id, tier_filter)) {
       continue;
     }
 
     FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_BIND));
     FR_TRY(fr_persist_writer_u16(&writer, slot_id));
     {
-      uint8_t tier = fr_persist_slot_tier[slot_id];
+      uint8_t tier = fr_persist_slot_encode_tier(runtime, slot_id);
 
-      if (tier != FR_PERSIST_TIER_LIBRARY && tier != FR_PERSIST_TIER_USER) {
-        tier = (uint8_t)FR_PERSIST_TIER_USER;
-      }
       FR_TRY(fr_persist_writer_u8(&writer, tier));
     }
     FR_TRY(fr_persist_encode_value(&writer, runtime,
@@ -1357,8 +1453,7 @@ static fr_err_t fr_persist_payload_encode_impl(
       return FR_ERR_INVALID;
     }
     FR_TRY(fr_slot_id_for_name(runtime, name, &slot_id));
-    if (tier_filter != 0 && slot_id < FR_PROFILE_MAX_SLOTS &&
-        fr_persist_slot_tier[slot_id] != tier_filter) {
+    if (!fr_persist_slot_should_encode(runtime, slot_id, tier_filter)) {
       continue;
     }
     FR_TRY(fr_persist_name_length(name, &name_length));
@@ -1383,7 +1478,8 @@ static fr_err_t fr_persist_payload_encode_impl(
         continue;
       }
       FR_TRY(fr_persist_encode_code_ref(&writer, runtime, entry->body,
-                                        runtime_code_ids, &code_count,
+                                        runtime_code_ids, code_visiting,
+                                        &code_count,
                                         runtime_object_ids, object_kinds,
                                         &object_count, &local_code_id));
       FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_EVENT));
@@ -1402,8 +1498,12 @@ static fr_err_t fr_persist_payload_encode_impl(
 
 fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
                                    uint16_t cap, uint16_t *out_length) {
-  return fr_persist_payload_encode_impl(runtime, 0, 0, 0, NULL, 0, bytes, cap,
-                                        out_length);
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+  return fr_persist_payload_finalize_encode(
+      runtime, 0, runtime->code.base_image_count, runtime->objects.base_count,
+      NULL, 0, bytes, cap, out_length);
 }
 
 /* Skip a tagged value body inside a BIND record. Mirrors the decoder's
@@ -1555,12 +1655,9 @@ static fr_err_t fr_persist_payload_advance_record(
 }
 
 /* Walk a prefix span (a slice of an encoded payload, starting at the first
- * record byte after magic+version) and count CODE and OBJECT records so the
- * downstream L2 encode pass can continue local-id numbering from where the
- * prefix left off. TEXT / RECORD_SHAPE / RECORD / CELLS all live in the
- * shared object-id namespace; EVENT never appears in a prefix because save
- * emits events only into its own L2 tail. */
-static fr_err_t fr_persist_payload_count_prefix_records(
+ * record byte after magic+version) and return the next final code/object ids
+ * after the preserved L1 records. */
+static fr_err_t fr_persist_payload_next_prefix_ids(
     const uint8_t *prefix, uint16_t prefix_length, uint16_t *out_code_count,
     uint16_t *out_object_count) {
   fr_persist_reader_t reader = {prefix, prefix_length, 0};
@@ -1583,7 +1680,9 @@ static fr_err_t fr_persist_payload_count_prefix_records(
       return FR_ERR_CORRUPT;
     }
     if (tag == FR_PERSIST_RECORD_CODE) {
-      *out_code_count = (uint16_t)(*out_code_count + 1);
+      if (key >= *out_code_count) {
+        *out_code_count = (uint16_t)(key + 1u);
+      }
     } else if (tag == FR_PERSIST_RECORD_TEXT
 #if FR_FEATURE_RECORDS
                || tag == FR_PERSIST_RECORD_RECORD_SHAPE ||
@@ -1593,7 +1692,9 @@ static fr_err_t fr_persist_payload_count_prefix_records(
                || tag == FR_PERSIST_RECORD_CELLS
 #endif
     ) {
-      *out_object_count = (uint16_t)(*out_object_count + 1);
+      if (key >= *out_object_count) {
+        *out_object_count = (uint16_t)(key + 1u);
+      }
     } else if (tag == FR_PERSIST_RECORD_BIND ||
                tag == FR_PERSIST_RECORD_NAME) {
       /* no count change */
@@ -1615,10 +1716,19 @@ fr_err_t fr_persist_payload_save_encode(
   uint16_t prefix_code_count = 0;
   uint16_t prefix_object_count = 0;
 
-  FR_TRY(fr_persist_payload_count_prefix_records(
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_persist_payload_next_prefix_ids(
       library_prefix, library_prefix_length, &prefix_code_count,
       &prefix_object_count));
-  return fr_persist_payload_encode_impl(
+  if (prefix_code_count < runtime->code.base_image_count) {
+    prefix_code_count = runtime->code.base_image_count;
+  }
+  if (prefix_object_count < runtime->objects.base_count) {
+    prefix_object_count = runtime->objects.base_count;
+  }
+  return fr_persist_payload_finalize_encode(
       runtime, (uint8_t)FR_PERSIST_TIER_USER, prefix_code_count,
       prefix_object_count, library_prefix, library_prefix_length, bytes, cap,
       out_length);
@@ -1661,14 +1771,15 @@ static fr_err_t fr_persist_decode_value(fr_persist_reader_t *reader,
 static fr_err_t fr_persist_decode_cell_value(
     fr_persist_reader_t *reader,
     const fr_persist_object_record_kind_t object_kinds[],
-    uint16_t object_count, fr_tagged_t *out_tagged) {
+    const bool object_present[], uint16_t object_count,
+    fr_tagged_t *out_tagged) {
   uint8_t value_kind = 0;
 #if FR_FEATURE_TEXT
   uint16_t value_word = 0;
 #endif
   fr_int_t value_int = 0;
 
-  if (out_tagged == NULL || object_kinds == NULL) {
+  if (out_tagged == NULL || object_kinds == NULL || object_present == NULL) {
     return FR_ERR_INVALID;
   }
 #if !FR_FEATURE_TEXT
@@ -1694,7 +1805,7 @@ static fr_err_t fr_persist_decode_cell_value(
     return FR_ERR_UNSUPPORTED;
 #else
     FR_TRY(fr_persist_reader_u16(reader, &value_word));
-    if (value_word >= object_count) {
+    if (value_word >= object_count || !object_present[value_word]) {
       return FR_ERR_CORRUPT;
     }
     if (object_kinds[value_word] != FR_PERSIST_OBJECT_TEXT
@@ -1709,6 +1820,23 @@ static fr_err_t fr_persist_decode_cell_value(
   default:
     return FR_ERR_CORRUPT;
   }
+}
+#endif
+
+#if FR_FEATURE_TEXT
+static fr_err_t fr_persist_find_text_record(
+    const fr_persist_text_record_t text_records[], uint16_t text_count,
+    uint16_t local_id, const fr_persist_text_record_t **out_text) {
+  if (text_records == NULL || out_text == NULL) {
+    return FR_ERR_INVALID;
+  }
+  for (uint16_t i = 0; i < text_count; i++) {
+    if (text_records[i].local_id == local_id) {
+      *out_text = &text_records[i];
+      return FR_OK;
+    }
+  }
+  return FR_ERR_CORRUPT;
 }
 #endif
 
@@ -1751,15 +1879,32 @@ static fr_err_t fr_persist_find_shape_record(
   return FR_ERR_CORRUPT;
 }
 
+static fr_err_t fr_persist_find_record_record(
+    const fr_persist_record_record_t record_records[], uint16_t record_count,
+    uint16_t local_id, const fr_persist_record_record_t **out_record) {
+  if (record_records == NULL || out_record == NULL) {
+    return FR_ERR_INVALID;
+  }
+  for (uint16_t i = 0; i < record_count; i++) {
+    if (record_records[i].local_id == local_id) {
+      *out_record = &record_records[i];
+      return FR_OK;
+    }
+  }
+  return FR_ERR_CORRUPT;
+}
+
 static fr_err_t fr_persist_decode_record_value(
     fr_persist_reader_t *reader,
     const fr_persist_object_record_kind_t object_kinds[],
-    uint16_t object_count, fr_tagged_t *out_tagged) {
+    const bool object_present[], uint16_t object_count,
+    fr_tagged_t *out_tagged) {
   uint8_t value_kind = 0;
   uint16_t value_word = 0;
   fr_int_t value_int = 0;
 
-  if (reader == NULL || object_kinds == NULL || out_tagged == NULL) {
+  if (reader == NULL || object_kinds == NULL || object_present == NULL ||
+      out_tagged == NULL) {
     return FR_ERR_INVALID;
   }
 
@@ -1779,7 +1924,7 @@ static fr_err_t fr_persist_decode_record_value(
     return fr_tagged_encode_int(value_int, out_tagged);
   case FR_PERSIST_VALUE_OBJECT:
     FR_TRY(fr_persist_reader_u16(reader, &value_word));
-    if (value_word >= object_count ||
+    if (value_word >= object_count || !object_present[value_word] ||
         object_kinds[value_word] != FR_PERSIST_OBJECT_TEXT) {
       return FR_ERR_CORRUPT;
     }
@@ -1787,6 +1932,23 @@ static fr_err_t fr_persist_decode_record_value(
   default:
     return FR_ERR_CORRUPT;
   }
+}
+#endif
+
+#if FR_FEATURE_CELLS
+static fr_err_t fr_persist_find_cell_record(
+    const fr_persist_cell_record_t cell_records[], uint16_t cell_count,
+    uint16_t local_id, const fr_persist_cell_record_t **out_cell) {
+  if (cell_records == NULL || out_cell == NULL) {
+    return FR_ERR_INVALID;
+  }
+  for (uint16_t i = 0; i < cell_count; i++) {
+    if (cell_records[i].local_id == local_id) {
+      *out_cell = &cell_records[i];
+      return FR_OK;
+    }
+  }
+  return FR_ERR_CORRUPT;
 }
 #endif
 
@@ -1806,6 +1968,8 @@ static fr_err_t fr_persist_decode_payload(
   fr_persist_cell_record_t *cell_records = NULL;
   fr_tagged_t *cell_values = NULL;
   fr_persist_object_record_kind_t *object_kinds = NULL;
+  bool *code_present = NULL;
+  bool *object_present = NULL;
   fr_persist_bind_record_t *bind_records = NULL;
   fr_persist_name_record_t *name_records = NULL;
   uint16_t *out_code_count = NULL;
@@ -1834,6 +1998,8 @@ static fr_err_t fr_persist_decode_payload(
   cell_records = decoded->cell_records;
   cell_values = decoded->cell_values;
   object_kinds = decoded->object_kinds;
+  code_present = decoded->code_present;
+  object_present = decoded->object_present;
   bind_records = decoded->bind_records;
   name_records = decoded->name_records;
   out_code_count = &decoded->code_count;
@@ -1869,6 +2035,7 @@ static fr_err_t fr_persist_decode_payload(
 #endif
 #if !FR_FEATURE_OBJECTS
   (void)object_kinds;
+  (void)object_present;
   (void)out_object_count;
 #endif
 #if FR_PROFILE_MAX_OVERLAY_NAMES == 0
@@ -1896,60 +2063,70 @@ static fr_err_t fr_persist_decode_payload(
       fr_persist_code_record_t *code = NULL;
       fr_instruction_stream_t instructions;
       fr_instruction_header_t header = {0};
+      uint16_t final_id = 0;
 
-      if (*out_code_count >= FR_PROFILE_CODE_OBJECT_TABLE_SIZE) {
-        return FR_ERR_CAPACITY;
-      }
-      code = &code_records[*out_code_count];
-      FR_TRY(fr_persist_reader_u16(&reader, &code->local_id));
-      if (code->local_id != *out_code_count) {
+      FR_TRY(fr_persist_reader_u16(&reader, &final_id));
+      if (final_id >= FR_PROFILE_CODE_OBJECT_TABLE_SIZE ||
+          code_present[final_id]) {
         return FR_ERR_CORRUPT;
       }
+      code = &code_records[final_id];
+      code->local_id = final_id;
       FR_TRY(fr_persist_reader_u16(&reader, &code->length));
       FR_TRY(fr_persist_reader_bytes(&reader, code->length, &code->bytes));
       FR_TRY(fr_instruction_stream_init(&instructions, code->bytes,
                                         code->length));
       FR_TRY(fr_instruction_read_header(&instructions, &header));
-      *out_code_count = (uint16_t)(*out_code_count + 1);
+      code_present[final_id] = true;
+      if (final_id >= *out_code_count) {
+        *out_code_count = (uint16_t)(final_id + 1u);
+      }
     } else if (record == FR_PERSIST_RECORD_TEXT) {
 #if !FR_FEATURE_TEXT
       return FR_ERR_UNSUPPORTED;
 #else
       fr_persist_text_record_t *text = NULL;
+      uint16_t final_id = 0;
 
-      if (*out_text_count >= FR_PROFILE_OBJECT_TABLE_SIZE ||
-          *out_object_count >= FR_PROFILE_OBJECT_TABLE_SIZE) {
+      if (*out_text_count >= FR_PROFILE_OBJECT_TABLE_SIZE) {
         return FR_ERR_CAPACITY;
       }
       text = &text_records[*out_text_count];
-      FR_TRY(fr_persist_reader_u16(&reader, &text->local_id));
-      if (text->local_id != *out_object_count) {
+      FR_TRY(fr_persist_reader_u16(&reader, &final_id));
+      if (final_id >= FR_OBJECT_TABLE_CAPACITY ||
+          object_present[final_id]) {
         return FR_ERR_CORRUPT;
       }
+      text->local_id = final_id;
       FR_TRY(fr_persist_reader_u16(&reader, &text->length));
       if (text->length > FR_PROFILE_MAX_TEXT_LENGTH) {
         return FR_ERR_CORRUPT;
       }
       FR_TRY(fr_persist_reader_bytes(&reader, text->length, &text->bytes));
-      object_kinds[*out_object_count] = FR_PERSIST_OBJECT_TEXT;
+      object_kinds[final_id] = FR_PERSIST_OBJECT_TEXT;
+      object_present[final_id] = true;
       *out_text_count = (uint16_t)(*out_text_count + 1);
-      *out_object_count = (uint16_t)(*out_object_count + 1);
+      if (final_id >= *out_object_count) {
+        *out_object_count = (uint16_t)(final_id + 1u);
+      }
 #endif
     } else if (record == FR_PERSIST_RECORD_RECORD_SHAPE) {
 #if !FR_FEATURE_RECORDS
       return FR_ERR_UNSUPPORTED;
 #else
       fr_persist_record_shape_record_t *shape = NULL;
+      uint16_t final_id = 0;
 
-      if (*out_shape_count >= FR_PROFILE_OBJECT_TABLE_SIZE ||
-          *out_object_count >= FR_PROFILE_OBJECT_TABLE_SIZE) {
+      if (*out_shape_count >= FR_PROFILE_OBJECT_TABLE_SIZE) {
         return FR_ERR_CAPACITY;
       }
       shape = &shape_records[*out_shape_count];
-      FR_TRY(fr_persist_reader_u16(&reader, &shape->local_id));
-      if (shape->local_id != *out_object_count) {
+      FR_TRY(fr_persist_reader_u16(&reader, &final_id));
+      if (final_id >= FR_OBJECT_TABLE_CAPACITY ||
+          object_present[final_id]) {
         return FR_ERR_CORRUPT;
       }
+      shape->local_id = final_id;
       FR_TRY(fr_persist_decode_record_name(&reader, &shape->name));
       FR_TRY(fr_persist_reader_u16(&reader, &shape->field_count));
       if (shape->field_count == 0 ||
@@ -1975,9 +2152,12 @@ static fr_err_t fr_persist_decode_payload(
         *out_record_field_count =
             (uint16_t)(*out_record_field_count + 1);
       }
-      object_kinds[*out_object_count] = FR_PERSIST_OBJECT_RECORD_SHAPE;
+      object_kinds[final_id] = FR_PERSIST_OBJECT_RECORD_SHAPE;
+      object_present[final_id] = true;
       *out_shape_count = (uint16_t)(*out_shape_count + 1);
-      *out_object_count = (uint16_t)(*out_object_count + 1);
+      if (final_id >= *out_object_count) {
+        *out_object_count = (uint16_t)(final_id + 1u);
+      }
 #endif
     } else if (record == FR_PERSIST_RECORD_RECORD) {
 #if !FR_FEATURE_RECORDS
@@ -1985,19 +2165,22 @@ static fr_err_t fr_persist_decode_payload(
 #else
       fr_persist_record_record_t *record_object = NULL;
       const fr_persist_record_shape_record_t *shape = NULL;
+      uint16_t final_id = 0;
 
-      if (*out_record_count >= FR_PROFILE_OBJECT_TABLE_SIZE ||
-          *out_object_count >= FR_PROFILE_OBJECT_TABLE_SIZE) {
+      if (*out_record_count >= FR_PROFILE_OBJECT_TABLE_SIZE) {
         return FR_ERR_CAPACITY;
       }
       record_object = &record_records[*out_record_count];
-      FR_TRY(fr_persist_reader_u16(&reader, &record_object->local_id));
-      if (record_object->local_id != *out_object_count) {
+      FR_TRY(fr_persist_reader_u16(&reader, &final_id));
+      if (final_id >= FR_OBJECT_TABLE_CAPACITY ||
+          object_present[final_id]) {
         return FR_ERR_CORRUPT;
       }
+      record_object->local_id = final_id;
       FR_TRY(fr_persist_reader_u16(&reader,
                                    &record_object->shape_local_id));
       if (record_object->shape_local_id >= *out_object_count ||
+          !object_present[record_object->shape_local_id] ||
           object_kinds[record_object->shape_local_id] !=
               FR_PERSIST_OBJECT_RECORD_SHAPE) {
         return FR_ERR_CORRUPT;
@@ -2018,30 +2201,36 @@ static fr_err_t fr_persist_decode_payload(
         fr_tagged_t tagged = 0;
 
         FR_TRY(fr_persist_decode_record_value(&reader, object_kinds,
+                                              object_present,
                                               *out_object_count, &tagged));
         record_values[*out_record_value_count] = tagged;
         *out_record_value_count =
             (uint16_t)(*out_record_value_count + 1);
       }
-      object_kinds[*out_object_count] = FR_PERSIST_OBJECT_RECORD;
+      object_kinds[final_id] = FR_PERSIST_OBJECT_RECORD;
+      object_present[final_id] = true;
       *out_record_count = (uint16_t)(*out_record_count + 1);
-      *out_object_count = (uint16_t)(*out_object_count + 1);
+      if (final_id >= *out_object_count) {
+        *out_object_count = (uint16_t)(final_id + 1u);
+      }
 #endif
     } else if (record == FR_PERSIST_RECORD_CELLS) {
 #if !FR_FEATURE_CELLS
       return FR_ERR_UNSUPPORTED;
 #else
       fr_persist_cell_record_t *cell = NULL;
+      uint16_t final_id = 0;
 
-      if (*out_cell_count >= FR_PROFILE_OBJECT_TABLE_SIZE ||
-          *out_object_count >= FR_PROFILE_OBJECT_TABLE_SIZE) {
+      if (*out_cell_count >= FR_PROFILE_OBJECT_TABLE_SIZE) {
         return FR_ERR_CAPACITY;
       }
       cell = &cell_records[*out_cell_count];
-      FR_TRY(fr_persist_reader_u16(&reader, &cell->local_id));
-      if (cell->local_id != *out_object_count) {
+      FR_TRY(fr_persist_reader_u16(&reader, &final_id));
+      if (final_id >= FR_OBJECT_TABLE_CAPACITY ||
+          object_present[final_id]) {
         return FR_ERR_CORRUPT;
       }
+      cell->local_id = final_id;
       FR_TRY(fr_persist_reader_u16(&reader, &cell->length));
       if (cell->length == 0 || cell->length > FR_PROFILE_MAX_CELL_LENGTH) {
         return FR_ERR_CORRUPT;
@@ -2055,13 +2244,17 @@ static fr_err_t fr_persist_decode_payload(
         fr_tagged_t tagged = 0;
 
         FR_TRY(fr_persist_decode_cell_value(&reader, object_kinds,
+                                            object_present,
                                             *out_object_count, &tagged));
         cell_values[*out_cell_value_count] = tagged;
         *out_cell_value_count = (uint16_t)(*out_cell_value_count + 1);
       }
-      object_kinds[*out_object_count] = FR_PERSIST_OBJECT_CELLS;
+      object_kinds[final_id] = FR_PERSIST_OBJECT_CELLS;
+      object_present[final_id] = true;
       *out_cell_count = (uint16_t)(*out_cell_count + 1);
-      *out_object_count = (uint16_t)(*out_object_count + 1);
+      if (final_id >= *out_object_count) {
+        *out_object_count = (uint16_t)(final_id + 1u);
+      }
 #endif
     } else if (record == FR_PERSIST_RECORD_BIND) {
       fr_persist_bind_record_t *bind = NULL;
@@ -2103,7 +2296,7 @@ static fr_err_t fr_persist_decode_payload(
       FR_TRY(fr_persist_reader_u16(&reader, &body));
       /* Save writes the body's CODE record before this EVENT record via
        * fr_persist_encode_code_ref, so the local id has been seen by decode. */
-      if (body >= *out_code_count) {
+      if (body >= *out_code_count || !code_present[body]) {
         return FR_ERR_CORRUPT;
       }
       binding = &decoded->event_records[decoded->event_count];
@@ -2155,9 +2348,7 @@ static fr_err_t fr_persist_decode_payload(
 
 static fr_err_t fr_persist_bind_value(const fr_runtime_t *runtime,
                                       const fr_persist_bind_record_t *bind,
-                                      const fr_code_object_id_t code_map[],
                                       uint16_t code_count,
-                                      const fr_object_id_t object_map[],
                                       uint16_t object_count,
                                       fr_tagged_t *out_tagged) {
   switch (bind->value_kind) {
@@ -2176,8 +2367,7 @@ static fr_err_t fr_persist_bind_value(const fr_runtime_t *runtime,
     if (bind->value_word >= code_count) {
       return FR_ERR_CORRUPT;
     }
-    return fr_tagged_encode_code_object_id(code_map[bind->value_word],
-                                           out_tagged);
+    return fr_tagged_encode_code_object_id(bind->value_word, out_tagged);
   case FR_PERSIST_VALUE_NATIVE:
     if (bind->value_word >= runtime->natives.base_count) {
       return FR_ERR_CORRUPT;
@@ -2187,8 +2377,7 @@ static fr_err_t fr_persist_bind_value(const fr_runtime_t *runtime,
     if (bind->value_word >= object_count) {
       return FR_ERR_CORRUPT;
     }
-    return fr_tagged_encode_object_id(object_map[bind->value_word],
-                                      out_tagged);
+    return fr_tagged_encode_object_id(bind->value_word, out_tagged);
   default:
     return FR_ERR_CORRUPT;
   }
@@ -2197,31 +2386,32 @@ static fr_err_t fr_persist_bind_value(const fr_runtime_t *runtime,
 static fr_err_t fr_persist_check_restore_capacity(
     const fr_runtime_t *runtime,
     const fr_persist_decoded_payload_t *decoded) {
-  uint32_t used_instruction_bytes = 0;
   uint32_t used_cell_words = 0;
   uint32_t used_text_bytes = 0;
   uint32_t used_record_names = 0;
   uint32_t used_record_shape_fields = 0;
   uint32_t used_record_values = 0;
   uint32_t used_record_name_bytes = 0;
-  uint16_t unique_text_count = 0;
   const fr_persist_code_record_t *code_records = NULL;
   const fr_persist_text_record_t *text_records = NULL;
   const fr_persist_record_shape_record_t *shape_records = NULL;
   const fr_record_name_t *record_fields = NULL;
   const fr_persist_record_record_t *record_records = NULL;
   const fr_persist_cell_record_t *cell_records = NULL;
+  const bool *code_present = NULL;
   uint16_t code_count = 0;
   uint16_t text_count = 0;
   uint16_t shape_count = 0;
   uint16_t record_field_count = 0;
   uint16_t record_count = 0;
   uint16_t cell_count = 0;
+  uint16_t object_count = 0;
 
   if (runtime == NULL || decoded == NULL) {
     return FR_ERR_INVALID;
   }
   code_records = decoded->code_records;
+  code_present = decoded->code_present;
   text_records = decoded->text_records;
   shape_records = decoded->shape_records;
   record_fields = decoded->record_fields;
@@ -2233,6 +2423,7 @@ static fr_err_t fr_persist_check_restore_capacity(
   record_field_count = decoded->record_field_count;
   record_count = decoded->record_count;
   cell_count = decoded->cell_count;
+  object_count = decoded->object_count;
 #if !FR_FEATURE_TEXT
   (void)text_records;
   (void)text_count;
@@ -2250,18 +2441,17 @@ static fr_err_t fr_persist_check_restore_capacity(
   (void)cell_count;
 #endif
 
-  if ((uint32_t)runtime->code.base_image_count + code_count >
-      FR_PROFILE_CODE_OBJECT_TABLE_SIZE) {
+  if (code_count > FR_PROFILE_CODE_OBJECT_TABLE_SIZE) {
     return FR_ERR_CAPACITY;
   }
 
-  used_instruction_bytes = runtime->code.base_image_used_instruction_bytes;
   for (uint16_t i = 0; i < code_count; i++) {
-    if (used_instruction_bytes + code_records[i].length >
-        sizeof(runtime->code.image_instruction_bytes)) {
+    if (!code_present[i]) {
+      continue;
+    }
+    if (code_records[i].length > FR_PROFILE_TOTAL_IMAGE_BYTES) {
       return FR_ERR_CAPACITY;
     }
-    used_instruction_bytes += code_records[i].length;
   }
 
 #if FR_FEATURE_TEXT
@@ -2290,7 +2480,6 @@ static fr_err_t fr_persist_check_restore_capacity(
       return FR_ERR_CAPACITY;
     }
     used_text_bytes += text_records[i].length;
-    unique_text_count = (uint16_t)(unique_text_count + 1);
   }
 #else
   if (text_count > 0) {
@@ -2375,9 +2564,7 @@ static fr_err_t fr_persist_check_restore_capacity(
     }
     used_cell_words += cell_records[i].length;
   }
-  if ((uint32_t)runtime->objects.base_count + unique_text_count + shape_count +
-          record_count + cell_count >
-      FR_PROFILE_OBJECT_TABLE_SIZE) {
+  if (object_count > FR_PROFILE_OBJECT_TABLE_SIZE) {
     return FR_ERR_CAPACITY;
   }
   return FR_OK;
@@ -2385,13 +2572,15 @@ static fr_err_t fr_persist_check_restore_capacity(
 
 static fr_err_t fr_persist_check_bind_record(
     const fr_runtime_t *runtime, const fr_persist_bind_record_t *bind,
-    uint16_t code_count, uint16_t object_count) {
+    const bool code_present[], uint16_t code_count,
+    const bool object_present[], uint16_t object_count) {
   fr_tagged_t ignored = 0;
 
 #if !FR_FEATURE_OBJECTS
   (void)object_count;
 #endif
-  if (runtime == NULL || bind == NULL) {
+  if (runtime == NULL || bind == NULL || code_present == NULL ||
+      object_present == NULL) {
     return FR_ERR_INVALID;
   }
 
@@ -2403,19 +2592,130 @@ static fr_err_t fr_persist_check_bind_record(
   case FR_PERSIST_VALUE_INT:
     return fr_tagged_encode_int(bind->int_value, &ignored);
   case FR_PERSIST_VALUE_CODE:
-    return bind->value_word < code_count ? FR_OK : FR_ERR_CORRUPT;
+    if (bind->value_word < runtime->code.base_image_count) {
+      return bind->value_word < runtime->code.count ? FR_OK : FR_ERR_CORRUPT;
+    }
+    return bind->value_word < code_count && code_present[bind->value_word]
+               ? FR_OK
+               : FR_ERR_CORRUPT;
   case FR_PERSIST_VALUE_NATIVE:
     return bind->value_word < runtime->natives.base_count ? FR_OK
                                                           : FR_ERR_CORRUPT;
   case FR_PERSIST_VALUE_OBJECT:
 #if FR_FEATURE_OBJECTS
-    return bind->value_word < object_count ? FR_OK : FR_ERR_CORRUPT;
+    if (bind->value_word < runtime->objects.base_count) {
+      return bind->value_word < runtime->objects.count ? FR_OK
+                                                       : FR_ERR_CORRUPT;
+    }
+    return bind->value_word < object_count && object_present[bind->value_word]
+               ? FR_OK
+               : FR_ERR_CORRUPT;
 #else
     return FR_ERR_UNSUPPORTED;
 #endif
   default:
     return FR_ERR_CORRUPT;
   }
+}
+
+static fr_err_t fr_persist_check_final_image_refs(
+    const fr_runtime_t *runtime,
+    const fr_persist_decoded_payload_t *decoded) {
+  if (runtime == NULL || decoded == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (decoded->code_count > 0 &&
+      decoded->code_count < runtime->code.base_image_count) {
+    return FR_ERR_CORRUPT;
+  }
+  for (uint16_t i = 0;
+       i < runtime->code.base_image_count && i < decoded->code_count; i++) {
+    if (decoded->code_present[i]) {
+      return FR_ERR_CORRUPT;
+    }
+  }
+  for (uint16_t i = runtime->code.base_image_count; i < decoded->code_count;
+       i++) {
+    if (!decoded->code_present[i]) {
+      return FR_ERR_CORRUPT;
+    }
+  }
+  if (decoded->object_count > 0 &&
+      decoded->object_count < runtime->objects.base_count) {
+    return FR_ERR_CORRUPT;
+  }
+  for (uint16_t i = 0;
+       i < runtime->objects.base_count && i < decoded->object_count; i++) {
+    if (decoded->object_present[i]) {
+      return FR_ERR_CORRUPT;
+    }
+  }
+  for (uint16_t i = runtime->objects.base_count; i < decoded->object_count;
+       i++) {
+    if (!decoded->object_present[i]) {
+      return FR_ERR_CORRUPT;
+    }
+  }
+
+  for (uint16_t i = runtime->code.base_image_count; i < decoded->code_count;
+       i++) {
+    const fr_persist_code_record_t *code = &decoded->code_records[i];
+    fr_instruction_stream_t view;
+    fr_instruction_header_t header = {0};
+    fr_code_offset_t ip = 0;
+    char scratch[64];
+
+    if (!decoded->code_present[i]) {
+      continue;
+    }
+    FR_TRY(fr_instruction_stream_init(&view, code->bytes, code->length));
+    FR_TRY(fr_instruction_read_header(&view, &header));
+    ip = (fr_code_offset_t)header.header_size;
+    while (ip < view.length) {
+      fr_code_offset_t next_ip = 0;
+      fr_opcode_t op = (fr_opcode_t)code->bytes[ip];
+
+      if (op == FR_OP_PUSH_CODE_ID) {
+        fr_code_object_id_t ref = 0;
+
+        FR_TRY(fr_instruction_read_code_id_operand(&view, ip, &ref));
+        if (ref < runtime->code.base_image_count) {
+          if (ref >= runtime->code.count) {
+            return FR_ERR_CORRUPT;
+          }
+        } else if (ref >= i || !decoded->code_present[ref]) {
+          return FR_ERR_CORRUPT;
+        }
+      }
+#if FR_FEATURE_OBJECTS
+      if (op == FR_OP_PUSH_OBJECT_ID) {
+        fr_object_id_t ref = 0;
+
+        FR_TRY(fr_instruction_read_object_id_operand(&view, ip, &ref));
+        if (ref < runtime->objects.base_count) {
+          const uint8_t *ignored_bytes = NULL;
+          uint16_t ignored_length = 0;
+
+          FR_TRY(fr_text_view(runtime, ref, &ignored_bytes, &ignored_length));
+        } else if (ref >= decoded->object_count ||
+                   !decoded->object_present[ref] ||
+                   decoded->object_kinds[ref] != FR_PERSIST_OBJECT_TEXT) {
+          return FR_ERR_CORRUPT;
+        }
+        /* Object records are all validated and installed before any code is
+         * mounted, so PUSH_OBJECT_ID has no code-style deps-before ordering. */
+      }
+#endif
+      FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
+                                           (uint16_t)sizeof(scratch), NULL,
+                                           &next_ip));
+      if (next_ip <= ip) {
+        return FR_ERR_CORRUPT;
+      }
+      ip = next_ip;
+    }
+  }
+  return FR_OK;
 }
 
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
@@ -2527,8 +2827,7 @@ static void fr_persist_write_l1_skip_warning(fr_slot_id_t slot_id,
  * the walk, which is what the FULL and L2 restore paths want. */
 static fr_err_t fr_persist_apply_binds_tiered(
     fr_runtime_t *runtime, const fr_persist_decoded_payload_t *decoded,
-    const fr_code_object_id_t code_map[], const fr_object_id_t object_map[],
-    uint8_t tier_filter, bool skip_on_failure) {
+    uint8_t tier_filter, bool skip_on_failure, bool mount_as_base) {
   const fr_persist_bind_record_t *bind_records = decoded->bind_records;
   uint16_t bind_count = decoded->bind_count;
   uint16_t code_count = decoded->code_count;
@@ -2546,11 +2845,20 @@ static fr_err_t fr_persist_apply_binds_tiered(
       if (bind_records[i].tier != pass_tier) {
         continue;
       }
-      err = fr_persist_bind_value(runtime, &bind_records[i], code_map,
-                                  code_count, object_map, object_count,
-                                  &tagged);
+      err = fr_persist_bind_value(runtime, &bind_records[i], code_count,
+                                  object_count, &tagged);
       if (err == FR_OK) {
-        err = fr_slot_write(runtime, bind_records[i].slot_id, tagged);
+        if (mount_as_base) {
+          fr_install_tier_t tier =
+              bind_records[i].tier == FR_PERSIST_TIER_LIBRARY
+                  ? FR_INSTALL_TIER_LIBRARY
+                  : FR_INSTALL_TIER_USER;
+
+          err = fr_slot_set_mounted_base(runtime, bind_records[i].slot_id,
+                                         tagged, tier);
+        } else {
+          err = fr_slot_write(runtime, bind_records[i].slot_id, tagged);
+        }
       }
       if (err != FR_OK) {
         if (skip_on_failure) {
@@ -2567,9 +2875,9 @@ static fr_err_t fr_persist_apply_binds_tiered(
   return FR_OK;
 }
 
-/* Tier-agnostic resource install: texts, codes (with patched local id
- * operands), shapes, records, cells. Codes are not deduped — they always
- * append — so code_map[i] == runtime->code.image_count + i on success.
+/* Tier-agnostic resource install: texts, codes, shapes, records, cells. Codes
+ * are not deduped — they always append — and final ids must match installed
+ * ids because mount does not patch immutable image bytes.
  * Objects dedupe by content via fr_text_install_since's find path, but the
  * encoder also dedupes by content so within a single payload no two records
  * carry the same bytes; the dedup never collapses two distinct local ids.
@@ -2577,18 +2885,12 @@ static fr_err_t fr_persist_apply_binds_tiered(
  * Optional code_filter / object_filter masks limit the install to closure
  * subsets — used by the L2-only public restore (D5 acceptance #6) so L1
  * resources already installed by the boot pipeline do not get reinstalled.
- * NULL means "install every record" (FULL restore + boot L1 pass). Records
- * outside the closure leave their code_map / object_map slot at zero; the
- * filter must be the transitive closure under PUSH_CODE_ID / PUSH_OBJECT_ID
- * / RECORD field-value / CELL value references so no installed record's
- * patch step reads an uninstalled entry. */
+ * NULL means "install every record" (FULL restore + boot L1 pass). */
 static fr_err_t
 fr_persist_install_resources(fr_runtime_t *runtime,
                              const fr_persist_decoded_payload_t *decoded,
                              const bool *code_filter,
-                             const bool *object_filter,
-                             fr_code_object_id_t code_map[],
-                             fr_object_id_t object_map[]) {
+                             const bool *object_filter) {
   const fr_persist_code_record_t *code_records = decoded->code_records;
   const fr_persist_text_record_t *text_records = decoded->text_records;
   const fr_persist_record_shape_record_t *shape_records =
@@ -2607,170 +2909,151 @@ fr_persist_install_resources(fr_runtime_t *runtime,
   uint16_t object_count = decoded->object_count;
   fr_tagged_t cell_install_values[FR_CELL_WORD_CAPACITY];
 
+#if !FR_FEATURE_TEXT
+  (void)text_records;
+  (void)text_count;
+#endif
 #if !FR_FEATURE_RECORDS
   (void)shape_records;
   (void)record_fields;
   (void)record_records;
   (void)record_values;
+  (void)shape_count;
+  (void)record_count;
 #endif
-  (void)object_kinds;
-  (void)object_count;
+#if !FR_FEATURE_CELLS
+  (void)cell_records;
+  (void)cell_values;
+  (void)cell_count;
+  (void)cell_install_values;
+#endif
 
-  for (uint16_t i = 0; i < text_count; i++) {
-    if (object_filter != NULL && !object_filter[text_records[i].local_id]) {
+  for (uint16_t object_id = runtime->objects.base_count;
+       object_id < object_count; object_id++) {
+    fr_object_id_t installed_id = 0;
+
+    if (!decoded->object_present[object_id]) {
       continue;
     }
-    FR_TRY(fr_text_install_since(runtime, text_records[i].bytes,
-                                 text_records[i].length,
-                                 runtime->objects.base_count,
-                                 &object_map[text_records[i].local_id]));
-  }
-  for (uint16_t i = 0; i < code_count; i++) {
-    fr_instruction_stream_t instructions;
-    /* Whole-image code object during restore; size off the image cap, not the
-     * per-definition cap (they diverge once the storage split lands). */
-    uint8_t patched[FR_PROFILE_TOTAL_IMAGE_BYTES];
-    fr_instruction_header_t header = {0};
-    fr_code_offset_t ip = 0;
-    char scratch[64];
-
-    if (code_filter != NULL && !code_filter[i]) {
+    if (object_filter != NULL && !object_filter[object_id]) {
       continue;
     }
-    if (code_records[i].length > (uint16_t)sizeof(patched)) {
-      return FR_ERR_CORRUPT;
-    }
-    memcpy(patched, code_records[i].bytes, code_records[i].length);
-    FR_TRY(fr_instruction_stream_init(&instructions, patched,
-                                      code_records[i].length));
-    FR_TRY(fr_instruction_read_header(&instructions, &header));
-    ip = (fr_code_offset_t)header.header_size;
-    while (ip < instructions.length) {
-      fr_code_offset_t next_ip = 0;
 
-#if FR_FEATURE_TEXT
-      if ((fr_opcode_t)patched[ip] == FR_OP_PUSH_OBJECT_ID) {
-        fr_object_id_t local_id = 0;
+    if (object_kinds[object_id] == FR_PERSIST_OBJECT_TEXT) {
+#if !FR_FEATURE_TEXT
+      return FR_ERR_UNSUPPORTED;
+#else
+      const fr_persist_text_record_t *text = NULL;
 
-        FR_TRY(fr_instruction_read_object_id_operand(&instructions, ip,
-                                                     &local_id));
-        if (local_id >= object_count ||
-            object_kinds[local_id] != FR_PERSIST_OBJECT_TEXT) {
-          return FR_ERR_CORRUPT;
-        }
-        patched[ip + 1] = (uint8_t)(object_map[local_id] & 0xffu);
-        patched[ip + 2] = (uint8_t)(object_map[local_id] >> 8);
-      }
+      FR_TRY(fr_persist_find_text_record(text_records, text_count, object_id,
+                                         &text));
+      FR_TRY(fr_text_install_since(runtime, text->bytes, text->length,
+                                   runtime->objects.base_count,
+                                   &installed_id));
 #endif
-      if ((fr_opcode_t)patched[ip] == FR_OP_PUSH_CODE_ID) {
-        fr_code_object_id_t inner_local_id = 0;
-
-        FR_TRY(fr_instruction_read_code_id_operand(&instructions, ip,
-                                                   &inner_local_id));
-        /* Save writes deps before dependents, so the referenced inner
-         * record must already be installed at code_map[inner_local_id]. */
-        if (inner_local_id >= i) {
-          return FR_ERR_CORRUPT;
-        }
-        patched[ip + 1] = (uint8_t)(code_map[inner_local_id] & 0xffu);
-        patched[ip + 2] = (uint8_t)(code_map[inner_local_id] >> 8);
-      }
-      FR_TRY(fr_instruction_disassemble_at(&instructions, ip, scratch,
-                                           (uint16_t)sizeof(scratch), NULL,
-                                           &next_ip));
-      if (next_ip <= ip) {
-        return FR_ERR_CORRUPT;
-      }
-      ip = next_ip;
-    }
-    FR_TRY(fr_code_mount_image(runtime, &instructions, NULL, 0, &code_map[i]));
-  }
-#if FR_FEATURE_RECORDS
-  {
-    fr_tagged_t record_install_values[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
-
-    for (uint16_t i = 0; i < shape_count; i++) {
+    } else if (object_kinds[object_id] == FR_PERSIST_OBJECT_RECORD_SHAPE) {
+#if !FR_FEATURE_RECORDS
+      return FR_ERR_UNSUPPORTED;
+#else
+      const fr_persist_record_shape_record_t *shape = NULL;
       fr_record_name_t install_fields[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
 
-      if (object_filter != NULL &&
-          !object_filter[shape_records[i].local_id]) {
-        continue;
-      }
-      for (uint16_t j = 0; j < shape_records[i].field_count; j++) {
-        install_fields[j] = record_fields[shape_records[i].first_field + j];
+      FR_TRY(fr_persist_find_shape_record(shape_records, shape_count,
+                                          object_id, &shape));
+      for (uint16_t j = 0; j < shape->field_count; j++) {
+        install_fields[j] = record_fields[shape->first_field + j];
       }
       FR_TRY(fr_record_shape_install_since(
-          runtime, shape_records[i].name, install_fields,
-          shape_records[i].field_count, runtime->objects.base_count,
-          &object_map[shape_records[i].local_id]));
-    }
-    for (uint16_t i = 0; i < record_count; i++) {
-      if (object_filter != NULL &&
-          !object_filter[record_records[i].local_id]) {
-        continue;
-      }
-      if (record_records[i].field_count >
-          FR_RECORD_FIELDS_PER_SHAPE_CAPACITY) {
+          runtime, shape->name, install_fields, shape->field_count,
+          runtime->objects.base_count, &installed_id));
+#endif
+    } else if (object_kinds[object_id] == FR_PERSIST_OBJECT_RECORD) {
+#if !FR_FEATURE_RECORDS
+      return FR_ERR_UNSUPPORTED;
+#else
+      const fr_persist_record_record_t *record = NULL;
+      fr_tagged_t record_install_values[FR_RECORD_FIELDS_PER_SHAPE_CAPACITY];
+
+      FR_TRY(fr_persist_find_record_record(record_records, record_count,
+                                           object_id, &record));
+      if (record->field_count > FR_RECORD_FIELDS_PER_SHAPE_CAPACITY) {
         return FR_ERR_CORRUPT;
       }
-      for (uint16_t j = 0; j < record_records[i].field_count; j++) {
-        fr_tagged_t stored =
-            record_values[record_records[i].first_value + j];
-        fr_object_id_t local_object_id = 0;
+      for (uint16_t j = 0; j < record->field_count; j++) {
+        fr_tagged_t stored = record_values[record->first_value + j];
+        fr_object_id_t ref = 0;
 
-        if (fr_tagged_decode_object_id(stored, &local_object_id) == FR_OK) {
-          if (local_object_id >= object_count ||
-              object_kinds[local_object_id] != FR_PERSIST_OBJECT_TEXT) {
+        if (fr_tagged_decode_object_id(stored, &ref) == FR_OK) {
+          if (ref >= object_count || !decoded->object_present[ref] ||
+              object_kinds[ref] != FR_PERSIST_OBJECT_TEXT) {
             return FR_ERR_CORRUPT;
           }
-          FR_TRY(fr_tagged_encode_object_id(object_map[local_object_id],
-                                            &stored));
         }
         if (!fr_record_field_value_allowed(runtime, stored)) {
           return FR_ERR_CORRUPT;
         }
         record_install_values[j] = stored;
       }
-      FR_TRY(fr_record_install(
-          runtime, object_map[record_records[i].shape_local_id],
-          record_install_values, record_records[i].field_count,
-          &object_map[record_records[i].local_id]));
-    }
-  }
+      FR_TRY(fr_record_install(runtime, record->shape_local_id,
+                               record_install_values, record->field_count,
+                               &installed_id));
+#endif
+    } else if (object_kinds[object_id] == FR_PERSIST_OBJECT_CELLS) {
+#if !FR_FEATURE_CELLS
+      return FR_ERR_UNSUPPORTED;
 #else
-  if (shape_count > 0 || record_count > 0) {
-    return FR_ERR_UNSUPPORTED;
-  }
-#endif
-  for (uint16_t i = 0; i < cell_count; i++) {
-    if (object_filter != NULL &&
-        !object_filter[cell_records[i].local_id]) {
-      continue;
-    }
-    for (uint16_t j = 0; j < cell_records[i].length; j++) {
-      fr_tagged_t stored = cell_values[cell_records[i].first_value + j];
-      fr_object_id_t local_object_id = 0;
+      const fr_persist_cell_record_t *cell = NULL;
 
-      if (fr_tagged_decode_object_id(stored, &local_object_id) == FR_OK) {
-        if (local_object_id >= object_count ||
-            (object_kinds[local_object_id] != FR_PERSIST_OBJECT_TEXT
+      FR_TRY(
+          fr_persist_find_cell_record(cell_records, cell_count, object_id,
+                                      &cell));
+      for (uint16_t j = 0; j < cell->length; j++) {
+        fr_tagged_t stored = cell_values[cell->first_value + j];
+        fr_object_id_t ref = 0;
+
+        if (fr_tagged_decode_object_id(stored, &ref) == FR_OK) {
+          if (ref >= object_count || !decoded->object_present[ref] ||
+              (object_kinds[ref] != FR_PERSIST_OBJECT_TEXT
 #if FR_FEATURE_RECORDS
-             && object_kinds[local_object_id] != FR_PERSIST_OBJECT_RECORD
+               && object_kinds[ref] != FR_PERSIST_OBJECT_RECORD
 #endif
-             )) {
+               )) {
+            return FR_ERR_CORRUPT;
+          }
+        }
+        if (!fr_cells_value_allowed(runtime, stored)) {
           return FR_ERR_CORRUPT;
         }
-        FR_TRY(fr_tagged_encode_object_id(object_map[local_object_id],
-                                          &stored));
+        cell_install_values[j] = stored;
       }
-      if (!fr_cells_value_allowed(runtime, stored)) {
-        return FR_ERR_CORRUPT;
-      }
-      cell_install_values[j] = stored;
+      FR_TRY(fr_cells_install(runtime, cell->length, cell_install_values,
+                              &installed_id));
+#endif
+    } else {
+      return FR_ERR_CORRUPT;
     }
-    FR_TRY(fr_cells_install(runtime, cell_records[i].length,
-                            cell_install_values,
-                            &object_map[cell_records[i].local_id]));
+
+    if (installed_id != object_id) {
+      return FR_ERR_CORRUPT;
+    }
+  }
+
+  for (uint16_t i = runtime->code.base_image_count; i < code_count; i++) {
+    fr_instruction_stream_t instructions;
+    fr_code_object_id_t mounted_id = 0;
+
+    if (!decoded->code_present[i]) {
+      continue;
+    }
+    if (code_filter != NULL && !code_filter[i]) {
+      continue;
+    }
+    FR_TRY(fr_instruction_stream_init(&instructions, code_records[i].bytes,
+                                      code_records[i].length));
+    FR_TRY(fr_code_mount_image(runtime, &instructions, NULL, 0, &mounted_id));
+    if (mounted_id != i) {
+      return FR_ERR_CORRUPT;
+    }
   }
   return FR_OK;
 }
@@ -2823,8 +3106,7 @@ fr_persist_apply_names(fr_runtime_t *runtime,
 
 static fr_err_t
 fr_persist_apply_events(fr_runtime_t *runtime,
-                        const fr_persist_decoded_payload_t *decoded,
-                        const fr_code_object_id_t code_map[]) {
+                        const fr_persist_decoded_payload_t *decoded) {
 #if FR_FEATURE_EVENTS
   /* fr_runtime_reset cleared the binding table at the start of the L1 pass;
    * re-register each decoded record in payload order. fr_event_register stages
@@ -2834,13 +3116,11 @@ fr_persist_apply_events(fr_runtime_t *runtime,
     const fr_image_event_binding_t *binding = &decoded->event_records[i];
 
     FR_TRY(fr_event_register(runtime, binding->kind, binding->source,
-                             binding->debounce_ms,
-                             code_map[binding->body]));
+                             binding->debounce_ms, binding->body));
   }
 #else
   (void)runtime;
   (void)decoded;
-  (void)code_map;
 #endif
   return FR_OK;
 }
@@ -2858,9 +3138,12 @@ fr_persist_payload_decode_and_validate(const fr_runtime_t *runtime,
   }
   FR_TRY(fr_persist_decode_payload(bytes, length, decoded));
   FR_TRY(fr_persist_check_restore_capacity(runtime, decoded));
+  FR_TRY(fr_persist_check_final_image_refs(runtime, decoded));
   for (uint16_t i = 0; i < decoded->bind_count; i++) {
     FR_TRY(fr_persist_check_bind_record(runtime, &decoded->bind_records[i],
+                                        decoded->code_present,
                                         decoded->code_count,
+                                        decoded->object_present,
                                         decoded->object_count));
   }
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
@@ -2879,22 +3162,20 @@ fr_persist_payload_decode_and_validate(const fr_runtime_t *runtime,
 fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
                                     uint16_t length) {
   fr_persist_decoded_payload_t decoded;
-  fr_code_object_id_t code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
-  fr_object_id_t object_map[FR_OBJECT_TABLE_CAPACITY];
 
-  memset(object_map, 0, sizeof(object_map));
   FR_TRY(fr_persist_payload_decode_and_validate(runtime, bytes, length,
                                                 &decoded));
   FR_TRY(fr_runtime_reset(runtime));
-  FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL,
-                                      code_map, object_map));
+  fr_code_restore_base(runtime);
+  fr_object_restore_base(runtime);
+  FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL));
+  fr_object_mark_image(runtime);
   /* D6 single-call path applies both tiers in tier order so user definitions
    * see library slots already in place. tier_filter=0 selects both passes;
    * skip_on_failure=false matches the strict FULL-restore contract. */
-  FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,
-                                       0, false));
+  FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, 0, false, true));
   FR_TRY(fr_persist_apply_names(runtime, &decoded, 0));
-  FR_TRY(fr_persist_apply_events(runtime, &decoded, code_map));
+  FR_TRY(fr_persist_apply_events(runtime, &decoded));
   return FR_OK;
 }
 
@@ -2903,35 +3184,26 @@ fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime, const uint8_t *bytes,
  * binds and the names whose slot is L1. A per-bind failure here writes
  * the SPEC-shaped warning and the walk continues; binding L1 names in
  * this pass is what makes a library word resolve via fr_slot_id_for_name
- * before the L2 pass runs. The L2 pass uses the stashed maps to translate
- * decoded local ids without re-installing. */
+ * before the L2 pass runs. */
 fr_err_t fr_persist_payload_restore_library(fr_runtime_t *runtime,
                                             const uint8_t *bytes,
                                             uint16_t length) {
   fr_persist_decoded_payload_t decoded;
-  fr_code_object_id_t code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
-  fr_object_id_t object_map[FR_OBJECT_TABLE_CAPACITY];
 
-  memset(object_map, 0, sizeof(object_map));
-  fr_persist_boot_maps_valid = false;
+  fr_persist_boot_library_valid = false;
   FR_TRY(fr_persist_payload_decode_and_validate(runtime, bytes, length,
                                                 &decoded));
   FR_TRY(fr_runtime_reset(runtime));
-  FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL,
-                                      code_map, object_map));
-  FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,
-                                       (uint8_t)FR_PERSIST_TIER_LIBRARY, true));
+  fr_code_restore_base(runtime);
+  fr_object_restore_base(runtime);
+  FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL));
+  fr_object_mark_image(runtime);
+  FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded,
+                                       (uint8_t)FR_PERSIST_TIER_LIBRARY, true,
+                                       true));
   FR_TRY(fr_persist_apply_names(runtime, &decoded,
                                 (uint8_t)FR_PERSIST_TIER_LIBRARY));
-  if (decoded.code_count > 0) {
-    memcpy(fr_persist_boot_code_map, code_map,
-           (size_t)decoded.code_count * sizeof(code_map[0]));
-  }
-  if (decoded.object_count > 0) {
-    memcpy(fr_persist_boot_object_map, object_map,
-           (size_t)decoded.object_count * sizeof(object_map[0]));
-  }
-  fr_persist_boot_maps_valid = true;
+  fr_persist_boot_library_valid = true;
   return FR_OK;
 }
 
@@ -2991,12 +3263,14 @@ fr_err_t fr_persist_payload_extract_library_records(
       slot_in_l1[bind->slot_id] = true;
     }
     if (bind->value_kind == FR_PERSIST_VALUE_CODE) {
-      if (bind->value_word >= decoded.code_count) {
+      if (bind->value_word >= decoded.code_count ||
+          !decoded.code_present[bind->value_word]) {
         return FR_ERR_CORRUPT;
       }
       code_in_l1[bind->value_word] = true;
     } else if (bind->value_kind == FR_PERSIST_VALUE_OBJECT) {
-      if (bind->value_word >= decoded.object_count) {
+      if (bind->value_word >= decoded.object_count ||
+          !decoded.object_present[bind->value_word]) {
         return FR_ERR_CORRUPT;
       }
       object_in_l1[bind->value_word] = true;
@@ -3015,6 +3289,9 @@ fr_err_t fr_persist_payload_extract_library_records(
       if (!code_in_l1[i]) {
         continue;
       }
+      if (!decoded.code_present[i]) {
+        return FR_ERR_CORRUPT;
+      }
       FR_TRY(fr_instruction_stream_init(&view, code->bytes, code->length));
       FR_TRY(fr_instruction_read_header(&view, &header));
       ip = (fr_code_offset_t)header.header_size;
@@ -3025,7 +3302,7 @@ fr_err_t fr_persist_payload_extract_library_records(
         if (op == FR_OP_PUSH_CODE_ID) {
           uint16_t ref = (uint16_t)code->bytes[ip + 1] |
                          ((uint16_t)code->bytes[ip + 2] << 8);
-          if (ref >= decoded.code_count) {
+          if (ref >= decoded.code_count || !decoded.code_present[ref]) {
             return FR_ERR_CORRUPT;
           }
           if (!code_in_l1[ref]) {
@@ -3037,7 +3314,7 @@ fr_err_t fr_persist_payload_extract_library_records(
         if (op == FR_OP_PUSH_OBJECT_ID) {
           uint16_t ref = (uint16_t)code->bytes[ip + 1] |
                          ((uint16_t)code->bytes[ip + 2] << 8);
-          if (ref >= decoded.object_count) {
+          if (ref >= decoded.object_count || !decoded.object_present[ref]) {
             return FR_ERR_CORRUPT;
           }
           if (!object_in_l1[ref]) {
@@ -3065,8 +3342,11 @@ fr_err_t fr_persist_payload_extract_library_records(
           !object_in_l1[rec->local_id]) {
         continue;
       }
-      if (rec->shape_local_id < FR_OBJECT_TABLE_CAPACITY &&
-          !object_in_l1[rec->shape_local_id]) {
+      if (rec->shape_local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !decoded.object_present[rec->shape_local_id]) {
+        return FR_ERR_CORRUPT;
+      }
+      if (!object_in_l1[rec->shape_local_id]) {
         object_in_l1[rec->shape_local_id] = true;
         closure_changed = true;
       }
@@ -3077,8 +3357,11 @@ fr_err_t fr_persist_payload_extract_library_records(
         if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
           continue;
         }
-        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
-            !object_in_l1[(uint16_t)obj]) {
+        if ((uint16_t)obj >= FR_OBJECT_TABLE_CAPACITY ||
+            !decoded.object_present[(uint16_t)obj]) {
+          return FR_ERR_CORRUPT;
+        }
+        if (!object_in_l1[(uint16_t)obj]) {
           object_in_l1[(uint16_t)obj] = true;
           closure_changed = true;
         }
@@ -3101,8 +3384,11 @@ fr_err_t fr_persist_payload_extract_library_records(
         if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
           continue;
         }
-        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
-            !object_in_l1[(uint16_t)obj]) {
+        if ((uint16_t)obj >= FR_OBJECT_TABLE_CAPACITY ||
+            !decoded.object_present[(uint16_t)obj]) {
+          return FR_ERR_CORRUPT;
+        }
+        if (!object_in_l1[(uint16_t)obj]) {
           object_in_l1[(uint16_t)obj] = true;
           closure_changed = true;
         }
@@ -3209,12 +3495,14 @@ fr_err_t fr_persist_payload_strip_library_records(
       slot_in_l1[bind->slot_id] = true;
     }
     if (bind->value_kind == FR_PERSIST_VALUE_CODE) {
-      if (bind->value_word >= decoded.code_count) {
+      if (bind->value_word >= decoded.code_count ||
+          !decoded.code_present[bind->value_word]) {
         return FR_ERR_CORRUPT;
       }
       code_in_l1[bind->value_word] = true;
     } else if (bind->value_kind == FR_PERSIST_VALUE_OBJECT) {
-      if (bind->value_word >= decoded.object_count) {
+      if (bind->value_word >= decoded.object_count ||
+          !decoded.object_present[bind->value_word]) {
         return FR_ERR_CORRUPT;
       }
       object_in_l1[bind->value_word] = true;
@@ -3233,6 +3521,9 @@ fr_err_t fr_persist_payload_strip_library_records(
       if (!code_in_l1[i]) {
         continue;
       }
+      if (!decoded.code_present[i]) {
+        return FR_ERR_CORRUPT;
+      }
       FR_TRY(fr_instruction_stream_init(&view, code->bytes, code->length));
       FR_TRY(fr_instruction_read_header(&view, &header));
       ip = (fr_code_offset_t)header.header_size;
@@ -3243,7 +3534,7 @@ fr_err_t fr_persist_payload_strip_library_records(
         if (op == FR_OP_PUSH_CODE_ID) {
           uint16_t ref = (uint16_t)code->bytes[ip + 1] |
                          ((uint16_t)code->bytes[ip + 2] << 8);
-          if (ref >= decoded.code_count) {
+          if (ref >= decoded.code_count || !decoded.code_present[ref]) {
             return FR_ERR_CORRUPT;
           }
           if (!code_in_l1[ref]) {
@@ -3255,7 +3546,7 @@ fr_err_t fr_persist_payload_strip_library_records(
         if (op == FR_OP_PUSH_OBJECT_ID) {
           uint16_t ref = (uint16_t)code->bytes[ip + 1] |
                          ((uint16_t)code->bytes[ip + 2] << 8);
-          if (ref >= decoded.object_count) {
+          if (ref >= decoded.object_count || !decoded.object_present[ref]) {
             return FR_ERR_CORRUPT;
           }
           if (!object_in_l1[ref]) {
@@ -3281,8 +3572,11 @@ fr_err_t fr_persist_payload_strip_library_records(
           !object_in_l1[rec->local_id]) {
         continue;
       }
-      if (rec->shape_local_id < FR_OBJECT_TABLE_CAPACITY &&
-          !object_in_l1[rec->shape_local_id]) {
+      if (rec->shape_local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          !decoded.object_present[rec->shape_local_id]) {
+        return FR_ERR_CORRUPT;
+      }
+      if (!object_in_l1[rec->shape_local_id]) {
         object_in_l1[rec->shape_local_id] = true;
         closure_changed = true;
       }
@@ -3293,8 +3587,11 @@ fr_err_t fr_persist_payload_strip_library_records(
         if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
           continue;
         }
-        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
-            !object_in_l1[(uint16_t)obj]) {
+        if ((uint16_t)obj >= FR_OBJECT_TABLE_CAPACITY ||
+            !decoded.object_present[(uint16_t)obj]) {
+          return FR_ERR_CORRUPT;
+        }
+        if (!object_in_l1[(uint16_t)obj]) {
           object_in_l1[(uint16_t)obj] = true;
           closure_changed = true;
         }
@@ -3316,8 +3613,11 @@ fr_err_t fr_persist_payload_strip_library_records(
         if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
           continue;
         }
-        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
-            !object_in_l1[(uint16_t)obj]) {
+        if ((uint16_t)obj >= FR_OBJECT_TABLE_CAPACITY ||
+            !decoded.object_present[(uint16_t)obj]) {
+          return FR_ERR_CORRUPT;
+        }
+        if (!object_in_l1[(uint16_t)obj]) {
           object_in_l1[(uint16_t)obj] = true;
           closure_changed = true;
         }
@@ -3388,7 +3688,7 @@ fr_err_t fr_persist_payload_strip_library_records(
 /* D6 boot L2 pass: must follow a successful library pass on the same
  * payload. Applies only L2 binds onto the runtime the L1 pass left behind,
  * then installs names and events. Returns FR_ERR_NOT_FOUND if no L1 pass
- * stashed maps for this sequence. */
+ * started this sequence. */
 fr_err_t fr_persist_payload_restore_user_after_library(fr_runtime_t *runtime,
                                                        const uint8_t *bytes,
                                                        uint16_t length) {
@@ -3397,7 +3697,7 @@ fr_err_t fr_persist_payload_restore_user_after_library(fr_runtime_t *runtime,
   if (runtime == NULL || bytes == NULL) {
     return FR_ERR_INVALID;
   }
-  if (!fr_persist_boot_maps_valid) {
+  if (!fr_persist_boot_library_valid) {
     return FR_ERR_NOT_FOUND;
   }
   /* The L1 pass already passed the validate checks against the same payload;
@@ -3405,163 +3705,11 @@ fr_err_t fr_persist_payload_restore_user_after_library(fr_runtime_t *runtime,
    * apply only L2 binds plus names and events. */
   FR_TRY(fr_persist_decode_payload(bytes, length, &decoded));
   FR_TRY(fr_persist_apply_binds_tiered(
-      runtime, &decoded, fr_persist_boot_code_map, fr_persist_boot_object_map,
-      (uint8_t)FR_PERSIST_TIER_USER, false));
+      runtime, &decoded, (uint8_t)FR_PERSIST_TIER_USER, false, true));
   FR_TRY(fr_persist_apply_names(runtime, &decoded,
                                 (uint8_t)FR_PERSIST_TIER_USER));
-  FR_TRY(fr_persist_apply_events(runtime, &decoded, fr_persist_boot_code_map));
-  fr_persist_boot_maps_valid = false;
-  return FR_OK;
-}
-
-/* D5 acceptance #6: derive the closure of CODE / object records that L2
- * binds (and L2 event bodies) reach. The public `restore` installs only
- * this closure, leaving L1 records on the payload alone — boot already
- * installed them and SPEC D5 says restore is a no-op on L1.
- *
- * Mirrors the widen step of fr_persist_payload_extract_library_records but
- * starts from L2 binds instead of L1, and folds in event bodies (which the
- * encoder writes after binds; restore_user_only's apply_events reads
- * code_map[body], so the body's CODE record must be installed). */
-static fr_err_t fr_persist_payload_compute_user_closure_marks(
-    const fr_persist_decoded_payload_t *decoded,
-    bool code_in_l2[FR_PROFILE_CODE_OBJECT_TABLE_SIZE],
-    bool object_in_l2[FR_OBJECT_TABLE_CAPACITY]) {
-  bool closure_changed = true;
-
-  for (uint16_t i = 0; i < decoded->bind_count; i++) {
-    const fr_persist_bind_record_t *bind = &decoded->bind_records[i];
-
-    if (bind->tier != FR_PERSIST_TIER_USER) {
-      continue;
-    }
-    if (bind->value_kind == FR_PERSIST_VALUE_CODE) {
-      if (bind->value_word >= decoded->code_count) {
-        return FR_ERR_CORRUPT;
-      }
-      code_in_l2[bind->value_word] = true;
-    } else if (bind->value_kind == FR_PERSIST_VALUE_OBJECT) {
-      if (bind->value_word >= decoded->object_count) {
-        return FR_ERR_CORRUPT;
-      }
-      object_in_l2[bind->value_word] = true;
-    }
-  }
-#if FR_FEATURE_EVENTS
-  for (uint16_t i = 0; i < decoded->event_count; i++) {
-    uint16_t body = decoded->event_records[i].body;
-
-    if (body >= decoded->code_count) {
-      return FR_ERR_CORRUPT;
-    }
-    code_in_l2[body] = true;
-  }
-#endif
-
-  while (closure_changed) {
-    closure_changed = false;
-    for (uint16_t i = 0; i < decoded->code_count; i++) {
-      const fr_persist_code_record_t *code = &decoded->code_records[i];
-      fr_instruction_stream_t view;
-      fr_instruction_header_t header = {0};
-      fr_code_offset_t ip = 0;
-      char scratch[64];
-
-      if (!code_in_l2[i]) {
-        continue;
-      }
-      FR_TRY(fr_instruction_stream_init(&view, code->bytes, code->length));
-      FR_TRY(fr_instruction_read_header(&view, &header));
-      ip = (fr_code_offset_t)header.header_size;
-      while (ip < view.length) {
-        fr_code_offset_t next_ip = 0;
-        fr_opcode_t op = (fr_opcode_t)code->bytes[ip];
-
-        if (op == FR_OP_PUSH_CODE_ID) {
-          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
-                         ((uint16_t)code->bytes[ip + 2] << 8);
-          if (ref >= decoded->code_count) {
-            return FR_ERR_CORRUPT;
-          }
-          if (!code_in_l2[ref]) {
-            code_in_l2[ref] = true;
-            closure_changed = true;
-          }
-        }
-#if FR_FEATURE_OBJECTS
-        if (op == FR_OP_PUSH_OBJECT_ID) {
-          uint16_t ref = (uint16_t)code->bytes[ip + 1] |
-                         ((uint16_t)code->bytes[ip + 2] << 8);
-          if (ref >= decoded->object_count) {
-            return FR_ERR_CORRUPT;
-          }
-          if (!object_in_l2[ref]) {
-            object_in_l2[ref] = true;
-            closure_changed = true;
-          }
-        }
-#endif
-        FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
-                                             (uint16_t)sizeof(scratch), NULL,
-                                             &next_ip));
-        if (next_ip <= ip) {
-          return FR_ERR_CORRUPT;
-        }
-        ip = next_ip;
-      }
-    }
-#if FR_FEATURE_RECORDS
-    for (uint16_t i = 0; i < decoded->record_count; i++) {
-      const fr_persist_record_record_t *rec = &decoded->record_records[i];
-
-      if (rec->local_id >= FR_OBJECT_TABLE_CAPACITY ||
-          !object_in_l2[rec->local_id]) {
-        continue;
-      }
-      if (rec->shape_local_id < FR_OBJECT_TABLE_CAPACITY &&
-          !object_in_l2[rec->shape_local_id]) {
-        object_in_l2[rec->shape_local_id] = true;
-        closure_changed = true;
-      }
-      for (uint16_t j = 0; j < rec->field_count; j++) {
-        fr_tagged_t val = decoded->record_values[rec->first_value + j];
-        fr_object_id_t obj = 0;
-
-        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
-          continue;
-        }
-        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
-            !object_in_l2[(uint16_t)obj]) {
-          object_in_l2[(uint16_t)obj] = true;
-          closure_changed = true;
-        }
-      }
-    }
-#endif
-#if FR_FEATURE_CELLS
-    for (uint16_t i = 0; i < decoded->cell_count; i++) {
-      const fr_persist_cell_record_t *cell = &decoded->cell_records[i];
-
-      if (cell->local_id >= FR_OBJECT_TABLE_CAPACITY ||
-          !object_in_l2[cell->local_id]) {
-        continue;
-      }
-      for (uint16_t j = 0; j < cell->length; j++) {
-        fr_tagged_t val = decoded->cell_values[cell->first_value + j];
-        fr_object_id_t obj = 0;
-
-        if (fr_tagged_decode_object_id(val, &obj) != FR_OK) {
-          continue;
-        }
-        if ((uint16_t)obj < FR_OBJECT_TABLE_CAPACITY &&
-            !object_in_l2[(uint16_t)obj]) {
-          object_in_l2[(uint16_t)obj] = true;
-          closure_changed = true;
-        }
-      }
-    }
-#endif
-  }
+  FR_TRY(fr_persist_apply_events(runtime, &decoded));
+  fr_persist_boot_library_valid = false;
   return FR_OK;
 }
 
@@ -3575,30 +3723,19 @@ fr_err_t fr_persist_payload_restore_user_only(fr_runtime_t *runtime,
                                               const uint8_t *bytes,
                                               uint16_t length) {
   fr_persist_decoded_payload_t decoded;
-  fr_code_object_id_t code_map[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
-  fr_object_id_t object_map[FR_OBJECT_TABLE_CAPACITY];
-  bool code_in_l2[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
-  bool object_in_l2[FR_OBJECT_TABLE_CAPACITY];
 
-  memset(code_map, 0, sizeof(code_map));
-  memset(object_map, 0, sizeof(object_map));
-  memset(code_in_l2, 0, sizeof(code_in_l2));
-  memset(object_in_l2, 0, sizeof(object_in_l2));
   FR_TRY(fr_persist_payload_decode_and_validate(runtime, bytes, length,
                                                 &decoded));
-  for (uint16_t i = 0; i < decoded.code_count; i++) {
-    code_in_l2[i] = true;
-  }
-  FR_TRY(fr_persist_payload_compute_user_closure_marks(&decoded, code_in_l2,
-                                                        object_in_l2));
   fr_persist_session_wipe_user_tier(runtime);
   fr_code_restore_base(runtime);
-  FR_TRY(fr_persist_install_resources(runtime, &decoded, code_in_l2,
-                                      object_in_l2, code_map, object_map));
-  FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded, code_map, object_map,
-                                       (uint8_t)FR_PERSIST_TIER_USER, false));
+  fr_object_restore_base(runtime);
+  FR_TRY(fr_persist_install_resources(runtime, &decoded, NULL, NULL));
+  fr_object_mark_image(runtime);
+  FR_TRY(fr_persist_apply_binds_tiered(runtime, &decoded,
+                                       (uint8_t)FR_PERSIST_TIER_USER, false,
+                                       true));
   FR_TRY(fr_persist_apply_names(runtime, &decoded,
                                 (uint8_t)FR_PERSIST_TIER_USER));
-  FR_TRY(fr_persist_apply_events(runtime, &decoded, code_map));
+  FR_TRY(fr_persist_apply_events(runtime, &decoded));
   return FR_OK;
 }

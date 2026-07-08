@@ -56,8 +56,8 @@ const fr_lib_native_def_t fr_lib_natives[] = {
 const uint16_t fr_lib_natives_count = 1;
 
 /* Mirror persist_payload.c's enum so a public test can shape the bytes. */
-#define FR_TEST_TIER_PAYLOAD_VERSION 4
-#define FR_TEST_TIER_PAYLOAD_VERSION_LEGACY 3
+#define FR_TEST_TIER_PAYLOAD_VERSION 5
+#define FR_TEST_TIER_PAYLOAD_VERSION_LEGACY 4
 
 #define FR_TEST_TIER_RECORD_CODE 1
 #define FR_TEST_TIER_RECORD_BIND 2
@@ -1157,7 +1157,7 @@ static void test_boot_two_call_applies_library_before_user(void) {
    * regression that applies all names in the L1 pass would resolve
    * usr_word here too. */
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&s_runtime));
-  TEST_ASSERT_TRUE(fr_slot_is_overlay(&s_runtime, lib_slot));
+  TEST_ASSERT_FALSE(fr_slot_is_overlay(&s_runtime, lib_slot));
   TEST_ASSERT_FALSE(fr_slot_is_overlay(&s_runtime, usr_slot));
   {
     fr_slot_id_t resolved = 0;
@@ -1175,8 +1175,8 @@ static void test_boot_two_call_applies_library_before_user(void) {
   /* L2 pass: user binding lands and resolves by name; library name still
    * resolves to the same slot. */
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_user(&s_runtime));
-  TEST_ASSERT_TRUE(fr_slot_is_overlay(&s_runtime, lib_slot));
-  TEST_ASSERT_TRUE(fr_slot_is_overlay(&s_runtime, usr_slot));
+  TEST_ASSERT_FALSE(fr_slot_is_overlay(&s_runtime, lib_slot));
+  TEST_ASSERT_FALSE(fr_slot_is_overlay(&s_runtime, usr_slot));
   {
     fr_slot_id_t resolved = 0;
 

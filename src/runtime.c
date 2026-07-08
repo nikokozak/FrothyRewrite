@@ -16,7 +16,10 @@ fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
   for (fr_slot_id_t slot_id = 0; slot_id < FR_PROFILE_MAX_SLOTS; slot_id++) {
     runtime->slots.current[slot_id] = fr_tagged_nil();
     runtime->slots.base[slot_id] = fr_tagged_nil();
+    runtime->slots.library_base[slot_id] = fr_tagged_nil();
     runtime->slots.overlay[slot_id] = false;
+    runtime->slots.library_base_present[slot_id] = false;
+    runtime->slots.base_tier[slot_id] = 0;
   }
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   for (uint16_t i = 0; i < FR_PROFILE_MAX_OVERLAY_NAMES; i++) {
@@ -64,16 +67,33 @@ fr_err_t fr_runtime_clear_project(fr_runtime_t *runtime) {
     runtime->slots.overlay[slot_id] = false;
   }
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
-  for (uint16_t i = 0; i < runtime->slots.overlay_name_count; i++) {
-    runtime->slots.overlay_names[i][0] = '\0';
-    runtime->slots.overlay_name_slots[i] = 0;
+  {
+    uint16_t dst = 0;
+    for (uint16_t src = 0; src < runtime->slots.overlay_name_count; src++) {
+      fr_slot_id_t slot_id = runtime->slots.overlay_name_slots[src];
+
+      if (slot_id < runtime->slots.base_count &&
+          runtime->slots.base_tier[slot_id] != 0) {
+        if (dst != src) {
+          memcpy(runtime->slots.overlay_names[dst],
+                 runtime->slots.overlay_names[src],
+                 (size_t)FR_PROFILE_MAX_NAME_BYTES + 1);
+          runtime->slots.overlay_name_slots[dst] = slot_id;
+        }
+        dst = (uint16_t)(dst + 1);
+      }
+    }
+    for (uint16_t i = dst; i < runtime->slots.overlay_name_count; i++) {
+      runtime->slots.overlay_names[i][0] = '\0';
+      runtime->slots.overlay_name_slots[i] = 0;
+    }
+    runtime->slots.overlay_name_count = dst;
   }
-  runtime->slots.overlay_name_count = 0;
 #endif
   runtime->slots.count = runtime->slots.base_count;
-  fr_code_restore_base(runtime);
+  fr_code_clear_overlay(runtime);
   fr_native_restore_base(runtime);
-  fr_object_restore_base(runtime);
+  fr_object_clear_overlay(runtime);
 #if FR_FEATURE_BYTES
   fr_bytes_init(runtime);
 #endif

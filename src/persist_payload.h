@@ -13,7 +13,7 @@
  * re-install.
  */
 enum {
-  FR_PERSIST_PAYLOAD_VERSION = 4,
+  FR_PERSIST_PAYLOAD_VERSION = 5,
 };
 
 fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,

@@ -10,7 +10,10 @@
  */
 
 #include "base_image.h"
+#include "code.h"
 #include "crc.h"
+#include "event.h"
+#include "instruction.h"
 #include "persist.h"
 #include "platform.h"
 #include "repl.h"
@@ -56,6 +59,17 @@ static void assert_restored_boot_is_nil(void) {
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&restore_runtime));
   TEST_ASSERT_EQUAL(FR_OK, fr_vm_run_boot(&restore_runtime, &tagged));
   TEST_ASSERT_TRUE(fr_tagged_is_nil(tagged));
+}
+
+static void assert_all_code_headers_read(fr_runtime_t *runtime) {
+  for (fr_code_object_id_t code_id = 0; code_id < runtime->code.count;
+       code_id++) {
+    fr_instruction_stream_t view;
+    fr_instruction_header_t header = {0};
+
+    TEST_ASSERT_EQUAL(FR_OK, fr_code_get_instructions(runtime, code_id, &view));
+    TEST_ASSERT_EQUAL(FR_OK, fr_instruction_read_header(&view, &header));
+  }
 }
 
 void setUp(void) { TEST_ASSERT_EQUAL(FR_OK, fr_platform_persist_clear()); }
@@ -128,6 +142,95 @@ static void test_corrupt_newer_image_falls_back_to_older_good_image(void) {
   assert_restored_boot_is_nil();
 }
 
+#if FR_FEATURE_COMPILER && FR_FEATURE_EVENTS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+static void save_counter_event_image(fr_runtime_t *runtime) {
+  char buf[128];
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(runtime, "counter is 0", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(
+                        runtime,
+                        "tick is fn [ set counter to counter + 1 ]", buf,
+                        (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(runtime,
+                                      "boot is fn [ every 50 [ tick: ] ]", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(runtime, "boot:", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(runtime));
+}
+
+static void test_failed_restore_drops_candidate_code_without_fallback(void) {
+  fr_runtime_t restore_runtime;
+  uint16_t base_code_count = 0;
+  char buf[128];
+
+  save_counter_event_image(&s_runtime);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&restore_runtime));
+  base_code_count = restore_runtime.code.base_image_count;
+  fr_host_event_debug_fail_next_timer_install();
+  TEST_ASSERT_EQUAL(FR_ERR_IO, fr_persist_restore(&restore_runtime));
+  TEST_ASSERT_EQUAL(base_code_count, restore_runtime.code.count);
+  TEST_ASSERT_EQUAL(base_code_count, restore_runtime.code.image_count);
+  assert_all_code_headers_read(&restore_runtime);
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                    fr_repl_eval_line(&restore_runtime, "tick:", buf,
+                                      (uint16_t)sizeof(buf)));
+}
+
+static void test_failed_restore_cleans_candidate_code_before_fallback(void) {
+  fr_runtime_t restore_runtime;
+  fr_event_binding_t *entry = NULL;
+  char buf[128];
+
+  save_counter_event_image(&s_runtime);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "newer is fn [ 9 ]", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&restore_runtime));
+  fr_host_event_debug_fail_next_timer_install();
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore(&restore_runtime));
+  assert_all_code_headers_read(&restore_runtime);
+  TEST_ASSERT_EQUAL(FR_ERR_NOT_FOUND,
+                    fr_repl_eval_line(&restore_runtime, "newer:", buf,
+                                      (uint16_t)sizeof(buf)));
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&restore_runtime, "tick:", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", buf);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&restore_runtime, "counter", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("1\nok\n", buf);
+  entry = &restore_runtime.events.entries[0];
+  TEST_ASSERT_EQUAL(FR_EVENT_KIND_EVERY, entry->kind);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_event_post_test_candidate(0, entry->generation,
+                                                          50));
+  TEST_ASSERT_EQUAL(FR_OK, fr_event_drain(&restore_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_event_dispatch(&restore_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&restore_runtime, "counter", buf,
+                                      (uint16_t)sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("2\nok\n", buf);
+}
+#endif
+
 static void test_clear_reports_not_found(void) {
   fr_runtime_t restore_runtime;
 
@@ -171,6 +274,10 @@ int main(void) {
   RUN_TEST(test_mid_commit_power_loss_keeps_previous_good_image);
   RUN_TEST(test_bad_payload_newer_image_falls_back_to_older_good_image);
   RUN_TEST(test_corrupt_newer_image_falls_back_to_older_good_image);
+#if FR_FEATURE_COMPILER && FR_FEATURE_EVENTS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  RUN_TEST(test_failed_restore_drops_candidate_code_without_fallback);
+  RUN_TEST(test_failed_restore_cleans_candidate_code_before_fallback);
+#endif
   RUN_TEST(test_clear_reports_not_found);
 #if FR_FEATURE_TEXT
   RUN_TEST(test_see_after_restore_renders_canonical_arg_names);

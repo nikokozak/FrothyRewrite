@@ -147,6 +147,43 @@ fr_err_t fr_slot_set_base(fr_runtime_t *runtime, fr_slot_id_t slot_id,
   runtime->slots.base[slot_id] = tagged;
   runtime->slots.current[slot_id] = tagged;
   runtime->slots.overlay[slot_id] = false;
+  runtime->slots.library_base[slot_id] = fr_tagged_nil();
+  runtime->slots.library_base_present[slot_id] = false;
+  runtime->slots.base_tier[slot_id] = 0;
+  fr_slot_note_base_id(&runtime->slots, slot_id);
+  return FR_OK;
+}
+
+fr_err_t fr_slot_set_mounted_base(fr_runtime_t *runtime, fr_slot_id_t slot_id,
+                                  fr_tagged_t tagged,
+                                  fr_install_tier_t tier) {
+  fr_handle_ref_t handle_ref = {0};
+  fr_bytes_ref_t bytes_ref = {0};
+
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (slot_id >= FR_PROFILE_MAX_SLOTS) {
+    return FR_ERR_RANGE;
+  }
+  if (tier != FR_INSTALL_TIER_LIBRARY && tier != FR_INSTALL_TIER_USER) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_tagged_decode_handle_ref(tagged, &handle_ref) == FR_OK) {
+    return FR_ERR_VOLATILE;
+  }
+  if (fr_tagged_decode_bytes_ref(tagged, &bytes_ref) == FR_OK) {
+    return FR_ERR_VOLATILE;
+  }
+
+  if (tier == FR_INSTALL_TIER_LIBRARY) {
+    runtime->slots.library_base[slot_id] = tagged;
+    runtime->slots.library_base_present[slot_id] = true;
+  }
+  runtime->slots.base[slot_id] = tagged;
+  runtime->slots.current[slot_id] = tagged;
+  runtime->slots.overlay[slot_id] = false;
+  runtime->slots.base_tier[slot_id] = tier;
   fr_slot_note_base_id(&runtime->slots, slot_id);
   return FR_OK;
 }
@@ -277,8 +314,34 @@ static bool fr_slot_project_name_points_to(const fr_runtime_t *runtime,
  * must call this, or a later definition is assigned an id past what the install
  * validator will accept. */
 void fr_slot_reclaim_free_tail(fr_runtime_t *runtime) {
+  fr_slot_id_t first_project_id = fr_slot_first_project_id();
+
   if (runtime == NULL) {
     return;
+  }
+  while (runtime->slots.count > runtime->slots.base_count) {
+    fr_slot_id_t last = (fr_slot_id_t)(runtime->slots.count - 1);
+
+    if (runtime->slots.overlay[last] ||
+        runtime->slots.current[last] != runtime->slots.base[last] ||
+        fr_slot_project_name_points_to(runtime, last)) {
+      break;
+    }
+    runtime->slots.count = last;
+  }
+  while (runtime->slots.base_count > first_project_id) {
+    fr_slot_id_t last = (fr_slot_id_t)(runtime->slots.base_count - 1);
+
+    if (runtime->slots.base_tier[last] != 0 ||
+        runtime->slots.library_base_present[last]) {
+      break;
+    }
+    if (runtime->slots.overlay[last] ||
+        runtime->slots.current[last] != runtime->slots.base[last] ||
+        fr_slot_project_name_points_to(runtime, last)) {
+      break;
+    }
+    runtime->slots.base_count = last;
   }
   while (runtime->slots.count > runtime->slots.base_count) {
     fr_slot_id_t last = (fr_slot_id_t)(runtime->slots.count - 1);

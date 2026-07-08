@@ -96,19 +96,28 @@ typedef struct fr_object_table_t {
   uint16_t used_record_name_bytes;
 #endif
   uint16_t base_count;
+  uint16_t image_count;
   uint16_t base_used_cell_words;
   uint16_t base_used_text_bytes;
+  uint16_t image_used_cell_words;
+  uint16_t image_used_text_bytes;
 #if FR_FEATURE_RECORDS
   uint16_t base_used_record_names;
   uint16_t base_used_record_shape_fields;
   uint16_t base_used_record_values;
   uint16_t base_used_record_name_bytes;
+  uint16_t image_used_record_names;
+  uint16_t image_used_record_shape_fields;
+  uint16_t image_used_record_values;
+  uint16_t image_used_record_name_bytes;
 #endif
 } fr_object_table_t;
 
 void fr_object_reset(fr_runtime_t *runtime);
 void fr_object_mark_base(fr_runtime_t *runtime);
+void fr_object_mark_image(fr_runtime_t *runtime);
 void fr_object_restore_base(fr_runtime_t *runtime);
+void fr_object_clear_overlay(fr_runtime_t *runtime);
 
 bool fr_cells_value_allowed(const fr_runtime_t *runtime, fr_tagged_t tagged);
 fr_err_t fr_cells_check_install(const fr_runtime_t *runtime, uint16_t length,

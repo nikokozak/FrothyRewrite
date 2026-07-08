@@ -72,6 +72,9 @@ fr_err_t fr_platform_event_drain(fr_event_candidate_t *out_events,
 fr_err_t fr_platform_event_post_test_candidate(uint16_t binding_index,
                                                uint16_t generation,
                                                uint32_t timestamp_ms);
+#ifdef FR_HOST_TEST_HELPERS
+void fr_host_event_debug_fail_next_timer_install(void);
+#endif
 
 #if FR_FEATURE_UART
 fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
@@ -151,6 +154,15 @@ void fr_host_i2c_queue_read(uint16_t platform_index, const uint8_t *bytes,
  * The platform owns torn-write atomicity, envelope CRC, and generation order. */
 fr_err_t fr_platform_persist_read(uint8_t *bytes, uint16_t cap,
                                   uint16_t *out_length, uint8_t image_index);
+/* Borrow the committed image bytes by backend generation order. The pointer is
+ * valid until the next mount, unmount, clear, or target reset. */
+fr_err_t fr_platform_persist_mount(uint8_t image_index,
+                                   const uint8_t **out_bytes,
+                                   uint16_t *out_length);
+fr_err_t fr_platform_persist_mount_commit(void);
+void fr_platform_persist_mount_discard(void);
+void fr_platform_persist_unmount(void);
+bool fr_platform_persist_pointer_is_mounted(const void *ptr, uint16_t length);
 /* Atomically replace the committed image. After power loss, read returns the
  * old image or the new image, never a mixed image. */
 fr_err_t fr_platform_persist_commit(const uint8_t *bytes, uint16_t length);
