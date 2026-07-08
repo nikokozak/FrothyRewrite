@@ -129,6 +129,32 @@ static void build_legacy_bind(uint8_t *out, fr_int_t value) {
 /* magic 4 + version 1 + BIND 1 + slot 2 = 8; the tier byte sits here. */
 #define FR_TEST_TIER_BYTE_OFFSET 8
 
+static fr_err_t test_persist_commit_image(const uint8_t *image,
+                                          uint16_t image_length) {
+  fr_err_t err = FR_OK;
+
+  if (image == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (image_length < FR_PERSIST_HEADER_BYTES) {
+    return FR_ERR_CORRUPT;
+  }
+  err = fr_platform_persist_stream_begin();
+  if (err != FR_OK) {
+    return err;
+  }
+  err = fr_platform_persist_stream_write(
+      &image[FR_PERSIST_HEADER_BYTES],
+      (uint16_t)(image_length - FR_PERSIST_HEADER_BYTES));
+  if (err == FR_OK) {
+    err = fr_platform_persist_stream_finalize(image);
+  }
+  if (err != FR_OK) {
+    fr_platform_persist_stream_abort();
+  }
+  return err;
+}
+
 /* Tests that need storage to already contain L1 records seed it directly.
  * The runtime passed in is whatever the caller has set up; this helper
  * encodes that runtime's overlay state via the public encoder, wraps it in
@@ -147,7 +173,7 @@ static void seed_persist_from_runtime(fr_runtime_t *runtime) {
                                image, payload_length,
                                fr_crc32(payload, payload_length)));
   image_length = (uint16_t)(FR_PERSIST_HEADER_BYTES + payload_length);
-  TEST_ASSERT_EQUAL(FR_OK, fr_platform_persist_commit(image, image_length));
+  TEST_ASSERT_EQUAL(FR_OK, test_persist_commit_image(image, image_length));
 }
 
 static void read_committed_payload(uint8_t *header, uint8_t *payload,
@@ -717,6 +743,75 @@ static void test_save_preserves_library_text_in_code_from_nvs(void) {
 }
 #endif
 
+static void test_save_stream_matches_staged_l1_reference(void) {
+  uint8_t old_header[FR_PERSIST_HEADER_BYTES];
+  uint8_t old_payload[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t prefix[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t expected_image[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t saved_image[FR_PROFILE_PERSISTENCE_BYTES];
+  fr_persist_format_info_t old_info = {0};
+  uint16_t old_length = 0;
+  uint16_t prefix_length = 0;
+  uint16_t expected_payload_length = 0;
+  uint16_t expected_image_length = 0;
+  uint16_t saved_payload_length = 0;
+  uint16_t saved_image_length = 0;
+  char repl_out[FR_REPL_OUTPUT_BYTES];
+
+  fr_platform_persist_clear();
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-library", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "lib_thunk is fn [ 99 ]",
+                                      repl_out, (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  seed_persist_from_runtime(&s_runtime);
+  read_committed_payload(old_header, old_payload, &old_length);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_format_read_header(old_header, &old_info));
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_extract_library_records(
+                               old_payload, old_length, prefix,
+                               (uint16_t)sizeof(prefix), &prefix_length));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "install-user", repl_out,
+                                      (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "usr_word is fn [ 7 ]",
+                                      repl_out, (uint16_t)sizeof(repl_out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", repl_out);
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_payload_save_encode(
+                               &s_runtime, prefix, prefix_length,
+                               &expected_image[FR_PERSIST_HEADER_BYTES],
+                               (uint16_t)(sizeof(expected_image) -
+                                          FR_PERSIST_HEADER_BYTES),
+                               &expected_payload_length));
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_persist_format_build_header(
+                 expected_image, expected_payload_length,
+                 fr_crc32(&expected_image[FR_PERSIST_HEADER_BYTES],
+                          expected_payload_length)));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_persist_format_stamp_generation(
+                        expected_image, old_info.backend_generation + 1u));
+  expected_image_length =
+      (uint16_t)(FR_PERSIST_HEADER_BYTES + expected_payload_length);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_persist_save(&s_runtime));
+  read_committed_payload(saved_image, &saved_image[FR_PERSIST_HEADER_BYTES],
+                         &saved_payload_length);
+  saved_image_length =
+      (uint16_t)(FR_PERSIST_HEADER_BYTES + saved_payload_length);
+
+  TEST_ASSERT_EQUAL(expected_image_length, saved_image_length);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(expected_image, saved_image,
+                                expected_image_length);
+}
+
 /* Acceptance #10: SPEC's save + reset + restore round-trip with the
  * mixed-demo fixture's exact names and call chain. `test-mixed.echo`
  * is the L0 library native (returns 7, mirroring
@@ -1069,7 +1164,7 @@ static void seed_both_tiers_with_user_line(fr_runtime_t *runtime,
   uint16_t image_length = 0;
 
   build_both_tiers_image(runtime, user_line, image, &image_length);
-  TEST_ASSERT_EQUAL(FR_OK, fr_platform_persist_commit(image, image_length));
+  TEST_ASSERT_EQUAL(FR_OK, test_persist_commit_image(image, image_length));
 }
 
 static void test_boot_restore_user_uses_pinned_library_image(void) {
@@ -1088,8 +1183,8 @@ static void test_boot_restore_user_uses_pinned_library_image(void) {
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_library(&s_runtime));
 
-  TEST_ASSERT_EQUAL(FR_OK, fr_platform_persist_commit(alternate_image,
-                                                      alternate_image_length));
+  TEST_ASSERT_EQUAL(FR_OK, test_persist_commit_image(alternate_image,
+                                                     alternate_image_length));
 
   TEST_ASSERT_EQUAL(FR_OK, fr_persist_restore_user(&s_runtime));
   TEST_ASSERT_EQUAL(FR_OK,
@@ -1447,6 +1542,7 @@ int main(void) {
 #if FR_FEATURE_TEXT
   RUN_TEST(test_save_preserves_library_text_in_code_from_nvs);
 #endif
+  RUN_TEST(test_save_stream_matches_staged_l1_reference);
   RUN_TEST(test_save_restore_round_trip_preserves_both_tiers);
   RUN_TEST(test_restore_preserves_runtime_library_tier);
   RUN_TEST(test_restore_does_not_reinstall_library_resources);

@@ -10,6 +10,7 @@
 #include "image.h"
 #include "instruction.h"
 #include "object.h"
+#include "persist_format.h"
 #include "platform.h"
 #include "slot.h"
 #include "tagged.h"
@@ -211,14 +212,16 @@ void fr_persist_session_wipe_library_tier(fr_runtime_t *runtime) {
   fr_slot_reclaim_free_tail(runtime);
 }
 
-/* Writer/reader cursors stay uint16_t; this asserts the payload buffer fits. */
+/* Writer/reader cursors stay uint16_t; this asserts the stream cap fits. */
 typedef char fr_persist_payload_bytes_must_fit_uint16[
-    (FR_PROFILE_PERSISTENCE_BYTES <= UINT16_MAX) ? 1 : -1];
+    (FR_PERSIST_STORAGE_BYTES <= UINT16_MAX) ? 1 : -1];
 
 typedef struct fr_persist_writer_t {
   uint8_t *bytes;
   uint16_t used;
   uint16_t cap;
+  fr_persist_payload_write_fn_t write;
+  void *ctx;
 } fr_persist_writer_t;
 
 typedef struct fr_persist_reader_t {
@@ -340,36 +343,29 @@ static void fr_persist_payload_write_u16(uint8_t *bytes, uint16_t value) {
   bytes[1] = (uint8_t)(value >> 8);
 }
 
+static fr_err_t fr_persist_writer_bytes(fr_persist_writer_t *writer,
+                                        const uint8_t *bytes,
+                                        uint16_t length);
+
 static fr_err_t fr_persist_writer_u8(fr_persist_writer_t *writer,
                                      uint8_t value) {
-  if (writer->used + 1 > writer->cap) {
-    return FR_ERR_CAPACITY;
-  }
-
-  writer->bytes[writer->used++] = value;
-  return FR_OK;
+  return fr_persist_writer_bytes(writer, &value, 1);
 }
 
 static fr_err_t fr_persist_writer_u16(fr_persist_writer_t *writer,
                                       uint16_t value) {
-  if (writer->used + 2 > writer->cap) {
-    return FR_ERR_CAPACITY;
-  }
+  uint8_t bytes[2];
 
-  fr_persist_payload_write_u16(&writer->bytes[writer->used], value);
-  writer->used = (uint16_t)(writer->used + 2);
-  return FR_OK;
+  fr_persist_payload_write_u16(bytes, value);
+  return fr_persist_writer_bytes(writer, bytes, (uint16_t)sizeof(bytes));
 }
 
 static fr_err_t fr_persist_writer_u32(fr_persist_writer_t *writer,
                                       uint32_t value) {
-  if (writer->used + 4 > writer->cap) {
-    return FR_ERR_CAPACITY;
-  }
+  uint8_t bytes[4];
 
-  fr_write_u32_le(&writer->bytes[writer->used], value);
-  writer->used = (uint16_t)(writer->used + 4);
-  return FR_OK;
+  fr_write_u32_le(bytes, value);
+  return fr_persist_writer_bytes(writer, bytes, (uint16_t)sizeof(bytes));
 }
 
 static fr_err_t fr_persist_writer_int(fr_persist_writer_t *writer,
@@ -380,14 +376,27 @@ static fr_err_t fr_persist_writer_int(fr_persist_writer_t *writer,
 static fr_err_t fr_persist_writer_bytes(fr_persist_writer_t *writer,
                                         const uint8_t *bytes,
                                         uint16_t length) {
-  if ((bytes == NULL && length > 0) || writer->used + length > writer->cap) {
+  uint32_t next = 0;
+
+  if (writer == NULL) {
+    return FR_ERR_INVALID;
+  }
+  next = (uint32_t)writer->used + length;
+  if ((bytes == NULL && length > 0) || next > writer->cap) {
     return bytes == NULL ? FR_ERR_INVALID : FR_ERR_CAPACITY;
   }
 
   if (length > 0) {
-    memcpy(&writer->bytes[writer->used], bytes, length);
+    if (writer->write != NULL) {
+      FR_TRY(writer->write(writer->ctx, bytes, length));
+    } else {
+      if (writer->bytes == NULL) {
+        return FR_ERR_INVALID;
+      }
+      memcpy(&writer->bytes[writer->used], bytes, length);
+    }
   }
-  writer->used = (uint16_t)(writer->used + length);
+  writer->used = (uint16_t)next;
   return FR_OK;
 }
 
@@ -1311,12 +1320,11 @@ static bool fr_persist_slot_should_encode(const fr_runtime_t *runtime,
  * L2 encode writes new CODE/OBJECT records with local ids continuing from
  * the prefix's last id, which is what the decoder's strict local-id sequence
  * check at fr_persist_decode_payload requires. */
-static fr_err_t fr_persist_payload_finalize_encode(
+static fr_err_t fr_persist_payload_write_finalized(
     const fr_runtime_t *runtime, uint8_t tier_filter,
     uint16_t code_count_initial, uint16_t object_count_initial,
     const uint8_t *library_prefix, uint16_t library_prefix_length,
-    uint8_t *bytes, uint16_t cap, uint16_t *out_length) {
-  fr_persist_writer_t writer = {bytes, 0, cap};
+    bool write_preamble, fr_persist_writer_t *writer) {
   fr_code_object_id_t runtime_code_ids[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
   bool code_visiting[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
   fr_object_id_t runtime_object_ids[FR_OBJECT_TABLE_CAPACITY];
@@ -1324,7 +1332,7 @@ static fr_err_t fr_persist_payload_finalize_encode(
   uint16_t code_count = code_count_initial;
   uint16_t object_count = object_count_initial;
 
-  if (runtime == NULL || bytes == NULL || out_length == NULL) {
+  if (runtime == NULL || writer == NULL) {
     return FR_ERR_INVALID;
   }
   if (library_prefix == NULL && library_prefix_length > 0) {
@@ -1353,11 +1361,14 @@ static fr_err_t fr_persist_payload_finalize_encode(
     (void)fr_persist_object_kind(runtime, i, &object_kinds[i]);
   }
   FR_TRY(fr_persist_check_no_volatile_handles(runtime));
-  FR_TRY(fr_persist_writer_bytes(&writer, fr_persist_payload_magic,
-                                 (uint16_t)sizeof(fr_persist_payload_magic)));
-  FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_PAYLOAD_VERSION));
+  if (write_preamble) {
+    FR_TRY(fr_persist_writer_bytes(
+        writer, fr_persist_payload_magic,
+        (uint16_t)sizeof(fr_persist_payload_magic)));
+    FR_TRY(fr_persist_writer_u8(writer, FR_PERSIST_PAYLOAD_VERSION));
+  }
   if (library_prefix_length > 0) {
-    FR_TRY(fr_persist_writer_bytes(&writer, library_prefix,
+    FR_TRY(fr_persist_writer_bytes(writer, library_prefix,
                                    library_prefix_length));
   }
 
@@ -1370,7 +1381,7 @@ static fr_err_t fr_persist_payload_finalize_encode(
     }
     if (fr_tagged_decode_code_object_id(runtime->slots.current[slot_id],
                                         &code_id) == FR_OK) {
-      FR_TRY(fr_persist_encode_code_ref(&writer, runtime, code_id,
+      FR_TRY(fr_persist_encode_code_ref(writer, runtime, code_id,
                                         runtime_code_ids, code_visiting,
                                         &code_count,
                                         runtime_object_ids, object_kinds,
@@ -1394,12 +1405,12 @@ static fr_err_t fr_persist_payload_finalize_encode(
 #if !FR_FEATURE_TEXT
         return FR_ERR_UNSUPPORTED;
 #else
-        FR_TRY(fr_persist_encode_text_ref(&writer, runtime, object_id,
+        FR_TRY(fr_persist_encode_text_ref(writer, runtime, object_id,
                                           runtime_object_ids, object_kinds,
                                           &object_count, &ignored));
 #endif
       } else if (kind == FR_PERSIST_OBJECT_CELLS) {
-        FR_TRY(fr_persist_encode_cell_ref(&writer, runtime, object_id,
+        FR_TRY(fr_persist_encode_cell_ref(writer, runtime, object_id,
                                           runtime_object_ids, object_kinds,
                                           &object_count, &ignored));
       } else if (kind == FR_PERSIST_OBJECT_RECORD_SHAPE) {
@@ -1407,14 +1418,14 @@ static fr_err_t fr_persist_payload_finalize_encode(
         return FR_ERR_UNSUPPORTED;
 #else
         FR_TRY(fr_persist_encode_record_shape_ref(
-            &writer, runtime, object_id, runtime_object_ids, object_kinds,
+            writer, runtime, object_id, runtime_object_ids, object_kinds,
             &object_count, &ignored));
 #endif
       } else if (kind == FR_PERSIST_OBJECT_RECORD) {
 #if !FR_FEATURE_RECORDS
         return FR_ERR_UNSUPPORTED;
 #else
-        FR_TRY(fr_persist_encode_record_ref(&writer, runtime, object_id,
+        FR_TRY(fr_persist_encode_record_ref(writer, runtime, object_id,
                                             runtime_object_ids, object_kinds,
                                             &object_count, &ignored));
 #endif
@@ -1429,14 +1440,14 @@ static fr_err_t fr_persist_payload_finalize_encode(
       continue;
     }
 
-    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_BIND));
-    FR_TRY(fr_persist_writer_u16(&writer, slot_id));
+    FR_TRY(fr_persist_writer_u8(writer, FR_PERSIST_RECORD_BIND));
+    FR_TRY(fr_persist_writer_u16(writer, slot_id));
     {
       uint8_t tier = fr_persist_slot_encode_tier(runtime, slot_id);
 
-      FR_TRY(fr_persist_writer_u8(&writer, tier));
+      FR_TRY(fr_persist_writer_u8(writer, tier));
     }
-    FR_TRY(fr_persist_encode_value(&writer, runtime,
+    FR_TRY(fr_persist_encode_value(writer, runtime,
                                    runtime->slots.current[slot_id],
                                    runtime_code_ids, &code_count,
                                    runtime_object_ids, object_kinds,
@@ -1458,10 +1469,10 @@ static fr_err_t fr_persist_payload_finalize_encode(
     }
     FR_TRY(fr_persist_name_length(name, &name_length));
 
-    FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_NAME));
-    FR_TRY(fr_persist_writer_u16(&writer, slot_id));
-    FR_TRY(fr_persist_writer_u8(&writer, name_length));
-    FR_TRY(fr_persist_writer_bytes(&writer, (const uint8_t *)name,
+    FR_TRY(fr_persist_writer_u8(writer, FR_PERSIST_RECORD_NAME));
+    FR_TRY(fr_persist_writer_u16(writer, slot_id));
+    FR_TRY(fr_persist_writer_u8(writer, name_length));
+    FR_TRY(fr_persist_writer_bytes(writer, (const uint8_t *)name,
                                    name_length));
   }
 #endif
@@ -1477,33 +1488,51 @@ static fr_err_t fr_persist_payload_finalize_encode(
       if (entry->kind == FR_EVENT_KIND_NONE) {
         continue;
       }
-      FR_TRY(fr_persist_encode_code_ref(&writer, runtime, entry->body,
+      FR_TRY(fr_persist_encode_code_ref(writer, runtime, entry->body,
                                         runtime_code_ids, code_visiting,
                                         &code_count,
                                         runtime_object_ids, object_kinds,
                                         &object_count, &local_code_id));
-      FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_EVENT));
-      FR_TRY(fr_persist_writer_u8(&writer, (uint8_t)entry->kind));
-      FR_TRY(fr_persist_writer_u16(&writer, entry->source));
-      FR_TRY(fr_persist_writer_u16(&writer, entry->debounce_ms));
-      FR_TRY(fr_persist_writer_u16(&writer, local_code_id));
+      FR_TRY(fr_persist_writer_u8(writer, FR_PERSIST_RECORD_EVENT));
+      FR_TRY(fr_persist_writer_u8(writer, (uint8_t)entry->kind));
+      FR_TRY(fr_persist_writer_u16(writer, entry->source));
+      FR_TRY(fr_persist_writer_u16(writer, entry->debounce_ms));
+      FR_TRY(fr_persist_writer_u16(writer, local_code_id));
     }
   }
 #endif
 
-  FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_RECORD_END));
-  *out_length = writer.used;
-  return FR_OK;
+  return fr_persist_writer_u8(writer, FR_PERSIST_RECORD_END);
 }
 
 fr_err_t fr_persist_payload_encode(const fr_runtime_t *runtime, uint8_t *bytes,
                                    uint16_t cap, uint16_t *out_length) {
-  if (runtime == NULL) {
+  fr_persist_writer_t writer = {bytes, 0, cap, NULL, NULL};
+
+  if (runtime == NULL || bytes == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
-  return fr_persist_payload_finalize_encode(
+  FR_TRY(fr_persist_payload_write_finalized(
       runtime, 0, runtime->code.base_image_count, runtime->objects.base_count,
-      NULL, 0, bytes, cap, out_length);
+      NULL, 0, true, &writer));
+  *out_length = writer.used;
+  return FR_OK;
+}
+
+fr_err_t fr_persist_payload_encode_stream(
+    const fr_runtime_t *runtime, fr_persist_payload_write_fn_t write, void *ctx,
+    uint16_t *out_length) {
+  fr_persist_writer_t writer = {NULL, 0, (uint16_t)FR_PERSIST_PAYLOAD_BYTES,
+                                write, ctx};
+
+  if (runtime == NULL || write == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_persist_payload_write_finalized(
+      runtime, 0, runtime->code.base_image_count, runtime->objects.base_count,
+      NULL, 0, true, &writer));
+  *out_length = writer.used;
+  return FR_OK;
 }
 
 /* Skip a tagged value body inside a BIND record. Mirrors the decoder's
@@ -1705,6 +1734,511 @@ static fr_err_t fr_persist_payload_next_prefix_ids(
   return FR_OK;
 }
 
+typedef struct fr_persist_l1_marks_t {
+  bool code_in_l1[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  bool code_present[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  uint16_t code_start[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  uint16_t code_length[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
+  bool object_in_l1[FR_OBJECT_TABLE_CAPACITY];
+  bool object_present[FR_OBJECT_TABLE_CAPACITY];
+  uint8_t object_tag[FR_OBJECT_TABLE_CAPACITY];
+  uint16_t object_start[FR_OBJECT_TABLE_CAPACITY];
+  uint16_t object_length[FR_OBJECT_TABLE_CAPACITY];
+  bool slot_in_l1[FR_PROFILE_MAX_SLOTS];
+} fr_persist_l1_marks_t;
+
+static fr_err_t fr_persist_payload_scan_value_ref(fr_persist_reader_t *reader,
+                                                  uint8_t *out_kind,
+                                                  uint16_t *out_word) {
+  uint8_t kind = 0;
+  fr_int_t scratch_int = 0;
+  uint16_t scratch_word = 0;
+
+  if (reader == NULL || out_kind == NULL || out_word == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_persist_reader_u8(reader, &kind));
+  *out_kind = kind;
+  *out_word = 0;
+  switch (kind) {
+  case FR_PERSIST_VALUE_NIL:
+  case FR_PERSIST_VALUE_FALSE:
+  case FR_PERSIST_VALUE_TRUE:
+    return FR_OK;
+  case FR_PERSIST_VALUE_INT:
+    return fr_persist_reader_int(reader, &scratch_int);
+  case FR_PERSIST_VALUE_NATIVE:
+  case FR_PERSIST_VALUE_CODE:
+  case FR_PERSIST_VALUE_OBJECT:
+    FR_TRY(fr_persist_reader_u16(reader, &scratch_word));
+    *out_word = scratch_word;
+    return FR_OK;
+  default:
+    return FR_ERR_CORRUPT;
+  }
+}
+
+#if FR_FEATURE_OBJECTS || FR_FEATURE_RECORDS || FR_FEATURE_CELLS
+static fr_err_t fr_persist_payload_mark_object(fr_persist_l1_marks_t *marks,
+                                               uint16_t object_id,
+                                               bool *closure_changed) {
+  if (marks == NULL || closure_changed == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (object_id >= FR_OBJECT_TABLE_CAPACITY || !marks->object_present[object_id]) {
+    return FR_ERR_CORRUPT;
+  }
+  if (!marks->object_in_l1[object_id]) {
+    marks->object_in_l1[object_id] = true;
+    *closure_changed = true;
+  }
+  return FR_OK;
+}
+#endif
+
+static fr_err_t fr_persist_payload_scan_l1_records(
+    const uint8_t *src, uint16_t src_length, fr_persist_l1_marks_t *marks) {
+  fr_persist_reader_t reader = {src, src_length, 0};
+  const uint8_t *magic = NULL;
+  uint8_t version = 0;
+
+  if (src == NULL || marks == NULL) {
+    return FR_ERR_INVALID;
+  }
+  memset(marks, 0, sizeof(*marks));
+  FR_TRY(fr_persist_reader_bytes(&reader,
+                                 (uint16_t)sizeof(fr_persist_payload_magic),
+                                 &magic));
+  if (memcmp(magic, fr_persist_payload_magic,
+             sizeof(fr_persist_payload_magic)) != 0) {
+    return FR_ERR_CORRUPT;
+  }
+  FR_TRY(fr_persist_reader_u8(&reader, &version));
+  if (version != FR_PERSIST_PAYLOAD_VERSION) {
+    return FR_ERR_CORRUPT;
+  }
+
+  while (true) {
+    uint16_t record_start = reader.offset;
+    uint8_t tag = 0;
+    uint16_t local_id = 0;
+    uint16_t length = 0;
+    const uint8_t *bytes = NULL;
+
+    FR_TRY(fr_persist_reader_u8(&reader, &tag));
+    if (tag == FR_PERSIST_RECORD_END) {
+      return reader.offset == reader.used ? FR_OK : FR_ERR_CORRUPT;
+    }
+    if (tag == FR_PERSIST_RECORD_CODE) {
+      FR_TRY(fr_persist_reader_u16(&reader, &local_id));
+      FR_TRY(fr_persist_reader_u16(&reader, &length));
+      FR_TRY(fr_persist_reader_bytes(&reader, length, &bytes));
+      if (local_id >= FR_PROFILE_CODE_OBJECT_TABLE_SIZE ||
+          marks->code_present[local_id]) {
+        return FR_ERR_CORRUPT;
+      }
+      marks->code_present[local_id] = true;
+      marks->code_start[local_id] = record_start;
+      marks->code_length[local_id] = (uint16_t)(reader.offset - record_start);
+      continue;
+    }
+    if (tag == FR_PERSIST_RECORD_TEXT) {
+      FR_TRY(fr_persist_reader_u16(&reader, &local_id));
+      FR_TRY(fr_persist_reader_u16(&reader, &length));
+      FR_TRY(fr_persist_reader_bytes(&reader, length, &bytes));
+      if (local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          marks->object_present[local_id]) {
+        return FR_ERR_CORRUPT;
+      }
+      marks->object_present[local_id] = true;
+      marks->object_tag[local_id] = tag;
+      marks->object_start[local_id] = record_start;
+      marks->object_length[local_id] =
+          (uint16_t)(reader.offset - record_start);
+      continue;
+    }
+#if FR_FEATURE_RECORDS
+    if (tag == FR_PERSIST_RECORD_RECORD_SHAPE) {
+      uint16_t field_count = 0;
+
+      FR_TRY(fr_persist_reader_u16(&reader, &local_id));
+      FR_TRY(fr_persist_payload_skip_record_name(&reader));
+      FR_TRY(fr_persist_reader_u16(&reader, &field_count));
+      for (uint16_t i = 0; i < field_count; i++) {
+        FR_TRY(fr_persist_payload_skip_record_name(&reader));
+      }
+      if (local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          marks->object_present[local_id]) {
+        return FR_ERR_CORRUPT;
+      }
+      marks->object_present[local_id] = true;
+      marks->object_tag[local_id] = tag;
+      marks->object_start[local_id] = record_start;
+      marks->object_length[local_id] =
+          (uint16_t)(reader.offset - record_start);
+      continue;
+    }
+    if (tag == FR_PERSIST_RECORD_RECORD) {
+      uint16_t shape_id = 0;
+      uint16_t field_count = 0;
+
+      FR_TRY(fr_persist_reader_u16(&reader, &local_id));
+      FR_TRY(fr_persist_reader_u16(&reader, &shape_id));
+      FR_TRY(fr_persist_reader_u16(&reader, &field_count));
+      for (uint16_t i = 0; i < field_count; i++) {
+        uint8_t value_kind = 0;
+        uint16_t value_word = 0;
+
+        FR_TRY(fr_persist_payload_scan_value_ref(&reader, &value_kind,
+                                                 &value_word));
+      }
+      (void)shape_id;
+      if (local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          marks->object_present[local_id]) {
+        return FR_ERR_CORRUPT;
+      }
+      marks->object_present[local_id] = true;
+      marks->object_tag[local_id] = tag;
+      marks->object_start[local_id] = record_start;
+      marks->object_length[local_id] =
+          (uint16_t)(reader.offset - record_start);
+      continue;
+    }
+#endif
+#if FR_FEATURE_CELLS
+    if (tag == FR_PERSIST_RECORD_CELLS) {
+      FR_TRY(fr_persist_reader_u16(&reader, &local_id));
+      FR_TRY(fr_persist_reader_u16(&reader, &length));
+      for (uint16_t i = 0; i < length; i++) {
+        uint8_t value_kind = 0;
+        uint16_t value_word = 0;
+
+        FR_TRY(fr_persist_payload_scan_value_ref(&reader, &value_kind,
+                                                 &value_word));
+      }
+      if (local_id >= FR_OBJECT_TABLE_CAPACITY ||
+          marks->object_present[local_id]) {
+        return FR_ERR_CORRUPT;
+      }
+      marks->object_present[local_id] = true;
+      marks->object_tag[local_id] = tag;
+      marks->object_start[local_id] = record_start;
+      marks->object_length[local_id] =
+          (uint16_t)(reader.offset - record_start);
+      continue;
+    }
+#endif
+    if (tag == FR_PERSIST_RECORD_BIND) {
+      uint16_t slot_id = 0;
+      uint8_t tier = 0;
+      uint8_t value_kind = 0;
+      uint16_t value_word = 0;
+
+      FR_TRY(fr_persist_reader_u16(&reader, &slot_id));
+      FR_TRY(fr_persist_reader_u8(&reader, &tier));
+      if (tier != FR_PERSIST_TIER_LIBRARY && tier != FR_PERSIST_TIER_USER) {
+        return FR_ERR_CORRUPT;
+      }
+      FR_TRY(fr_persist_payload_scan_value_ref(&reader, &value_kind,
+                                               &value_word));
+      if (tier == FR_PERSIST_TIER_LIBRARY) {
+        if (slot_id >= FR_PROFILE_MAX_SLOTS) {
+          return FR_ERR_CORRUPT;
+        }
+        marks->slot_in_l1[slot_id] = true;
+        if (value_kind == FR_PERSIST_VALUE_CODE) {
+          if (value_word >= FR_PROFILE_CODE_OBJECT_TABLE_SIZE ||
+              !marks->code_present[value_word]) {
+            return FR_ERR_CORRUPT;
+          }
+          marks->code_in_l1[value_word] = true;
+        } else if (value_kind == FR_PERSIST_VALUE_OBJECT) {
+          if (value_word >= FR_OBJECT_TABLE_CAPACITY ||
+              !marks->object_present[value_word]) {
+            return FR_ERR_CORRUPT;
+          }
+          marks->object_in_l1[value_word] = true;
+        }
+      }
+      continue;
+    }
+    if (tag == FR_PERSIST_RECORD_NAME) {
+      uint16_t slot_id = 0;
+      uint8_t name_length = 0;
+
+      FR_TRY(fr_persist_reader_u16(&reader, &slot_id));
+      FR_TRY(fr_persist_reader_u8(&reader, &name_length));
+      if (slot_id >= FR_PROFILE_MAX_SLOTS || name_length == 0 ||
+          name_length > FR_PROFILE_MAX_NAME_BYTES) {
+        return FR_ERR_CORRUPT;
+      }
+      FR_TRY(fr_persist_reader_bytes(&reader, name_length, &bytes));
+      continue;
+    }
+#if FR_FEATURE_EVENTS
+    if (tag == FR_PERSIST_RECORD_EVENT) {
+      uint8_t kind = 0;
+      uint16_t scratch = 0;
+
+      FR_TRY(fr_persist_reader_u8(&reader, &kind));
+      FR_TRY(fr_persist_reader_u16(&reader, &scratch));
+      FR_TRY(fr_persist_reader_u16(&reader, &scratch));
+      FR_TRY(fr_persist_reader_u16(&reader, &scratch));
+      continue;
+    }
+#endif
+    return FR_ERR_CORRUPT;
+  }
+}
+
+static fr_err_t fr_persist_payload_mark_code_refs(
+    const uint8_t *src, const fr_persist_l1_marks_t *marks, uint16_t code_id,
+    fr_persist_l1_marks_t *out_marks, bool *closure_changed) {
+  fr_persist_reader_t reader = {src + marks->code_start[code_id],
+                                marks->code_length[code_id], 0};
+  uint8_t tag = 0;
+  uint16_t local_id = 0;
+  uint16_t length = 0;
+  const uint8_t *code_bytes = NULL;
+  fr_instruction_stream_t view;
+  fr_instruction_header_t header = {0};
+  fr_code_offset_t ip = 0;
+  char scratch[64];
+
+  FR_TRY(fr_persist_reader_u8(&reader, &tag));
+  if (tag != FR_PERSIST_RECORD_CODE) {
+    return FR_ERR_CORRUPT;
+  }
+  FR_TRY(fr_persist_reader_u16(&reader, &local_id));
+  FR_TRY(fr_persist_reader_u16(&reader, &length));
+  FR_TRY(fr_persist_reader_bytes(&reader, length, &code_bytes));
+  if (local_id != code_id) {
+    return FR_ERR_CORRUPT;
+  }
+  FR_TRY(fr_instruction_stream_init(&view, code_bytes, length));
+  FR_TRY(fr_instruction_read_header(&view, &header));
+  ip = (fr_code_offset_t)header.header_size;
+  while (ip < view.length) {
+    fr_code_offset_t next_ip = 0;
+    fr_opcode_t op = (fr_opcode_t)code_bytes[ip];
+
+    if (op == FR_OP_PUSH_CODE_ID) {
+      fr_code_object_id_t ref = 0;
+
+      FR_TRY(fr_instruction_read_code_id_operand(&view, ip, &ref));
+      if (ref >= FR_PROFILE_CODE_OBJECT_TABLE_SIZE ||
+          !marks->code_present[ref]) {
+        return FR_ERR_CORRUPT;
+      }
+      if (!out_marks->code_in_l1[ref]) {
+        out_marks->code_in_l1[ref] = true;
+        *closure_changed = true;
+      }
+    }
+#if FR_FEATURE_OBJECTS
+    if (op == FR_OP_PUSH_OBJECT_ID) {
+      fr_object_id_t ref = 0;
+
+      FR_TRY(fr_instruction_read_object_id_operand(&view, ip, &ref));
+      FR_TRY(fr_persist_payload_mark_object(out_marks, ref, closure_changed));
+    }
+#endif
+    FR_TRY(fr_instruction_disassemble_at(&view, ip, scratch,
+                                         (uint16_t)sizeof(scratch), NULL,
+                                         &next_ip));
+    if (next_ip <= ip) {
+      return FR_ERR_CORRUPT;
+    }
+    ip = next_ip;
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_persist_payload_mark_object_refs(
+    const uint8_t *src, uint16_t object_id, fr_persist_l1_marks_t *marks,
+    bool *closure_changed) {
+  fr_persist_reader_t reader = {src + marks->object_start[object_id],
+                                marks->object_length[object_id], 0};
+  uint8_t tag = 0;
+  uint16_t local_id = 0;
+
+  (void)closure_changed;
+  FR_TRY(fr_persist_reader_u8(&reader, &tag));
+  FR_TRY(fr_persist_reader_u16(&reader, &local_id));
+  if (local_id != object_id || tag != marks->object_tag[object_id]) {
+    return FR_ERR_CORRUPT;
+  }
+#if FR_FEATURE_RECORDS
+  if (tag == FR_PERSIST_RECORD_RECORD) {
+    uint16_t shape_id = 0;
+    uint16_t field_count = 0;
+
+    FR_TRY(fr_persist_reader_u16(&reader, &shape_id));
+    FR_TRY(fr_persist_payload_mark_object(marks, shape_id, closure_changed));
+    FR_TRY(fr_persist_reader_u16(&reader, &field_count));
+    for (uint16_t i = 0; i < field_count; i++) {
+      uint8_t value_kind = 0;
+      uint16_t value_word = 0;
+
+      FR_TRY(fr_persist_payload_scan_value_ref(&reader, &value_kind,
+                                               &value_word));
+      if (value_kind == FR_PERSIST_VALUE_OBJECT) {
+        FR_TRY(fr_persist_payload_mark_object(marks, value_word,
+                                              closure_changed));
+      }
+    }
+    return FR_OK;
+  }
+#endif
+#if FR_FEATURE_CELLS
+  if (tag == FR_PERSIST_RECORD_CELLS) {
+    uint16_t length = 0;
+
+    FR_TRY(fr_persist_reader_u16(&reader, &length));
+    for (uint16_t i = 0; i < length; i++) {
+      uint8_t value_kind = 0;
+      uint16_t value_word = 0;
+
+      FR_TRY(fr_persist_payload_scan_value_ref(&reader, &value_kind,
+                                               &value_word));
+      if (value_kind == FR_PERSIST_VALUE_OBJECT) {
+        FR_TRY(fr_persist_payload_mark_object(marks, value_word,
+                                              closure_changed));
+      }
+    }
+    return FR_OK;
+  }
+#endif
+  return FR_OK;
+}
+
+static fr_err_t fr_persist_payload_mark_l1_closure(
+    const uint8_t *src, uint16_t src_length, fr_persist_l1_marks_t *marks) {
+  bool closure_changed = true;
+
+  FR_TRY(fr_persist_payload_scan_l1_records(src, src_length, marks));
+  while (closure_changed) {
+    closure_changed = false;
+    for (uint16_t i = 0; i < FR_PROFILE_CODE_OBJECT_TABLE_SIZE; i++) {
+      if (marks->code_in_l1[i]) {
+        if (!marks->code_present[i]) {
+          return FR_ERR_CORRUPT;
+        }
+        FR_TRY(fr_persist_payload_mark_code_refs(src, marks, i, marks,
+                                                 &closure_changed));
+      }
+    }
+    for (uint16_t i = 0; i < FR_OBJECT_TABLE_CAPACITY; i++) {
+      if (marks->object_in_l1[i]) {
+        if (!marks->object_present[i]) {
+          return FR_ERR_CORRUPT;
+        }
+        FR_TRY(fr_persist_payload_mark_object_refs(src, i, marks,
+                                                   &closure_changed));
+      }
+    }
+  }
+  return FR_OK;
+}
+
+static void fr_persist_payload_l1_next_ids(
+    const fr_persist_l1_marks_t *marks, uint16_t *out_code_count,
+    uint16_t *out_object_count) {
+  *out_code_count = 0;
+  *out_object_count = 0;
+  for (uint16_t i = 0; i < FR_PROFILE_CODE_OBJECT_TABLE_SIZE; i++) {
+    if (marks->code_present[i] && marks->code_in_l1[i]) {
+      *out_code_count = (uint16_t)(i + 1u);
+    }
+  }
+  for (uint16_t i = 0; i < FR_OBJECT_TABLE_CAPACITY; i++) {
+    if (marks->object_present[i] && marks->object_in_l1[i]) {
+      *out_object_count = (uint16_t)(i + 1u);
+    }
+  }
+}
+
+static fr_err_t fr_persist_writer_copy_source_bytes(
+    fr_persist_writer_t *writer, const uint8_t *bytes, uint16_t length) {
+  enum { FR_PERSIST_COPY_CHUNK_BYTES = 4 };
+  uint8_t chunk[FR_PERSIST_COPY_CHUNK_BYTES];
+  uint16_t offset = 0;
+
+  if (writer == NULL || (bytes == NULL && length > 0)) {
+    return FR_ERR_INVALID;
+  }
+  while (offset < length) {
+    uint16_t n = (uint16_t)(length - offset);
+
+    if (n > sizeof(chunk)) {
+      n = sizeof(chunk);
+    }
+    memcpy(chunk, &bytes[offset], n);
+    FR_TRY(fr_persist_writer_bytes(writer, chunk, n));
+    offset = (uint16_t)(offset + n);
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_persist_payload_copy_l1_records(
+    const uint8_t *src, uint16_t src_length, const fr_persist_l1_marks_t *marks,
+    fr_persist_writer_t *writer) {
+  fr_persist_reader_t scan = {src, src_length, 0};
+  const uint8_t *magic_scratch = NULL;
+  uint8_t version_scratch = 0;
+
+  FR_TRY(fr_persist_reader_bytes(&scan,
+                                 (uint16_t)sizeof(fr_persist_payload_magic),
+                                 &magic_scratch));
+  FR_TRY(fr_persist_reader_u8(&scan, &version_scratch));
+  while (true) {
+    uint16_t record_start = scan.offset;
+    uint8_t tag = 0;
+    uint16_t key = 0;
+    uint16_t record_length = 0;
+    bool qualifies = false;
+
+    FR_TRY(fr_persist_payload_advance_record(&scan, &tag, &key));
+    if (tag == FR_PERSIST_RECORD_END) {
+      break;
+    }
+    record_length = (uint16_t)(scan.offset - record_start);
+    switch (tag) {
+    case FR_PERSIST_RECORD_CODE:
+      qualifies = key < FR_PROFILE_CODE_OBJECT_TABLE_SIZE &&
+                  marks->code_in_l1[key];
+      break;
+    case FR_PERSIST_RECORD_TEXT:
+#if FR_FEATURE_RECORDS
+    case FR_PERSIST_RECORD_RECORD_SHAPE:
+    case FR_PERSIST_RECORD_RECORD:
+#endif
+#if FR_FEATURE_CELLS
+    case FR_PERSIST_RECORD_CELLS:
+#endif
+      qualifies =
+          key < FR_OBJECT_TABLE_CAPACITY && marks->object_in_l1[key];
+      break;
+    case FR_PERSIST_RECORD_BIND:
+    case FR_PERSIST_RECORD_NAME:
+      qualifies = key < FR_PROFILE_MAX_SLOTS && marks->slot_in_l1[key];
+      break;
+#if FR_FEATURE_EVENTS
+    case FR_PERSIST_RECORD_EVENT:
+      qualifies = false;
+      break;
+#endif
+    default:
+      return FR_ERR_CORRUPT;
+    }
+    if (qualifies) {
+      FR_TRY(fr_persist_writer_copy_source_bytes(writer, src + record_start,
+                                                 record_length));
+    }
+  }
+  return FR_OK;
+}
+
 /* D5: save encodes only L2 from runtime and prefixes the existing payload's
  * L1 records (CODE / TEXT / BIND / NAME — the closure of records L1 BINDs
  * reference) verbatim. Callers (fr_persist_save) extract the prefix via
@@ -1713,10 +2247,11 @@ fr_err_t fr_persist_payload_save_encode(
     const fr_runtime_t *runtime, const uint8_t *library_prefix,
     uint16_t library_prefix_length, uint8_t *bytes, uint16_t cap,
     uint16_t *out_length) {
+  fr_persist_writer_t writer = {bytes, 0, cap, NULL, NULL};
   uint16_t prefix_code_count = 0;
   uint16_t prefix_object_count = 0;
 
-  if (runtime == NULL) {
+  if (runtime == NULL || bytes == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_persist_payload_next_prefix_ids(
@@ -1728,10 +2263,57 @@ fr_err_t fr_persist_payload_save_encode(
   if (prefix_object_count < runtime->objects.base_count) {
     prefix_object_count = runtime->objects.base_count;
   }
-  return fr_persist_payload_finalize_encode(
+  FR_TRY(fr_persist_payload_write_finalized(
       runtime, (uint8_t)FR_PERSIST_TIER_USER, prefix_code_count,
-      prefix_object_count, library_prefix, library_prefix_length, bytes, cap,
-      out_length);
+      prefix_object_count, library_prefix, library_prefix_length, true,
+      &writer));
+  *out_length = writer.used;
+  return FR_OK;
+}
+
+fr_err_t fr_persist_payload_save_stream(
+    const fr_runtime_t *runtime, const uint8_t *old_payload,
+    uint16_t old_payload_length, fr_persist_payload_write_fn_t write,
+    void *ctx, uint16_t *out_length) {
+  fr_persist_writer_t writer = {NULL, 0, (uint16_t)FR_PERSIST_PAYLOAD_BYTES,
+                                write, ctx};
+  fr_persist_l1_marks_t marks;
+  bool have_old_payload = false;
+  uint16_t prefix_code_count = 0;
+  uint16_t prefix_object_count = 0;
+
+  if (runtime == NULL || write == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (old_payload == NULL && old_payload_length > 0) {
+    return FR_ERR_INVALID;
+  }
+  have_old_payload = old_payload != NULL && old_payload_length > 0;
+  if (have_old_payload) {
+    FR_TRY(fr_persist_payload_mark_l1_closure(old_payload, old_payload_length,
+                                              &marks));
+    fr_persist_payload_l1_next_ids(&marks, &prefix_code_count,
+                                   &prefix_object_count);
+  }
+  if (prefix_code_count < runtime->code.base_image_count) {
+    prefix_code_count = runtime->code.base_image_count;
+  }
+  if (prefix_object_count < runtime->objects.base_count) {
+    prefix_object_count = runtime->objects.base_count;
+  }
+
+  FR_TRY(fr_persist_writer_bytes(&writer, fr_persist_payload_magic,
+                                 (uint16_t)sizeof(fr_persist_payload_magic)));
+  FR_TRY(fr_persist_writer_u8(&writer, FR_PERSIST_PAYLOAD_VERSION));
+  if (have_old_payload) {
+    FR_TRY(fr_persist_payload_copy_l1_records(old_payload, old_payload_length,
+                                              &marks, &writer));
+  }
+  FR_TRY(fr_persist_payload_write_finalized(
+      runtime, (uint8_t)FR_PERSIST_TIER_USER, prefix_code_count,
+      prefix_object_count, NULL, 0, false, &writer));
+  *out_length = writer.used;
+  return FR_OK;
 }
 
 static fr_err_t fr_persist_decode_value(fr_persist_reader_t *reader,
@@ -3235,7 +3817,7 @@ fr_err_t fr_persist_payload_extract_library_records(
     const uint8_t *src, uint16_t src_length, uint8_t *dst, uint16_t dst_cap,
     uint16_t *out_length) {
   fr_persist_decoded_payload_t decoded;
-  fr_persist_writer_t writer = {dst, 0, dst_cap};
+  fr_persist_writer_t writer = {dst, 0, dst_cap, NULL, NULL};
   bool code_in_l1[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
   bool object_in_l1[FR_OBJECT_TABLE_CAPACITY];
   bool slot_in_l1[FR_PROFILE_MAX_SLOTS];
@@ -3467,7 +4049,7 @@ fr_err_t fr_persist_payload_strip_library_records(
     const uint8_t *src, uint16_t src_length, uint8_t *dst, uint16_t dst_cap,
     uint16_t *out_length) {
   fr_persist_decoded_payload_t decoded;
-  fr_persist_writer_t writer = {dst, 0, dst_cap};
+  fr_persist_writer_t writer = {dst, 0, dst_cap, NULL, NULL};
   bool code_in_l1[FR_PROFILE_CODE_OBJECT_TABLE_SIZE];
   bool object_in_l1[FR_OBJECT_TABLE_CAPACITY];
   bool slot_in_l1[FR_PROFILE_MAX_SLOTS];

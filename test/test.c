@@ -320,9 +320,35 @@ static void write_instruction_header(uint8_t *bytes, uint8_t header_size) {
   bytes[1] = header_size;
 }
 
+static fr_err_t test_persist_commit_image(const uint8_t *image,
+                                          uint16_t image_length) {
+  fr_err_t err = FR_OK;
+
+  if (image == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (image_length < FR_PERSIST_HEADER_BYTES) {
+    return FR_ERR_CORRUPT;
+  }
+  err = fr_platform_persist_stream_begin();
+  if (err != FR_OK) {
+    return err;
+  }
+  err = fr_platform_persist_stream_write(
+      &image[FR_PERSIST_HEADER_BYTES],
+      (uint16_t)(image_length - FR_PERSIST_HEADER_BYTES));
+  if (err == FR_OK) {
+    err = fr_platform_persist_stream_finalize(image);
+  }
+  if (err != FR_OK) {
+    fr_platform_persist_stream_abort();
+  }
+  return err;
+}
+
 static fr_err_t test_persist_commit_payload(const uint8_t *payload,
                                             uint16_t payload_length) {
-  uint8_t image[FR_PROFILE_PERSISTENCE_BYTES];
+  uint8_t image[FR_PERSIST_STORAGE_BYTES];
 
   if (payload == NULL ||
       (uint32_t)FR_PERSIST_HEADER_BYTES + payload_length > sizeof(image)) {
@@ -332,7 +358,7 @@ static fr_err_t test_persist_commit_payload(const uint8_t *payload,
   memcpy(&image[FR_PERSIST_HEADER_BYTES], payload, payload_length);
   FR_TRY(fr_persist_format_build_header(image, payload_length,
                                         fr_crc32(payload, payload_length)));
-  return fr_platform_persist_commit(
+  return test_persist_commit_image(
       image, (uint16_t)(FR_PERSIST_HEADER_BYTES + payload_length));
 }
 
@@ -579,7 +605,7 @@ static void test_persist_cross_width_header_rejection(void) {
 
   CHECK("commit wrong-width image without fallback",
         fr_platform_persist_clear() == FR_OK &&
-            fr_platform_persist_commit(image, image_length) == FR_OK);
+            test_persist_commit_image(image, image_length) == FR_OK);
   CHECK("restore rejects header with opposite-width profile hash",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_ERR_CORRUPT);
@@ -973,6 +999,53 @@ static void test_persist_resolve_equivalence(void) {
             strcmp(out, "42\nok\n") == 0);
 #endif
 }
+
+#if FR_PERSIST_STORAGE_BYTES > FR_PROFILE_PERSISTENCE_BYTES &&               \
+    FR_PROFILE_MAX_OVERLAY_NAMES >= 32 &&                                    \
+    FR_PROFILE_CODE_OBJECT_TABLE_SIZE >= 48
+static void test_persist_stream_save_exceeds_legacy_staging_cap(void) {
+  fr_runtime_t runtime;
+  char out[FR_REPL_OUTPUT_BYTES];
+  char line[FR_REPL_LINE_BYTES];
+  fr_slot_id_t slot_id = 0;
+
+  fr_platform_persist_clear();
+  CHECK("stream large image base", fr_base_image_install(&runtime) == FR_OK);
+  for (uint16_t i = 0; i < 32; i++) {
+    int used = snprintf(line, sizeof(line), "big_%02u is fn [", (unsigned)i);
+
+    CHECK("stream large image line prefix",
+          used > 0 && (size_t)used < sizeof(line));
+    for (uint16_t j = 0; j < 22; j++) {
+      int wrote = snprintf(&line[used], sizeof(line) - (size_t)used, " %u",
+                           100000u + (unsigned)i * 22u + (unsigned)j);
+
+      CHECK("stream large image line body",
+            wrote > 0 && (size_t)wrote < sizeof(line) - (size_t)used);
+      used += wrote;
+    }
+    {
+      int wrote = snprintf(&line[used], sizeof(line) - (size_t)used, " ]");
+
+      CHECK("stream large image line suffix",
+            wrote > 0 && (size_t)wrote < sizeof(line) - (size_t)used);
+    }
+    CHECK("stream large image define",
+          fr_repl_eval_line(&runtime, line, out, (uint16_t)sizeof(out)) ==
+                  FR_OK &&
+              strcmp(out, "ok\n") == 0);
+  }
+
+  CHECK("stream large image save exceeds old staging cap",
+        fr_persist_save(&runtime) == FR_OK &&
+            fr_persist_debug_last_payload_bytes() >
+                FR_PROFILE_PERSISTENCE_BYTES);
+  CHECK("stream large image restores",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK &&
+            fr_slot_id_for_name(&runtime, "big_31", &slot_id) == FR_OK);
+}
+#endif
 #endif
 
 #if FR_FEATURE_TEXT
@@ -1392,7 +1465,7 @@ static void test_persist_old_format_rejection(void) {
 
   CHECK("old format commit",
         fr_platform_persist_clear() == FR_OK &&
-            fr_platform_persist_commit(image, image_length) == FR_OK);
+            test_persist_commit_image(image, image_length) == FR_OK);
   CHECK("old format restore rejects cleanly",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_ERR_CORRUPT &&
@@ -1432,7 +1505,7 @@ static void test_persist_source_change_header_rejection(void) {
 
   CHECK("commit source-changed image without fallback",
         fr_platform_persist_clear() == FR_OK &&
-            fr_platform_persist_commit(image, image_length) == FR_OK);
+            test_persist_commit_image(image, image_length) == FR_OK);
   CHECK("restore rejects overlay saved under different source bytes",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_ERR_CORRUPT);
@@ -9500,8 +9573,10 @@ static void test_persist(void) {
   CHECK("persist torn newer image falls back",
         fr_platform_persist_read(image, (uint16_t)sizeof(image), &image_length,
                                  0) == FR_OK &&
-            fr_platform_persist_commit(
-                image, (uint16_t)(FR_PERSIST_HEADER_BYTES + 1u)) == FR_OK &&
+            fr_platform_persist_stream_begin() == FR_OK &&
+            fr_platform_persist_stream_write(&image[FR_PERSIST_HEADER_BYTES],
+                                             1) == FR_OK &&
+            (fr_platform_persist_stream_abort(), true) &&
             fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
@@ -9536,7 +9611,7 @@ static void test_persist(void) {
             image_length > FR_PERSIST_HEADER_BYTES + 5u);
   image[FR_PERSIST_HEADER_BYTES + 5u] ^= 0x5au;
   CHECK("persist corrupt newer payload falls back",
-        fr_platform_persist_commit(image, image_length) == FR_OK &&
+        test_persist_commit_image(image, image_length) == FR_OK &&
             fr_base_image_install(&runtime) == FR_OK &&
             fr_persist_restore(&runtime) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
@@ -12825,6 +12900,11 @@ int main(void) {
   test_persist_repl_contract_proof();
   test_persist_round_trip_payload_identity();
   test_persist_resolve_equivalence();
+#if FR_PERSIST_STORAGE_BYTES > FR_PROFILE_PERSISTENCE_BYTES &&               \
+    FR_PROFILE_MAX_OVERLAY_NAMES >= 32 &&                                    \
+    FR_PROFILE_CODE_OBJECT_TABLE_SIZE >= 48
+  test_persist_stream_save_exceeds_legacy_staging_cap();
+#endif
   test_persist_restore_falls_back_from_semantic_corrupt_newer();
 #endif
 #if FR_FEATURE_TEXT

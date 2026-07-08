@@ -27,6 +27,32 @@
 
 static fr_runtime_t s_runtime;
 
+static fr_err_t test_persist_commit_image(const uint8_t *image,
+                                          uint16_t image_length) {
+  fr_err_t err = FR_OK;
+
+  if (image == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (image_length < FR_PERSIST_HEADER_BYTES) {
+    return FR_ERR_CORRUPT;
+  }
+  err = fr_platform_persist_stream_begin();
+  if (err != FR_OK) {
+    return err;
+  }
+  err = fr_platform_persist_stream_write(
+      &image[FR_PERSIST_HEADER_BYTES],
+      (uint16_t)(image_length - FR_PERSIST_HEADER_BYTES));
+  if (err == FR_OK) {
+    err = fr_platform_persist_stream_finalize(image);
+  }
+  if (err != FR_OK) {
+    fr_platform_persist_stream_abort();
+  }
+  return err;
+}
+
 static void save_boot_one_after_nil_save(void) {
   char buf[128];
 
@@ -91,9 +117,8 @@ static void test_mid_commit_power_loss_keeps_previous_good_image(void) {
                                0));
   TEST_ASSERT_GREATER_THAN(FR_PERSIST_HEADER_BYTES + 1u, image_length);
 
-  fr_host_persist_debug_interrupt_next_commit(
-      (uint16_t)(FR_PERSIST_HEADER_BYTES + 1u));
-  TEST_ASSERT_EQUAL(FR_ERR_IO, fr_platform_persist_commit(image, image_length));
+  fr_host_persist_debug_interrupt_next_header_write();
+  TEST_ASSERT_EQUAL(FR_ERR_IO, test_persist_commit_image(image, image_length));
 
   assert_restored_boot_is_one();
 }
@@ -119,7 +144,7 @@ static void test_bad_payload_newer_image_falls_back_to_older_good_image(void) {
                  image, info.payload_length,
                  fr_crc32(&image[FR_PERSIST_HEADER_BYTES],
                           info.payload_length)));
-  TEST_ASSERT_EQUAL(FR_OK, fr_platform_persist_commit(image, info.total_length));
+  TEST_ASSERT_EQUAL(FR_OK, test_persist_commit_image(image, info.total_length));
 
   assert_restored_boot_is_nil();
 }
