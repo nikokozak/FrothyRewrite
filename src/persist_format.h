@@ -15,13 +15,13 @@ enum {
 
 typedef struct fr_persist_format_info_t {
   uint32_t backend_generation;
-  uint16_t payload_length;
-  uint16_t total_length;
+  uint32_t payload_length;
+  uint32_t total_length;
   uint32_t payload_crc;
 } fr_persist_format_info_t;
 
 fr_err_t fr_persist_format_build_header(uint8_t *bytes,
-                                        uint16_t payload_length,
+                                        uint32_t payload_length,
                                         uint32_t payload_crc);
 fr_err_t fr_persist_format_validate(const uint8_t *bytes,
                                     uint16_t stored_length,

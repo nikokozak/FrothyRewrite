@@ -236,6 +236,7 @@ fr_err_t fr_base_image_install(fr_runtime_t *runtime) {
   fr_code_mark_base(next);
   fr_native_mark_base(next);
   *runtime = *next;
+  fr_code_rebase_ram_pointers(runtime, next);
   free(next);
   return FR_OK;
 }

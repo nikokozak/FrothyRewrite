@@ -78,8 +78,11 @@ void fr_object_reset(fr_runtime_t *runtime) {
   runtime->objects.used_cell_words = 0;
   runtime->objects.used_text_bytes = 0;
   runtime->objects.base_count = 0;
+  runtime->objects.image_count = 0;
   runtime->objects.base_used_cell_words = 0;
   runtime->objects.base_used_text_bytes = 0;
+  runtime->objects.image_used_cell_words = 0;
+  runtime->objects.image_used_text_bytes = 0;
 #if FR_FEATURE_RECORDS
   runtime->objects.used_record_names = 0;
   runtime->objects.used_record_shape_fields = 0;
@@ -89,6 +92,10 @@ void fr_object_reset(fr_runtime_t *runtime) {
   runtime->objects.base_used_record_shape_fields = 0;
   runtime->objects.base_used_record_values = 0;
   runtime->objects.base_used_record_name_bytes = 0;
+  runtime->objects.image_used_record_names = 0;
+  runtime->objects.image_used_record_shape_fields = 0;
+  runtime->objects.image_used_record_values = 0;
+  runtime->objects.image_used_record_name_bytes = 0;
 #endif
   memset(runtime->objects.entries, 0, sizeof(runtime->objects.entries));
   memset(runtime->objects.base_entries, 0,
@@ -130,8 +137,11 @@ void fr_object_mark_base(fr_runtime_t *runtime) {
   }
 
   runtime->objects.base_count = runtime->objects.count;
+  runtime->objects.image_count = runtime->objects.count;
   runtime->objects.base_used_cell_words = runtime->objects.used_cell_words;
   runtime->objects.base_used_text_bytes = runtime->objects.used_text_bytes;
+  runtime->objects.image_used_cell_words = runtime->objects.used_cell_words;
+  runtime->objects.image_used_text_bytes = runtime->objects.used_text_bytes;
 #if FR_FEATURE_RECORDS
   runtime->objects.base_used_record_names =
       runtime->objects.used_record_names;
@@ -140,6 +150,14 @@ void fr_object_mark_base(fr_runtime_t *runtime) {
   runtime->objects.base_used_record_values =
       runtime->objects.used_record_values;
   runtime->objects.base_used_record_name_bytes =
+      runtime->objects.used_record_name_bytes;
+  runtime->objects.image_used_record_names =
+      runtime->objects.used_record_names;
+  runtime->objects.image_used_record_shape_fields =
+      runtime->objects.used_record_shape_fields;
+  runtime->objects.image_used_record_values =
+      runtime->objects.used_record_values;
+  runtime->objects.image_used_record_name_bytes =
       runtime->objects.used_record_name_bytes;
 #endif
   memcpy(runtime->objects.base_entries, runtime->objects.entries,
@@ -173,6 +191,34 @@ void fr_object_mark_base(fr_runtime_t *runtime) {
 #endif
 }
 
+void fr_object_mark_image(fr_runtime_t *runtime) {
+#if !FR_FEATURE_OBJECTS
+  (void)runtime;
+#else
+  if (runtime == NULL) {
+    return;
+  }
+
+  runtime->objects.image_count = runtime->objects.count;
+  runtime->objects.image_used_cell_words = runtime->objects.used_cell_words;
+  runtime->objects.image_used_text_bytes = runtime->objects.used_text_bytes;
+#if FR_FEATURE_RECORDS
+  runtime->objects.image_used_record_names =
+      runtime->objects.used_record_names;
+  runtime->objects.image_used_record_shape_fields =
+      runtime->objects.used_record_shape_fields;
+  runtime->objects.image_used_record_values =
+      runtime->objects.used_record_values;
+  runtime->objects.image_used_record_name_bytes =
+      runtime->objects.used_record_name_bytes;
+#endif
+  for (fr_object_id_t object_id = 0; object_id < runtime->objects.count;
+       object_id++) {
+    runtime->objects.overlay[object_id] = false;
+  }
+#endif
+}
+
 void fr_object_restore_base(fr_runtime_t *runtime) {
   if (runtime == NULL) {
     return;
@@ -182,8 +228,13 @@ void fr_object_restore_base(fr_runtime_t *runtime) {
   memset(&runtime->objects, 0, sizeof(runtime->objects));
 #else
   runtime->objects.count = runtime->objects.base_count;
+  runtime->objects.image_count = runtime->objects.base_count;
   runtime->objects.used_cell_words = runtime->objects.base_used_cell_words;
   runtime->objects.used_text_bytes = runtime->objects.base_used_text_bytes;
+  runtime->objects.image_used_cell_words =
+      runtime->objects.base_used_cell_words;
+  runtime->objects.image_used_text_bytes =
+      runtime->objects.base_used_text_bytes;
 #if FR_FEATURE_RECORDS
   runtime->objects.used_record_names = runtime->objects.base_used_record_names;
   runtime->objects.used_record_shape_fields =
@@ -191,6 +242,14 @@ void fr_object_restore_base(fr_runtime_t *runtime) {
   runtime->objects.used_record_values =
       runtime->objects.base_used_record_values;
   runtime->objects.used_record_name_bytes =
+      runtime->objects.base_used_record_name_bytes;
+  runtime->objects.image_used_record_names =
+      runtime->objects.base_used_record_names;
+  runtime->objects.image_used_record_shape_fields =
+      runtime->objects.base_used_record_shape_fields;
+  runtime->objects.image_used_record_values =
+      runtime->objects.base_used_record_values;
+  runtime->objects.image_used_record_name_bytes =
       runtime->objects.base_used_record_name_bytes;
 #endif
   memcpy(runtime->objects.entries, runtime->objects.base_entries,
@@ -234,6 +293,77 @@ void fr_object_restore_base(fr_runtime_t *runtime) {
                                    runtime->objects.used_record_name_bytes);
 #endif
   memset(runtime->objects.overlay, 0, sizeof(runtime->objects.overlay));
+#endif
+}
+
+void fr_object_clear_overlay(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return;
+  }
+
+#if !FR_FEATURE_OBJECTS
+  memset(&runtime->objects, 0, sizeof(runtime->objects));
+#else
+  memcpy(runtime->objects.entries, runtime->objects.base_entries,
+         runtime->objects.base_count * sizeof(runtime->objects.entries[0]));
+  memcpy(runtime->objects.cell_values, runtime->objects.base_cell_values,
+         runtime->objects.base_used_cell_words *
+             sizeof(runtime->objects.cell_values[0]));
+  memcpy(runtime->objects.text_bytes, runtime->objects.base_text_bytes,
+         runtime->objects.base_used_text_bytes *
+             sizeof(runtime->objects.text_bytes[0]));
+#if FR_FEATURE_RECORDS
+  memcpy(runtime->objects.record_names, runtime->objects.base_record_names,
+         runtime->objects.base_used_record_names *
+             sizeof(runtime->objects.record_names[0]));
+  memcpy(runtime->objects.record_shape_fields,
+         runtime->objects.base_record_shape_fields,
+         runtime->objects.base_used_record_shape_fields *
+             sizeof(runtime->objects.record_shape_fields[0]));
+  memcpy(runtime->objects.record_values, runtime->objects.base_record_values,
+         runtime->objects.base_used_record_values *
+             sizeof(runtime->objects.record_values[0]));
+  memcpy(runtime->objects.record_name_bytes,
+         runtime->objects.base_record_name_bytes,
+         runtime->objects.base_used_record_name_bytes *
+             sizeof(runtime->objects.record_name_bytes[0]));
+#endif
+  runtime->objects.count = runtime->objects.image_count;
+  runtime->objects.used_cell_words = runtime->objects.image_used_cell_words;
+  runtime->objects.used_text_bytes = runtime->objects.image_used_text_bytes;
+#if FR_FEATURE_RECORDS
+  runtime->objects.used_record_names =
+      runtime->objects.image_used_record_names;
+  runtime->objects.used_record_shape_fields =
+      runtime->objects.image_used_record_shape_fields;
+  runtime->objects.used_record_values =
+      runtime->objects.image_used_record_values;
+  runtime->objects.used_record_name_bytes =
+      runtime->objects.image_used_record_name_bytes;
+#endif
+  fr_object_zero_entries(runtime->objects.entries, runtime->objects.count);
+  fr_object_zero_cells(runtime->objects.cell_values,
+                       runtime->objects.used_cell_words);
+  fr_object_zero_text(runtime->objects.text_bytes,
+                      runtime->objects.used_text_bytes);
+#if FR_FEATURE_RECORDS
+  fr_object_zero_record_names(runtime->objects.record_names,
+                              runtime->objects.used_record_names);
+  fr_object_zero_record_shape_fields(
+      runtime->objects.record_shape_fields,
+      runtime->objects.used_record_shape_fields);
+  fr_object_zero_record_values(runtime->objects.record_values,
+                               runtime->objects.used_record_values);
+  fr_object_zero_record_name_bytes(runtime->objects.record_name_bytes,
+                                   runtime->objects.used_record_name_bytes);
+#endif
+  memset(runtime->objects.overlay, 0,
+         runtime->objects.image_count * sizeof(runtime->objects.overlay[0]));
+  if (runtime->objects.image_count < FR_OBJECT_TABLE_CAPACITY) {
+    memset(&runtime->objects.overlay[runtime->objects.image_count], 0,
+           (FR_OBJECT_TABLE_CAPACITY - runtime->objects.image_count) *
+               sizeof(runtime->objects.overlay[0]));
+  }
 #endif
 }
 

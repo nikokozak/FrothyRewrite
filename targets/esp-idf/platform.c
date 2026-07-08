@@ -1171,6 +1171,14 @@ fr_err_t fr_platform_i2c_close(uint16_t platform_index) {
 static uint8_t fr_esp_persist_image[FR_PROFILE_PERSISTENCE_BYTES];
 static uint8_t fr_esp_persist_best_image[FR_PROFILE_PERSISTENCE_BYTES];
 static const esp_partition_t *fr_esp_persist_partition;
+static esp_partition_mmap_handle_t fr_esp_persist_mmap_handle;
+static esp_partition_mmap_handle_t fr_esp_persist_candidate_mmap_handle;
+static const uint8_t *fr_esp_persist_mmap_bytes;
+static const uint8_t *fr_esp_persist_candidate_mmap_bytes;
+static uint16_t fr_esp_persist_mmap_length;
+static uint16_t fr_esp_persist_candidate_mmap_length;
+static bool fr_esp_persist_mmap_active;
+static bool fr_esp_persist_candidate_mmap_active;
 
 static uint32_t fr_esp_persist_slot_offset(uint8_t slot) {
   return (uint32_t)slot * (uint32_t)FR_ESP_PERSIST_SLOT_BYTES;
@@ -1338,18 +1346,120 @@ fr_err_t fr_platform_persist_read(uint8_t *bytes, uint16_t cap,
   }
   err = fr_esp_persist_pick_read_slot(partition, image_index, &slot, &info);
   if (err == FR_OK) {
-    if (cap < info.total_length) {
+    if (info.total_length > UINT16_MAX) {
+      err = FR_ERR_CAPACITY;
+    } else if (cap < info.total_length) {
       err = FR_ERR_CAPACITY;
     } else {
       err = fr_esp_persist_load(partition, slot, fr_esp_persist_best_image,
                                 out_length, &info);
       if (err == FR_OK) {
-        memcpy(bytes, fr_esp_persist_best_image, info.total_length);
-        *out_length = info.total_length;
+        memcpy(bytes, fr_esp_persist_best_image, (uint16_t)info.total_length);
+        *out_length = (uint16_t)info.total_length;
       }
     }
   }
   return err;
+}
+
+void fr_platform_persist_unmount(void) {
+  fr_platform_persist_mount_discard();
+  if (fr_esp_persist_mmap_active) {
+    esp_partition_munmap(fr_esp_persist_mmap_handle);
+    fr_esp_persist_mmap_active = false;
+    fr_esp_persist_mmap_handle = 0;
+    fr_esp_persist_mmap_bytes = NULL;
+    fr_esp_persist_mmap_length = 0;
+  }
+}
+
+void fr_platform_persist_mount_discard(void) {
+  if (fr_esp_persist_candidate_mmap_active) {
+    esp_partition_munmap(fr_esp_persist_candidate_mmap_handle);
+    fr_esp_persist_candidate_mmap_active = false;
+    fr_esp_persist_candidate_mmap_handle = 0;
+    fr_esp_persist_candidate_mmap_bytes = NULL;
+    fr_esp_persist_candidate_mmap_length = 0;
+  }
+}
+
+fr_err_t fr_platform_persist_mount_commit(void) {
+  esp_partition_mmap_handle_t old_handle = 0;
+  bool had_old = fr_esp_persist_mmap_active;
+
+  if (!fr_esp_persist_candidate_mmap_active) {
+    return FR_ERR_INVALID;
+  }
+  old_handle = fr_esp_persist_mmap_handle;
+  fr_esp_persist_mmap_handle = fr_esp_persist_candidate_mmap_handle;
+  fr_esp_persist_mmap_bytes = fr_esp_persist_candidate_mmap_bytes;
+  fr_esp_persist_mmap_length = fr_esp_persist_candidate_mmap_length;
+  fr_esp_persist_mmap_active = true;
+  fr_esp_persist_candidate_mmap_handle = 0;
+  fr_esp_persist_candidate_mmap_bytes = NULL;
+  fr_esp_persist_candidate_mmap_length = 0;
+  fr_esp_persist_candidate_mmap_active = false;
+  if (had_old) {
+    esp_partition_munmap(old_handle);
+  }
+  return FR_OK;
+}
+
+bool fr_platform_persist_pointer_is_mounted(const void *ptr, uint16_t length) {
+  uintptr_t p = (uintptr_t)ptr;
+  uintptr_t b = (uintptr_t)fr_esp_persist_mmap_bytes;
+
+  if (!fr_esp_persist_mmap_active || fr_esp_persist_mmap_bytes == NULL) {
+    return false;
+  }
+  if (length == 0) {
+    return true;
+  }
+  if (ptr == NULL || p < b) {
+    return false;
+  }
+  return (uint32_t)(p - b) + length <= fr_esp_persist_mmap_length;
+}
+
+fr_err_t fr_platform_persist_mount(uint8_t image_index,
+                                   const uint8_t **out_bytes,
+                                   uint16_t *out_length) {
+  const esp_partition_t *partition = NULL;
+  const void *mapped = NULL;
+  uint8_t slot = 0;
+  fr_persist_format_info_t info = {0};
+  fr_err_t err = FR_OK;
+
+  if (out_bytes == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  fr_platform_persist_mount_discard();
+  err = fr_esp_persist_open(&partition);
+  if (err != FR_OK) {
+    return err;
+  }
+  err = fr_esp_persist_pick_read_slot(partition, image_index, &slot, &info);
+  if (err != FR_OK) {
+    return err;
+  }
+  if (info.total_length > UINT16_MAX) {
+    return FR_ERR_CAPACITY;
+  }
+
+  err = fr_esp_err(esp_partition_mmap(
+      partition, fr_esp_persist_slot_offset(slot), info.total_length,
+      ESP_PARTITION_MMAP_DATA, &mapped,
+      &fr_esp_persist_candidate_mmap_handle));
+  if (err != FR_OK) {
+    return err;
+  }
+  fr_esp_persist_candidate_mmap_active = true;
+  fr_esp_persist_candidate_mmap_bytes = (const uint8_t *)mapped;
+  fr_esp_persist_candidate_mmap_length = (uint16_t)info.total_length;
+  *out_bytes = (const uint8_t *)mapped;
+  *out_length = (uint16_t)info.total_length;
+  return FR_OK;
 }
 
 fr_err_t fr_platform_persist_commit(const uint8_t *bytes, uint16_t length) {
@@ -1401,6 +1511,7 @@ fr_err_t fr_platform_persist_clear(void) {
   const esp_partition_t *partition = NULL;
   fr_err_t err = FR_OK;
 
+  fr_platform_persist_unmount();
   err = fr_esp_persist_open(&partition);
   if (err != FR_OK) {
     return err;

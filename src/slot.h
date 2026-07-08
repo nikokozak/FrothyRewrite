@@ -14,6 +14,9 @@ fr_err_t fr_slot_write(fr_runtime_t *runtime, fr_slot_id_t slot_id,
                        fr_tagged_t tagged);
 fr_err_t fr_slot_set_base(fr_runtime_t *runtime, fr_slot_id_t slot_id,
                           fr_tagged_t tagged);
+fr_err_t fr_slot_set_mounted_base(fr_runtime_t *runtime, fr_slot_id_t slot_id,
+                                  fr_tagged_t tagged,
+                                  fr_install_tier_t tier);
 fr_err_t fr_slot_restore(fr_runtime_t *runtime, fr_slot_id_t slot_id);
 bool fr_slot_is_overlay(const fr_runtime_t *runtime, fr_slot_id_t slot_id);
 fr_slot_id_t fr_slot_count(const fr_runtime_t *runtime);

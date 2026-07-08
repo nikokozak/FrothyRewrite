@@ -5,7 +5,7 @@
 
 #if FR_FEATURE_PERSISTENCE
 
-fr_err_t fr_persist_save(const fr_runtime_t *runtime);
+fr_err_t fr_persist_save(fr_runtime_t *runtime);
 fr_err_t fr_persist_restore(fr_runtime_t *runtime);
 fr_err_t fr_persist_wipe(fr_runtime_t *runtime);
 
@@ -17,7 +17,7 @@ fr_err_t fr_persist_wipe_user(fr_runtime_t *runtime);
 fr_err_t fr_persist_install_library(fr_runtime_t *runtime);
 /* D3 install-library mode persists new definitions with tier tag L1 after each
  * successful overlay-apply or value-binding. */
-fr_err_t fr_persist_save_full(const fr_runtime_t *runtime);
+fr_err_t fr_persist_save_full(fr_runtime_t *runtime);
 /* D6 boot two-call sequence. Restore library first, then user against the
  * runtime state left by the library pass. */
 fr_err_t fr_persist_restore_library(fr_runtime_t *runtime);

@@ -34,7 +34,10 @@ typedef struct fr_runtime_limits_t {
 typedef struct fr_slot_table_t {
   fr_tagged_t current[FR_PROFILE_MAX_SLOTS];
   fr_tagged_t base[FR_PROFILE_MAX_SLOTS];
+  fr_tagged_t library_base[FR_PROFILE_MAX_SLOTS];
   bool overlay[FR_PROFILE_MAX_SLOTS];
+  bool library_base_present[FR_PROFILE_MAX_SLOTS];
+  fr_install_tier_t base_tier[FR_PROFILE_MAX_SLOTS];
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   /*
    * Overlay is the clearable runtime layer; project names are the public view

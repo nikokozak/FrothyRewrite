@@ -5,13 +5,17 @@
 #endif
 
 #include "base_defs.h"
+#include "base_image.h"
+#include "code.h"
 #include "crc.h"
 #include "event.h"
+#include "object.h"
 #include "persist_payload.h"
 #include "platform.h"
 #include "profile.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 enum {
@@ -28,7 +32,8 @@ static uint8_t fr_persist_image[FR_PROFILE_PERSISTENCE_BYTES];
  * could shape that whole image into the prefix. */
 static uint8_t fr_persist_library_prefix[FR_PERSIST_PAYLOAD_BYTES];
 static uint16_t fr_persist_last_payload_bytes = 0;
-static uint16_t fr_persist_boot_payload_bytes = 0;
+static const uint8_t *fr_persist_boot_payload_bytes = NULL;
+static uint16_t fr_persist_boot_payload_length = 0;
 static bool fr_persist_boot_image_pinned;
 
 static uint8_t *fr_persist_payload_bytes(void) {
@@ -40,7 +45,8 @@ static const uint8_t *fr_persist_payload_const_bytes(void) {
 }
 
 static void fr_persist_forget_boot_image(void) {
-  fr_persist_boot_payload_bytes = 0;
+  fr_persist_boot_payload_bytes = NULL;
+  fr_persist_boot_payload_length = 0;
   fr_persist_boot_image_pinned = false;
 }
 
@@ -57,7 +63,10 @@ static fr_err_t fr_persist_read_image(uint8_t image_index,
                                   (uint16_t)sizeof(fr_persist_image),
                                   &image_length, image_index));
   FR_TRY(fr_persist_format_validate(fr_persist_image, image_length, &info));
-  *out_payload_length = info.payload_length;
+  if (info.payload_length > UINT16_MAX) {
+    return FR_ERR_CAPACITY;
+  }
+  *out_payload_length = (uint16_t)info.payload_length;
   return FR_OK;
 }
 
@@ -91,25 +100,37 @@ extern fr_err_t fr_persist_payload_restore_user_after_library(
 extern fr_err_t fr_persist_payload_restore_user_only(fr_runtime_t *runtime,
                                                      const uint8_t *bytes,
                                                      uint16_t length);
+extern fr_err_t fr_persist_payload_restore(fr_runtime_t *runtime,
+                                           const uint8_t *bytes,
+                                           uint16_t length);
 
 typedef fr_err_t (*fr_persist_payload_apply_fn_t)(fr_runtime_t *runtime,
                                                   const uint8_t *bytes,
                                                   uint16_t length);
 
-static fr_err_t fr_persist_apply_image(fr_runtime_t *runtime,
-                                       uint16_t payload_length,
-                                       fr_persist_payload_apply_fn_t apply,
-                                       bool reset_on_error) {
+static fr_err_t fr_persist_apply_payload(fr_runtime_t *runtime,
+                                         const uint8_t *payload,
+                                         uint16_t payload_length,
+                                         fr_persist_payload_apply_fn_t apply,
+                                         bool reset_on_error) {
   fr_err_t err = FR_OK;
 
-  if (runtime == NULL || apply == NULL) {
+  if (runtime == NULL || payload == NULL || apply == NULL) {
     return FR_ERR_INVALID;
   }
 
-  err = apply(runtime, fr_persist_payload_const_bytes(), payload_length);
+  err = apply(runtime, payload, payload_length);
   if (err != FR_OK && reset_on_error) {
     FR_TRY(fr_runtime_reset(runtime));
   }
+  return err;
+}
+
+static fr_err_t fr_persist_cleanup_failed_apply(fr_runtime_t *runtime) {
+  fr_err_t err = fr_runtime_clear_project(runtime);
+
+  fr_code_restore_base(runtime);
+  fr_object_restore_base(runtime);
   return err;
 }
 
@@ -120,14 +141,20 @@ fr_persist_restore_read_and_apply(fr_runtime_t *runtime,
                                   uint16_t *out_applied_payload_length) {
   fr_err_t err = FR_OK;
   fr_err_t last_err = FR_ERR_NOT_FOUND;
+  const uint8_t *image = NULL;
+  const uint8_t *payload = NULL;
+  uint16_t image_length = 0;
   uint16_t payload_length = 0;
+  fr_persist_format_info_t info = {0};
 
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
 
   for (uint8_t image_index = 0;; image_index++) {
-    err = fr_persist_read_image(image_index, &payload_length);
+    bool apply_started = false;
+
+    err = fr_platform_persist_mount(image_index, &image, &image_length);
     if (err == FR_ERR_NOT_FOUND) {
       break;
     }
@@ -138,13 +165,39 @@ fr_persist_restore_read_and_apply(fr_runtime_t *runtime,
       return err;
     }
 
-    err =
-        fr_persist_apply_image(runtime, payload_length, apply, reset_on_miss);
+    err = fr_persist_format_validate(image, image_length, &info);
+    if (err == FR_OK) {
+      if (info.payload_length > UINT16_MAX) {
+        err = FR_ERR_CAPACITY;
+      } else {
+        payload_length = (uint16_t)info.payload_length;
+        payload = &image[FR_PERSIST_HEADER_BYTES];
+        apply_started = true;
+        err = fr_persist_apply_payload(runtime, payload, payload_length, apply,
+                                       reset_on_miss);
+      }
+    }
     if (err == FR_OK) {
       if (out_applied_payload_length != NULL) {
         *out_applied_payload_length = payload_length;
       }
+      fr_code_mark_persist_image(runtime);
+      FR_TRY(fr_platform_persist_mount_commit());
+      if (apply == fr_persist_payload_restore_library) {
+        fr_persist_boot_payload_bytes = payload;
+        fr_persist_boot_payload_length = payload_length;
+      }
       return FR_OK;
+    }
+    if (apply_started) {
+      fr_err_t cleanup_err = fr_persist_cleanup_failed_apply(runtime);
+
+      fr_platform_persist_mount_discard();
+      if (cleanup_err != FR_OK) {
+        return cleanup_err;
+      }
+    } else {
+      fr_platform_persist_mount_discard();
     }
     last_err = err;
   }
@@ -155,6 +208,11 @@ fr_persist_restore_read_and_apply(fr_runtime_t *runtime,
   return last_err;
 }
 
+static fr_err_t fr_persist_remount_latest(fr_runtime_t *runtime) {
+  return fr_persist_restore_read_and_apply(runtime, fr_persist_payload_restore,
+                                           true, NULL);
+}
+
 /* D5: save persists the user tier only and preserves the library tier in
  * durable storage byte-for-byte. The existing committed payload (if any) is
  * decoded, its L1 records are re-encoded into the scratch prefix
@@ -162,7 +220,7 @@ fr_persist_restore_read_and_apply(fr_runtime_t *runtime,
  * the prefix is pasted verbatim ahead of the freshly-encoded L2 records in
  * the new payload. A first save against empty storage produces an L2-only
  * payload. */
-fr_err_t fr_persist_save(const fr_runtime_t *runtime) {
+fr_err_t fr_persist_save(fr_runtime_t *runtime) {
   fr_err_t read_err = FR_OK;
   uint16_t payload_length = 0;
   uint16_t previous_payload_length = 0;
@@ -188,7 +246,8 @@ fr_err_t fr_persist_save(const fr_runtime_t *runtime) {
       fr_persist_payload_bytes(), (uint16_t)FR_PERSIST_PAYLOAD_BYTES,
       &payload_length));
   fr_persist_last_payload_bytes = payload_length;
-  return fr_persist_commit_payload(payload_length);
+  FR_TRY(fr_persist_commit_payload(payload_length));
+  return fr_persist_remount_latest(runtime);
 }
 
 /* D5: public `restore` brings L2 back from durable storage; L1 binds already
@@ -213,7 +272,7 @@ fr_err_t fr_persist_restore_library(fr_runtime_t *runtime) {
   err = fr_persist_restore_read_and_apply(
       runtime, fr_persist_payload_restore_library, true, &payload_length);
   if (err == FR_OK) {
-    fr_persist_boot_payload_bytes = payload_length;
+    fr_persist_boot_payload_length = payload_length;
     fr_persist_boot_image_pinned = true;
   }
   return err;
@@ -229,9 +288,10 @@ fr_err_t fr_persist_restore_user(fr_runtime_t *runtime) {
     return FR_ERR_NOT_FOUND;
   }
 
-  err = fr_persist_apply_image(runtime, fr_persist_boot_payload_bytes,
-                               fr_persist_payload_restore_user_after_library,
-                               false);
+  err = fr_persist_apply_payload(runtime, fr_persist_boot_payload_bytes,
+                                 fr_persist_boot_payload_length,
+                                 fr_persist_payload_restore_user_after_library,
+                                 false);
   if (err == FR_OK || err == FR_ERR_NOT_FOUND) {
     fr_persist_forget_boot_image();
   }
@@ -244,8 +304,9 @@ fr_err_t fr_persist_wipe(fr_runtime_t *runtime) {
   }
 
   fr_persist_forget_boot_image();
+  fr_platform_persist_unmount();
   FR_TRY(fr_platform_persist_clear());
-  return fr_runtime_reset(runtime);
+  return fr_base_image_install(runtime);
 }
 
 /* Defined in persist_payload.c. Drops every user-tier overlay binding from
@@ -276,7 +337,7 @@ extern void fr_persist_session_wipe_library_tier(fr_runtime_t *runtime);
  * path after every L1 definition (so the new library word lands in durable
  * storage as it is typed — D3's "subsequent definitions are compiled,
  * installed, and persisted to NVS with tier tag L1"). */
-fr_err_t fr_persist_save_full(const fr_runtime_t *runtime) {
+fr_err_t fr_persist_save_full(fr_runtime_t *runtime) {
   uint16_t payload_length = 0;
 
   if (runtime == NULL) {
@@ -287,7 +348,8 @@ fr_err_t fr_persist_save_full(const fr_runtime_t *runtime) {
                                    (uint16_t)FR_PERSIST_PAYLOAD_BYTES,
                                    &payload_length));
   fr_persist_last_payload_bytes = payload_length;
-  return fr_persist_commit_payload(payload_length);
+  FR_TRY(fr_persist_commit_payload(payload_length));
+  return fr_persist_remount_latest(runtime);
 }
 
 /* SPEC D10: receiving install-library drops L1 from the device — runtime

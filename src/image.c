@@ -645,17 +645,13 @@ static fr_err_t fr_image_check_apply(const fr_runtime_t *runtime,
       runtime->code.count != runtime->code.image_count) {
     return FR_ERR_INVALID;
   }
-  used_instruction_bytes = mode == FR_IMAGE_APPLY_BASE
-                               ? runtime->code.image_used_instruction_bytes
-                               : runtime->code.overlay_used_instruction_bytes;
+  used_instruction_bytes = runtime->code.overlay_used_instruction_bytes;
   for (uint16_t i = 0; i < records->code_object_count; i++) {
     const fr_instruction_stream_t *instructions =
         &records->code_objects[i].instructions;
     fr_instruction_header_t header = {0};
     uint32_t instruction_capacity =
-        mode == FR_IMAGE_APPLY_BASE
-            ? (uint32_t)sizeof(runtime->code.image_instruction_bytes)
-            : (uint32_t)sizeof(runtime->code.overlay_instruction_bytes);
+        (uint32_t)sizeof(runtime->code.overlay_instruction_bytes);
 
     if (instructions->length == 0 || instructions->bytes == NULL) {
       return FR_ERR_INVALID;
@@ -854,10 +850,9 @@ static fr_err_t fr_image_resolve_ref(
 }
 
 #if FR_FEATURE_TEXT
-/* The caller owns writable storage for these instruction bytes (compile output
- * or decoded scratch) and passes the writable pointer in explicitly. We read
- * the operand through the instruction reader before writing the runtime id. */
-static fr_err_t fr_image_patch_code_text_refs(
+/* The caller owns writable overlay/base-compile storage for these instruction
+ * bytes and passes the writable pointer in explicitly. */
+static fr_err_t fr_overlay_patch_code_text_refs(
     uint8_t *bytes, uint16_t length, const fr_object_id_t text_ids[],
     uint16_t text_object_count) {
   fr_instruction_stream_t view;
@@ -896,12 +891,10 @@ static fr_err_t fr_image_patch_code_text_refs(
 }
 #endif
 
-/* PUSH_CODE_ID carries an overlay-local code index at compile time. We rewrite
- * it to the runtime code id before fr_code_install copies the bytes, mirroring
- * the text patch path. */
-static fr_err_t fr_image_patch_code_id_refs(uint8_t *bytes, uint16_t length,
-                                            const fr_code_object_id_t code_ids[],
-                                            uint16_t code_object_count) {
+static fr_err_t
+fr_overlay_patch_code_id_refs(uint8_t *bytes, uint16_t length,
+                              const fr_code_object_id_t code_ids[],
+                              uint16_t code_object_count) {
   fr_instruction_stream_t view;
   fr_instruction_header_t header = {0};
   fr_code_offset_t ip = 0;
@@ -968,7 +961,7 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
        * arenas under them are writable. Cast once at the call site. */
       uint8_t *writable = (uint8_t *)records->code_objects[i].instructions.bytes;
 
-      FR_TRY(fr_image_patch_code_text_refs(
+      FR_TRY(fr_overlay_patch_code_text_refs(
           writable, records->code_objects[i].instructions.length, text_ids,
           installed_text_count));
     }
@@ -988,7 +981,7 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
   if (records->code_object_count > 1) {
     for (uint16_t i = 0; i < records->code_object_count; i++) {
       uint8_t *writable = (uint8_t *)records->code_objects[i].instructions.bytes;
-      FR_TRY(fr_image_patch_code_id_refs(
+      FR_TRY(fr_overlay_patch_code_id_refs(
           writable, records->code_objects[i].instructions.length, code_ids,
           records->code_object_count));
     }
@@ -996,7 +989,7 @@ static fr_err_t fr_image_apply_to_runtime(fr_runtime_t *runtime,
   for (uint16_t i = 0; i < records->code_object_count; i++) {
     fr_code_object_id_t installed_id = 0;
     if (mode == FR_IMAGE_APPLY_BASE) {
-      FR_TRY(fr_code_mount_image(runtime,
+      FR_TRY(fr_code_install_base(runtime,
                                  &records->code_objects[i].instructions,
                                  records->code_objects[i].param_names,
                                  records->code_objects[i].param_names_length,
@@ -1130,6 +1123,7 @@ fr_err_t fr_image_install(fr_runtime_t *runtime, const fr_image_t *image) {
   fr_object_mark_base(&next);
 
   *runtime = next;
+  fr_code_rebase_ram_pointers(runtime, &next);
   return FR_OK;
 }
 
