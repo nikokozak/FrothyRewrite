@@ -315,15 +315,17 @@ static fr_err_t fr_compile_add_local(const fr_compile_context_t *ctx,
   return FR_OK;
 }
 
-static uint8_t fr_compile_count_local_binds(const fr_parse_line_t *parsed) {
-  uint8_t count = 0;
+static uint16_t fr_compile_count_local_slots(const fr_parse_line_t *parsed) {
+  uint16_t count = 0;
 
   if (parsed == NULL) {
     return 0;
   }
   for (uint8_t i = 0; i < parsed->expr_count; i++) {
-    if (parsed->exprs[i].kind == FR_PARSE_EXPR_LOCAL_BIND) {
-      count = (uint8_t)(count + 1);
+    if (parsed->exprs[i].kind == FR_PARSE_EXPR_LOCAL_BIND ||
+        (parsed->exprs[i].kind == FR_PARSE_EXPR_REPEAT &&
+         parsed->exprs[i].name.length > 0)) {
+      count = (uint16_t)(count + 1);
     }
   }
   return count;
@@ -1002,6 +1004,9 @@ static fr_err_t fr_compile_emit_repeat(const fr_compile_context_t *ctx,
   const fr_parse_expr_t *count = NULL;
   uint16_t done_target_operand = 0;
   uint16_t body_offset = 0;
+  uint8_t local_index = 0;
+  uint8_t saved_local_count = 0;
+  bool has_index = false;
 
   if (expr == NULL || expr->child_count != 2) {
     return FR_ERR_INVALID;
@@ -1020,18 +1025,42 @@ static fr_err_t fr_compile_emit_repeat(const fr_compile_context_t *ctx,
 
   FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
                               instruction_bytes, offset));
+  has_index = expr->name.length > 0;
+  if (has_index) {
+    if (ctx == NULL || ctx->locals == NULL) {
+      return FR_ERR_INVALID;
+    }
+    saved_local_count = ctx->locals->count;
+    FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, 0));
+    FR_TRY(fr_compile_add_local(ctx, expr->name, &local_index));
+    FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_STORE_LOCAL));
+    FR_TRY(fr_compile_write_byte(instruction_bytes, offset, local_index));
+    FR_TRY(fr_compile_emit_drop(instruction_bytes, offset));
+  }
   FR_TRY(fr_compile_emit_jump_placeholder(
       instruction_bytes, offset, FR_OP_REPEAT_BEGIN, &done_target_operand));
   body_offset = *offset;
   FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[1],
                               instruction_bytes, offset));
   FR_TRY(fr_compile_emit_drop(instruction_bytes, offset));
+  if (has_index) {
+    FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_LOAD_LOCAL));
+    FR_TRY(fr_compile_write_byte(instruction_bytes, offset, local_index));
+    FR_TRY(fr_compile_emit_push_int(instruction_bytes, offset, 1));
+    FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_ADD_INT));
+    FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_STORE_LOCAL));
+    FR_TRY(fr_compile_write_byte(instruction_bytes, offset, local_index));
+    FR_TRY(fr_compile_emit_drop(instruction_bytes, offset));
+  }
 #if FR_FEATURE_BYTES
   FR_TRY(fr_compile_write_byte(instruction_bytes, offset, FR_OP_BYTES_RESET));
 #endif
   FR_TRY(fr_compile_emit_jump_target(instruction_bytes, offset,
                                      FR_OP_REPEAT_NEXT, body_offset));
   FR_TRY(fr_compile_patch_u16(instruction_bytes, done_target_operand, *offset));
+  if (has_index) {
+    ctx->locals->count = saved_local_count;
+  }
   return fr_compile_emit_push_nil(instruction_bytes, offset);
 }
 
@@ -1707,7 +1736,7 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
       .used = false,
   };
   uint8_t arity = 0;
-  uint8_t local_count = 0;
+  uint16_t local_count = 0;
   uint8_t header_size = FR_INSTRUCTION_MIN_HEADER_SIZE;
   uint16_t offset = 0;
 
@@ -1722,7 +1751,7 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
     return FR_ERR_INVALID;
   }
   arity = function->param_count;
-  local_count = fr_compile_count_local_binds(parsed);
+  local_count = fr_compile_count_local_slots(parsed);
   if (local_count > FR_PARSE_MAX_LOCALS) {
     return FR_ERR_CAPACITY;
   }
@@ -1753,7 +1782,7 @@ static fr_err_t fr_compile_function(const fr_compile_context_t *ctx,
     out->instruction_bytes[2] = arity;
   }
   if (header_size >= FR_INSTRUCTION_LOCALS_HEADER_SIZE) {
-    out->instruction_bytes[3] = local_count;
+    out->instruction_bytes[3] = (uint8_t)local_count;
   }
   FR_TRY(fr_compile_emit_expr(&body_ctx, parsed, function->child,
                               out->instruction_bytes, &offset));
@@ -2034,7 +2063,7 @@ fr_err_t fr_compile_value_binding_for_runtime_with_diagnostic(
   fr_compile_locals_t locals = {0};
   fr_parse_line_t parsed = {0};
   const fr_parse_expr_t *value = NULL;
-  uint8_t local_count = 0;
+  uint16_t local_count = 0;
   uint8_t header_size = FR_INSTRUCTION_MIN_HEADER_SIZE;
   uint16_t offset = 0;
 
@@ -2057,7 +2086,7 @@ fr_err_t fr_compile_value_binding_for_runtime_with_diagnostic(
       (uint16_t)sizeof(out->slot_name_text), &out->slot_name, &out->slot_id,
       &out->has_slot_name));
 
-  local_count = fr_compile_count_local_binds(&parsed);
+  local_count = fr_compile_count_local_slots(&parsed);
   if (local_count > FR_PARSE_MAX_LOCALS) {
     return FR_ERR_CAPACITY;
   }
@@ -2076,7 +2105,7 @@ fr_err_t fr_compile_value_binding_for_runtime_with_diagnostic(
     out->instruction_bytes[2] = 0;
   }
   if (header_size >= FR_INSTRUCTION_LOCALS_HEADER_SIZE) {
-    out->instruction_bytes[3] = local_count;
+    out->instruction_bytes[3] = (uint8_t)local_count;
   }
   FR_TRY(fr_compile_emit_expr(&ctx, &parsed, parsed.definition.value,
                               out->instruction_bytes, &offset));
@@ -2097,7 +2126,7 @@ fr_compile_expression_with_context(const fr_compile_context_t *ctx,
   fr_parse_expr_id_t expr_id = 0;
   fr_compile_context_t expr_ctx = {0};
   fr_compile_locals_t locals = {0};
-  uint8_t local_count = 0;
+  uint16_t local_count = 0;
   uint8_t header_size = FR_INSTRUCTION_MIN_HEADER_SIZE;
   uint16_t offset = 0;
 
@@ -2109,7 +2138,7 @@ fr_compile_expression_with_context(const fr_compile_context_t *ctx,
   FR_TRY(fr_parse_expression_line_with_diagnostic(
       source, &parsed, &expr_id, ctx != NULL ? ctx->diag : NULL));
 
-  local_count = fr_compile_count_local_binds(&parsed);
+  local_count = fr_compile_count_local_slots(&parsed);
   if (local_count > FR_PARSE_MAX_LOCALS) {
     return FR_ERR_CAPACITY;
   }
@@ -2131,7 +2160,7 @@ fr_compile_expression_with_context(const fr_compile_context_t *ctx,
     out->instruction_bytes[2] = 0;
   }
   if (header_size >= FR_INSTRUCTION_LOCALS_HEADER_SIZE) {
-    out->instruction_bytes[3] = local_count;
+    out->instruction_bytes[3] = (uint8_t)local_count;
   }
   FR_TRY(fr_compile_emit_expr(&expr_ctx, &parsed, expr_id,
                               out->instruction_bytes, &offset));

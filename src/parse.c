@@ -48,6 +48,7 @@ typedef struct fr_parser_t {
   uint8_t expr_depth;
   uint8_t call_arg_stop_depth;
   bool stop_plus_before_call;
+  bool stop_name_before_repeat_as;
 } fr_parser_t;
 
 typedef uint32_t fr_parse_int_magnitude_t;
@@ -668,6 +669,12 @@ static bool fr_parse_token_starts_word_argument(const fr_token_t *token) {
          token->kind == FR_TOKEN_LPAREN;
 }
 
+static bool fr_parse_stops_at_repeat_as(const fr_parser_t *parser) {
+  return parser != NULL && parser->stop_name_before_repeat_as &&
+         parser->token.kind == FR_TOKEN_NAME &&
+         fr_parse_span_equals(parser->token.span, "as");
+}
+
 static fr_parse_span_t fr_parse_word_argument_diagnostic_span(
     const fr_token_t *token) {
   if (token != NULL && token->kind == FR_TOKEN_TEXT &&
@@ -903,7 +910,7 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
     return fr_parse_field_postfix(parser, base_id, out_id);
   }
 
-  if (parser->token.leading_space &&
+  if (!fr_parse_stops_at_repeat_as(parser) && parser->token.leading_space &&
       fr_parse_token_starts_word_argument(&parser->token)) {
     return fr_parse_fail_span(
         parser, FR_DIAG_MSG_PARSE_EXPECTED_COLON_BEFORE_ARGUMENT,
@@ -1108,9 +1115,30 @@ static fr_err_t fr_parse_unless(fr_parser_t *parser,
 static fr_err_t fr_parse_repeat(fr_parser_t *parser,
                                 fr_parse_expr_id_t *out_id) {
   fr_parse_expr_t repeat = {.kind = FR_PARSE_EXPR_REPEAT};
+  bool saved_stop_name_before_repeat_as = false;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_parse_advance(parser));
-  FR_TRY(fr_parse_expression(parser, &repeat.children[0]));
+  saved_stop_name_before_repeat_as = parser->stop_name_before_repeat_as;
+  parser->stop_name_before_repeat_as = true;
+  err = fr_parse_expression(parser, &repeat.children[0]);
+  parser->stop_name_before_repeat_as = saved_stop_name_before_repeat_as;
+  FR_TRY(err);
+  if (parser->token.kind == FR_TOKEN_NAME &&
+      fr_parse_span_equals(parser->token.span, "as")) {
+    FR_TRY(fr_parse_advance(parser));
+    if (parser->token.kind != FR_TOKEN_NAME ||
+        fr_parse_is_reserved_parameter(parser->token.span)) {
+      if (parser->token.kind == FR_TOKEN_NAME) {
+        return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_RESERVED_NAME,
+                                   FR_ERR_INVALID);
+      }
+      return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_EXPECTED_WORD_NAME,
+                                 FR_ERR_INVALID);
+    }
+    repeat.name = parser->token.span;
+    FR_TRY(fr_parse_advance(parser));
+  }
   FR_TRY(fr_parse_bracket_block(parser, &repeat.children[1]));
   repeat.child = repeat.children[0];
   repeat.child_count = 2;

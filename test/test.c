@@ -6623,6 +6623,24 @@ static bool test_make_local_overflow_line(char *out, size_t cap) {
   return test_append_source(out, cap, &used, "l0 ]");
 }
 
+static bool test_make_repeat_index_overflow_line(char *out, size_t cap) {
+  size_t used = 0;
+
+  if (!test_append_source(out, cap, &used, "boot is fn [ ")) {
+    return false;
+  }
+  for (uint16_t i = 0; i < FR_PARSE_MAX_LOCALS; i++) {
+    char bind[32];
+
+    (void)snprintf(bind, sizeof(bind), "here l%u is %u ; ", (unsigned)i,
+                   (unsigned)i);
+    if (!test_append_source(out, cap, &used, bind)) {
+      return false;
+    }
+  }
+  return test_append_source(out, cap, &used, "repeat 1 as extra [ nil ] ]");
+}
+
 static bool test_make_param_overflow_line(char *out, size_t cap) {
   size_t used = 0;
 
@@ -7221,6 +7239,29 @@ static void test_parse(void) {
             body->child_count == 1 &&
             parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_CALL &&
             fr_parse_span_equals(parsed.exprs[body->children[0]].name, "ms"));
+  CHECK("parse repeat index expression",
+        fr_parse_line("boot is fn [ repeat count as i [ i ] ]", &parsed) ==
+                FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_REPEAT &&
+            value->child_count == 2 && fr_parse_span_equals(value->name, "i") &&
+            (condition = &parsed.exprs[value->children[0]])->kind ==
+                FR_PARSE_EXPR_NAME &&
+            fr_parse_span_equals(condition->name, "count") &&
+            (body = &parsed.exprs[value->children[1]])->kind ==
+                FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_NAME &&
+            fr_parse_span_equals(parsed.exprs[body->children[0]].name, "i"));
+  CHECK("parse repeat as rejects missing index name",
+        fr_parse_line("boot is fn [ repeat 4 as [ nil ] ]", &parsed) ==
+            FR_ERR_INVALID);
+  CHECK("parse as is not a global reserved parameter",
+        fr_parse_line("boot is fn with as [ as ]", &parsed) == FR_OK);
   CHECK("parse while expression",
         fr_parse_line("boot is fn [ while 1 [ one ] ]", &parsed) == FR_OK &&
             (value = &parsed.exprs[parsed.definition.value])->kind ==
@@ -9231,6 +9272,61 @@ static void test_compile(void) {
   CHECK("compile rejects negative repeat count",
         fr_compile_overlay_update("boot is fn [ repeat -1 [ one ] ]",
                                   &update) == FR_ERR_RANGE);
+  CHECK("compiled repeat as index sums zero-based values",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(&runtime, "sum is 0",
+                                                  &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime,
+                "boot is fn [ repeat 4 as i [ set sum to sum + i ] ; sum ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 6);
+  CHECK("compiled repeat as index starts at zero",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(&runtime, "first is -1",
+                                                  &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime,
+                "boot is fn [ repeat 1 as i [ set first to i ] ; first ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 0);
+  CHECK("compiled bare repeat still runs",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(&runtime, "sum is 0",
+                                                  &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime,
+                "boot is fn [ repeat 3 [ set sum to sum + 1 ] ; sum ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 3);
+  CHECK("compiled nested repeat as indexes resolve separately",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(&runtime, "sum is 0",
+                                                  &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_compile_overlay_update_for_runtime(
+                &runtime,
+                "boot is fn [ repeat 3 as i [ repeat 2 as j [ set sum to "
+                "sum + i * 10 + j ] ] ; sum ]",
+                &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 63);
+  CHECK("repeat as index is scoped to body",
+        fr_compile_overlay_update("boot is fn [ repeat 1 as i [ nil ] ; i ]",
+                                  &update) == FR_ERR_NOT_FOUND);
+  CHECK("repeat as index respects local capacity",
+        test_make_repeat_index_overflow_line(cap_line, sizeof(cap_line)) &&
+            fr_compile_overlay_update(cap_line, &update) == FR_ERR_CAPACITY);
   CHECK("compiled while uses jump loop",
         fr_compile_overlay_update("boot is fn [ while 0 [ 1 ] ]",
                                   &update) == FR_OK &&
