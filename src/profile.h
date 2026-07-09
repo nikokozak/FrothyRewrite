@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lib_native.h"
 #include "types.h"
 
 const char *fr_profile_name(void);
@@ -14,6 +15,9 @@ uint32_t fr_profile_debug_hash_for_word_size(uint16_t word_size);
 uint32_t fr_profile_debug_hash_for_source(uint16_t word_size, const char *bytes,
                                           uint16_t length);
 #endif
+/* Debug observability for tests; lets a single binary substitute library-native rows. */
+uint32_t fr_profile_debug_hash_for_lib_natives(
+    const fr_lib_native_def_t *defs, uint16_t count);
 const char *fr_profile_compiler_mode(void);
 const char *fr_profile_names_mode(void);
 const char *fr_profile_storage_mode(void);

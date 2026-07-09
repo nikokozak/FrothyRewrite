@@ -3,6 +3,7 @@
 #include "base_defs.h"
 #include "config.h"
 #include "crc.h"
+#include "lib_native.h"
 #include "tagged.h"
 
 #if FR_FEATURE_SOURCE_BASE
@@ -262,7 +263,9 @@ const char *fr_profile_contract_name(void) { return FR_PROFILE_CONTRACT_NAME; }
 
 static uint32_t fr_profile_hash_body(uint16_t word_size,
                                      const char *source_bytes,
-                                     uint16_t source_length) {
+                                     uint16_t source_length,
+                                     const fr_lib_native_def_t *lib_natives,
+                                     uint16_t lib_natives_count) {
   uint32_t crc = 0xffffffffu;
   (void)source_bytes;
   (void)source_length;
@@ -342,24 +345,62 @@ static uint32_t fr_profile_hash_body(uint16_t word_size,
   }
 #endif
 
+  fr_profile_hash_u16(&crc, lib_natives_count);
+  for (uint16_t i = 0; i < lib_natives_count; i++) {
+    const fr_lib_native_def_t *def = NULL;
+    const char *name = NULL;
+
+    if (lib_natives == NULL) {
+      fr_profile_hash_u16(&crc, 0xffffu);
+      continue;
+    }
+
+    def = &lib_natives[i];
+    name = def->name;
+    if (name == NULL) {
+      fr_profile_hash_u16(&crc, 0xffffu);
+    } else {
+      while (*name != '\0') {
+        fr_profile_hash_u16(&crc, (uint16_t)(uint8_t)*name);
+        name++;
+      }
+      fr_profile_hash_u16(&crc, 0);
+    }
+    fr_profile_hash_u16(&crc, def->arity);
+  }
+
   return ~crc;
 }
 
 uint32_t fr_profile_debug_hash_for_word_size(uint16_t word_size) {
 #if FR_FEATURE_SOURCE_BASE
   return fr_profile_hash_body(word_size, fr_source_base_bytes,
-                              fr_source_base_bytes_len);
+                              fr_source_base_bytes_len, fr_lib_natives,
+                              fr_lib_natives_count);
 #else
-  return fr_profile_hash_body(word_size, NULL, 0);
+  return fr_profile_hash_body(word_size, NULL, 0, fr_lib_natives,
+                              fr_lib_natives_count);
 #endif
 }
 
 #if FR_FEATURE_SOURCE_BASE
 uint32_t fr_profile_debug_hash_for_source(uint16_t word_size, const char *bytes,
                                           uint16_t length) {
-  return fr_profile_hash_body(word_size, bytes, length);
+  return fr_profile_hash_body(word_size, bytes, length, fr_lib_natives,
+                              fr_lib_natives_count);
 }
 #endif
+
+uint32_t
+fr_profile_debug_hash_for_lib_natives(const fr_lib_native_def_t *defs,
+                                      uint16_t count) {
+#if FR_FEATURE_SOURCE_BASE
+  return fr_profile_hash_body(FR_PROFILE_HASH_WORD_SIZE, fr_source_base_bytes,
+                              fr_source_base_bytes_len, defs, count);
+#else
+  return fr_profile_hash_body(FR_PROFILE_HASH_WORD_SIZE, NULL, 0, defs, count);
+#endif
+}
 
 uint32_t fr_profile_hash(void) {
   return fr_profile_debug_hash_for_word_size(FR_PROFILE_HASH_WORD_SIZE);
