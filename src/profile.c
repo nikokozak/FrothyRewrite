@@ -86,6 +86,10 @@
 #define FR_PROFILE_HASH_MAX_CALL_DEPTH FR_PROFILE_MAX_CALL_DEPTH
 #endif
 
+#ifndef FR_PROFILE_HASH_MAX_ATTEMPT_DEPTH
+#define FR_PROFILE_HASH_MAX_ATTEMPT_DEPTH FR_PROFILE_MAX_ATTEMPT_DEPTH
+#endif
+
 #ifndef FR_PROFILE_HASH_REPL_LINE_BYTES
 #define FR_PROFILE_HASH_REPL_LINE_BYTES FR_PROFILE_REPL_LINE_BYTES
 #endif
@@ -288,6 +292,7 @@ static uint32_t fr_profile_hash_body(uint16_t word_size,
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_NATIVE_TABLE_SIZE);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_MAX_HANDLES);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_MAX_CALL_DEPTH);
+  fr_profile_hash_u16(&crc, FR_PROFILE_HASH_MAX_ATTEMPT_DEPTH);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_REPL_LINE_BYTES);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_PERSISTENCE_BYTES);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_MAX_OVERLAY_NAMES);

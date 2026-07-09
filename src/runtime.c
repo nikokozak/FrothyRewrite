@@ -52,6 +52,8 @@ fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
   runtime->interrupted = false;
   runtime->dispatching_event = false;
   runtime->install_tier = FR_INSTALL_TIER_USER;
+  runtime->rescue_error = FR_OK;
+  runtime->rescue_error_active = false;
   runtime->diag = NULL;
   return FR_OK;
 }
@@ -119,6 +121,8 @@ fr_err_t fr_runtime_clear_project(fr_runtime_t *runtime) {
   FR_TRY(fr_pad_reset(runtime));
 #endif
   runtime->interrupted = false;
+  runtime->rescue_error = FR_OK;
+  runtime->rescue_error_active = false;
   return event_err;
 }
 
@@ -188,5 +192,6 @@ fr_runtime_limits_t fr_runtime_get_limits(void) {
       .max_record_shape_fields = FR_PROFILE_MAX_RECORD_SHAPE_FIELDS,
       .max_record_value_fields = FR_PROFILE_MAX_RECORD_VALUE_FIELDS,
       .max_pad_bytes = FR_PROFILE_PAD_BYTES,
+      .max_attempt_depth = FR_PROFILE_MAX_ATTEMPT_DEPTH,
   };
 }

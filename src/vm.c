@@ -40,6 +40,18 @@
 #error "FR_VM_POLL_SAFE_POINTS must be 1..UINT16_MAX"
 #endif
 
+typedef struct fr_vm_attempt_frame_t {
+  uint16_t saved_depth;
+  fr_code_offset_t fallback_ip;
+  fr_code_offset_t end_ip;
+} fr_vm_attempt_frame_t;
+
+typedef struct fr_vm_rescue_context_t {
+  fr_err_t saved_error;
+  bool saved_error_active;
+  fr_code_offset_t end_ip;
+} fr_vm_rescue_context_t;
+
 typedef struct fr_vm_state_t {
   fr_code_offset_t ip;
   fr_tagged_t stack[FR_PROFILE_MAX_STACK_DEPTH];
@@ -50,6 +62,12 @@ typedef struct fr_vm_state_t {
   uint16_t call_depth;
   uint8_t arg_count;
   uint8_t local_count;
+  uint8_t attempt_depth;
+  uint8_t rescue_depth;
+  /* Attempt frames are per run state; called words get their own state, so
+   * callee attempts cannot redirect caller code. */
+  fr_vm_attempt_frame_t attempts[FR_PROFILE_MAX_ATTEMPT_DEPTH];
+  fr_vm_rescue_context_t rescues[FR_PROFILE_MAX_ATTEMPT_DEPTH];
   bool returned;
 } fr_vm_state_t;
 
@@ -77,6 +95,41 @@ static fr_err_t fr_vm_run_slot_depth(fr_runtime_t *runtime,
 static bool fr_vm_diag_empty(const fr_runtime_t *runtime) {
   return runtime != NULL && runtime->diag != NULL &&
          runtime->diag->kind == FR_DIAG_NONE;
+}
+
+static void fr_vm_clear_diag(fr_runtime_t *runtime) {
+  if (runtime != NULL && runtime->diag != NULL) {
+    *runtime->diag = (fr_diagnostic_t){0};
+  }
+}
+
+static bool fr_vm_error_catchable(fr_err_t err) {
+  return err != FR_OK && err != FR_ERR_INTERRUPTED;
+}
+
+static void fr_vm_rescue_restore(fr_runtime_t *runtime,
+                                 const fr_vm_rescue_context_t *rescue) {
+  runtime->rescue_error = rescue->saved_error;
+  runtime->rescue_error_active = rescue->saved_error_active;
+}
+
+static void fr_vm_rescue_scope_exit(fr_runtime_t *runtime,
+                                    fr_vm_state_t *state) {
+  while (state->rescue_depth > 0 &&
+         state->rescues[state->rescue_depth - 1u].end_ip == state->ip) {
+    state->rescue_depth = (uint8_t)(state->rescue_depth - 1u);
+    fr_vm_rescue_restore(runtime, &state->rescues[state->rescue_depth]);
+  }
+}
+
+static void fr_vm_rescue_discard_through(fr_runtime_t *runtime,
+                                         fr_vm_state_t *state,
+                                         fr_code_offset_t end_ip) {
+  while (state->rescue_depth > 0 &&
+         state->rescues[state->rescue_depth - 1u].end_ip <= end_ip) {
+    state->rescue_depth = (uint8_t)(state->rescue_depth - 1u);
+    fr_vm_rescue_restore(runtime, &state->rescues[state->rescue_depth]);
+  }
 }
 
 static void fr_vm_note_message(fr_runtime_t *runtime, fr_diag_kind_t kind,
@@ -268,6 +321,90 @@ static fr_err_t fr_vm_push_bool(fr_runtime_t *runtime, fr_vm_state_t *state,
   FR_TRY(fr_tagged_encode_bool(value, &tagged));
   state->ip += 1;
   return fr_vm_push(runtime, state, tagged);
+}
+
+static fr_err_t fr_vm_attempt_begin(fr_runtime_t *runtime,
+                                    const fr_instruction_stream_t *view,
+                                    fr_vm_state_t *state) {
+  fr_code_offset_t fallback_ip = 0;
+  fr_code_offset_t attempt_end_ip = 0;
+  fr_code_offset_t end_ip = 0;
+  fr_vm_attempt_frame_t *frame = NULL;
+
+  FR_TRY(fr_instruction_read_jump_operand(view, state->ip, &fallback_ip));
+  if (fallback_ip < (fr_code_offset_t)(state->ip + 6u)) {
+    return FR_ERR_INVALID;
+  }
+  attempt_end_ip = (fr_code_offset_t)(fallback_ip - 3u);
+  if ((fr_opcode_t)view->bytes[attempt_end_ip] != FR_OP_ATTEMPT_END) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_instruction_read_jump_operand(view, attempt_end_ip, &end_ip));
+  if (end_ip < fallback_ip) {
+    return FR_ERR_INVALID;
+  }
+  if (state->attempt_depth >= FR_PROFILE_MAX_ATTEMPT_DEPTH) {
+    fr_vm_note_message(runtime, FR_DIAG_LIMIT,
+                       FR_DIAG_MSG_RUNTIME_STACK_OVERFLOW, 0, 0);
+    return FR_ERR_CAPACITY;
+  }
+
+  frame = &state->attempts[state->attempt_depth];
+  frame->saved_depth = state->depth;
+  frame->fallback_ip = fallback_ip;
+  frame->end_ip = end_ip;
+  state->attempt_depth = (uint8_t)(state->attempt_depth + 1u);
+  state->ip += 3;
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_attempt_end(const fr_instruction_stream_t *view,
+                                  fr_vm_state_t *state) {
+  fr_code_offset_t target = 0;
+
+  FR_TRY(fr_instruction_read_jump_operand(view, state->ip, &target));
+  if (state->attempt_depth == 0) {
+    return FR_ERR_INVALID;
+  }
+  state->attempt_depth = (uint8_t)(state->attempt_depth - 1u);
+  state->ip = target;
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_error_code(fr_runtime_t *runtime, fr_vm_state_t *state) {
+  fr_tagged_t tagged = 0;
+
+  if (runtime == NULL || !runtime->rescue_error_active) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_encode_int((fr_int_t)runtime->rescue_error, &tagged));
+  state->ip += 1;
+  return fr_vm_push(runtime, state, tagged);
+}
+
+static fr_err_t fr_vm_error_name(fr_runtime_t *runtime, fr_vm_state_t *state) {
+#if FR_FEATURE_TEXT
+  const char *name = NULL;
+  uint16_t length = 0;
+  fr_object_id_t object_id = 0;
+  fr_tagged_t tagged = 0;
+
+  if (runtime == NULL || !runtime->rescue_error_active) {
+    return FR_ERR_INVALID;
+  }
+  name = fr_err_name(runtime->rescue_error);
+  while (name[length] != '\0') {
+    length = (uint16_t)(length + 1u);
+  }
+  FR_TRY(fr_text_install(runtime, (const uint8_t *)name, length, &object_id));
+  FR_TRY(fr_tagged_encode_object_id(object_id, &tagged));
+  state->ip += 1;
+  return fr_vm_push(runtime, state, tagged);
+#else
+  (void)runtime;
+  (void)state;
+  return FR_ERR_UNSUPPORTED;
+#endif
 }
 
 static fr_err_t fr_vm_load_arg(fr_runtime_t *runtime,
@@ -755,7 +892,7 @@ static fr_err_t fr_vm_arith_int(fr_runtime_t *runtime, fr_vm_state_t *state,
     break;
   case FR_OP_DIV_INT:
     if (rhs == 0) {
-      return FR_ERR_RANGE;
+      return FR_ERR_DOMAIN;
     }
     result = (int64_t)lhs / (int64_t)rhs;
     break;
@@ -882,6 +1019,40 @@ static fr_err_t fr_vm_repeat_next(fr_runtime_t *runtime,
                               &state->stack[state->depth - 1]));
   state->ip = target;
   return FR_OK;
+}
+
+static fr_err_t fr_vm_try_catch_attempt(fr_runtime_t *runtime,
+                                        fr_vm_state_t *state, fr_err_t err) {
+  while (fr_vm_error_catchable(err)) {
+    fr_vm_attempt_frame_t frame;
+    fr_vm_rescue_context_t *rescue = NULL;
+
+    if (state->attempt_depth == 0) {
+      return err;
+    }
+
+    state->attempt_depth = (uint8_t)(state->attempt_depth - 1u);
+    frame = state->attempts[state->attempt_depth];
+    fr_vm_rescue_discard_through(runtime, state, frame.end_ip);
+    if (state->rescue_depth >= FR_PROFILE_MAX_ATTEMPT_DEPTH) {
+      err = FR_ERR_CAPACITY;
+      continue;
+    }
+
+    rescue = &state->rescues[state->rescue_depth];
+    rescue->saved_error = runtime->rescue_error;
+    rescue->saved_error_active = runtime->rescue_error_active;
+    rescue->end_ip = frame.end_ip;
+    state->rescue_depth = (uint8_t)(state->rescue_depth + 1u);
+
+    state->depth = frame.saved_depth;
+    runtime->rescue_error = err;
+    runtime->rescue_error_active = true;
+    fr_vm_clear_diag(runtime);
+    state->ip = frame.fallback_ip;
+    return FR_OK;
+  }
+  return err;
 }
 
 static fr_err_t fr_vm_reader_require(uint16_t length, fr_code_offset_t ip,
@@ -1198,6 +1369,62 @@ static fr_err_t fr_vm_reader_push_code_id(fr_runtime_t *runtime,
 
   state->ip += FR_INSTRUCTION_PUSH_CODE_ID_SIZE;
   return fr_vm_push(runtime, state, tagged);
+}
+
+static fr_err_t fr_vm_reader_attempt_begin(
+    fr_runtime_t *runtime, fr_code_object_id_t code_object_id, uint16_t length,
+    fr_vm_state_t *state) {
+  fr_code_offset_t fallback_ip = 0;
+  fr_code_offset_t attempt_end_ip = 0;
+  fr_code_offset_t end_ip = 0;
+  fr_opcode_t attempt_end_op = FR_OP_RETURN;
+  fr_vm_attempt_frame_t *frame = NULL;
+
+  FR_TRY(fr_vm_reader_read_jump_operand(runtime, code_object_id, length,
+                                        state->ip, &fallback_ip));
+  if (fallback_ip < (fr_code_offset_t)(state->ip + 6u)) {
+    return FR_ERR_INVALID;
+  }
+  attempt_end_ip = (fr_code_offset_t)(fallback_ip - 3u);
+  FR_TRY(fr_vm_reader_read_opcode(runtime, code_object_id, length,
+                                  attempt_end_ip, &attempt_end_op));
+  if (attempt_end_op != FR_OP_ATTEMPT_END) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_vm_reader_read_jump_operand(runtime, code_object_id, length,
+                                        attempt_end_ip, &end_ip));
+  if (end_ip < fallback_ip) {
+    return FR_ERR_INVALID;
+  }
+  if (state->attempt_depth >= FR_PROFILE_MAX_ATTEMPT_DEPTH) {
+    fr_vm_note_message(runtime, FR_DIAG_LIMIT,
+                       FR_DIAG_MSG_RUNTIME_STACK_OVERFLOW, 0, 0);
+    return FR_ERR_CAPACITY;
+  }
+
+  frame = &state->attempts[state->attempt_depth];
+  frame->saved_depth = state->depth;
+  frame->fallback_ip = fallback_ip;
+  frame->end_ip = end_ip;
+  state->attempt_depth = (uint8_t)(state->attempt_depth + 1u);
+  state->ip += 3;
+  return FR_OK;
+}
+
+static fr_err_t fr_vm_reader_attempt_end(fr_runtime_t *runtime,
+                                         fr_code_object_id_t code_object_id,
+                                         uint16_t length,
+                                         fr_vm_state_t *state) {
+  fr_code_offset_t target = 0;
+
+  FR_TRY(fr_vm_reader_read_jump_operand(runtime, code_object_id, length,
+                                        state->ip, &target));
+  if (state->attempt_depth == 0) {
+    return FR_ERR_INVALID;
+  }
+  state->attempt_depth = (uint8_t)(state->attempt_depth - 1u);
+  state->ip = target;
+  return FR_OK;
 }
 
 static fr_err_t fr_vm_reader_load_arg(fr_runtime_t *runtime,
@@ -1634,6 +1861,14 @@ static fr_err_t fr_vm_reader_step(fr_runtime_t *runtime,
     return fr_vm_reader_push_object_id(runtime, code_object_id, length, state);
   case FR_OP_PUSH_CODE_ID:
     return fr_vm_reader_push_code_id(runtime, code_object_id, length, state);
+  case FR_OP_ATTEMPT_BEGIN:
+    return fr_vm_reader_attempt_begin(runtime, code_object_id, length, state);
+  case FR_OP_ATTEMPT_END:
+    return fr_vm_reader_attempt_end(runtime, code_object_id, length, state);
+  case FR_OP_ERROR_CODE:
+    return fr_vm_error_code(runtime, state);
+  case FR_OP_ERROR_NAME:
+    return fr_vm_error_name(runtime, state);
   case FR_OP_LOAD_ARG:
     return fr_vm_reader_load_arg(runtime, code_object_id, length, state);
   case FR_OP_LOAD_LOCAL:
@@ -1736,6 +1971,14 @@ static fr_err_t fr_vm_step(fr_runtime_t *runtime,
     return fr_vm_push_object_id(runtime, view, state);
   case FR_OP_PUSH_CODE_ID:
     return fr_vm_push_code_id(runtime, view, state);
+  case FR_OP_ATTEMPT_BEGIN:
+    return fr_vm_attempt_begin(runtime, view, state);
+  case FR_OP_ATTEMPT_END:
+    return fr_vm_attempt_end(view, state);
+  case FR_OP_ERROR_CODE:
+    return fr_vm_error_code(runtime, state);
+  case FR_OP_ERROR_NAME:
+    return fr_vm_error_name(runtime, state);
   case FR_OP_LOAD_ARG:
     return fr_vm_load_arg(runtime, view, state);
   case FR_OP_LOAD_LOCAL:
@@ -1829,6 +2072,8 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
   fr_instruction_header_t header;
   uint16_t yield_countdown = FR_VM_YIELD_SAFE_POINTS;
   uint16_t poll_countdown = FR_VM_POLL_SAFE_POINTS;
+  fr_err_t saved_rescue_error = FR_OK;
+  bool saved_rescue_error_active = false;
 
   if (call_depth >= FR_PROFILE_MAX_CALL_DEPTH) {
     fr_vm_note_call_depth(runtime);
@@ -1861,25 +2106,50 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
   state.arg_count = arg_count;
   state.local_count = header.local_count;
   state.ip = header.header_size;
+  saved_rescue_error = runtime->rescue_error;
+  saved_rescue_error_active = runtime->rescue_error_active;
   while (state.ip < view->length && !state.returned) {
     fr_opcode_t op;
+    fr_err_t err = FR_OK;
 
+    fr_vm_rescue_scope_exit(runtime, &state);
     op = (fr_opcode_t)view->bytes[state.ip];
-    FR_TRY(fr_vm_step(runtime, view, &state));
+    err = fr_vm_step(runtime, view, &state);
+    if (err != FR_OK) {
+      err = fr_vm_try_catch_attempt(runtime, &state, err);
+      if (err == FR_OK) {
+        continue;
+      }
+      runtime->rescue_error = saved_rescue_error;
+      runtime->rescue_error_active = saved_rescue_error_active;
+      return err;
+    }
     /* Spec §9 safe points: statement boundary (DROP) and end of any body
        (RETURN). Loop back-edges in repeat/while/forever emit DROP before
        the jump, so DROP also covers each loop iteration. */
     if (op == FR_OP_DROP || op == FR_OP_RETURN) {
       poll_countdown--;
       if (poll_countdown == 0) {
-        FR_TRY(fr_platform_poll_interrupt(runtime));
+        err = fr_platform_poll_interrupt(runtime);
+        if (err != FR_OK) {
+          runtime->rescue_error = saved_rescue_error;
+          runtime->rescue_error_active = saved_rescue_error_active;
+          return err;
+        }
         poll_countdown = FR_VM_POLL_SAFE_POINTS;
       }
       if (fr_runtime_is_interrupted(runtime)) {
+        runtime->rescue_error = saved_rescue_error;
+        runtime->rescue_error_active = saved_rescue_error_active;
         return FR_ERR_INTERRUPTED;
       }
       if (runtime->events.active_count > 0) {
-        FR_TRY(fr_event_drain(runtime));
+        err = fr_event_drain(runtime);
+        if (err != FR_OK) {
+          runtime->rescue_error = saved_rescue_error;
+          runtime->rescue_error_active = saved_rescue_error_active;
+          return err;
+        }
       }
       yield_countdown--;
       if (yield_countdown == 0) {
@@ -1888,7 +2158,12 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
       }
       if (runtime->events.active_count > 0) {
         fr_event_report_overflow(runtime);
-        FR_TRY(fr_event_dispatch(runtime));
+        err = fr_event_dispatch(runtime);
+        if (err != FR_OK) {
+          runtime->rescue_error = saved_rescue_error;
+          runtime->rescue_error_active = saved_rescue_error_active;
+          return err;
+        }
       }
     }
   }
@@ -1898,6 +2173,8 @@ static fr_err_t fr_vm_run_instruction_stream_depth(
   } else {
     *out_tagged = state.stack[state.depth - 1];
   }
+  runtime->rescue_error = saved_rescue_error;
+  runtime->rescue_error_active = saved_rescue_error_active;
   return FR_OK;
 }
 
@@ -1909,6 +2186,8 @@ static fr_err_t fr_vm_run_reader_code_object_depth(
   fr_instruction_header_t header;
   uint16_t yield_countdown = FR_VM_YIELD_SAFE_POINTS;
   uint16_t poll_countdown = FR_VM_POLL_SAFE_POINTS;
+  fr_err_t saved_rescue_error = FR_OK;
+  bool saved_rescue_error_active = false;
 
   if (call_depth >= FR_PROFILE_MAX_CALL_DEPTH) {
     fr_vm_note_call_depth(runtime);
@@ -1941,23 +2220,50 @@ static fr_err_t fr_vm_run_reader_code_object_depth(
   state.arg_count = arg_count;
   state.local_count = header.local_count;
   state.ip = header.header_size;
+  saved_rescue_error = runtime->rescue_error;
+  saved_rescue_error_active = runtime->rescue_error_active;
   while (state.ip < length && !state.returned) {
     fr_opcode_t op;
+    fr_err_t err = FR_OK;
 
-    FR_TRY(fr_vm_reader_read_opcode(runtime, code_object_id, length, state.ip,
-                                    &op));
-    FR_TRY(fr_vm_reader_step(runtime, code_object_id, length, &state, op));
+    fr_vm_rescue_scope_exit(runtime, &state);
+    err = fr_vm_reader_read_opcode(runtime, code_object_id, length, state.ip,
+                                   &op);
+    if (err == FR_OK) {
+      err = fr_vm_reader_step(runtime, code_object_id, length, &state, op);
+    }
+    if (err != FR_OK) {
+      err = fr_vm_try_catch_attempt(runtime, &state, err);
+      if (err == FR_OK) {
+        continue;
+      }
+      runtime->rescue_error = saved_rescue_error;
+      runtime->rescue_error_active = saved_rescue_error_active;
+      return err;
+    }
     if (op == FR_OP_DROP || op == FR_OP_RETURN) {
       poll_countdown--;
       if (poll_countdown == 0) {
-        FR_TRY(fr_platform_poll_interrupt(runtime));
+        err = fr_platform_poll_interrupt(runtime);
+        if (err != FR_OK) {
+          runtime->rescue_error = saved_rescue_error;
+          runtime->rescue_error_active = saved_rescue_error_active;
+          return err;
+        }
         poll_countdown = FR_VM_POLL_SAFE_POINTS;
       }
       if (fr_runtime_is_interrupted(runtime)) {
+        runtime->rescue_error = saved_rescue_error;
+        runtime->rescue_error_active = saved_rescue_error_active;
         return FR_ERR_INTERRUPTED;
       }
       if (runtime->events.active_count > 0) {
-        FR_TRY(fr_event_drain(runtime));
+        err = fr_event_drain(runtime);
+        if (err != FR_OK) {
+          runtime->rescue_error = saved_rescue_error;
+          runtime->rescue_error_active = saved_rescue_error_active;
+          return err;
+        }
       }
       yield_countdown--;
       if (yield_countdown == 0) {
@@ -1966,7 +2272,12 @@ static fr_err_t fr_vm_run_reader_code_object_depth(
       }
       if (runtime->events.active_count > 0) {
         fr_event_report_overflow(runtime);
-        FR_TRY(fr_event_dispatch(runtime));
+        err = fr_event_dispatch(runtime);
+        if (err != FR_OK) {
+          runtime->rescue_error = saved_rescue_error;
+          runtime->rescue_error_active = saved_rescue_error_active;
+          return err;
+        }
       }
     }
   }
@@ -1976,6 +2287,8 @@ static fr_err_t fr_vm_run_reader_code_object_depth(
   } else {
     *out_tagged = state.stack[state.depth - 1];
   }
+  runtime->rescue_error = saved_rescue_error;
+  runtime->rescue_error_active = saved_rescue_error_active;
   return FR_OK;
 }
 

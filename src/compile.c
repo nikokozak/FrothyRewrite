@@ -1599,6 +1599,32 @@ static fr_err_t fr_compile_emit_forever(const fr_compile_context_t *ctx,
   return fr_compile_emit_push_nil(instruction_bytes, offset);
 }
 
+static fr_err_t fr_compile_emit_attempt(const fr_compile_context_t *ctx,
+                                        const fr_parse_line_t *parsed,
+                                        const fr_parse_expr_t *expr,
+                                        uint8_t instruction_bytes[],
+                                        uint16_t *offset) {
+  uint16_t fallback_operand = 0;
+  uint16_t end_operand = 0;
+
+  if (expr == NULL || expr->child_count != 2) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_compile_require_source_feature(
+      ctx, FR_COMPILE_SOURCE_CONTROL_FLOW,
+      fr_compile_expr_diagnostic_span(parsed, expr)));
+  FR_TRY(fr_compile_emit_jump_placeholder(
+      instruction_bytes, offset, FR_OP_ATTEMPT_BEGIN, &fallback_operand));
+  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[0],
+                              instruction_bytes, offset));
+  FR_TRY(fr_compile_emit_jump_placeholder(
+      instruction_bytes, offset, FR_OP_ATTEMPT_END, &end_operand));
+  FR_TRY(fr_compile_patch_u16(instruction_bytes, fallback_operand, *offset));
+  FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->children[1],
+                              instruction_bytes, offset));
+  return fr_compile_patch_u16(instruction_bytes, end_operand, *offset);
+}
+
 static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
                                      const fr_parse_line_t *parsed,
                                      fr_parse_expr_id_t expr_id,
@@ -1634,6 +1660,13 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
 #else
     return FR_ERR_UNSUPPORTED;
 #endif
+  case FR_PARSE_EXPR_ERROR_CODE:
+    return fr_compile_write_byte(instruction_bytes, offset, FR_OP_ERROR_CODE);
+  case FR_PARSE_EXPR_ERROR_NAME:
+    FR_TRY(fr_compile_require_source_feature(
+        ctx, FR_COMPILE_SOURCE_TEXT,
+        fr_compile_expr_diagnostic_span(parsed, expr)));
+    return fr_compile_write_byte(instruction_bytes, offset, FR_OP_ERROR_NAME);
   case FR_PARSE_EXPR_NAME: {
     uint8_t local_index = 0;
     if (fr_compile_local_for_name(ctx, expr->name, &local_index)) {
@@ -1857,6 +1890,9 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     return fr_compile_emit_while(ctx, parsed, expr, instruction_bytes, offset);
   case FR_PARSE_EXPR_FOREVER:
     return fr_compile_emit_forever(ctx, parsed, expr, instruction_bytes,
+                                   offset);
+  case FR_PARSE_EXPR_ATTEMPT:
+    return fr_compile_emit_attempt(ctx, parsed, expr, instruction_bytes,
                                    offset);
   case FR_PARSE_EXPR_EVENT_REGISTER:
     return fr_compile_emit_event_register(ctx, parsed, expr, instruction_bytes,

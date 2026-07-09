@@ -506,6 +506,19 @@ static fr_err_t fr_source_reduce_if(fr_source_render_t *r,
   return fr_source_seal(r, start, false);
 }
 
+static fr_err_t fr_source_reduce_attempt(fr_source_render_t *r,
+                                         uint16_t body_start,
+                                         uint16_t fallback_start) {
+  uint16_t start = r->used;
+
+  FR_TRY(fr_source_puts(r, "attempt [ "));
+  FR_TRY(fr_source_puts(r, &fr_source_render_arena[body_start]));
+  FR_TRY(fr_source_puts(r, " ] rescue [ "));
+  FR_TRY(fr_source_puts(r, &fr_source_render_arena[fallback_start]));
+  FR_TRY(fr_source_puts(r, " ]"));
+  return fr_source_seal(r, start, false);
+}
+
 /* A branch body must reduce to exactly one fragment; hand back its arena
  * offset and pop it so the caller can splice it into the if form. */
 static fr_err_t fr_source_render_branch(fr_source_render_t *r,
@@ -693,6 +706,42 @@ static fr_err_t fr_source_render_repeat(fr_source_render_t *r,
   return FR_OK;
 }
 
+static fr_err_t fr_source_render_attempt(fr_source_render_t *r,
+                                         const fr_instruction_stream_t *view,
+                                         const char *names, uint16_t names_len,
+                                         fr_code_offset_t ip,
+                                         fr_code_offset_t end,
+                                         fr_code_offset_t *out_ip) {
+  fr_code_offset_t fallback_target = 0;
+  fr_code_offset_t attempt_end_ip = 0;
+  fr_code_offset_t end_target = 0;
+  uint16_t body_start = 0;
+  uint16_t fallback_start = 0;
+
+  FR_TRY(fr_instruction_read_jump_operand(view, ip, &fallback_target));
+  if (fallback_target < (fr_code_offset_t)(ip + 6u) ||
+      fallback_target > end) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  attempt_end_ip = (fr_code_offset_t)(fallback_target - 3u);
+  if ((fr_opcode_t)view->bytes[attempt_end_ip] != FR_OP_ATTEMPT_END) {
+    return FR_ERR_UNSUPPORTED;
+  }
+  FR_TRY(fr_instruction_read_jump_operand(view, attempt_end_ip, &end_target));
+  if (end_target < fallback_target || end_target > end) {
+    return FR_ERR_UNSUPPORTED;
+  }
+
+  FR_TRY(fr_source_render_branch(r, view, names, names_len,
+                                 (fr_code_offset_t)(ip + 3u), attempt_end_ip,
+                                 &body_start));
+  FR_TRY(fr_source_render_branch(r, view, names, names_len, fallback_target,
+                                 end_target, &fallback_start));
+  FR_TRY(fr_source_reduce_attempt(r, body_start, fallback_start));
+  *out_ip = end_target;
+  return FR_OK;
+}
+
 static fr_err_t fr_source_render_span(fr_source_render_t *r,
                                       const fr_instruction_stream_t *view,
                                       const char *names, uint16_t names_len,
@@ -717,6 +766,14 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       break;
     case FR_OP_PUSH_TRUE:
       FR_TRY(fr_source_push_text(r, "true"));
+      ip = (fr_code_offset_t)(ip + 1u);
+      break;
+    case FR_OP_ERROR_CODE:
+      FR_TRY(fr_source_push_text(r, "error.code"));
+      ip = (fr_code_offset_t)(ip + 1u);
+      break;
+    case FR_OP_ERROR_NAME:
+      FR_TRY(fr_source_push_text(r, "error.name"));
       ip = (fr_code_offset_t)(ip + 1u);
       break;
     case FR_OP_PUSH_INT: {
@@ -1024,6 +1081,9 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
     case FR_OP_REPEAT_BEGIN:
     case FR_OP_REPEAT_BEGIN_AS:
       FR_TRY(fr_source_render_repeat(r, view, names, names_len, ip, &ip));
+      break;
+    case FR_OP_ATTEMPT_BEGIN:
+      FR_TRY(fr_source_render_attempt(r, view, names, names_len, ip, end, &ip));
       break;
     default:
       return FR_ERR_UNSUPPORTED;
