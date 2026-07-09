@@ -91,7 +91,7 @@ teaching the chip one word at a time.
 | Where you edit | How |
 |---|---|
 | **Any text editor** | Write a `.fr` file. Send it with `frothy send file.fr --port …` or watch it on the device with `frothy connect`. |
-| **VS Code** | Install the extension shipped at `editors/vscode/frothy-0.1.0.vsix`. Adds Frothy syntax + a "Connect" command. |
+| **VS Code** | Build the extension with `make vsix`; it produces the versioned `.vsix`. Or install it from the editor once published. Adds Frothy syntax + a "Connect" command. |
 | **In the browser** | Open the [frothy editor](https://nikokozak.github.io/FrothyRewrite/web/editor/). WebSerial talks to the chip directly; sketches save to localStorage. |
 
 ## How Frothy is put together
@@ -107,7 +107,7 @@ Frothy's runtime stays small enough to read end to end:
   the wire protocol for browser and Node consumers.
 - `web/flash/`, `web/editor/`: static demo pages that vendor the
   libraries above.
-- `test/`: one C test binary.
+- `test/`: core C tests, Unity tests, transcript replays, and library e2e fixtures.
 
 The first interface is a human serial session — `cat`, `screen`,
 `tio`, or any terminal can drive a Frothy board directly. The CLI and
@@ -115,11 +115,17 @@ the web tools are conveniences, not a private control plane.
 
 ## Tests and checks
 
+Run `make help` to see the common make targets.
+The check surface is the core C suite, 10 Unity binaries, transcript replays,
+the library e2e fixture, Go packages, and the TypeScript library suites.
+
 ```sh
-make test                                # core C test binary
+make test                                # core C suite
+make test-unity                          # Unity host binaries
 make test-host-normal                    # roomy host profile
 make test-esp32-plain-host-transcript    # ESP32 transcript replay
-go test ./cmd/frothy-session/...         # the Go CLI
+make test-lib-e2e                        # library extension e2e fixture
+go test ./cmd/... ./internal/...         # Go packages
 (cd libs/frothy-repl && npm test)        # @frothy/repl
 (cd libs/frothy-editor && npm test)      # @frothy/editor
 ```
@@ -139,5 +145,7 @@ Frothy programs never allocate at all. It aims to be the shortest path from
 workshop, or your own first afternoon with a microcontroller.
 
 ## License
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks, and PR guidance.
 
 Frothy is released under the [MIT License](LICENSE).
