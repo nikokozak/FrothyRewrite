@@ -133,7 +133,7 @@ static fr_err_t fr_base_compile_source(fr_runtime_t *runtime, const char *bytes,
     bool blank = true;
 
     while (i < length && bytes[i] != '\n') {
-      if (n + 1 >= sizeof(line)) {
+      if ((uint32_t)n + 1 >= sizeof(line)) {
         return FR_ERR_CAPACITY;
       }
       if (bytes[i] != ' ' && bytes[i] != '\t' && bytes[i] != '\r') {

@@ -766,7 +766,7 @@ fr_repl_writer_write_quoted_text(const fr_repl_writer_t *writer,
   for (uint16_t i = 0; i < length; i++) {
     uint8_t byte = bytes[i];
 
-    if (used + FR_REPL_MAX_TEXT_ESCAPE_BYTES + 1 > sizeof(chunk)) {
+    if ((uint32_t)used + FR_REPL_MAX_TEXT_ESCAPE_BYTES + 1 > sizeof(chunk)) {
       chunk[used] = '\0';
       FR_TRY(fr_repl_writer_write(writer, chunk));
       used = 0;
