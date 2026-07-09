@@ -1,0 +1,10 @@
+-- Cells
+-- Creates a fixed-size mutable array, writes cells, and reads them back.
+-- @tag host
+
+readings is cells(3)
+set readings[0] to 11
+set readings[1] to 22
+set readings[2] to 33
+readings[0] + readings[1] -- => 33
+readings[0] + readings[1] + readings[2] -- => 66

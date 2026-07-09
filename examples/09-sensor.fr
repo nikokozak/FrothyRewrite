@@ -1,0 +1,8 @@
+-- Sensor
+-- Reads an ADC pin and converts ranges. Real readings are environmental, so
+-- only the pure map math is asserted; the adc lines just show a live value.
+-- @tag host device
+
+adc.read: 34
+adc.percent: 34
+map: 50, 0, 100, 0, 1023 -- => 511

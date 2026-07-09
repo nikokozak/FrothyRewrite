@@ -1,0 +1,11 @@
+-- Truthiness
+-- Shows if/else, loose truthiness, and boolean operators.
+-- @tag host
+
+if 5 [ 1 ] else [ 2 ] -- => 1
+if nil [ 1 ] else [ 2 ] -- => 2
+if 0 [ 1 ] else [ 2 ] -- => 2
+not nil -- => true
+1 < 2 and 3 < 4 -- => true
+1 > 2 or 3 < 4 -- => true
+not false -- => true

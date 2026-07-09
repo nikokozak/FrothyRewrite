@@ -1,0 +1,9 @@
+-- Records
+-- Declares a record shape, constructs a record, and reads and writes fields.
+-- @tag host
+
+record pt [ x, y ]
+p is pt: 3, 4
+p -> x + p -> y -- => 7
+set p -> x to 30
+p -> x -- => 30

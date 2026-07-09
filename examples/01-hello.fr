@@ -1,0 +1,8 @@
+-- Hello
+-- Starts with values, arithmetic, grouping, and a printed line.
+-- @tag host
+
+-7 + 50 -- => 43
+2 * 3 + 4 -- => 10
+(2 + 3) * 4 -- => 20
+print: "hello"
