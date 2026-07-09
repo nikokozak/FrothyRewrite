@@ -48,9 +48,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     Window,
     "addEventListener" | "removeEventListener"
   > & { confirm?: (message?: string) => boolean };
+  const timerTarget = (doc.defaultView ?? globalThis) as Pick<
+    Window,
+    "setTimeout" | "clearTimeout"
+  >;
   const storage: SketchStorage = makeStorage(opts.storageKey);
   const initial = storage.load() ?? opts.initialSource ?? DEFAULT_INITIAL_SOURCE;
-  let baseline = initial;
+  let saveTimer: ReturnType<Window["setTimeout"]> | null = null;
 
   const root = doc.createElement("div");
   root.className = "frothy-editor";
@@ -89,8 +93,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   commandBar.className = "frothy-editor-cmdbar";
   const sendLineBtn = mkBtn(doc, "Send line", "frothy-btn");
   const sendBufBtn = mkBtn(doc, "Send buffer", "frothy-btn");
-  const saveBtn = mkBtn(doc, "Save", "frothy-btn");
+  const interruptBtn = mkBtn(doc, "Interrupt", "frothy-btn");
   const downloadBtn = mkBtn(doc, "Download .fr", "frothy-btn");
+  const saveStatus = doc.createElement("span");
+  saveStatus.className = "frothy-save-status";
+  saveStatus.textContent = "saved";
   const echoToggle = doc.createElement("label");
   echoToggle.className = "frothy-echo-toggle";
   const echoBox = doc.createElement("input");
@@ -100,7 +107,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     suppressEcho = echoBox.checked;
   });
   echoToggle.append(echoBox, doc.createTextNode(" Hide echo"));
-  commandBar.append(sendLineBtn, sendBufBtn, saveBtn, downloadBtn, echoToggle);
+  commandBar.append(sendLineBtn, sendBufBtn, interruptBtn, downloadBtn, saveStatus, echoToggle);
 
   const transcriptHost = doc.createElement("div");
   transcriptHost.className = "frothy-transcript-host";
@@ -117,6 +124,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         history(),
         frothyLanguage(),
         frothyHighlight(),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) scheduleSave();
+        }),
         keymap.of([...defaultKeymap, ...historyKeymap]),
       ],
     }),
@@ -143,6 +153,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     connectBtn.classList.toggle("frothy-btn-connected", connected);
     sendLineBtn.disabled = !connected;
     sendBufBtn.disabled = !connected;
+    interruptBtn.disabled = !connected;
   }
 
   function reportError(err: unknown) {
@@ -169,10 +180,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     currentPort = null;
     pendingEcho = null;
     setConnected("Connect", false);
-    transcript.appendDevice("device disconnected");
+    transcript.note("device disconnected");
   }
 
   function releaseBeforeUnload() {
+    save();
     // beforeunload cannot await, so go straight to the port's synchronous
     // close() — the single hop the flasher uses (frothy-site flash/app.js).
     // Routing through repl.close() would gate the real port.close() behind two
@@ -203,6 +215,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       repl = await createConnector(new WebSerialTransport(port));
       const connectedRepl = repl;
       unsubscribeLines = repl.onLine((line) => {
+        if (isDeviceErrorLine(line)) pendingEcho = null;
         if (suppressEcho && pendingEcho !== null && line === pendingEcho) {
           pendingEcho = null;
           return;
@@ -264,14 +277,18 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     if (!repl) return;
     const lines = sendableLines(view.state.doc.toString());
     if (lines.length === 0) {
-      transcript.appendDevice("(empty buffer)");
+      transcript.note("(empty buffer)");
       return;
     }
     for (const line of lines) {
       transcript.appendHost(line);
       pendingEcho = line;
       try {
-        await repl.sendLine(line);
+        const res = await repl.sendLine(line);
+        if (res.kind === "error") {
+          transcript.note("stopped: line errored");
+          break;
+        }
       } catch (err) {
         reportError(err);
         return;
@@ -279,9 +296,33 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     }
   }
 
+  async function interrupt(): Promise<void> {
+    try {
+      await repl?.interrupt();
+    } catch (err) {
+      reportError(err);
+    }
+  }
+
+  function clearSaveTimer(): void {
+    if (saveTimer === null) return;
+    timerTarget.clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+
+  function scheduleSave(): void {
+    saveStatus.textContent = "editing...";
+    clearSaveTimer();
+    saveTimer = timerTarget.setTimeout(() => {
+      saveTimer = null;
+      save();
+    }, 700);
+  }
+
   function save() {
-    baseline = currentSource();
-    storage.save(baseline);
+    clearSaveTimer();
+    storage.save(currentSource());
+    saveStatus.textContent = "saved";
   }
 
   function download() {
@@ -297,7 +338,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   });
   sendLineBtn.addEventListener("click", () => void sendLine());
   sendBufBtn.addEventListener("click", () => void sendBuffer());
-  saveBtn.addEventListener("click", () => save());
+  interruptBtn.addEventListener("click", () => void interrupt());
   downloadBtn.addEventListener("click", () => download());
   examplesSelect.addEventListener("change", () => {
     const example = FROTHY_EXAMPLES.find((entry) => entry.name === examplesSelect.value);
@@ -305,7 +346,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       examplesSelect.value = "";
       return;
     }
-    const allowed = !isBufferDirty(currentSource(), baseline)
+    const allowed = !shouldConfirmReplace(currentSource(), example.source)
       || (unloadTarget.confirm?.("Replace your current sketch?") ?? true);
     if (!allowed) {
       examplesSelect.value = "";
@@ -313,7 +354,6 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       return;
     }
     replaceSource(example.source);
-    baseline = example.source;
     examplesSelect.value = "";
     view.focus();
   });
@@ -353,6 +393,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     },
     destroy() {
       unloadTarget.removeEventListener("beforeunload", releaseBeforeUnload);
+      // Flush any debounced edit before teardown — destroy() also fires from the
+      // web component's disconnectedCallback on ordinary DOM removal, not just
+      // page unload, so a pending save would otherwise be silently dropped.
+      if (saveTimer !== null) save();
       void disconnect();
       view.destroy();
       opts.mount.removeChild(root);
@@ -367,6 +411,10 @@ function mkBtn(doc: Document, label: string, cls: string): HTMLButtonElement {
   return b;
 }
 
+function isDeviceErrorLine(line: string): boolean {
+  return line.startsWith("error:") || /^err \d/.test(line);
+}
+
 export function sendableLines(text: string): string[] {
   const lines: string[] = [];
   for (const raw of text.split("\n")) {
@@ -377,6 +425,9 @@ export function sendableLines(text: string): string[] {
   return lines;
 }
 
-export function isBufferDirty(current: string, baseline: string): boolean {
-  return current.trim() !== baseline.trim();
+export function shouldConfirmReplace(current: string, incoming: string): boolean {
+  const trimmedCurrent = current.trim();
+  return trimmedCurrent.length > 0
+    && trimmedCurrent !== incoming.trim()
+    && trimmedCurrent !== DEFAULT_INITIAL_SOURCE.trim();
 }

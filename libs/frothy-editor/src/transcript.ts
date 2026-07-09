@@ -8,6 +8,9 @@ export interface Transcript {
   element: HTMLElement;
   appendHost(line: string): void;
   appendDevice(line: string): void;
+  /** A client-side system message (not device output). Ends any open
+   *  diagnostic group and renders plainly, so it never reads as an error detail. */
+  note(line: string): void;
   clear(): void;
 }
 
@@ -22,6 +25,7 @@ export function mountTranscript(host: HTMLElement): Transcript {
   const root = host.ownerDocument.createElement("div");
   root.className = "frothy-transcript";
   host.appendChild(root);
+  let inDiagnostic = false;
 
   function append(html: HTMLElement): void {
     root.appendChild(html);
@@ -31,6 +35,7 @@ export function mountTranscript(host: HTMLElement): Transcript {
   return {
     element: root,
     appendHost(line) {
+      inDiagnostic = false;
       const row = root.ownerDocument.createElement("div");
       row.className = "transcript-host";
       row.textContent = HOST_PREFIX + line;
@@ -38,11 +43,34 @@ export function mountTranscript(host: HTMLElement): Transcript {
     },
     appendDevice(line) {
       const row = root.ownerDocument.createElement("div");
-      row.className = classifyDevice(line);
+      const cls = classifyDevice(line);
+      // Async event lines ("! ...") are never part of a diagnostic: an error's
+      // detail block ends at a bare prompt (no line), so without this an event
+      // firing afterward would latch onto the stale error's group.
+      if (line.startsWith("! ")) {
+        inDiagnostic = false;
+        row.className = cls;
+      } else if (cls === "transcript-error") {
+        inDiagnostic = true;
+        row.className = cls;
+      } else if (inDiagnostic && cls === "transcript-line") {
+        row.className = "transcript-detail";
+      } else {
+        inDiagnostic = false;
+        row.className = cls;
+      }
+      row.textContent = line;
+      append(row);
+    },
+    note(line) {
+      inDiagnostic = false;
+      const row = root.ownerDocument.createElement("div");
+      row.className = "transcript-note";
       row.textContent = line;
       append(row);
     },
     clear() {
+      inDiagnostic = false;
       root.replaceChildren();
     },
   };

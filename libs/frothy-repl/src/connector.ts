@@ -144,6 +144,15 @@ class Connector implements ReplConnector {
     return this.send(line);
   }
 
+  async interrupt(): Promise<void> {
+    if (this.closed) return;
+    try {
+      await this.transport.write(this.encoder.encode("\x03"));
+    } catch (err) {
+      throw new TransportError("transport write failed", { cause: err });
+    }
+  }
+
   onLine(cb: (line: string) => void): Unsubscribe {
     this.subscribers.add(cb);
     return () => {
