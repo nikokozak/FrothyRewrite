@@ -422,6 +422,14 @@ fr_err_t fr_instruction_disassemble_at(const fr_instruction_stream_t *view,
     FR_TRY(fr_append_text(out, out_cap, &used, "PUSH_TRUE"));
     return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
                                       next_ip);
+  case FR_OP_ERROR_CODE:
+    FR_TRY(fr_append_text(out, out_cap, &used, "ERROR_CODE"));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
+                                      next_ip);
+  case FR_OP_ERROR_NAME:
+    FR_TRY(fr_append_text(out, out_cap, &used, "ERROR_NAME"));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 1),
+                                      next_ip);
   case FR_OP_LOAD_ARG: {
     uint8_t arg_index = 0;
     FR_TRY(fr_instruction_read_arg_operand(view, ip, &arg_index));
@@ -602,6 +610,22 @@ fr_err_t fr_instruction_disassemble_at(const fr_instruction_stream_t *view,
     fr_code_offset_t target = 0;
     FR_TRY(fr_instruction_read_jump_operand(view, ip, &target));
     FR_TRY(fr_append_text(out, out_cap, &used, "JUMP_IF_FALSY "));
+    FR_TRY(fr_append_u32(out, out_cap, &used, target));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 3),
+                                      next_ip);
+  }
+  case FR_OP_ATTEMPT_BEGIN: {
+    fr_code_offset_t target = 0;
+    FR_TRY(fr_instruction_read_jump_operand(view, ip, &target));
+    FR_TRY(fr_append_text(out, out_cap, &used, "ATTEMPT_BEGIN "));
+    FR_TRY(fr_append_u32(out, out_cap, &used, target));
+    return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 3),
+                                      next_ip);
+  }
+  case FR_OP_ATTEMPT_END: {
+    fr_code_offset_t target = 0;
+    FR_TRY(fr_instruction_read_jump_operand(view, ip, &target));
+    FR_TRY(fr_append_text(out, out_cap, &used, "ATTEMPT_END "));
     FR_TRY(fr_append_u32(out, out_cap, &used, target));
     return fr_finish_instruction_text(used, out_len, (fr_code_offset_t)(ip + 3),
                                       next_ip);

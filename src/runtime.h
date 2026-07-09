@@ -28,6 +28,7 @@ typedef struct fr_runtime_limits_t {
   uint16_t max_record_shape_fields;
   uint16_t max_record_value_fields;
   uint16_t max_pad_bytes;
+  uint16_t max_attempt_depth;
 } fr_runtime_limits_t;
 
 typedef enum fr_slot_name_storage_kind_t {
@@ -175,6 +176,8 @@ struct fr_runtime_t {
      entry; install-library / install-user REPL commands flip it; the persist
      encoder reads it when stamping new overlay records. */
   fr_install_tier_t install_tier;
+  fr_err_t rescue_error;
+  bool rescue_error_active;
   /* Borrowed for one REPL eval so VM/native faults can fill the same
      diagnostic object parse and compile already use. */
   fr_diagnostic_t *diag;

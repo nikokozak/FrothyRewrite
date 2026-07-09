@@ -889,8 +889,10 @@ static void test_persist_fake_non_xip_code_reader(void) {
   char out[256];
   char direct_top[64];
   char direct_depth[64];
+  char direct_safe[64];
   char fake_top[64];
   char fake_depth[64];
+  char fake_safe[64];
 
   fr_platform_persist_clear();
   CHECK("nonxip reader base", fr_base_image_install(&saved) == FR_OK);
@@ -916,6 +918,11 @@ static void test_persist_fake_non_xip_code_reader(void) {
             "depth is fn with n [ if n < 1 [ 0 ] else [ (depth: n - 1) + 1 ] ]",
             out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
+  CHECK("nonxip reader attempt word",
+        fr_repl_eval_line(
+            &saved, "safe-div is fn [ attempt [ 2 / 0 ] rescue [ 9 ] ]",
+            out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
   CHECK("nonxip reader save", fr_persist_save(&saved) == FR_OK);
 
   fr_host_persist_debug_direct_code_pointers(true);
@@ -930,6 +937,10 @@ static void test_persist_fake_non_xip_code_reader(void) {
         fr_repl_eval_line(&direct, "depth: 5", direct_depth,
                           (uint16_t)sizeof(direct_depth)) == FR_OK &&
             strcmp(direct_depth, "5\nok\n") == 0);
+  CHECK("nonxip direct attempt catches",
+        fr_repl_eval_line(&direct, "safe-div:", direct_safe,
+                          (uint16_t)sizeof(direct_safe)) == FR_OK &&
+            strcmp(direct_safe, "9\nok\n") == 0);
 
   fr_host_persist_debug_direct_code_pointers(false);
   CHECK("nonxip fake restore",
@@ -949,8 +960,13 @@ static void test_persist_fake_non_xip_code_reader(void) {
         fr_repl_eval_line(&fake, "depth: 5", fake_depth,
                           (uint16_t)sizeof(fake_depth)) == FR_OK &&
             strcmp(fake_depth, "5\nok\n") == 0);
+  CHECK("nonxip fake attempt catches",
+        fr_repl_eval_line(&fake, "safe-div:", fake_safe,
+                          (uint16_t)sizeof(fake_safe)) == FR_OK &&
+            strcmp(fake_safe, "9\nok\n") == 0);
   CHECK("nonxip parity top", strcmp(direct_top, fake_top) == 0);
   CHECK("nonxip parity depth", strcmp(direct_depth, fake_depth) == 0);
+  CHECK("nonxip parity attempt", strcmp(direct_safe, fake_safe) == 0);
   CHECK("nonxip direct depth code id",
         fr_slot_id_for_name(&direct, "depth", &direct_depth_slot) == FR_OK &&
             fr_slot_read(&direct, direct_depth_slot, &tagged) == FR_OK &&
@@ -8846,7 +8862,7 @@ static void test_compile(void) {
             fr_compile_overlay_update("boot is fn [ 1 / 0 ]", &update) ==
                 FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
-            fr_vm_run_boot(&runtime, &tagged) == FR_ERR_RANGE);
+            fr_vm_run_boot(&runtime, &tagged) == FR_ERR_DOMAIN);
   CHECK("compiled subtraction below min rejects",
         ((void)snprintf(line, sizeof(line),
                         "boot is fn [ %" PRId32 " - 1 ]",
@@ -9617,6 +9633,486 @@ static void test_compile(void) {
         fr_compile_overlay_update("boot is fn with x [ set x to 1 ]",
                                   &update) == FR_ERR_INVALID);
 }
+
+#if FR_FEATURE_REPL && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&                       \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+static bool test_attempt_append(char *out, size_t cap, size_t *used,
+                                const char *text) {
+  int written = 0;
+
+  if (out == NULL || used == NULL || text == NULL || *used >= cap) {
+    return false;
+  }
+  written = snprintf(&out[*used], cap - *used, "%s", text);
+  if (written < 0 || (size_t)written >= cap - *used) {
+    return false;
+  }
+  *used += (size_t)written;
+  return true;
+}
+
+static bool test_attempt_nested_source(char *out, size_t cap, uint8_t depth,
+                                       const char *leaf,
+                                       const char *fallback) {
+  size_t used = 0;
+
+  if (out == NULL || cap == 0) {
+    return false;
+  }
+  out[0] = '\0';
+  for (uint8_t i = 0; i < depth; i++) {
+    if (!test_attempt_append(out, cap, &used, "attempt [ ")) {
+      return false;
+    }
+  }
+  if (!test_attempt_append(out, cap, &used, leaf)) {
+    return false;
+  }
+  for (uint8_t i = 0; i < depth; i++) {
+    if (!test_attempt_append(out, cap, &used, " ] rescue [ ") ||
+        !test_attempt_append(out, cap, &used, fallback) ||
+        !test_attempt_append(out, cap, &used, " ]")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool test_attempt_expression_int(fr_runtime_t *runtime,
+                                        const char *source,
+                                        fr_int_t expected) {
+  fr_compile_expression_t expression;
+  fr_tagged_t tagged = 0;
+  fr_int_t decoded = 0;
+
+  return fr_compile_expression_for_runtime(runtime, source, &expression) ==
+             FR_OK &&
+         fr_vm_run_instruction_stream(runtime, &expression.instructions,
+                                      &tagged) == FR_OK &&
+         fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == expected;
+}
+
+#if FR_FEATURE_TEXT
+static bool test_attempt_expression_text(fr_runtime_t *runtime,
+                                         const char *source,
+                                         const char *expected) {
+  fr_compile_expression_t expression;
+  fr_tagged_t tagged = 0;
+  fr_object_id_t object_id = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+  size_t expected_length = strlen(expected);
+
+  return expected_length <= UINT16_MAX &&
+         fr_compile_expression_for_runtime(runtime, source, &expression) ==
+             FR_OK &&
+         fr_vm_run_instruction_stream(runtime, &expression.instructions,
+                                      &tagged) == FR_OK &&
+         fr_tagged_decode_object_id(tagged, &object_id) == FR_OK &&
+         fr_text_view(runtime, object_id, &bytes, &length) == FR_OK &&
+         length == (uint16_t)expected_length &&
+         memcmp(bytes, expected, expected_length) == 0;
+}
+#endif
+
+static void test_attempt_rescue(void) {
+  fr_runtime_t runtime;
+  fr_compile_expression_t expression;
+  fr_compile_overlay_update_t update;
+  fr_parse_line_t parsed;
+  fr_parse_expr_id_t expr_id = 0;
+  const fr_parse_expr_t *attempt = NULL;
+  const fr_parse_expr_t *fallback = NULL;
+  const fr_parse_expr_t *body = NULL;
+  const fr_parse_expr_t *expr = NULL;
+#if FR_FEATURE_EVENTS
+  fr_instruction_stream_t body_view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *entry = NULL;
+#endif
+  fr_tagged_t tagged = 0;
+  fr_slot_id_t slot_id = 0;
+  fr_native_id_t native_id = 0;
+  fr_diagnostic_t diag = {0};
+  fr_err_t err = FR_OK;
+  char out[512];
+  char source[512];
+  char disassembly[256];
+  uint16_t disassembly_len = 0;
+#if FR_FEATURE_EVENTS
+  uint8_t body_bytes[] = {0x00, 0x00, FR_OP_PUSH_TRUE, FR_TEST_PUSH_INT(1),
+                          FR_OP_ADD_INT, FR_OP_RETURN};
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+#endif
+
+  CHECK("attempt base", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("attempt mid expression restores stack",
+        fr_repl_eval_line(&runtime, "1 + attempt [ 2 / 0 ] rescue [ 9 ]",
+                          out, sizeof(out)) == FR_OK &&
+            strcmp(out, "10\nok\n") == 0);
+  CHECK("attempt catches type",
+        fr_repl_eval_line(&runtime, "attempt [ true + 1 ] rescue [ 7 ]",
+                          out, sizeof(out)) == FR_OK &&
+            strcmp(out, "7\nok\n") == 0);
+  CHECK("attempt catches domain",
+        fr_repl_eval_line(&runtime, "attempt [ 2 / 0 ] rescue [ 7 ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "7\nok\n") == 0);
+  CHECK("attempt catches range",
+        ((void)snprintf(source, sizeof(source),
+                        "attempt [ %" PRId32 " / -1 ] rescue [ 7 ]",
+                        (int32_t)FR_TAGGED_INT_MIN),
+         fr_repl_eval_line(&runtime, source, out, sizeof(out)) == FR_OK &&
+             strcmp(out, "7\nok\n") == 0));
+#if FR_FEATURE_CELLS
+  CHECK("attempt cell setup",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "readings is cells(1)", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("attempt catches cell range",
+        fr_repl_eval_line(&runtime, "attempt [ readings[1] ] rescue [ 7 ]",
+                          out, sizeof(out)) == FR_OK &&
+            strcmp(out, "7\nok\n") == 0);
+#endif
+#if FR_FEATURE_EVENTS
+  CHECK("attempt catches runtime not-found",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime,
+                              "attempt [ cancel every 50 ] rescue [ 7 ]",
+                              out, sizeof(out)) == FR_OK &&
+            strcmp(out, "7\nok\n") == 0);
+#endif
+  CHECK("attempt nesting to cap succeeds",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_attempt_nested_source(source, sizeof(source),
+                                       FR_PROFILE_MAX_ATTEMPT_DEPTH, "1",
+                                       "99") &&
+            test_attempt_expression_int(&runtime, source, 1));
+  CHECK("attempt cap overflow is catchable",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_attempt_nested_source(
+                source, sizeof(source),
+                (uint8_t)(FR_PROFILE_MAX_ATTEMPT_DEPTH + 1u), "1", "77") &&
+            test_attempt_expression_int(&runtime, source, 77));
+  CHECK("attempt inside if body",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_attempt_expression_int(
+                &runtime,
+                "if true [ attempt [ 2 / 0 ] rescue [ 11 ] ] else [ 0 ]",
+                11));
+  CHECK("if inside attempt body",
+        test_attempt_expression_int(
+            &runtime,
+            "attempt [ if true [ 2 / 0 ] else [ 0 ] ] rescue [ 12 ]",
+            12));
+  CHECK("attempt inside repeat body",
+        fr_repl_eval_line(&runtime, "total is 0", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "repeat 3 [ set total to total + "
+                "attempt [ 2 / 0 ] rescue [ 1 ] ]",
+                out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "total", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "3\nok\n") == 0);
+  CHECK("attempt inside while body",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "idx is 0", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "total is 0", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "while idx < 3 [ set total to total + "
+                "attempt [ 2 / 0 ] rescue [ 1 ]; set idx to idx + 1 ]",
+                out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "total", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "3\nok\n") == 0);
+  CHECK("error in rescue is catchable by outer attempt",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_attempt_expression_int(
+                &runtime,
+                "attempt [ attempt [ 2 / 0 ] rescue [ true + 1 ] ] "
+                "rescue [ error.code ]",
+                FR_ERR_TYPE));
+
+  CHECK("attempt error.code domain",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_attempt_expression_int(
+                &runtime, "attempt [ 2 / 0 ] rescue [ error.code ]",
+                FR_ERR_DOMAIN));
+  CHECK("attempt error.code type",
+        test_attempt_expression_int(
+            &runtime, "attempt [ true + 1 ] rescue [ error.code ]",
+            FR_ERR_TYPE));
+  CHECK("attempt error.code range",
+        ((void)snprintf(source, sizeof(source),
+                        "attempt [ %" PRId32 " / -1 ] rescue [ error.code ]",
+                        (int32_t)FR_TAGGED_INT_MIN),
+         test_attempt_expression_int(&runtime, source, FR_ERR_RANGE)));
+#if FR_FEATURE_EVENTS
+  CHECK("attempt error.code not-found",
+        test_attempt_expression_int(
+            &runtime,
+            "attempt [ cancel every 50 ] rescue [ error.code ]",
+            FR_ERR_NOT_FOUND));
+#endif
+  CHECK("attempt error.code capacity",
+        test_attempt_nested_source(
+            source, sizeof(source),
+            (uint8_t)(FR_PROFILE_MAX_ATTEMPT_DEPTH + 1u), "1",
+            "error.code") &&
+            test_attempt_expression_int(&runtime, source, FR_ERR_CAPACITY));
+  CHECK("attempt error.code is a normal int in rescue",
+        test_attempt_expression_int(
+            &runtime, "attempt [ 2 / 0 ] rescue [ error.code + 1 ]",
+            (fr_int_t)(FR_ERR_DOMAIN + 1)));
+#if FR_FEATURE_TEXT
+  CHECK("attempt error.name domain",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_attempt_expression_text(
+                &runtime, "attempt [ 2 / 0 ] rescue [ error.name ]",
+                fr_err_name(FR_ERR_DOMAIN)));
+  CHECK("attempt error.name type",
+        test_attempt_expression_text(
+            &runtime, "attempt [ true + 1 ] rescue [ error.name ]",
+            fr_err_name(FR_ERR_TYPE)));
+  CHECK("attempt error.name range",
+        ((void)snprintf(source, sizeof(source),
+                        "attempt [ %" PRId32 " / -1 ] rescue [ error.name ]",
+                        (int32_t)FR_TAGGED_INT_MIN),
+         test_attempt_expression_text(&runtime, source,
+                                      fr_err_name(FR_ERR_RANGE))));
+#if FR_FEATURE_EVENTS
+  CHECK("attempt error.name not-found",
+        test_attempt_expression_text(
+            &runtime,
+            "attempt [ cancel every 50 ] rescue [ error.name ]",
+            fr_err_name(FR_ERR_NOT_FOUND)));
+#endif
+  CHECK("attempt error.name capacity",
+        test_attempt_nested_source(
+            source, sizeof(source),
+            (uint8_t)(FR_PROFILE_MAX_ATTEMPT_DEPTH + 1u), "1",
+            "error.name") &&
+            test_attempt_expression_text(&runtime, source,
+                                         fr_err_name(FR_ERR_CAPACITY)));
+#endif
+  CHECK("error.code outside rescue is ordinary undefined name",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_compile_expression_for_runtime(&runtime, "error.code",
+                                              &expression) ==
+                FR_ERR_NOT_FOUND);
+  CHECK("error.name outside rescue is ordinary undefined name",
+        fr_compile_expression_for_runtime(&runtime, "error.name",
+                                          &expression) == FR_ERR_NOT_FOUND);
+  CHECK("error.code in detached fn inside rescue parses as ordinary name",
+        fr_parse_expression_line(
+            "attempt [ 2 / 0 ] rescue "
+            "[ set stash to fn [ error.code ] ]",
+            &parsed, &expr_id) == FR_OK &&
+            (attempt = &parsed.exprs[expr_id])->kind ==
+                FR_PARSE_EXPR_ATTEMPT &&
+            (fallback = &parsed.exprs[attempt->children[1]])->kind ==
+                FR_PARSE_EXPR_LIST &&
+            fallback->child_count == 1 &&
+            (expr = &parsed.exprs[fallback->children[0]])->kind ==
+                FR_PARSE_EXPR_NAME_WRITE &&
+            (expr = &parsed.exprs[expr->child])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[expr->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            (expr = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_NAME &&
+            fr_parse_span_equals(expr->name, "error.code"));
+  CHECK("error.code in detached fn inside rescue is compile-rejected",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "stash is nil", out, sizeof(out)) ==
+                FR_OK &&
+            fr_compile_expression_for_runtime(
+                &runtime,
+                "attempt [ 2 / 0 ] rescue "
+                "[ set stash to fn [ error.code ] ]",
+                &expression) == FR_ERR_UNSUPPORTED);
+  CHECK("error.code after detached fn parses as rescue-scoped",
+        fr_parse_expression_line(
+            "attempt [ 2 / 0 ] rescue [ fn [ 1 ] ; error.code ]", &parsed,
+            &expr_id) == FR_OK &&
+            (attempt = &parsed.exprs[expr_id])->kind ==
+                FR_PARSE_EXPR_ATTEMPT &&
+            (fallback = &parsed.exprs[attempt->children[1]])->kind ==
+                FR_PARSE_EXPR_LIST &&
+            fallback->child_count == 2 &&
+            parsed.exprs[fallback->children[0]].kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            parsed.exprs[fallback->children[1]].kind ==
+                FR_PARSE_EXPR_ERROR_CODE);
+#if FR_FEATURE_EVENTS
+  CHECK("error.code in detached every handler inside rescue is undefined",
+        fr_compile_overlay_update(
+            "boot is fn [ attempt [ 2 / 0 ] rescue "
+            "[ every 50 [ error.code ] ] ]",
+            &update) == FR_ERR_NOT_FOUND);
+  CHECK("error.code in detached on handler inside rescue is undefined",
+        fr_compile_overlay_update(
+            "boot is fn [ attempt [ 2 / 0 ] rescue "
+            "[ on 1 rising [ error.code ] ] ]",
+            &update) == FR_ERR_NOT_FOUND);
+  CHECK("error.code in detached wifi handler inside rescue is undefined",
+        fr_compile_overlay_update(
+            "boot is fn [ attempt [ 2 / 0 ] rescue "
+            "[ on wifi.disconnected [ error.code ] ] ]",
+            &update) == FR_ERR_NOT_FOUND);
+#endif
+  CHECK("attempt and rescue can be user words",
+        fr_repl_eval_line(&runtime, "rescue is 5", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "attempt is 6", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "rescue + attempt", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "11\nok\n") == 0);
+  CHECK("error.code user word works outside rescue",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "error.code is 4", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "error.code", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "4\nok\n") == 0);
+  CHECK("rescue-scoped error.code shadows user word",
+        test_attempt_expression_int(
+            &runtime, "attempt [ 2 / 0 ] rescue [ error.code ]",
+            FR_ERR_DOMAIN));
+
+  CHECK("attempt catches across call boundary",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "boom is fn [ 2 / 0 ]", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime, "wrap is fn [ attempt [ boom: ] rescue [ 9 ] ]",
+                out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "wrap:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "9\nok\n") == 0);
+  CHECK("callee attempt frame does not redirect later callee error",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "leaker is fn [ attempt [ 2 / 0 ] rescue [ 1 ] ; 3 / 0 ]",
+                out, sizeof(out)) == FR_OK &&
+            fr_slot_id_for_name(&runtime, "leaker", &slot_id) == FR_OK &&
+            fr_vm_run_slot(&runtime, slot_id, &tagged) == FR_ERR_DOMAIN);
+  CHECK("caller can catch callee error after callee frame discard",
+        fr_repl_eval_line(
+            &runtime, "outer is fn [ attempt [ leaker: ] rescue [ 9 ] ]",
+            out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "outer:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "9\nok\n") == 0);
+  CHECK("callee successful attempt frame does not leak to caller",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime, "ok-attempt is fn [ attempt [ 1 ] rescue [ 77 ] ]",
+                out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime, "caller-leak is fn [ ok-attempt: ; 2 / 0 ]",
+                out, sizeof(out)) == FR_OK &&
+            fr_slot_id_for_name(&runtime, "caller-leak", &slot_id) ==
+                FR_OK &&
+            fr_vm_run_slot(&runtime, slot_id, &tagged) == FR_ERR_DOMAIN);
+
+  CHECK("attempt does not catch interrupted",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_native_install(&runtime, test_native_interrupt, 0, NULL,
+                              &native_id) == FR_OK &&
+            fr_tagged_encode_native_id(native_id, &tagged) == FR_OK &&
+            fr_slot_write(&runtime, fr_slot_first_project_id(), tagged) ==
+                FR_OK &&
+            fr_slot_bind_project_name(&runtime, "stop",
+                                      fr_slot_first_project_id()) == FR_OK &&
+            fr_repl_eval_line(&runtime, "attempt [ stop: ] rescue [ 9 ]",
+                              out, sizeof(out)) == FR_ERR_INTERRUPTED &&
+            (fr_runtime_clear_interrupt(&runtime), true));
+
+#if FR_FEATURE_EVENTS
+  CHECK("attempt handler isolation base",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_instruction_stream_init(&body_view, body_bytes,
+                                       sizeof(body_bytes)) == FR_OK &&
+            fr_code_install(&runtime, &body_view, NULL, 0, &body_id) == FR_OK &&
+            fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0,
+                              body_id) == FR_OK);
+  entry = &runtime.events.entries[0];
+  runtime.diag = &diag;
+  CHECK("attempt handler isolation compiles",
+        fr_compile_expression_for_runtime(&runtime,
+                                          "attempt [ 1 ; 2 ] rescue [ 9 ]",
+                                          &expression) == FR_OK);
+  CHECK("attempt handler isolation candidate",
+        fr_platform_event_post_test_candidate(0, entry->generation,
+                                              entry->registered_at_ms + 1u) ==
+            FR_OK);
+  err = fr_vm_run_instruction_stream(&runtime, &expression.instructions,
+                                     &tagged);
+  CHECK("attempt foreground does not catch handler fault",
+        err == FR_ERR_TYPE);
+  CHECK("attempt handler fault keeps foreground diag empty",
+        diag.kind == FR_DIAG_NONE);
+  runtime.diag = NULL;
+#endif
+
+  diag = (fr_diagnostic_t){0};
+  runtime.diag = &diag;
+  CHECK("attempt clears caught diagnostic",
+        fr_repl_eval_line(&runtime, "attempt [ true + 1 ] rescue [ 9 ]",
+                          out, sizeof(out)) == FR_OK &&
+            strcmp(out, "9\nok\n") == 0 && diag.kind == FR_DIAG_NONE);
+  err = fr_repl_eval_line(&runtime, "2 / 0", out, sizeof(out));
+  CHECK("attempt later error is its own domain error", err == FR_ERR_DOMAIN);
+  CHECK("attempt later domain error has no stale diagnostic",
+        diag.kind == FR_DIAG_NONE);
+  CHECK("attempt caught diagnostic does not leak to later error",
+        diag.kind != FR_DIAG_TYPE);
+  runtime.diag = NULL;
+
+  CHECK("attempt compiles dedicated opcodes",
+        fr_compile_expression("attempt [ 2 / 0 ] rescue [ error.code ]",
+                              &expression) == FR_OK &&
+            expression.instruction_bytes[2] == FR_OP_ATTEMPT_BEGIN);
+  CHECK("attempt disassembles dedicated opcodes",
+        fr_instruction_stream_disassemble(&expression.instructions, disassembly,
+                                          sizeof(disassembly),
+                                          &disassembly_len) == FR_OK &&
+            strstr(disassembly, "ATTEMPT_BEGIN") != NULL &&
+            strstr(disassembly, "ATTEMPT_END") != NULL &&
+            strstr(disassembly, "ERROR_CODE") != NULL);
+
+#if FR_FEATURE_PERSISTENCE
+  fr_platform_persist_clear();
+  CHECK("attempt persistence define",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "saved-guard is fn [ attempt [ 2 / 0 ] rescue [ 9 ] ]",
+                out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 && fr_persist_save(&runtime) == FR_OK);
+  CHECK("attempt persistence restore",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_persist_restore(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "saved-guard:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "9\nok\n") == 0);
+#endif
+
+}
+#endif
 
 /*
  * Host-owned-name helper profiles strip names before sending updates. This
@@ -12987,7 +13483,7 @@ static void test_repl_error_diagnostics(void) {
 static void test_repl_diagnostic_suggests_restored_non_xip_name(void) {
   fr_runtime_t saved;
   fr_runtime_t restored;
-  char out[1024] = {0};
+  char out[4096] = {0};
   const char *typo_lines[] = {"countr:"};
 
   fr_platform_persist_clear();
@@ -13186,6 +13682,47 @@ static void test_repl_see_source_form(void) {
             "bump-local",
             "to bump-local [ here local0 is 0 ; set local0 to 5 ; local0 ]",
             5));
+  CHECK("see round-trip attempt rescue",
+        test_see_round_trip_line_int(
+            "guard is fn [ attempt [ 2 / 0 ] rescue [ 9 ] ]", "guard",
+            "to guard [ attempt [ 2 / 0 ] rescue [ 9 ] ]", 9));
+  CHECK("see round-trip nested attempt rescue",
+        test_see_round_trip_line_int(
+            "nested-attempt is fn [ attempt [ attempt [ 2 / 0 ] rescue [ 3 ] ] "
+            "rescue [ 4 ] ]",
+            "nested-attempt",
+            "to nested-attempt [ attempt [ attempt [ 2 / 0 ] rescue [ 3 ] ] "
+            "rescue [ 4 ] ]",
+            3));
+  CHECK("see round-trip attempt error code",
+        test_see_round_trip_line_int(
+            "guard-code is fn [ attempt [ 2 / 0 ] rescue [ error.code ] ]",
+            "guard-code",
+            "to guard-code [ attempt [ 2 / 0 ] rescue [ error.code ] ]",
+            FR_ERR_DOMAIN));
+  CHECK("see round-trip while body attempt rescue",
+        test_see_round_trip_line_int(
+            "while-guard is fn [ here n is 0 ; while n < 1 "
+            "[ set n to attempt [ 2 / 0 ] rescue [ 1 ] ] ; n ]",
+            "while-guard",
+            "to while-guard [ here local0 is 0 ; while local0 < 1 "
+            "[ set local0 to attempt [ 2 / 0 ] rescue [ 1 ] ] ; local0 ]",
+            1));
+#if FR_FEATURE_TEXT
+  CHECK("see source attempt error name",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "guard-name is fn [ attempt [ 2 / 0 ] rescue [ error.name ] ]",
+                out, sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "see guard-name", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "overlay code\n"
+                   "to guard-name [ attempt [ 2 / 0 ] rescue [ error.name ] ]\n"
+                   "ok\n") == 0);
+#endif
 #if FR_PARSE_MAX_LOCALS > 10
   {
     char local_out[1024];
@@ -13866,6 +14403,10 @@ int main(void) {
   test_parse();
   test_first_definition_after_wipe();
   test_compile();
+#if FR_FEATURE_REPL && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&                     \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  test_attempt_rescue();
+#endif
 #if FR_FEATURE_REPL && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&                       \
     FR_PROFILE_MAX_OVERLAY_NAMES > 0 && !FR_HOST_TINY_NAMES_MODE
   test_compiler_overlay_wire_parity();

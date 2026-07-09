@@ -49,6 +49,7 @@ typedef struct fr_parser_t {
   uint8_t call_arg_stop_depth;
   bool stop_plus_before_call;
   bool stop_before_repeat_as;
+  bool inside_rescue_block;
 } fr_parser_t;
 
 typedef uint32_t fr_parse_int_magnitude_t;
@@ -773,6 +774,17 @@ static fr_err_t fr_parse_bracket_block(fr_parser_t *parser,
   return fr_parse_expect(parser, FR_TOKEN_RBRACKET);
 }
 
+static fr_err_t fr_parse_detached_bracket_block(fr_parser_t *parser,
+                                                fr_parse_expr_id_t *out_id) {
+  bool saved_inside_rescue_block = parser->inside_rescue_block;
+  fr_err_t err = FR_OK;
+
+  parser->inside_rescue_block = false;
+  err = fr_parse_bracket_block(parser, out_id);
+  parser->inside_rescue_block = saved_inside_rescue_block;
+  return err;
+}
+
 static fr_err_t fr_parse_function_value(fr_parser_t *parser,
                                         fr_parse_expr_id_t *out_id) {
   uint8_t param_start = parser->out->param_count;
@@ -803,7 +815,7 @@ static fr_err_t fr_parse_function_value(fr_parser_t *parser,
       }
     }
   }
-  FR_TRY(fr_parse_bracket_block(parser, &body));
+  FR_TRY(fr_parse_detached_bracket_block(parser, &body));
 
   return fr_parse_add_expr(parser,
                            (fr_parse_expr_t){.kind = FR_PARSE_EXPR_FUNCTION,
@@ -1172,6 +1184,31 @@ static fr_err_t fr_parse_forever(fr_parser_t *parser,
   return fr_parse_add_expr(parser, forever, out_id);
 }
 
+static fr_err_t fr_parse_attempt(fr_parser_t *parser,
+                                 fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_t attempt = {.kind = FR_PARSE_EXPR_ATTEMPT};
+  bool saved_inside_rescue_block = false;
+  fr_err_t err = FR_OK;
+
+  FR_TRY(fr_parse_advance(parser));
+  FR_TRY(fr_parse_bracket_block(parser, &attempt.children[0]));
+  if (parser->token.kind != FR_TOKEN_NAME ||
+      !fr_parse_span_equals(parser->token.span, "rescue")) {
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                               FR_ERR_INVALID);
+  }
+  FR_TRY(fr_parse_advance(parser));
+  saved_inside_rescue_block = parser->inside_rescue_block;
+  parser->inside_rescue_block = true;
+  err = fr_parse_bracket_block(parser, &attempt.children[1]);
+  parser->inside_rescue_block = saved_inside_rescue_block;
+  FR_TRY(err);
+
+  attempt.child = attempt.children[0];
+  attempt.child_count = 2;
+  return fr_parse_add_expr(parser, attempt, out_id);
+}
+
 /* `every <ms-expr> [body]` and `after <ms-expr> [body]` share one shape:
  * (ms, body) with int_value carrying the matching fr_event_kind_t value.
  * The keyword string drives the dispatch. */
@@ -1184,7 +1221,7 @@ static fr_err_t fr_parse_timer_event(fr_parser_t *parser,
                       : FR_EVENT_KIND_AFTER;
   FR_TRY(fr_parse_advance(parser));
   FR_TRY(fr_parse_expression(parser, &reg.children[0]));
-  FR_TRY(fr_parse_bracket_block(parser, &reg.children[1]));
+  FR_TRY(fr_parse_detached_bracket_block(parser, &reg.children[1]));
   reg.child = reg.children[0];
   reg.child_count = 2;
   return fr_parse_add_expr(parser, reg, out_id);
@@ -1205,7 +1242,7 @@ static fr_err_t fr_parse_on(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
       fr_parse_span_equals(parser->token.span, "wifi.disconnected")) {
     reg.int_value = FR_EVENT_KIND_WIFI_DISCONNECTED;
     FR_TRY(fr_parse_advance(parser));
-    FR_TRY(fr_parse_bracket_block(parser, &reg.children[0]));
+    FR_TRY(fr_parse_detached_bracket_block(parser, &reg.children[0]));
     reg.child = reg.children[0];
     reg.child_count = 1;
     return fr_parse_add_expr(parser, reg, out_id);
@@ -1214,7 +1251,7 @@ static fr_err_t fr_parse_on(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
       fr_parse_span_equals(parser->token.span, "wifi.reconnected")) {
     reg.int_value = FR_EVENT_KIND_WIFI_RECONNECTED;
     FR_TRY(fr_parse_advance(parser));
-    FR_TRY(fr_parse_bracket_block(parser, &reg.children[0]));
+    FR_TRY(fr_parse_detached_bracket_block(parser, &reg.children[0]));
     reg.child = reg.children[0];
     reg.child_count = 1;
     return fr_parse_add_expr(parser, reg, out_id);
@@ -1243,7 +1280,7 @@ static fr_err_t fr_parse_on(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
     FR_TRY(fr_parse_expression(parser, &reg.children[2]));
     reg.child_count = 3;
   }
-  FR_TRY(fr_parse_bracket_block(parser, &reg.children[1]));
+  FR_TRY(fr_parse_detached_bracket_block(parser, &reg.children[1]));
   reg.child = reg.children[0];
   return fr_parse_add_expr(parser, reg, out_id);
 }
@@ -1305,6 +1342,20 @@ static bool fr_parse_compare_token_kind(fr_token_kind_t kind,
 static bool fr_parse_name_token_is(fr_parser_t *parser, const char *word) {
   return parser->token.kind == FR_TOKEN_NAME &&
          fr_parse_span_equals(parser->token.span, word);
+}
+
+static bool fr_parse_name_followed_by_block(fr_parser_t *parser) {
+  fr_parser_t lookahead;
+
+  if (parser == NULL || parser->token.kind != FR_TOKEN_NAME) {
+    return false;
+  }
+  lookahead = *parser;
+  lookahead.diag = NULL;
+  if (fr_parse_advance(&lookahead) != FR_OK) {
+    return false;
+  }
+  return lookahead.token.kind == FR_TOKEN_LBRACKET;
 }
 
 static fr_err_t fr_parse_unary(fr_parser_t *parser,
@@ -1495,6 +1546,20 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
   }
 
   if (parser->token.kind == FR_TOKEN_NAME) {
+    if (parser->inside_rescue_block &&
+        fr_parse_span_equals(parser->token.span, "error.code")) {
+      FR_TRY(fr_parse_advance(parser));
+      return fr_parse_add_expr(
+          parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_ERROR_CODE},
+          out_id);
+    }
+    if (parser->inside_rescue_block &&
+        fr_parse_span_equals(parser->token.span, "error.name")) {
+      FR_TRY(fr_parse_advance(parser));
+      return fr_parse_add_expr(
+          parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_ERROR_NAME},
+          out_id);
+    }
     if (fr_parse_span_equals(parser->token.span, "nil")) {
       FR_TRY(fr_parse_advance(parser));
       return fr_parse_add_expr(
@@ -1530,6 +1595,10 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
     }
     if (fr_parse_span_equals(parser->token.span, "forever")) {
       return fr_parse_forever(parser, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "attempt") &&
+        fr_parse_name_followed_by_block(parser)) {
+      return fr_parse_attempt(parser, out_id);
     }
     if (fr_parse_span_equals(parser->token.span, "on")) {
       return fr_parse_on(parser, out_id);

@@ -71,6 +71,10 @@ typedef enum fr_opcode_t {
   FR_OP_SET_LOCAL = 0x25,
   FR_OP_REPEAT_BEGIN_AS = 0x26,
   FR_OP_REPEAT_NEXT_AS = 0x27,
+  FR_OP_ATTEMPT_BEGIN = 0x28,
+  FR_OP_ATTEMPT_END = 0x29,
+  FR_OP_ERROR_CODE = 0x2A,
+  FR_OP_ERROR_NAME = 0x2B,
 } fr_opcode_t;
 
 fr_err_t fr_instruction_stream_init(fr_instruction_stream_t *view,
