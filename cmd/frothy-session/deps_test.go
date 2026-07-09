@@ -139,17 +139,16 @@ servo = { path = "../servo" }
 	}
 }
 
-// Git deps don't fetch in the rescue. They must fail with a clear
-// message naming `frothy fetch`.
-func TestResolveDeps_GitDepNotYetWired(t *testing.T) {
+func TestResolveDeps_GitDepNotFetched(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("FROTH_HOME", t.TempDir())
 	proj := projectManifest{
 		Name:   "blink",
 		Target: "host",
-		Deps:   map[string]manifestDep{"servo": {Git: "https://example/x"}},
+		Deps:   map[string]manifestDep{"servo": {Git: "https://example/x", Rev: "abc123"}},
 	}
 	_, err := resolveDeps(dir, proj)
-	if err == nil || !strings.Contains(err.Error(), "git deps require frothy fetch") {
+	if err == nil || !strings.Contains(err.Error(), "git dep not fetched; run frothy fetch") {
 		t.Fatalf("wrong error: %v", err)
 	}
 }

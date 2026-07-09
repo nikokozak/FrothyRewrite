@@ -10,8 +10,8 @@ import (
 // SPEC D5 + D6 + D9. Resolves a project's deps recursively into a flat
 // list ordered dependency-before-dependent so the build's main.fr
 // compiles last and library overlay sources compile in an order that
-// matches D6's promise. Path deps work; git deps emit "git deps
-// require fetch, not yet wired" until frothy fetch lands.
+// matches D6's promise. Path deps resolve relative to the parent library;
+// git deps resolve through the cache populated by frothy fetch.
 //
 // Cycle detection is depth-first with a visiting stack. Two deps to
 // the same library by the same path are deduped (last wins on a name
@@ -41,13 +41,10 @@ type depResolver struct {
 }
 
 func (r *depResolver) walk(parentDir, depName string, dep manifestDep, stack []string) error {
-	if dep.Git != "" {
-		return fmt.Errorf("dep %s: git deps require frothy fetch (not yet wired); use path = \"...\" for now", depName)
+	libPath, isGit, err := depLibraryPath(parentDir, dep)
+	if err != nil {
+		return fmt.Errorf("dep %s: %w", depName, err)
 	}
-	if dep.Path == "" {
-		return fmt.Errorf("dep %s: missing path", depName)
-	}
-	libPath := filepath.Clean(filepath.Join(parentDir, dep.Path))
 
 	for _, s := range stack {
 		if s == libPath {
@@ -60,7 +57,21 @@ func (r *depResolver) walk(parentDir, depName string, dep manifestDep, stack []s
 		}
 	}
 
-	lib, err := loadLibrary(libPath)
+	if isGit {
+		if _, err := os.Stat(libPath); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("dep %s: git dep not fetched; run frothy fetch", depName)
+			}
+			return fmt.Errorf("dep %s: %w", depName, err)
+		}
+	}
+
+	var lib loadedLib
+	if isGit {
+		lib, err = loadGitLibrary(libPath)
+	} else {
+		lib, err = loadLibrary(libPath)
+	}
 	if err != nil {
 		return fmt.Errorf("dep %s: %w", depName, err)
 	}
@@ -87,6 +98,17 @@ func (r *depResolver) walk(parentDir, depName string, dep manifestDep, stack []s
 	return nil
 }
 
+func depLibraryPath(parentDir string, dep manifestDep) (string, bool, error) {
+	if dep.Git != "" {
+		libPath, err := gitDepCacheDir(dep)
+		return libPath, true, err
+	}
+	if dep.Path == "" {
+		return "", false, fmt.Errorf("missing path")
+	}
+	return filepath.Clean(filepath.Join(parentDir, dep.Path)), false, nil
+}
+
 // loadedLib carries the resolvedLibrary fields the generator needs
 // plus a reference to the parsed lib.toml (for [deps] recursion).
 type loadedLib struct {
@@ -98,6 +120,14 @@ type loadedLib struct {
 // missing lib.toml gives a pure-modules library named after the
 // directory.
 func loadLibrary(libPath string) (loadedLib, error) {
+	return loadLibraryAt(libPath, false, true)
+}
+
+func loadGitLibrary(libPath string) (loadedLib, error) {
+	return loadLibraryAt(libPath, true, false)
+}
+
+func loadLibraryAt(libPath string, requireManifest bool, requireNameMatchesDir bool) (loadedLib, error) {
 	info, err := os.Stat(libPath)
 	if err != nil {
 		return loadedLib{}, fmt.Errorf("library path %s: %w", libPath, err)
@@ -114,6 +144,9 @@ func loadLibrary(libPath string) (loadedLib, error) {
 	tomlBytes, err := os.ReadFile(tomlPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if requireManifest {
+				return loadedLib{}, fmt.Errorf("git repo missing lib.toml at repo root")
+			}
 			return loadedLib{
 				resolved: resolvedLibrary{
 					name: filepath.Base(libPath),
@@ -127,7 +160,7 @@ func loadLibrary(libPath string) (loadedLib, error) {
 	if err != nil {
 		return loadedLib{}, err
 	}
-	if m.Name != filepath.Base(libPath) {
+	if requireNameMatchesDir && m.Name != filepath.Base(libPath) {
 		return loadedLib{}, fmt.Errorf("library %s: lib.toml name %q does not match directory", filepath.Base(libPath), m.Name)
 	}
 
