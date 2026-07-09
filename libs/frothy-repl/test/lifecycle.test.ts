@@ -19,3 +19,43 @@ test("lifecycle idempotence: double close releases once; reopen works", async ()
   assert.deepEqual(await repl2.sendLine("noop"), { kind: "ok" });
   await repl2.close();
 });
+
+test("onClose fires once for close(), and late subscribers fire immediately", async () => {
+  const fake = new FakeTransport(() => "ok\n> ");
+  const repl = await createConnector(fake);
+  let calls = 0;
+
+  repl.onClose(() => {
+    calls += 1;
+  });
+
+  await repl.close();
+  await repl.close();
+  assert.equal(calls, 1);
+
+  let lateCalls = 0;
+  repl.onClose(() => {
+    lateCalls += 1;
+  });
+  assert.equal(lateCalls, 1);
+});
+
+test("onClose fires when the transport read ends", async () => {
+  const fake = new FakeTransport();
+  const repl = await createConnector(fake);
+  let calls = 0;
+
+  const closed = new Promise<void>((resolve) => {
+    repl.onClose(() => {
+      calls += 1;
+      resolve();
+    });
+  });
+
+  await fake.close();
+  await closed;
+  assert.equal(calls, 1);
+
+  await repl.close();
+  assert.equal(calls, 1);
+});

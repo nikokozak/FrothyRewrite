@@ -15,8 +15,9 @@ import type { Transcript } from "./transcript.js";
 import { makeStorage } from "./storage.js";
 import type { SketchStorage } from "./storage.js";
 
-export const DEFAULT_INITIAL_SOURCE = `to greet [ "hello, world" ]
-greet
+export const DEFAULT_INITIAL_SOURCE = `-- Welcome to Frothy. Edit, then Send buffer (Cmd/Ctrl+Enter).
+to greet [ "hello, world" ]
+greet:
 `;
 
 export interface EditorOptions {
@@ -42,6 +43,10 @@ export interface EditorHandle {
 
 export function mountEditor(opts: EditorOptions): EditorHandle {
   const doc = opts.mount.ownerDocument;
+  const unloadTarget = (doc.defaultView ?? globalThis) as Pick<
+    Window,
+    "addEventListener" | "removeEventListener"
+  >;
   const storage: SketchStorage = makeStorage(opts.storageKey);
   const initial = storage.load() ?? opts.initialSource ?? DEFAULT_INITIAL_SOURCE;
 
@@ -100,7 +105,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   });
 
   let repl: ReplConnector | null = null;
+  // The raw serial port, retained only so releaseBeforeUnload can close it in
+  // a single synchronous hop (see there). The connector/transport own the
+  // normal teardown path.
+  let currentPort: { close(): Promise<void> } | null = null;
   let unsubscribeLines: (() => void) | null = null;
+  let unsubscribeClose: (() => void) | null = null;
   // The device runs an interactive line editor that echoes each input line
   // back as the first response line. With "Hide echo" on (default), we swallow
   // exactly one echoed line per request — set to the line we just sent —
@@ -122,7 +132,44 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     if (opts.onError) opts.onError(e);
   }
 
+  function unsubscribeReplEvents() {
+    if (unsubscribeLines) {
+      unsubscribeLines();
+      unsubscribeLines = null;
+    }
+    if (unsubscribeClose) {
+      unsubscribeClose();
+      unsubscribeClose = null;
+    }
+  }
+
+  function handleConnectorClose(closedRepl: ReplConnector) {
+    if (repl !== closedRepl) return;
+    unsubscribeReplEvents();
+    repl = null;
+    currentPort = null;
+    pendingEcho = null;
+    setConnected("Connect", false);
+    transcript.appendDevice("device disconnected");
+  }
+
+  function releaseBeforeUnload() {
+    // beforeunload cannot await, so go straight to the port's synchronous
+    // close() — the single hop the flasher uses (frothy-site flash/app.js).
+    // Routing through repl.close() would gate the real port.close() behind two
+    // awaited hops (reader.cancel → released → port.close) the browser does not
+    // guarantee to run on unload, leaving the OS serial FD held and breaking
+    // the next connect.
+    if (!currentPort) return;
+    try {
+      void currentPort.close();
+    } catch {
+      // best effort only
+    }
+  }
+
   setConnected("Connect", false);
+  unloadTarget.addEventListener("beforeunload", releaseBeforeUnload);
 
   async function connect(): Promise<void> {
     const nav = globalThis.navigator;
@@ -133,7 +180,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     try {
       const port = await nav.serial.requestPort();
       await port.open({ baudRate: 115200 });
+      currentPort = port;
       repl = await createConnector(new WebSerialTransport(port));
+      const connectedRepl = repl;
       unsubscribeLines = repl.onLine((line) => {
         if (suppressEcho && pendingEcho !== null && line === pendingEcho) {
           pendingEcho = null;
@@ -141,25 +190,25 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         }
         transcript.appendDevice(line);
       });
+      unsubscribeClose = connectedRepl.onClose(() => handleConnectorClose(connectedRepl));
       pendingEcho = "status";
       const status = await repl.status();
       setConnected(`connected · ${status.profile}`, true);
       if (opts.onConnect) opts.onConnect(status);
     } catch (err) {
+      if (repl) await disconnect();
       reportError(err);
       setConnected("Connect", false);
     }
   }
 
   async function disconnect(): Promise<void> {
-    if (unsubscribeLines) {
-      unsubscribeLines();
-      unsubscribeLines = null;
-    }
-    if (repl) {
-      await repl.close().catch(() => undefined);
-      repl = null;
-    }
+    const closing = repl;
+    unsubscribeReplEvents();
+    repl = null;
+    currentPort = null;
+    pendingEcho = null;
+    if (closing) await closing.close().catch(() => undefined);
     setConnected("Connect", false);
   }
 
@@ -171,7 +220,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
 
   async function sendLine(): Promise<void> {
     if (!repl) return;
-    const line = currentLine().trim();
+    const [line] = sendableLines(currentLine());
     if (!line) return;
     transcript.appendHost(line);
     pendingEcho = line;
@@ -184,11 +233,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
 
   async function sendBuffer(): Promise<void> {
     if (!repl) return;
-    const lines = view.state.doc
-      .toString()
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
+    const lines = sendableLines(view.state.doc.toString());
     if (lines.length === 0) {
       transcript.appendDevice("(empty buffer)");
       return;
@@ -261,6 +306,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       return repl?.transcript() ?? [];
     },
     destroy() {
+      unloadTarget.removeEventListener("beforeunload", releaseBeforeUnload);
       void disconnect();
       view.destroy();
       opts.mount.removeChild(root);
@@ -273,4 +319,14 @@ function mkBtn(doc: Document, label: string, cls: string): HTMLButtonElement {
   b.className = cls;
   b.textContent = label;
   return b;
+}
+
+export function sendableLines(text: string): string[] {
+  const lines: string[] = [];
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (line.length === 0 || line.startsWith("--")) continue;
+    lines.push(line);
+  }
+  return lines;
 }
