@@ -14,6 +14,7 @@ const HANDLERS: Array<[string, () => unknown]> = [
   ['frothy.sendSelection', () => commands.sendSelection()],
   ['frothy.runLast',       () => commands.runLast()],
   ['frothy.sendFile',      () => commands.sendFile()],
+  ['frothy.openExample',   () => commands.openExample()],
   ['frothy.see',           () => commands.see()],
   ['frothy.words',         () => commands.words()],
   ['frothy.status',        () => commands.status()],

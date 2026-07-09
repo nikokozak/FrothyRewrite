@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 
-import { DEFAULT_INITIAL_SOURCE, sendableLines } from "../src/editor.js";
+import { DEFAULT_INITIAL_SOURCE, isBufferDirty, sendableLines } from "../src/editor.js";
 import { makeStorage } from "../src/storage.js";
 
 function withDOM(): void {
@@ -73,4 +73,10 @@ test("editor default source starts with a comment and sends a zero-arg call", ()
 
 test("editor sendableLines returns no lines for blank/comment-only source", () => {
   assert.deepEqual(sendableLines(" \n-- nothing here\n\t-- still a comment\n"), []);
+});
+
+test("editor isBufferDirty ignores edge whitespace only", () => {
+  assert.equal(isBufferDirty("to greet [ 1 ]\n", "to greet [ 1 ]\n"), false);
+  assert.equal(isBufferDirty("to greet [ 1 ]\n\n", "to greet [ 1 ]"), false);
+  assert.equal(isBufferDirty("to greet [ 2 ]", "to greet [ 1 ]"), true);
 });
