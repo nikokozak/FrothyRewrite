@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0 — 2026-07-09
+
+Editor-pass release: an example browser and corrected language support.
+
+### Added
+
+- **Frothy: Open Example** — a QuickPick of the bundled example sketches. The
+  chosen one opens as an untitled buffer, ready to Send File. The set is the
+  same `examples/` the browser editor and the host smoke battery use.
+
+### Fixed
+
+- **Comment syntax was wrong.** Line comments were configured as `//`, which the
+  parser rejects; they are now `--`, with `-* *-` block comments. `Cmd+/` now
+  inserts a comment the device accepts.
+
+### Changed
+
+- **Grammar synced to the language.** The keyword set now matches the parser
+  (adds `attempt`, `rescue`, `here`, `while`, `as`, `record`, and more),
+  `--` / `-* *-` comments are recognized, and `nil` colors as a constant.
+
 ## 0.2.1 — 2026-06-20
 
 Polish pass on serial reply rendering.
