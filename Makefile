@@ -118,6 +118,15 @@ PERSISTENCE_SOURCES ?= $(PERSISTENCE_KERNEL_SOURCES)
 # definition. When unset, src/lib_native.c's empty defaults supply the
 # symbols and no library natives are registered.
 FROTHY_LIB_NATIVES_C ?=
+FROTHY_LIBS_CMAKE ?=
+FROTHY_LIB_EXT_SOURCES :=
+FROTHY_LIB_EXT_INCLUDE_DIRS :=
+ifneq ($(wildcard $(FROTHY_LIBS_CMAKE)),)
+FROTHY_LIB_EXT_SOURCES := $(shell awk -v name=FROTHY_LIB_EXT_SOURCES '$$0 == "set(" name ")" { next } $$0 == "set(" name { in_list = 1; next } in_list && $$0 == ")" { in_list = 0; next } in_list { print }' "$(FROTHY_LIBS_CMAKE)")
+FROTHY_LIB_EXT_INCLUDE_DIRS := $(shell awk -v name=FROTHY_LIB_EXT_INCLUDE_DIRS '$$0 == "set(" name ")" { next } $$0 == "set(" name { in_list = 1; next } in_list && $$0 == ")" { in_list = 0; next } in_list { print }' "$(FROTHY_LIBS_CMAKE)")
+KERNEL_SOURCES += $(FROTHY_LIB_EXT_SOURCES)
+FR_CFLAGS += $(addprefix -I,$(FROTHY_LIB_EXT_INCLUDE_DIRS))
+endif
 ifneq ($(FROTHY_LIB_NATIVES_C),)
 KERNEL_SOURCES += $(FROTHY_LIB_NATIVES_C)
 FR_CFLAGS += -DFR_LIB_NATIVES_PROVIDED
@@ -274,6 +283,9 @@ FROTHY_BINARY ?= frothy
 OVERLAY_COMPILER ?= $(BUILD_DIR)/frothy-compile-overlay
 FROTHY_HOST_COMMAND_BINARY ?= build/host/frothy
 FROTHY_SESSION_BINARY ?= build/host/frothy-session
+LIB_E2E_PROJECT ?= test/fixtures/projects/mixed-demo
+LIB_E2E_BUILD_DIR ?= build/lib-e2e
+LIB_E2E_BINARY ?= $(LIB_E2E_BUILD_DIR)/frothy.elf
 GO_CACHE ?= $(abspath build/host/go-cache)
 INSTALL_TEST_ROOT ?= build/install-host-root
 PREFIX ?= /usr/local
@@ -565,6 +577,22 @@ test-host-normal-event-transcript: host-normal-events
 
 test-host-normal-profile: test-host-normal test-host-normal-transcript test-host-normal-event-transcript
 
+test-lib-e2e: frothy-host-command
+	BUILD_DIR="$(abspath $(LIB_E2E_BUILD_DIR))" "$(abspath $(FROTHY_HOST_COMMAND_BINARY))" build --project "$(abspath $(LIB_E2E_PROJECT))"
+	@out=$$(printf '%s\n' \
+		'test-mixed.echo:' \
+		'words' \
+		| "$(LIB_E2E_BINARY)"); \
+	if ! printf '%s\n' "$$out" | grep -q '^> 7$$'; then \
+		printf '%s\nmissing library native result: 7\n' "$$out"; \
+		exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$out" | grep -qF 'test-mixed.echo'; then \
+		printf '%s\nmissing library native in words output: test-mixed.echo\n' "$$out"; \
+		exit 1; \
+	fi; \
+	printf 'lib e2e ok\n'
+
 esp32-plain-host:
 	$(MAKE) BOARD=esp32_devkit_v1 TARGET=host PROFILE=esp32_plain \
 		BUILD_DIR=build/esp32-plain-host \
@@ -751,6 +779,6 @@ vsix:
 	cd editors/vscode && npm ci && npm run build && npx vsce package
 
 clean:
-	rm -rf build frothy test/test test/test-host-normal
+	rm -rf build frothy test/test test/test-host-normal test/fixtures/projects/*/.frothy
 
-.PHONY: test test-unity artifacts flash wipe-nvs web-bins test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean
+.PHONY: test test-unity artifacts flash wipe-nvs web-bins test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean
