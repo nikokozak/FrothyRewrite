@@ -1,0 +1,56 @@
+name: Release
+
+# Cut a release from a version tag: build the web-flasher binary and the VS Code
+# extension, then attach both to a GitHub release. See the "Releasing" section
+# of CONTRIBUTING.md.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release and upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache ESP-IDF
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.froth/sdk
+            ~/.espressif
+          key: ${{ runner.os }}-esp-idf-v5.5
+
+      - name: Install ESP-IDF
+        run: tools/setup-esp-idf.sh
+
+      - name: Build web flasher binary
+        run: |
+          . "$HOME/.froth/sdk/esp-idf/export.sh"
+          make web-bins
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Build VS Code extension
+        run: make vsix
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist-release
+          cp web/flash/firmware/esp32_devkit_v1-esp32_plain.bin dist-release/
+          cp editors/vscode/frothy-*.vsix dist-release/
+          ls -l dist-release
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Frothy $GITHUB_REF_NAME" \
+            --generate-notes \
+            dist-release/*

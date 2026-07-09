@@ -50,6 +50,50 @@ shape before behavior, and names a stranger can read without project history.
 If a change touches hardware behavior, say which board you used and how you
 verified it.
 
+## Releasing And Vendored Bundles
+
+The website (frothy.dev) serves two things built from this repo: the web
+flasher's firmware binary and the browser editor bundle. Both are vendored —
+built here, copied into the site — so the site stays self-contained and works
+offline. The firmware `.bin` carries embedded build timestamps and is never
+byte-identical between builds, so "update it" always means "rebuild and
+re-vendor", never "diff the bytes".
+
+**Version scheme.** `vX.Y.Z` git tags are the project release. Components keep
+their own versions (the VS Code extension and `@frothy/editor` each have their
+own `package.json` version); a release bundles a coherent set of them.
+
+**Update the flasher firmware** on a site checkout (needs ESP-IDF once, via
+`frothy bootstrap`):
+
+```sh
+tools/build-flasher-bundle.sh ~/Developer/frothy-site/static/test/flash
+```
+
+This runs `make web-bins`, copies the merged binary in, and stamps the build
+version (from `git describe`) into the flasher `manifest.json`.
+
+**Update the editor bundle** the same way:
+
+```sh
+tools/build-editor-bundle.sh ~/Developer/frothy-site/static/test/editor
+```
+
+Then point the page's import at the printed version and drop the old vendored
+directory.
+
+**Cut a release.** Update `CHANGELOG.md`, then tag and push:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The push triggers `.github/workflows/release.yml`, which builds `make web-bins`
+and `make vsix` and attaches the firmware binary and the `.vsix` to a GitHub
+release. Re-vendor the site bundles from the tagged commit so the live site
+matches the release.
+
 ## Where To Talk
 
 Use GitHub issues for bugs, feature requests, and design questions.
