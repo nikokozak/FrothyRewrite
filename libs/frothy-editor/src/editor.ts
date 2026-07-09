@@ -9,6 +9,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { createConnector, WebSerialTransport } from "@frothy/repl";
 import type { ReplConnector, Status } from "@frothy/repl";
 
+import { FROTHY_EXAMPLES } from "./examples.generated.js";
 import { frothyLanguage, frothyHighlight } from "./highlight.js";
 import { mountTranscript } from "./transcript.js";
 import type { Transcript } from "./transcript.js";
@@ -46,9 +47,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const unloadTarget = (doc.defaultView ?? globalThis) as Pick<
     Window,
     "addEventListener" | "removeEventListener"
-  >;
+  > & { confirm?: (message?: string) => boolean };
   const storage: SketchStorage = makeStorage(opts.storageKey);
   const initial = storage.load() ?? opts.initialSource ?? DEFAULT_INITIAL_SOURCE;
+  let baseline = initial;
 
   const root = doc.createElement("div");
   root.className = "frothy-editor";
@@ -58,10 +60,27 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const title = doc.createElement("div");
   title.className = "frothy-editor-title";
   title.textContent = "Frothy editor";
+  const examplesLabel = doc.createElement("label");
+  examplesLabel.className = "frothy-example-picker";
+  examplesLabel.textContent = "Example ";
+  const examplesSelect = doc.createElement("select");
+  const examplesPlaceholder = doc.createElement("option");
+  examplesPlaceholder.value = "";
+  examplesPlaceholder.textContent = "Examples...";
+  examplesPlaceholder.disabled = true;
+  examplesPlaceholder.selected = true;
+  examplesSelect.append(examplesPlaceholder);
+  for (const example of FROTHY_EXAMPLES) {
+    const option = doc.createElement("option");
+    option.value = example.name;
+    option.textContent = example.title;
+    examplesSelect.append(option);
+  }
+  examplesLabel.append(examplesSelect);
   const connectBtn = doc.createElement("button");
   connectBtn.className = "frothy-btn frothy-btn-primary";
   connectBtn.textContent = "Connect";
-  header.append(title, connectBtn);
+  header.append(title, examplesLabel, connectBtn);
 
   const editorHost = doc.createElement("div");
   editorHost.className = "frothy-editor-pane";
@@ -218,6 +237,16 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     return line.text;
   }
 
+  function currentSource(): string {
+    return view.state.doc.toString();
+  }
+
+  function replaceSource(src: string): void {
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: src },
+    });
+  }
+
   async function sendLine(): Promise<void> {
     if (!repl) return;
     const [line] = sendableLines(currentLine());
@@ -251,11 +280,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   }
 
   function save() {
-    storage.save(view.state.doc.toString());
+    baseline = currentSource();
+    storage.save(baseline);
   }
 
   function download() {
-    storage.download(view.state.doc.toString(), "sketch.fr");
+    storage.download(currentSource(), "sketch.fr");
   }
 
   connectBtn.addEventListener("click", () => {
@@ -269,6 +299,24 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   sendBufBtn.addEventListener("click", () => void sendBuffer());
   saveBtn.addEventListener("click", () => save());
   downloadBtn.addEventListener("click", () => download());
+  examplesSelect.addEventListener("change", () => {
+    const example = FROTHY_EXAMPLES.find((entry) => entry.name === examplesSelect.value);
+    if (!example) {
+      examplesSelect.value = "";
+      return;
+    }
+    const allowed = !isBufferDirty(currentSource(), baseline)
+      || (unloadTarget.confirm?.("Replace your current sketch?") ?? true);
+    if (!allowed) {
+      examplesSelect.value = "";
+      view.focus();
+      return;
+    }
+    replaceSource(example.source);
+    baseline = example.source;
+    examplesSelect.value = "";
+    view.focus();
+  });
 
   // Keyboard: Shift+Enter sends current line; Cmd/Ctrl+Enter sends buffer.
   editorHost.addEventListener(
@@ -292,9 +340,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       return view.state.doc.toString();
     },
     setSource(src: string) {
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: src },
-      });
+      replaceSource(src);
     },
     connect,
     disconnect,
@@ -329,4 +375,8 @@ export function sendableLines(text: string): string[] {
     lines.push(line);
   }
   return lines;
+}
+
+export function isBufferDirty(current: string, baseline: string): boolean {
+  return current.trim() !== baseline.trim();
 }

@@ -49,6 +49,7 @@
       { "command": "frothy.sendSelection", "title": "Frothy: Send Selection",   "icon": "$(run-all)" },
       { "command": "frothy.runLast",       "title": "Frothy: Run Last Form",    "icon": "$(debug-rerun)" },
       { "command": "frothy.sendFile",      "title": "Frothy: Send File",        "icon": "$(file-code)" },
+      { "command": "frothy.openExample",   "title": "Frothy: Open Example",     "icon": "$(book)" },
       { "command": "frothy.see",           "title": "Frothy: See Word",         "icon": "$(symbol-field)" },
       { "command": "frothy.words",         "title": "Frothy: List Words",       "icon": "$(list-unordered)" },
       { "command": "frothy.status",        "title": "Frothy: Show Status",     "icon": "$(info)" },
@@ -85,6 +86,7 @@
         { "command": "frothy.sendSelection", "when": "editorLangId == frothy" },
         { "command": "frothy.runLast",       "when": "frothy.hasLastForm" },
         { "command": "frothy.sendFile",      "when": "editorLangId == frothy && frothy.isConnected" },
+        { "command": "frothy.openExample" },
         { "command": "frothy.see",           "when": "editorLangId == frothy" },
         { "command": "frothy.disconnect",    "when": "frothy.isConnected" },
         { "command": "frothy.interrupt",     "when": "frothy.isConnected" }

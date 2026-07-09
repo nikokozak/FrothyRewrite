@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as proc from './connect';
+import { FROTHY_EXAMPLES } from './examples.generated';
 import { appendLine, show } from './output';
 
 // Frothy identifiers may contain `.`, `?`, `_`, `-`, and `$name` constants
@@ -112,6 +113,23 @@ export async function sendFile(): Promise<void> {
   show();
   appendLine(`> [send file: ${basename} · ${lineCount} lines]`);
   if (!proc.writeSourceBlock(doc.getText(), path)) notConnectedHint();
+}
+
+export async function openExample(): Promise<void> {
+  const pick = await vscode.window.showQuickPick(
+    FROTHY_EXAMPLES.map((example) => ({
+      label: example.title,
+      description: example.name,
+      detail: example.tags.join(' '),
+      example,
+    })),
+  );
+  if (!pick) return;
+  const doc = await vscode.workspace.openTextDocument({
+    language: 'frothy',
+    content: pick.example.source,
+  });
+  await vscode.window.showTextDocument(doc);
 }
 
 // `see <word>` for the symbol under the cursor (or the active selection).

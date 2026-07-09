@@ -34,6 +34,7 @@ jobs:
       - run: make test-esp32-plain-host-transcript
       - run: make test-lib-e2e
       - run: make examples
+      - run: make check-examples-manifest
 
       - name: Go tests
         run: |
