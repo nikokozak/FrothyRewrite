@@ -1,3 +1,5 @@
+SHELL := /usr/bin/env bash
+
 BOARD ?= host
 
 BOARD_DIR := boards/$(BOARD)
@@ -409,14 +411,14 @@ wipe-nvs:
 		printf 'BOARD_PORT is required, for example BOARD_PORT=/dev/cu.usbserial-0001\n'; \
 		exit 2; \
 	fi
-	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null 2>&1 && esptool.py --chip esp32 --port "$(BOARD_PORT)" erase_region 0x9000 0x6000
+	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && esptool.py --chip esp32 --port "$(BOARD_PORT)" erase_region 0x9000 0x6000
 
 # Merged .bin for the web flasher (T13b D11). Local esptool.py is
 # v4.12.dev1 which only accepts merge_bin (underscore).
 web-bins:
 	$(MAKE) BOARD=esp32_devkit_v1 PROFILE=esp32_plain artifacts
 	@mkdir -p web/flash/firmware
-	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null 2>&1 && esptool.py --chip esp32 merge_bin \
+	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && esptool.py --chip esp32 merge_bin \
 		-o web/flash/firmware/esp32_devkit_v1-esp32_plain.bin \
 		0x1000 build/esp32_devkit_v1/bootloader/bootloader.bin \
 		0x8000 build/esp32_devkit_v1/partition_table/partition-table.bin \
