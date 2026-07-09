@@ -12,6 +12,7 @@
 #include "event.h"
 #include "handle.h"
 #include "instruction.h"
+#include "lib_native.h"
 #include "native.h"
 #include "object.h"
 #if FR_FEATURE_PERSISTENCE
@@ -1056,13 +1057,14 @@ static fr_err_t fr_repl_write_word(const fr_repl_writer_t *writer,
 static fr_err_t fr_repl_write_words(fr_runtime_t *runtime,
                                     const fr_repl_writer_t *writer) {
   uint16_t base_word_count = fr_base_slot_count();
+  uint16_t lib_word_count = fr_lib_native_record_count();
   uint16_t overlay_word_count = fr_slot_project_name_count(runtime);
   bool wrote_word = false;
 
   if (runtime == NULL || writer == NULL) {
     return FR_ERR_INVALID;
   }
-  if (base_word_count == 0 && overlay_word_count == 0) {
+  if (base_word_count == 0 && lib_word_count == 0 && overlay_word_count == 0) {
     return FR_ERR_UNSUPPORTED;
   }
 
@@ -1089,6 +1091,19 @@ static fr_err_t fr_repl_write_words(fr_runtime_t *runtime,
     FR_TRY(fr_repl_write_word(writer, &wrote_word, name));
   }
 #endif
+  for (uint16_t i = 0; i < lib_word_count; i++) {
+    fr_slot_id_t slot_id = 0;
+    const char *name = NULL;
+
+    if (fr_lib_native_record_slot_id_at(i, &slot_id) != FR_OK) {
+      return FR_ERR_INVALID;
+    }
+    name = fr_lib_native_slot_name(slot_id);
+    if (name == NULL) {
+      return FR_ERR_INVALID;
+    }
+    FR_TRY(fr_repl_write_word(writer, &wrote_word, name));
+  }
   for (uint16_t i = 0; i < overlay_word_count; i++) {
     const char *name = fr_slot_project_name_at(runtime, i);
 

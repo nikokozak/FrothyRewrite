@@ -1,0 +1,5 @@
+/build/
+/frothy
+/test/test
+/test/test-host-normal
+/test/fixtures/projects/*/.frothy/

@@ -10,10 +10,13 @@
 #include "base_image.h"
 #include "lib_native.h"
 #include "profile.h"
+#include "repl.h"
 #include "runtime.h"
 #include "slot.h"
 
 #include "unity/unity.h"
+
+#include <string.h>
 
 static fr_runtime_t s_runtime;
 
@@ -61,6 +64,22 @@ static void test_names_survive_runtime_reset(void) {
                     fr_slot_id_for_name(&s_runtime, "libtest.one", &after));
   TEST_ASSERT_EQUAL(before, after);
   TEST_ASSERT_EQUAL_STRING("libtest.one", fr_slot_name(&s_runtime, after));
+}
+
+static void assert_words_include_libtest_one(void) {
+  char out[2048];
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "words", out, sizeof(out)));
+  TEST_ASSERT_NOT_NULL(strstr(out, "libtest.one"));
+}
+
+static void test_words_list_lib_native_after_runtime_reset(void) {
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  assert_words_include_libtest_one();
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_runtime_reset(&s_runtime));
+  assert_words_include_libtest_one();
 }
 
 /* R8 review: a second fr_base_image_install in the same process must allocate
@@ -135,6 +154,7 @@ int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_name_resolves_after_install);
   RUN_TEST(test_names_survive_runtime_reset);
+  RUN_TEST(test_words_list_lib_native_after_runtime_reset);
   RUN_TEST(test_repeated_install_same_slot);
   RUN_TEST(test_profile_hash_tracks_lib_native_table);
   return UNITY_END();
