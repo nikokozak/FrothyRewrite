@@ -9,6 +9,7 @@
 
 #include "base_image.h"
 #include "lib_native.h"
+#include "profile.h"
 #include "runtime.h"
 #include "slot.h"
 
@@ -81,10 +82,60 @@ static void test_repeated_install_same_slot(void) {
   TEST_ASSERT_EQUAL(first, second);
 }
 
+static void test_profile_hash_tracks_lib_native_table(void) {
+  const fr_lib_native_def_t base[] = {
+      {"alpha", lib_native_noop, 1},
+      {"beta", lib_native_noop, 2},
+  };
+  const fr_lib_native_def_t same[] = {
+      {"alpha", lib_native_noop, 1},
+      {"beta", lib_native_noop, 2},
+  };
+  const fr_lib_native_def_t renamed[] = {
+      {"alpha", lib_native_noop, 1},
+      {"gamma", lib_native_noop, 2},
+  };
+  const fr_lib_native_def_t arity_changed[] = {
+      {"alpha", lib_native_noop, 1},
+      {"beta", lib_native_noop, 3},
+  };
+  const fr_lib_native_def_t reordered[] = {
+      {"beta", lib_native_noop, 2},
+      {"alpha", lib_native_noop, 1},
+  };
+  /* Isolates the name terminator: without it, 0x63 == 'c' makes both tables
+     hash as a,b,c,c,1. */
+  const fr_lib_native_def_t boundary_left[] = {
+      {"ab", lib_native_noop, 0x63},
+      {"c", lib_native_noop, 1},
+  };
+  const fr_lib_native_def_t boundary_right[] = {
+      {"abc", lib_native_noop, 0x63},
+      {"", lib_native_noop, 1},
+  };
+  const uint32_t base_hash =
+      fr_profile_debug_hash_for_lib_natives(base, 2);
+
+  TEST_ASSERT_EQUAL_HEX32(base_hash,
+                          fr_profile_debug_hash_for_lib_natives(same, 2));
+  TEST_ASSERT_NOT_EQUAL_HEX32(
+      base_hash, fr_profile_debug_hash_for_lib_natives(renamed, 2));
+  TEST_ASSERT_NOT_EQUAL_HEX32(
+      base_hash, fr_profile_debug_hash_for_lib_natives(arity_changed, 2));
+  TEST_ASSERT_NOT_EQUAL_HEX32(
+      base_hash, fr_profile_debug_hash_for_lib_natives(reordered, 2));
+  TEST_ASSERT_NOT_EQUAL_HEX32(base_hash,
+                              fr_profile_debug_hash_for_lib_natives(base, 1));
+  TEST_ASSERT_NOT_EQUAL_HEX32(
+      fr_profile_debug_hash_for_lib_natives(boundary_left, 2),
+      fr_profile_debug_hash_for_lib_natives(boundary_right, 2));
+}
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_name_resolves_after_install);
   RUN_TEST(test_names_survive_runtime_reset);
   RUN_TEST(test_repeated_install_same_slot);
+  RUN_TEST(test_profile_hash_tracks_lib_native_table);
   return UNITY_END();
 }
