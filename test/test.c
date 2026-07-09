@@ -877,9 +877,15 @@ static void test_persist_fake_non_xip_code_reader(void) {
   fr_runtime_t direct;
   fr_runtime_t fake;
   fr_slot_id_t top_slot = 0;
+  fr_slot_id_t direct_depth_slot = 0;
+  fr_slot_id_t fake_depth_slot = 0;
   fr_tagged_t tagged = 0;
   fr_code_object_id_t top_code_id = 0;
+  fr_code_object_id_t direct_depth_code_id = 0;
+  fr_code_object_id_t fake_depth_code_id = 0;
   fr_instruction_stream_t top_view;
+  fr_diagnostic_t direct_diag = {0};
+  fr_diagnostic_t fake_diag = {0};
   char out[256];
   char direct_top[64];
   char direct_depth[64];
@@ -945,6 +951,32 @@ static void test_persist_fake_non_xip_code_reader(void) {
             strcmp(fake_depth, "5\nok\n") == 0);
   CHECK("nonxip parity top", strcmp(direct_top, fake_top) == 0);
   CHECK("nonxip parity depth", strcmp(direct_depth, fake_depth) == 0);
+  CHECK("nonxip direct depth code id",
+        fr_slot_id_for_name(&direct, "depth", &direct_depth_slot) == FR_OK &&
+            fr_slot_read(&direct, direct_depth_slot, &tagged) == FR_OK &&
+            fr_tagged_decode_code_object_id(tagged, &direct_depth_code_id) ==
+                FR_OK);
+  direct.diag = &direct_diag;
+  CHECK("nonxip direct depth arity diagnostic",
+        fr_vm_run_code_object(&direct, direct_depth_code_id, &tagged) ==
+                FR_ERR_INVALID &&
+            direct_diag.kind == FR_DIAG_ARITY && direct_diag.expected == 1 &&
+            direct_diag.got == 0);
+  direct.diag = NULL;
+  CHECK("nonxip reader depth code id",
+        fr_slot_id_for_name(&fake, "depth", &fake_depth_slot) == FR_OK &&
+            fr_slot_read(&fake, fake_depth_slot, &tagged) == FR_OK &&
+            fr_tagged_decode_code_object_id(tagged, &fake_depth_code_id) ==
+                FR_OK);
+  fake.diag = &fake_diag;
+  CHECK("nonxip reader depth arity diagnostic parity",
+        fr_vm_run_code_object(&fake, fake_depth_code_id, &tagged) ==
+                FR_ERR_INVALID &&
+            fake_diag.kind == direct_diag.kind &&
+            fake_diag.message_id == direct_diag.message_id &&
+            fake_diag.expected == direct_diag.expected &&
+            fake_diag.got == direct_diag.got);
+  fake.diag = NULL;
   CHECK("nonxip source see uses reader scratch",
         fr_repl_eval_line(&fake, "see tail", out, sizeof(out)) == FR_OK &&
             strcmp(out, "overlay code\nto tail [ leaf: ]\nok\n") == 0);
@@ -4787,6 +4819,47 @@ static void test_event_safe_point_fires_when_active(void) {
   CHECK("safe-point active binding survives",
         runtime.events.active_count == 1 &&
             entry->kind == FR_EVENT_KIND_GPIO_RISING && !entry->pending);
+}
+
+static void test_event_handler_fault_keeps_foreground_diag_empty(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t body_view;
+  fr_instruction_stream_t run_view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *entry = NULL;
+  fr_tagged_t result = 0;
+  fr_diagnostic_t diag = {0};
+  uint8_t body_bytes[] = {0x00, 0x00, FR_OP_PUSH_TRUE, FR_TEST_PUSH_INT(1),
+                          FR_OP_ADD_INT, FR_OP_RETURN};
+  uint8_t run_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(1), FR_OP_DROP,
+                         FR_OP_RETURN};
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(run_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+
+  CHECK("handler diag runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("handler diag body view",
+        fr_instruction_stream_init(&body_view, body_bytes,
+                                   sizeof(body_bytes)) == FR_OK);
+  CHECK("handler diag install body",
+        fr_code_install(&runtime, &body_view, NULL, 0, &body_id) == FR_OK);
+  CHECK("handler diag run view",
+        fr_instruction_stream_init(&run_view, run_bytes, sizeof(run_bytes)) ==
+            FR_OK);
+  CHECK("handler diag register event",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("handler diag post candidate",
+        fr_platform_event_post_test_candidate(0, entry->generation, 10) ==
+            FR_OK);
+
+  runtime.diag = &diag;
+  CHECK("handler diag foreground stays empty",
+        fr_vm_run_instruction_stream(&runtime, &run_view, &result) ==
+                FR_ERR_TYPE &&
+            diag.kind == FR_DIAG_NONE);
+  runtime.diag = NULL;
 }
 
 static void test_event_coalescing(void) {
@@ -12908,6 +12981,56 @@ static void test_repl_error_diagnostics(void) {
             strstr(out, "> error: not found (7)\n") == out &&
             test_error_line_matches_wire_shape(out));
 }
+
+#if FR_FEATURE_PERSISTENCE && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&               \
+    FR_HOST_TEST_HELPERS && FR_PROFILE_MAX_OVERLAY_NAMES >= 2
+static void test_repl_diagnostic_suggests_restored_non_xip_name(void) {
+  fr_runtime_t saved;
+  fr_runtime_t restored;
+  char out[1024] = {0};
+  const char *typo_lines[] = {"countr:"};
+
+  fr_platform_persist_clear();
+  fr_host_persist_debug_direct_code_pointers(true);
+  CHECK("restored suggestion base",
+        fr_base_image_install(&saved) == FR_OK);
+  CHECK("restored suggestion define counter",
+        fr_repl_eval_line(&saved, "counter is fn [ 42 ]", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("restored suggestion define neighbor",
+        fr_repl_eval_line(&saved, "reading is fn [ 7 ]", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("restored suggestion save", fr_persist_save(&saved) == FR_OK);
+
+  fr_host_persist_debug_direct_code_pointers(false);
+  CHECK("restored suggestion fake nonxip restore",
+        fr_base_image_install(&restored) == FR_OK &&
+            fr_persist_restore(&restored) == FR_OK);
+  CHECK("restored suggestion counter callable",
+        fr_repl_eval_line(&restored, "counter:", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "42\nok\n") == 0);
+  CHECK("restored suggestion words lists counter",
+        fr_repl_eval_line(&restored, "words", out, (uint16_t)sizeof(out)) ==
+                FR_OK &&
+            strstr(out, "counter") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic suggests restored nonxip word",
+        test_repl_run_lines(
+            &restored, typo_lines,
+            (uint8_t)(sizeof(typo_lines) / sizeof(typo_lines[0])), out,
+            (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: countr\n") != NULL &&
+            strstr(out, "help: did you mean \"counter\"?\n") != NULL &&
+            strstr(out, "did you mean \"reading\"") == NULL);
+  fr_host_persist_debug_direct_code_pointers(true);
+}
+#endif
 #endif
 
 #if FR_FEATURE_COMPILER && FR_FEATURE_INTROSPECTION &&                         \
@@ -13711,6 +13834,7 @@ int main(void) {
   test_wipe_user_clears_events();
   test_event_drain_dispatch();
   test_event_safe_point_fires_when_active();
+  test_event_handler_fault_keeps_foreground_diag_empty();
   test_event_coalescing();
   test_event_debounce_drops_within_window();
   test_event_debounce_first_fire_at_zero();
@@ -13826,6 +13950,10 @@ int main(void) {
   test_err_name();
 #if FR_FEATURE_COMPILER
   test_repl_error_diagnostics();
+#if FR_FEATURE_PERSISTENCE && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&               \
+    FR_HOST_TEST_HELPERS && FR_PROFILE_MAX_OVERLAY_NAMES >= 2
+  test_repl_diagnostic_suggests_restored_non_xip_name();
+#endif
 #endif
   test_repl_pump();
   test_repl_transcript();

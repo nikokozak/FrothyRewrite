@@ -1405,6 +1405,7 @@ static fr_err_t fr_vm_reader_call_slot_arg(fr_runtime_t *runtime,
   FR_TRY(fr_vm_reader_read_call_slot_arg_operands(
       runtime, code_object_id, length, state->ip, &slot_id, &arg_count));
   if (state->depth < arg_count) {
+    fr_vm_note_too_few_args(runtime, arg_count, state->depth);
     return FR_ERR_UNDERFLOW;
   }
   for (uint8_t i = 0; i < arg_count; i++) {
@@ -1433,13 +1434,15 @@ static fr_err_t fr_vm_reader_call_native_slot(
   FR_TRY(fr_tagged_decode_native_id(slot_tagged, &native_id));
   FR_TRY(fr_native_get(runtime, native_id, &entry));
   if (state->depth < entry->arity) {
+    fr_vm_note_too_few_args(runtime, entry->arity, state->depth);
     return FR_ERR_UNDERFLOW;
   }
   for (uint8_t i = 0; i < entry->arity; i++) {
     FR_TRY(fr_vm_pop(runtime, state, &args[entry->arity - 1 - i]));
   }
 
-  FR_TRY(fr_native_call(runtime, entry, args, entry->arity, &result));
+  FR_TRY(fr_native_call_named(runtime, entry, fr_slot_name(runtime, slot_id),
+                              args, entry->arity, &result));
 
   state->ip += 3;
   return fr_vm_push(runtime, state, result);
@@ -1485,6 +1488,7 @@ static fr_err_t fr_vm_reader_repeat_begin(fr_runtime_t *runtime,
   FR_TRY(fr_vm_reader_read_jump_operand(runtime, code_object_id, length,
                                         state->ip, &target));
   if (state->depth == 0) {
+    fr_vm_note_stack_underflow(runtime);
     return FR_ERR_UNDERFLOW;
   }
 
@@ -1513,6 +1517,7 @@ static fr_err_t fr_vm_reader_repeat_next(fr_runtime_t *runtime,
   FR_TRY(fr_vm_reader_read_jump_operand(runtime, code_object_id, length,
                                         state->ip, &target));
   if (state->depth == 0) {
+    fr_vm_note_stack_underflow(runtime);
     return FR_ERR_UNDERFLOW;
   }
 
@@ -1906,6 +1911,7 @@ static fr_err_t fr_vm_run_reader_code_object_depth(
   uint16_t poll_countdown = FR_VM_POLL_SAFE_POINTS;
 
   if (call_depth >= FR_PROFILE_MAX_CALL_DEPTH) {
+    fr_vm_note_call_depth(runtime);
     return FR_ERR_OVERFLOW;
   }
   if (runtime == NULL || out_tagged == NULL) {
@@ -1917,6 +1923,12 @@ static fr_err_t fr_vm_run_reader_code_object_depth(
 
   FR_TRY(fr_vm_reader_read_header(runtime, code_object_id, length, &header));
   if (header.arity != arg_count) {
+    if (arg_count < header.arity) {
+      fr_vm_note_too_few_args(runtime, header.arity, arg_count);
+    } else {
+      fr_vm_note_message(runtime, FR_DIAG_ARITY, FR_DIAG_MSG_NONE,
+                         header.arity, arg_count);
+    }
     return FR_ERR_INVALID;
   }
 

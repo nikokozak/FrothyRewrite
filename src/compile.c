@@ -314,32 +314,31 @@ static bool fr_compile_name_is_proper_prefix(fr_parse_span_t typed,
          memcmp(typed.start, candidate, typed.length) == 0;
 }
 
-static bool fr_compile_project_name_is_callable(
-    const fr_compile_context_t *ctx, const char *name) {
-  fr_slot_id_t slot_id = 0;
+static bool fr_compile_slot_is_callable(const fr_compile_context_t *ctx,
+                                        fr_slot_id_t slot_id) {
   fr_tagged_t tagged = 0;
   fr_native_id_t native_id = 0;
   fr_code_object_id_t code_object_id = 0;
 
-  if (ctx == NULL || ctx->runtime == NULL || name == NULL) {
+  if (ctx == NULL || ctx->runtime == NULL ||
+      slot_id >= fr_slot_count(ctx->runtime)) {
     return false;
   }
-  if (fr_slot_id_for_name(ctx->runtime, name, &slot_id) != FR_OK ||
-      fr_slot_read(ctx->runtime, slot_id, &tagged) != FR_OK) {
+  if (fr_slot_read(ctx->runtime, slot_id, &tagged) != FR_OK) {
     return false;
   }
   return fr_tagged_decode_native_id(tagged, &native_id) == FR_OK ||
          fr_tagged_decode_code_object_id(tagged, &code_object_id) == FR_OK;
 }
 
-static void fr_compile_consider_suggestion(fr_parse_span_t typed,
-                                           const char *candidate,
-                                           fr_compile_suggestion_scan_t *scan) {
+static void fr_compile_consider_suggestion_view(
+    fr_parse_span_t typed, const char *candidate, uint16_t candidate_len,
+    fr_compile_suggestion_scan_t *scan) {
   enum { FR_COMPILE_SUGGEST_MAX_DISTANCE = 2 };
-  uint16_t candidate_len = 0;
   uint8_t distance = 0;
 
-  if (scan == NULL || !fr_compile_candidate_length(candidate, &candidate_len)) {
+  if (scan == NULL || candidate == NULL || candidate_len == 0 ||
+      candidate_len > FR_PARSE_MAX_TOKEN_BYTES) {
     return;
   }
   if (fr_compile_name_is_proper_prefix(typed, candidate, candidate_len)) {
@@ -364,6 +363,17 @@ static void fr_compile_consider_suggestion(fr_parse_span_t typed,
   } else if (distance < scan->second_distance) {
     scan->second_distance = distance;
   }
+}
+
+static void fr_compile_consider_suggestion(fr_parse_span_t typed,
+                                           const char *candidate,
+                                           fr_compile_suggestion_scan_t *scan) {
+  uint16_t candidate_len = 0;
+
+  if (!fr_compile_candidate_length(candidate, &candidate_len)) {
+    return;
+  }
+  fr_compile_consider_suggestion_view(typed, candidate, candidate_len, scan);
 }
 
 static void fr_compile_note_name_suggestion(const fr_compile_context_t *ctx,
@@ -400,16 +410,23 @@ static void fr_compile_note_name_suggestion(const fr_compile_context_t *ctx,
 #endif
 
   if (ctx->runtime != NULL) {
-    uint16_t project_name_count = fr_slot_project_name_count(ctx->runtime);
+    fr_slot_id_t first_project_id = fr_slot_first_project_id();
+    fr_slot_id_t slot_count = fr_slot_count(ctx->runtime);
 
-    for (uint16_t i = 0; i < project_name_count; i++) {
-      const char *project_name = fr_slot_project_name_at(ctx->runtime, i);
+    for (fr_slot_id_t slot_id = first_project_id; slot_id < slot_count;
+         slot_id++) {
+      const char *project_name = NULL;
+      uint8_t project_name_length = 0;
 
-      if (call_position &&
-          !fr_compile_project_name_is_callable(ctx, project_name)) {
+      if (fr_slot_name_view(ctx->runtime, slot_id, &project_name,
+                            &project_name_length) != FR_OK) {
         continue;
       }
-      fr_compile_consider_suggestion(name, project_name, &scan);
+      if (call_position && !fr_compile_slot_is_callable(ctx, slot_id)) {
+        continue;
+      }
+      fr_compile_consider_suggestion_view(name, project_name,
+                                          project_name_length, &scan);
     }
   }
 
