@@ -20,6 +20,7 @@ type Pending = {
 
 class Connector implements ReplConnector {
   private readonly subscribers = new Set<(line: string) => void>();
+  private readonly closeSubscribers = new Set<() => void>();
   private readonly lines: string[] = [];
   private readonly decoder = new TextDecoder();
   private readonly encoder = new TextEncoder();
@@ -28,6 +29,7 @@ class Connector implements ReplConnector {
   private queue: Promise<unknown> = Promise.resolve();
   private applyBytes: number | null = null;
   private closed = false;
+  private closeNotified = false;
   private readonly transport: Transport;
 
   constructor(transport: Transport) {
@@ -41,15 +43,18 @@ class Connector implements ReplConnector {
         if (this.closed) break;
         this.feed(chunk);
       }
-      const wasClosed = this.closed;
-      this.closed = true; // read ended: no pump left to settle future sends
-      if (!wasClosed) {
-        this.failPending(new TransportError("transport closed while awaiting response"));
-      }
+      this.markClosed(new TransportError("transport closed while awaiting response"));
     } catch (err) {
-      this.closed = true;
-      this.failPending(new TransportError("transport read failed", { cause: err }));
+      this.markClosed(new TransportError("transport read failed", { cause: err }));
     }
+  }
+
+  private markClosed(pendingError: Error): boolean {
+    if (this.closed) return false;
+    this.closed = true;
+    this.failPending(pendingError);
+    this.notifyClosed();
+    return true;
   }
 
   private feed(chunk: Uint8Array): void {
@@ -146,6 +151,17 @@ class Connector implements ReplConnector {
     };
   }
 
+  onClose(cb: () => void): Unsubscribe {
+    if (this.closed) {
+      cb();
+      return () => undefined;
+    }
+    this.closeSubscribers.add(cb);
+    return () => {
+      this.closeSubscribers.delete(cb);
+    };
+  }
+
   async status(): Promise<Status> {
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -188,12 +204,16 @@ class Connector implements ReplConnector {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    // Settle any in-flight request now: the read pump may be parked in read()
-    // and will not run failPending once close() has set `closed`.
-    this.failPending(new TransportError("connector closed while awaiting response"));
+    if (!this.markClosed(new TransportError("connector closed while awaiting response"))) return;
     await this.transport.close();
+  }
+
+  private notifyClosed(): void {
+    if (this.closeNotified) return;
+    this.closeNotified = true;
+    const callbacks = [...this.closeSubscribers];
+    this.closeSubscribers.clear();
+    for (const cb of callbacks) cb();
   }
 }
 

@@ -16,8 +16,17 @@
   ],
   "repository": {
     "comment": {
-      "name": "comment.line.double-slash.frothy",
-      "match": "//.*$"
+      "patterns": [
+        {
+          "name": "comment.line.double-dash.frothy",
+          "match": "(?<![^\\s\\[(:;,])--.*$"
+        },
+        {
+          "name": "comment.block.frothy",
+          "begin": "(?<![^\\s\\[(:;,])-\\*",
+          "end": "\\*-"
+        }
+      ]
     },
     "string": {
       "name": "string.quoted.double.frothy",
@@ -33,7 +42,7 @@
     },
     "keyword": {
       "name": "keyword.control.frothy",
-      "match": "(?<![A-Za-z0-9_.?\\-$])(to|is|fn|with|set|if|else|repeat|forever|on|every|boot|rising|falling|changes)(?![A-Za-z0-9_.?\\-$])"
+      "match": "(?<![A-Za-z0-9_.?\\-$])(after|and|as|attempt|boot|cancel|cells|changes|debounce|else|every|falling|fn|forever|here|if|is|not|on|or|record|repeat|rescue|rising|set|to|unless|when|while|with)(?![A-Za-z0-9_.?\\-$])"
     },
     "repl-command": {
       "name": "keyword.other.repl.frothy",
@@ -41,7 +50,7 @@
     },
     "boolean": {
       "name": "constant.language.boolean.frothy",
-      "match": "(?<![A-Za-z0-9_.?\\-$])(true|false)(?![A-Za-z0-9_.?\\-$])"
+      "match": "(?<![A-Za-z0-9_.?\\-$])(true|false|nil)(?![A-Za-z0-9_.?\\-$])"
     },
     "constant": {
       "name": "variable.other.constant.frothy",

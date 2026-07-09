@@ -26,6 +26,8 @@ export type Unsubscribe = () => void;
 export interface ReplConnector {
   sendLine(line: string): Promise<Response>;
   onLine(cb: (line: string) => void): Unsubscribe;
+  /** Fires once when the connector becomes closed, whether by read end/failure or close(). */
+  onClose(cb: () => void): Unsubscribe;
   status(): Promise<Status>;
   apply(bytes: Uint8Array): Promise<Response>;
   run(bytes: Uint8Array): Promise<Response>;
