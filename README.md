@@ -1,5 +1,7 @@
 # Frothy
 
+[![CI](https://github.com/nikokozak/FrothyRewrite/actions/workflows/ci.yml/badge.svg)](https://github.com/nikokozak/FrothyRewrite/actions/workflows/ci.yml)
+
 Frothy is a small language for live-coding microcontrollers over a serial
 line. You define words and send them to the board; it evaluates them and
 answers back — no compile-flash-reboot loop, no toolchain to install, no
