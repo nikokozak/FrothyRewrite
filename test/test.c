@@ -877,9 +877,15 @@ static void test_persist_fake_non_xip_code_reader(void) {
   fr_runtime_t direct;
   fr_runtime_t fake;
   fr_slot_id_t top_slot = 0;
+  fr_slot_id_t direct_depth_slot = 0;
+  fr_slot_id_t fake_depth_slot = 0;
   fr_tagged_t tagged = 0;
   fr_code_object_id_t top_code_id = 0;
+  fr_code_object_id_t direct_depth_code_id = 0;
+  fr_code_object_id_t fake_depth_code_id = 0;
   fr_instruction_stream_t top_view;
+  fr_diagnostic_t direct_diag = {0};
+  fr_diagnostic_t fake_diag = {0};
   char out[256];
   char direct_top[64];
   char direct_depth[64];
@@ -945,6 +951,32 @@ static void test_persist_fake_non_xip_code_reader(void) {
             strcmp(fake_depth, "5\nok\n") == 0);
   CHECK("nonxip parity top", strcmp(direct_top, fake_top) == 0);
   CHECK("nonxip parity depth", strcmp(direct_depth, fake_depth) == 0);
+  CHECK("nonxip direct depth code id",
+        fr_slot_id_for_name(&direct, "depth", &direct_depth_slot) == FR_OK &&
+            fr_slot_read(&direct, direct_depth_slot, &tagged) == FR_OK &&
+            fr_tagged_decode_code_object_id(tagged, &direct_depth_code_id) ==
+                FR_OK);
+  direct.diag = &direct_diag;
+  CHECK("nonxip direct depth arity diagnostic",
+        fr_vm_run_code_object(&direct, direct_depth_code_id, &tagged) ==
+                FR_ERR_INVALID &&
+            direct_diag.kind == FR_DIAG_ARITY && direct_diag.expected == 1 &&
+            direct_diag.got == 0);
+  direct.diag = NULL;
+  CHECK("nonxip reader depth code id",
+        fr_slot_id_for_name(&fake, "depth", &fake_depth_slot) == FR_OK &&
+            fr_slot_read(&fake, fake_depth_slot, &tagged) == FR_OK &&
+            fr_tagged_decode_code_object_id(tagged, &fake_depth_code_id) ==
+                FR_OK);
+  fake.diag = &fake_diag;
+  CHECK("nonxip reader depth arity diagnostic parity",
+        fr_vm_run_code_object(&fake, fake_depth_code_id, &tagged) ==
+                FR_ERR_INVALID &&
+            fake_diag.kind == direct_diag.kind &&
+            fake_diag.message_id == direct_diag.message_id &&
+            fake_diag.expected == direct_diag.expected &&
+            fake_diag.got == direct_diag.got);
+  fake.diag = NULL;
   CHECK("nonxip source see uses reader scratch",
         fr_repl_eval_line(&fake, "see tail", out, sizeof(out)) == FR_OK &&
             strcmp(out, "overlay code\nto tail [ leaf: ]\nok\n") == 0);
@@ -4789,6 +4821,47 @@ static void test_event_safe_point_fires_when_active(void) {
             entry->kind == FR_EVENT_KIND_GPIO_RISING && !entry->pending);
 }
 
+static void test_event_handler_fault_keeps_foreground_diag_empty(void) {
+  fr_runtime_t runtime;
+  fr_instruction_stream_t body_view;
+  fr_instruction_stream_t run_view;
+  fr_code_object_id_t body_id = 0;
+  fr_event_binding_t *entry = NULL;
+  fr_tagged_t result = 0;
+  fr_diagnostic_t diag = {0};
+  uint8_t body_bytes[] = {0x00, 0x00, FR_OP_PUSH_TRUE, FR_TEST_PUSH_INT(1),
+                          FR_OP_ADD_INT, FR_OP_RETURN};
+  uint8_t run_bytes[] = {0x00, 0x00, FR_TEST_PUSH_INT(1), FR_OP_DROP,
+                         FR_OP_RETURN};
+
+  write_instruction_header(body_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+  write_instruction_header(run_bytes, FR_INSTRUCTION_MIN_HEADER_SIZE);
+
+  CHECK("handler diag runtime init", fr_runtime_init(&runtime) == FR_OK);
+  CHECK("handler diag body view",
+        fr_instruction_stream_init(&body_view, body_bytes,
+                                   sizeof(body_bytes)) == FR_OK);
+  CHECK("handler diag install body",
+        fr_code_install(&runtime, &body_view, NULL, 0, &body_id) == FR_OK);
+  CHECK("handler diag run view",
+        fr_instruction_stream_init(&run_view, run_bytes, sizeof(run_bytes)) ==
+            FR_OK);
+  CHECK("handler diag register event",
+        fr_event_register(&runtime, FR_EVENT_KIND_GPIO_RISING, 0, 0, body_id) ==
+            FR_OK);
+  entry = &runtime.events.entries[0];
+  CHECK("handler diag post candidate",
+        fr_platform_event_post_test_candidate(0, entry->generation, 10) ==
+            FR_OK);
+
+  runtime.diag = &diag;
+  CHECK("handler diag foreground stays empty",
+        fr_vm_run_instruction_stream(&runtime, &run_view, &result) ==
+                FR_ERR_TYPE &&
+            diag.kind == FR_DIAG_NONE);
+  runtime.diag = NULL;
+}
+
 static void test_event_coalescing(void) {
   fr_runtime_t runtime;
   fr_instruction_stream_t view;
@@ -5293,9 +5366,16 @@ static void test_event_compile_cancel_form(void) {
 static void test_event_compile_rejects_when_disabled(void) {
   fr_runtime_t runtime;
   fr_compile_overlay_update_t update;
+  fr_diagnostic_t diag = {0};
 
   CHECK("event reject base image",
         fr_base_image_install(&runtime) == FR_OK);
+  CHECK("event reject diagnostic message",
+        fr_compile_overlay_update_for_runtime_with_diagnostic(
+            &runtime, "boot is fn [ every 50 [ 1 ] ]", &update, &diag) ==
+                FR_ERR_UNSUPPORTED &&
+            diag.kind != FR_DIAG_NONE &&
+            diag.message_id == FR_DIAG_MSG_COMPILE_EVENTS_DISABLED);
   CHECK("event reject on form",
         fr_compile_overlay_update_for_runtime(
             &runtime, "boot is fn [ on 0 rising [ 1 ] ]", &update) ==
@@ -12326,10 +12406,61 @@ static bool test_error_line_equals(const char *out, const char *expected) {
          memcmp(line, expected, strlen(expected)) == 0;
 }
 
+static bool test_error_has_no_caret(const char *out) {
+  return out != NULL && strchr(out, '^') == NULL;
+}
+
 static void test_repl_error_diagnostics(void) {
   fr_runtime_t runtime;
   char out[512] = {0};
   const char *lines[] = {"1 + nope"};
+#if FR_FEATURE_TEXT && FR_FEATURE_REPL
+  const char *base_suggestion_lines[] = {"print: text.from"};
+  const char *text_prefix_lines[] = {"print: text."};
+  const char *text_equals_prefix_lines[] = {"print: text.e"};
+#endif
+  const char *noncallable_base_call_lines[] = {"onn:"};
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  const char *user_suggestion_lines[] = {
+      "increment is fn with n [ n + 1 ]",
+      "incremnt",
+  };
+  const char *user_value_call_typo_lines[] = {
+      "answer is 42",
+      "answr:",
+  };
+  const char *near_tie_lines[] = {
+      "foa is 1",
+      "fob is 2",
+      "foo",
+  };
+  const char *arity_one_lines[] = {
+      "add2 is fn with a, b [ a + b ]",
+      "add2: 1",
+  };
+  const char *arity_three_lines[] = {
+      "add2 is fn with a, b [ a + b ]",
+      "add2: 1, 2, 3",
+  };
+  const char *param_shadow_lines[] = {
+      "f is fn with x [ here x is 1 ; x ]",
+  };
+#endif
+#if FR_FEATURE_RECORDS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  const char *record_type_lines[] = {
+      "Point is 1",
+      "record Point [ x ]",
+  };
+#endif
+  const char *no_suggestion_lines[] = {"zzzqqq"};
+#if FR_FEATURE_EVENTS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  const char *event_param_lines[] = {"f is fn with x [ every 1 [ x ] ]"};
+  const char *event_global_lines[] = {
+      "x is 1",
+      "f is fn [ every 1 [ x ] ]",
+  };
+  const char *event_missing_lines[] = {"f is fn [ every 1 [ xyzzy ] ]"};
+#endif
   const char *stale_probe_lines[] = {"to + 1"};
   const char *eof_lines[] = {"1 +"};
   const char *missing_colon_lines[] = {"print 1"};
@@ -12349,9 +12480,31 @@ static void test_repl_error_diagnostics(void) {
   const char *cell_lines[] = {"missing[0]"};
 #endif
   const char *set_target_lines[] = {"set missing to 1"};
+  const char *native_type_lines[] = {"gpio.write: 2, true"};
+  const char *arith_type_lines[] = {"true + 1"};
+#if FR_FEATURE_CELLS
+  const char *cell_oob_lines[] = {
+      "c is cells(4)",
+      "c[99]",
+  };
+#endif
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  const char *call_depth_lines[] = {
+      "loop is fn [ loop: ]",
+      "loop:",
+  };
+  char call_depth_context[64];
+#endif
+  const char *int_overflow_lines[] = {"1073741823 + 1"};
   char long_line[FR_REPL_LINE_BYTES];
   const char *long_lines[] = {long_line};
   uint16_t spaces = FR_REPL_OUTPUT_BYTES;
+
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  snprintf(call_depth_context, sizeof(call_depth_context),
+           "call depth limit reached (%u)\n",
+           (unsigned)FR_PROFILE_MAX_CALL_DEPTH);
+#endif
 
   CHECK("repl diagnostic installs base image",
         fr_base_image_install(&runtime) == FR_OK);
@@ -12363,6 +12516,208 @@ static void test_repl_error_diagnostics(void) {
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "name: nope\n") != NULL &&
             strstr(out, "1 + nope\n    ^^^^\n") != NULL);
+
+#if FR_FEATURE_TEXT && FR_FEATURE_REPL
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic suggests base word",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, base_suggestion_lines,
+                (uint8_t)(sizeof(base_suggestion_lines) /
+                          sizeof(base_suggestion_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: text.from\n") != NULL &&
+            strstr(out, "help: did you mean \"text.from-int\"?\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic suppresses common text prefix",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, text_prefix_lines,
+                (uint8_t)(sizeof(text_prefix_lines) /
+                          sizeof(text_prefix_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: text.\n") != NULL &&
+            strstr(out, "did you mean") == NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic suggests unique text prefix",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, text_equals_prefix_lines,
+                (uint8_t)(sizeof(text_equals_prefix_lines) /
+                          sizeof(text_equals_prefix_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: text.e\n") != NULL &&
+            strstr(out, "help: did you mean \"text.equals?\"?\n") != NULL);
+#endif
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic does not suggest base literal as call",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, noncallable_base_call_lines,
+                (uint8_t)(sizeof(noncallable_base_call_lines) /
+                          sizeof(noncallable_base_call_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: onn\n") != NULL &&
+            strstr(out, "\"one\"") == NULL);
+
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic suggests user word",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, user_suggestion_lines,
+                (uint8_t)(sizeof(user_suggestion_lines) /
+                          sizeof(user_suggestion_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: incremnt\n") != NULL &&
+            strstr(out, "help: did you mean \"increment\"?\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic does not suggest user value as call",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, user_value_call_typo_lines,
+                (uint8_t)(sizeof(user_value_call_typo_lines) /
+                          sizeof(user_value_call_typo_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: answr\n") != NULL &&
+            strstr(out, "\"answer\"") == NULL &&
+            strstr(out, "did you mean") == NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic suppresses did-you-mean on near tie",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, near_tie_lines,
+                (uint8_t)(sizeof(near_tie_lines) /
+                          sizeof(near_tie_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: foo\n") != NULL &&
+            strstr(out, "did you mean") == NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders too few args",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, arity_one_lines,
+                (uint8_t)(sizeof(arity_one_lines) /
+                          sizeof(arity_one_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "expected 2 arguments, got 1\n") != NULL &&
+            strstr(out, "add2: 1\n^^^^\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders too many args",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, arity_three_lines,
+                (uint8_t)(sizeof(arity_three_lines) /
+                          sizeof(arity_three_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "expected 2 arguments, got 3\n") != NULL &&
+            strstr(out, "add2: 1, 2, 3\n^^^^\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders param shadow",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, param_shadow_lines,
+                (uint8_t)(sizeof(param_shadow_lines) /
+                          sizeof(param_shadow_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "parameter shadows an existing name\n") != NULL);
+#endif
+
+#if FR_FEATURE_RECORDS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders record name type",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, record_type_lines,
+                (uint8_t)(sizeof(record_type_lines) /
+                          sizeof(record_type_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: wrong type (2)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "record name is already used by another value\n") !=
+                NULL);
+#endif
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic suppresses did-you-mean on miss",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, no_suggestion_lines,
+                (uint8_t)(sizeof(no_suggestion_lines) /
+                          sizeof(no_suggestion_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: zzzqqq\n") != NULL &&
+            strstr(out, "did you mean") == NULL);
+
+#if FR_FEATURE_EVENTS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic explains event body caller local",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, event_param_lines,
+                (uint8_t)(sizeof(event_param_lines) /
+                          sizeof(event_param_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: x\n") != NULL &&
+            strstr(out,
+                   "note: event bodies can't use the caller's locals -- lift it to a global\n") !=
+                NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic leaves event body global visible",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, event_global_lines,
+                (uint8_t)(sizeof(event_global_lines) /
+                          sizeof(event_global_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            strcmp(out, "> ok\n> ok\n> ") == 0);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic keeps unrelated event miss normal",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, event_missing_lines,
+                (uint8_t)(sizeof(event_missing_lines) /
+                          sizeof(event_missing_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: xyzzy\n") != NULL &&
+            strstr(out, "event bodies can't use") == NULL);
+#endif
 
   memset(out, 0, sizeof(out));
   CHECK("repl diagnostic clears discarded definition probe",
@@ -12534,6 +12889,82 @@ static void test_repl_error_diagnostics(void) {
             strstr(out, "name: missing\n") != NULL &&
             strstr(out, "set missing to 1\n    ^^^^^^^\n") != NULL);
 
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders native arg type context without caret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, native_type_lines,
+                (uint8_t)(sizeof(native_type_lines) /
+                          sizeof(native_type_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: wrong type (2)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out,
+                   "gpio.write argument 2 expects an int, got a bool\n") !=
+                NULL &&
+            strstr(out, "gpio.write: 2, true\n") == NULL &&
+            test_error_has_no_caret(out));
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders arithmetic type context without caret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, arith_type_lines,
+                (uint8_t)(sizeof(arith_type_lines) /
+                          sizeof(arith_type_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: wrong type (2)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "expected an int, got a bool\n") != NULL &&
+            strstr(out, "true + 1\n") == NULL &&
+            test_error_has_no_caret(out));
+
+#if FR_FEATURE_CELLS
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders cell range context without caret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, cell_oob_lines,
+                (uint8_t)(sizeof(cell_oob_lines) /
+                          sizeof(cell_oob_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: out of range (1)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out,
+                   "cell index 99 is past the end (length 4)\n") != NULL &&
+            strstr(out, "c[99]\n") == NULL &&
+            test_error_has_no_caret(out));
+#endif
+
+#if FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders call depth context without caret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, call_depth_lines,
+                (uint8_t)(sizeof(call_depth_lines) /
+                          sizeof(call_depth_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: overflow (5)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, call_depth_context) != NULL &&
+            strstr(out, "loop:\n") == NULL && test_error_has_no_caret(out));
+#endif
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic renders integer overflow context without caret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, int_overflow_lines,
+                (uint8_t)(sizeof(int_overflow_lines) /
+                          sizeof(int_overflow_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: out of range (1)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "integer overflow\n") != NULL &&
+            strstr(out, "1073741823 + 1\n") == NULL &&
+            test_error_has_no_caret(out));
+
   if ((uint32_t)spaces + sizeof("nope") > sizeof(long_line)) {
     spaces = (uint16_t)(sizeof(long_line) - sizeof("nope"));
   }
@@ -12550,6 +12981,56 @@ static void test_repl_error_diagnostics(void) {
             strstr(out, "> error: not found (7)\n") == out &&
             test_error_line_matches_wire_shape(out));
 }
+
+#if FR_FEATURE_PERSISTENCE && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&               \
+    FR_HOST_TEST_HELPERS && FR_PROFILE_MAX_OVERLAY_NAMES >= 2
+static void test_repl_diagnostic_suggests_restored_non_xip_name(void) {
+  fr_runtime_t saved;
+  fr_runtime_t restored;
+  char out[1024] = {0};
+  const char *typo_lines[] = {"countr:"};
+
+  fr_platform_persist_clear();
+  fr_host_persist_debug_direct_code_pointers(true);
+  CHECK("restored suggestion base",
+        fr_base_image_install(&saved) == FR_OK);
+  CHECK("restored suggestion define counter",
+        fr_repl_eval_line(&saved, "counter is fn [ 42 ]", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("restored suggestion define neighbor",
+        fr_repl_eval_line(&saved, "reading is fn [ 7 ]", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("restored suggestion save", fr_persist_save(&saved) == FR_OK);
+
+  fr_host_persist_debug_direct_code_pointers(false);
+  CHECK("restored suggestion fake nonxip restore",
+        fr_base_image_install(&restored) == FR_OK &&
+            fr_persist_restore(&restored) == FR_OK);
+  CHECK("restored suggestion counter callable",
+        fr_repl_eval_line(&restored, "counter:", out,
+                          (uint16_t)sizeof(out)) == FR_OK &&
+            strcmp(out, "42\nok\n") == 0);
+  CHECK("restored suggestion words lists counter",
+        fr_repl_eval_line(&restored, "words", out, (uint16_t)sizeof(out)) ==
+                FR_OK &&
+            strstr(out, "counter") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic suggests restored nonxip word",
+        test_repl_run_lines(
+            &restored, typo_lines,
+            (uint8_t)(sizeof(typo_lines) / sizeof(typo_lines[0])), out,
+            (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "name: countr\n") != NULL &&
+            strstr(out, "help: did you mean \"counter\"?\n") != NULL &&
+            strstr(out, "did you mean \"reading\"") == NULL);
+  fr_host_persist_debug_direct_code_pointers(true);
+}
+#endif
 #endif
 
 #if FR_FEATURE_COMPILER && FR_FEATURE_INTROSPECTION &&                         \
@@ -13353,6 +13834,7 @@ int main(void) {
   test_wipe_user_clears_events();
   test_event_drain_dispatch();
   test_event_safe_point_fires_when_active();
+  test_event_handler_fault_keeps_foreground_diag_empty();
   test_event_coalescing();
   test_event_debounce_drops_within_window();
   test_event_debounce_first_fire_at_zero();
@@ -13468,6 +13950,10 @@ int main(void) {
   test_err_name();
 #if FR_FEATURE_COMPILER
   test_repl_error_diagnostics();
+#if FR_FEATURE_PERSISTENCE && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&               \
+    FR_HOST_TEST_HELPERS && FR_PROFILE_MAX_OVERLAY_NAMES >= 2
+  test_repl_diagnostic_suggests_restored_non_xip_name();
+#endif
 #endif
   test_repl_pump();
   test_repl_transcript();

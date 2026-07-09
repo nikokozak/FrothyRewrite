@@ -94,10 +94,65 @@ const char *fr_diag_message(uint16_t message_id) {
       [FR_DIAG_MSG_PARSE_EXPECTED_TO] = "expected 'to' before the value",
       [FR_DIAG_MSG_PARSE_EXPECTED_EVENT_EDGE] = "expected an event edge",
       [FR_DIAG_MSG_PARSE_TOO_DEEP] = "expression is too deeply nested",
+      [FR_DIAG_MSG_COMPILE_EVENT_BODY_LOCAL] =
+          "event bodies can't use the caller's locals -- lift it to a global",
+      [FR_DIAG_MSG_COMPILE_CONTROL_FLOW_DISABLED] =
+          "control flow is not enabled in this build",
+      [FR_DIAG_MSG_COMPILE_CELLS_DISABLED] =
+          "cells are not enabled in this build",
+      [FR_DIAG_MSG_COMPILE_TEXT_DISABLED] =
+          "text is not enabled in this build",
+      [FR_DIAG_MSG_COMPILE_RECORDS_DISABLED] =
+          "records are not enabled in this build",
+      [FR_DIAG_MSG_COMPILE_EVENTS_DISABLED] =
+          "events are not enabled in this build",
+      [FR_DIAG_MSG_COMPILE_PARAM_SHADOW] =
+          "parameter shadows an existing name",
+      [FR_DIAG_MSG_COMPILE_RECORD_NAME_NOT_SHAPE] =
+          "record name is already used by another value",
+      [FR_DIAG_MSG_RUNTIME_STACK_OVERFLOW] = "stack overflow",
+      [FR_DIAG_MSG_RUNTIME_STACK_UNDERFLOW] = "stack underflow",
+      [FR_DIAG_MSG_RUNTIME_INTEGER_OVERFLOW] = "integer overflow",
   };
 
   if (message_id >= (uint16_t)(sizeof(messages) / sizeof(messages[0]))) {
     return NULL;
   }
   return messages[message_id];
+}
+
+const char *fr_diag_value_kind_name(uint16_t value_kind) {
+  switch ((fr_diag_value_kind_t)value_kind) {
+  case FR_DIAG_VALUE_INT:
+    return "int";
+  case FR_DIAG_VALUE_BOOL:
+    return "bool";
+  case FR_DIAG_VALUE_NIL:
+    return "nil";
+  case FR_DIAG_VALUE_SPECIAL:
+    return "special";
+  case FR_DIAG_VALUE_SLOT:
+    return "slot";
+  case FR_DIAG_VALUE_FUNCTION:
+    return "function";
+  case FR_DIAG_VALUE_NATIVE:
+    return "native";
+  case FR_DIAG_VALUE_OBJECT:
+    return "object";
+  case FR_DIAG_VALUE_HANDLE:
+    return "handle";
+  case FR_DIAG_VALUE_BYTES:
+    return "bytes";
+  case FR_DIAG_VALUE_RESERVED:
+    return "reserved";
+  case FR_DIAG_VALUE_ANY:
+    return "anything";
+  case FR_DIAG_VALUE_TEXT:
+    return "text";
+  case FR_DIAG_VALUE_TEXT_OR_BYTES:
+    return "text or bytes";
+  case FR_DIAG_VALUE_NONE:
+  default:
+    return NULL;
+  }
 }

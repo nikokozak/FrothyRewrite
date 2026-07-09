@@ -291,6 +291,7 @@ fr_err_t fr_event_dispatch(fr_runtime_t *runtime) {
     fr_code_object_id_t body;
     fr_tagged_t result = 0;
     fr_err_t body_err;
+    fr_diagnostic_t *previous_diag = NULL;
 
     if (runtime->interrupted) {
       first_err = FR_ERR_INTERRUPTED;
@@ -318,7 +319,10 @@ fr_err_t fr_event_dispatch(fr_runtime_t *runtime) {
       entry->has_fired = false;
     }
 
+    previous_diag = runtime->diag;
+    runtime->diag = NULL;
     body_err = fr_vm_run_code_object(runtime, body, &result);
+    runtime->diag = previous_diag;
     if (body_err != FR_OK && first_err == FR_OK) {
       first_err = body_err;
     }
