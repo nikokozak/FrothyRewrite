@@ -302,11 +302,13 @@ HOST_INSTALL_LIBEXECDIR = $(DESTDIR)$(LIBEXECDIR)
 # TARGET_SIZE_COMMAND, TARGET_FLASH_DEPS, and TARGET_FLASH_COMMAND in target.mk.
 ARTIFACTS = $(ARTIFACT_ELF) $(if $(TARGET_OBJCOPY),$(ARTIFACT_HEX)) $(if $(TARGET_SIZE)$(TARGET_SIZE_COMMAND),$(ARTIFACT_SIZE))
 TARGET_FLASH_DEPS ?= $(ARTIFACT_HEX)
+TARGET_ARTIFACTS_CHECK ?= @:
+TARGET_FLASH_CHECK ?= @:
 
-test: $(TEST_BINARY)
+test: $(TEST_BINARY) ## Run the core C test binary.
 	./$(TEST_BINARY)
 
-test-unity: $(UNITY_TEST_BINARY) $(UNITY_I2C_TEST_BINARY) $(UNITY_LIB_NATIVES_TEST_BINARY) $(UNITY_PERSIST_TIER_TEST_BINARY) $(UNITY_T12_SERVO_TEST_BINARY) $(UNITY_T21_MEM_TEST_BINARY) $(UNITY_T15_NET_TEST_BINARY) $(UNITY_T15B_TCP_TEST_BINARY) $(UNITY_T14_POWER_TEST_BINARY) $(UNITY_T16_BYTES_TEST_BINARY)
+test-unity: $(UNITY_TEST_BINARY) $(UNITY_I2C_TEST_BINARY) $(UNITY_LIB_NATIVES_TEST_BINARY) $(UNITY_PERSIST_TIER_TEST_BINARY) $(UNITY_T12_SERVO_TEST_BINARY) $(UNITY_T21_MEM_TEST_BINARY) $(UNITY_T15_NET_TEST_BINARY) $(UNITY_T15B_TCP_TEST_BINARY) $(UNITY_T14_POWER_TEST_BINARY) $(UNITY_T16_BYTES_TEST_BINARY) ## Run all Unity host binaries.
 	./$(UNITY_TEST_BINARY)
 	./$(UNITY_I2C_TEST_BINARY)
 	./$(UNITY_LIB_NATIVES_TEST_BINARY)
@@ -330,6 +332,9 @@ test-unity: $(UNITY_TEST_BINARY) $(UNITY_I2C_TEST_BINARY) $(UNITY_LIB_NATIVES_TE
 		UNITY_T16_BYTES_TEST_BINARY=build/host/test-unity-t16-bytes-host-normal \
 		_test-unity-run
 
+help: ## Show common make targets.
+	@awk 'BEGIN { FS = ":.*##"; printf "Targets:\n" } /^[A-Za-z0-9_.-]+:.*##/ { printf "  %-38s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+
 _test-unity-run: $(UNITY_TEST_BINARY) $(UNITY_I2C_TEST_BINARY) $(UNITY_LIB_NATIVES_TEST_BINARY) $(UNITY_PERSIST_TIER_TEST_BINARY) $(UNITY_T12_SERVO_TEST_BINARY) $(UNITY_T21_MEM_TEST_BINARY) $(UNITY_T15_NET_TEST_BINARY) $(UNITY_T15B_TCP_TEST_BINARY) $(UNITY_T14_POWER_TEST_BINARY) $(UNITY_T16_BYTES_TEST_BINARY)
 	./$(UNITY_TEST_BINARY)
 	./$(UNITY_I2C_TEST_BINARY)
@@ -349,7 +354,8 @@ endif
 $(FROTHY_BINARY): $(FROTHY_DEPS) | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) $(FROTHY_SOURCES) $(FR_LDFLAGS) -o $@
 
-artifacts: $(ARTIFACTS)
+artifacts: $(ARTIFACTS) ## Build firmware artifacts for the selected board.
+	$(TARGET_ARTIFACTS_CHECK)
 
 $(BUILD_DIR):
 	mkdir -p $@
@@ -388,7 +394,7 @@ $(ARTIFACT_SIZE): $(ARTIFACT_ELF)
 	$(TARGET_SIZE) $< >> $@
 endif
 
-flash: $(TARGET_FLASH_DEPS)
+flash: $(TARGET_FLASH_DEPS) ## Flash the selected board; requires BOARD_PORT.
 	@if [ -z "$(TARGET_FLASH_COMMAND)" ]; then \
 		printf 'target %s does not define a flash command\n' "$(TARGET)"; \
 		exit 2; \
@@ -397,12 +403,13 @@ flash: $(TARGET_FLASH_DEPS)
 		printf 'BOARD_PORT is required, for example BOARD_PORT=/dev/cu.usbmodemXXXX\n'; \
 		exit 2; \
 	fi
+	$(TARGET_FLASH_CHECK)
 	$(TARGET_FLASH_COMMAND)
 
 # Offsets are the default ESP-IDF singleapp NVS range (partitions_singleapp.csv,
 # PARTITION_TABLE_OFFSET=0x8000, 0x1000 table). Update in lockstep with any
 # custom partition table.
-wipe-nvs:
+wipe-nvs: ## Erase the ESP32 NVS region used by Frothy persistence.
 	@if [ "$(BOARD)" != "esp32_devkit_v1" ]; then \
 		printf 'wipe-nvs: unsupported BOARD "%s"; only esp32_devkit_v1 is supported\n' "$(BOARD)"; \
 		exit 2; \
@@ -415,7 +422,7 @@ wipe-nvs:
 
 # Merged .bin for the web flasher (T13b D11). Local esptool.py is
 # v4.12.dev1 which only accepts merge_bin (underscore).
-web-bins:
+web-bins: ## Build the merged ESP32 binary for the web flasher.
 	$(MAKE) BOARD=esp32_devkit_v1 PROFILE=esp32_plain artifacts
 	@mkdir -p web/flash/firmware
 	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && esptool.py --chip esp32 merge_bin \
@@ -424,7 +431,7 @@ web-bins:
 		0x8000 build/esp32_devkit_v1/partition_table/partition-table.bin \
 		0x10000 build/esp32_devkit_v1/frothy.bin
 
-test-host-normal:
+test-host-normal: ## Run the core C suite with the host_normal profile.
 	$(MAKE) BOARD=host PROFILE=host_normal \
 		TEST_BINARY=test/test-host-normal test
 
@@ -432,7 +439,7 @@ host-normal:
 	$(MAKE) BOARD=host PROFILE=host_normal \
 		FROTHY_BINARY=build/host/frothy-host-normal frothy
 
-test-host-normal-transcript: host-normal
+test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 	@out=$$(printf '%s\n' \
 		'status' \
 		'time is 200' \
@@ -543,7 +550,7 @@ host-normal-events:
 # Exercises the T11a save -> reinstall-base -> restore -> fire-event
 # round-trip through the CLI. Needs FR_INCLUDE_TEST_NATIVES so
 # frothy.fire-event is reachable from the REPL.
-test-host-normal-event-transcript: host-normal-events
+test-host-normal-event-transcript: host-normal-events ## Replay the host_normal event transcript.
 	@out=$$(printf '%s\n' \
 		'counter is cells(1)' \
 		'set counter[0] to 1' \
@@ -579,7 +586,7 @@ test-host-normal-event-transcript: host-normal-events
 
 test-host-normal-profile: test-host-normal test-host-normal-transcript test-host-normal-event-transcript
 
-test-lib-e2e: frothy-host-command
+test-lib-e2e: frothy-host-command ## Build and run the library extension e2e fixture.
 	BUILD_DIR="$(abspath $(LIB_E2E_BUILD_DIR))" "$(abspath $(FROTHY_HOST_COMMAND_BINARY))" build --project "$(abspath $(LIB_E2E_PROJECT))"
 	@out=$$(printf '%s\n' \
 		'test-mixed.echo:' \
@@ -600,7 +607,7 @@ esp32-plain-host:
 		BUILD_DIR=build/esp32-plain-host \
 		FROTHY_BINARY=build/esp32-plain-host/frothy frothy
 
-test-esp32-plain-host-transcript: esp32-plain-host
+test-esp32-plain-host-transcript: esp32-plain-host ## Replay the esp32_plain profile on the host target.
 	@out=$$(printf '%s\n' \
 		'status' \
 		'words' \
@@ -667,14 +674,14 @@ host-overlay-compiler:
 		OVERLAY_COMPILER=build/host/frothy-compile-overlay \
 		build/host/frothy-compile-overlay
 
-frothy-host-command: host-overlay-compiler
+frothy-host-command: host-overlay-compiler ## Build the user-facing frothy CLI binary.
 	GOCACHE=$(GO_CACHE) go build -o $(FROTHY_HOST_COMMAND_BINARY) ./cmd/frothy-session
 
 # Build the user-facing `frothy` CLI for local use without a system install.
 # It lands next to its frothy-compile-overlay helper (resolved as a sibling),
 # so the only step left is putting that directory on PATH — which the recipe
 # prints. No symlinking required.
-cli: frothy-host-command
+cli: frothy-host-command ## Build the local frothy CLI and print PATH setup.
 	@bindir='$(abspath $(dir $(FROTHY_HOST_COMMAND_BINARY)))'; \
 	printf '\n  \033[32m✓\033[0m Built the frothy CLI  ->  %s/frothy\n\n' "$$bindir"; \
 	printf '  Add it to your PATH for this shell:\n\n'; \
@@ -687,7 +694,7 @@ cli: frothy-host-command
 frothy-session: host-overlay-compiler
 	GOCACHE=$(GO_CACHE) go build -o $(FROTHY_SESSION_BINARY) ./cmd/frothy-session
 
-install-host: frothy-host-command frothy-session host-overlay-compiler
+install-host: frothy-host-command frothy-session host-overlay-compiler ## Install host binaries under DESTDIR/PREFIX.
 	$(INSTALL_DIR) "$(HOST_INSTALL_BINDIR)"
 	$(INSTALL_DIR) "$(HOST_INSTALL_LIBEXECDIR)"
 	$(INSTALL_PROGRAM) "$(FROTHY_HOST_COMMAND_BINARY)" "$(HOST_INSTALL_BINDIR)/frothy"
@@ -756,7 +763,7 @@ $(UNITY_T16_BYTES_TEST_BINARY): $(UNITY_T16_BYTES_TEST_SOURCES) $(KERNEL_DEPS) $
 $(OVERLAY_COMPILER): tools/frothy-compile-overlay.c $(FROTHY_DEPS) | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) tools/frothy-compile-overlay.c $(KERNEL_SOURCES) $(PLATFORM_SOURCES) $(PERSISTENCE_SOURCES) $(FR_LDFLAGS) -o $@
 
-print-config:
+print-config: ## Print the selected board, target, profile, and build paths.
 	@printf 'BOARD=%s\n' "$(BOARD)"
 	@printf 'BOARD_DIR=%s\n' "$(BOARD_DIR)"
 	@printf 'BOARD_MK=%s\n' "$(BOARD_MK)"
@@ -777,10 +784,10 @@ print-config:
 	@printf 'ARTIFACT_HEX=%s\n' "$(ARTIFACT_HEX)"
 	@printf 'ARTIFACT_SIZE=%s\n' "$(ARTIFACT_SIZE)"
 
-vsix:
+vsix: ## Build the VS Code extension package.
 	cd editors/vscode && npm ci && npm run build && npx vsce package
 
-clean:
+clean: ## Remove generated build outputs.
 	rm -rf build frothy test/test test/test-host-normal test/fixtures/projects/*/.frothy
 
-.PHONY: test test-unity artifacts flash wipe-nvs web-bins test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean
+.PHONY: test test-unity help artifacts flash wipe-nvs web-bins test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean

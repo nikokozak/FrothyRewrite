@@ -6,8 +6,7 @@
 //
 // Sample banner from the ESP32 ROM (POWERON path, DevKit V-5 target),
 // sourced from the ESP32 TRM "Boot Mode" section, the ESP-IDF startup
-// docs, and the prefixes idf_monitor.py matches. The phrase set is
-// recorded in .local-adr/0053-frothy-connect.md.
+// docs, and the prefixes idf_monitor.py matches.
 //
 //	ets Jul 29 2019 12:21:46
 //
