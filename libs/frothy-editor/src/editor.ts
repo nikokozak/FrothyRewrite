@@ -81,10 +81,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     examplesSelect.append(option);
   }
   examplesLabel.append(examplesSelect);
+  const splitBtn = mkBtn(doc, "Split", "frothy-btn frothy-split-toggle");
   const connectBtn = doc.createElement("button");
   connectBtn.className = "frothy-btn frothy-btn-primary";
   connectBtn.textContent = "Connect";
-  header.append(title, examplesLabel, connectBtn);
+  header.append(title, examplesLabel, splitBtn, connectBtn);
 
   const editorHost = doc.createElement("div");
   editorHost.className = "frothy-editor-pane";
@@ -113,7 +114,33 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   transcriptHost.className = "frothy-transcript-host";
   const transcript: Transcript = mountTranscript(transcriptHost);
 
-  root.append(header, editorHost, commandBar, transcriptHost);
+  // The editor + its command bar form one column; the transcript (MCU output)
+  // sits beside or below it. The body flips between the two via a root class.
+  const editorMain = doc.createElement("div");
+  editorMain.className = "frothy-editor-main";
+  editorMain.append(editorHost, commandBar);
+
+  const body = doc.createElement("div");
+  body.className = "frothy-editor-body";
+  body.append(editorMain, transcriptHost);
+
+  let layout = loadLayout();
+  function applyLayout(): void {
+    const horizontal = layout === "horizontal";
+    root.classList.toggle("frothy-editor--horizontal", horizontal);
+    splitBtn.textContent = horizontal ? "Stack" : "Split";
+    splitBtn.title = horizontal
+      ? "Stack the output below the editor"
+      : "Put the output beside the editor";
+  }
+  splitBtn.addEventListener("click", () => {
+    layout = layout === "horizontal" ? "vertical" : "horizontal";
+    saveLayout(layout);
+    applyLayout();
+  });
+  applyLayout();
+
+  root.append(header, body);
   opts.mount.appendChild(root);
 
   const view = new EditorView({
@@ -413,6 +440,27 @@ function mkBtn(doc: Document, label: string, cls: string): HTMLButtonElement {
 
 function isDeviceErrorLine(line: string): boolean {
   return line.startsWith("error:") || /^err \d/.test(line);
+}
+
+const LAYOUT_KEY = "frothy-editor:layout";
+type Layout = "vertical" | "horizontal";
+
+function loadLayout(): Layout {
+  try {
+    return globalThis.localStorage?.getItem(LAYOUT_KEY) === "horizontal"
+      ? "horizontal"
+      : "vertical";
+  } catch {
+    return "vertical";
+  }
+}
+
+function saveLayout(layout: Layout): void {
+  try {
+    globalThis.localStorage?.setItem(LAYOUT_KEY, layout);
+  } catch {
+    // localStorage may be unavailable (private mode, no DOM). Non-fatal.
+  }
 }
 
 export function sendableLines(text: string): string[] {
