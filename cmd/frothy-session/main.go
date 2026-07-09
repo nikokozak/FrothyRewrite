@@ -2189,18 +2189,17 @@ func availableVerbs() []verb {
 		{name: "build", summary: "resolve libraries and build the project's firmware", run: runBuildMain,
 			longDesc: "Build resolves the project's libraries from frothy.toml, generates the " +
 				"target sources, and runs make to produce the firmware image for the target " +
-				"named in the manifest. Use it when you have changed library code or board " +
-				"settings and want to produce a flashable artifact without flashing it.",
+				"named in the manifest. Missing git dependencies are fetched into the local " +
+				"cache first. Use it when you have changed library code or board settings and " +
+				"want to produce a flashable artifact without flashing it.",
 			examples: "  frothy build\n" +
 				"      build the project in the current directory"},
-		{name: "fetch", summary: "resolve git deps into the local cache (stub; not yet wired)", run: runFetchMain,
+		{name: "fetch", summary: "fetch git deps into the local cache", run: runFetchMain,
 			longDesc: "Fetch resolves git dependencies declared in frothy.toml into the local " +
-				"cache so build can find them offline. It is a stub today: the dependency " +
-				"resolver is not yet wired, and running it prints a message saying so. The " +
-				"verb exists so projects that depend on it can be written against the final " +
-				"shape.",
+				"cache so build can find them offline. Each git dep must name a pinned rev; " +
+				"branch tracking is deliberately not part of this command.",
 			examples: "  frothy fetch\n" +
-				"      attempt to resolve git deps (prints not-wired notice today)"},
+				"      clone missing git deps and check out their pinned revs"},
 		{name: "install", summary: "send the project's library source to a device under install-library mode", run: runInstallMain,
 			longDesc: "Install sends the project's library source to a connected device under " +
 				"install-library mode, persisting the library tier on the board. Use it after " +

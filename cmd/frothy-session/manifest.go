@@ -123,5 +123,11 @@ func validateManifestDep(name string, d manifestDep) error {
 	if hasPath && (d.Rev != "" || d.Branch != "") {
 		return fmt.Errorf("dep %s: path dep cannot have rev or branch", name)
 	}
+	if hasGit && d.Branch != "" {
+		return fmt.Errorf("dep %s: git dep must pin rev, not branch; add rev = \"<commit>\"", name)
+	}
+	if hasGit && d.Rev == "" {
+		return fmt.Errorf("dep %s: git dep must pin rev; add rev = \"<commit>\"", name)
+	}
 	return nil
 }

@@ -63,6 +63,9 @@ func runBuild(opts buildOptions, stdout io.Writer, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := fetchDeps(opts.projectDir, proj); err != nil {
+		return err
+	}
 	libs, err := resolveDeps(opts.projectDir, proj)
 	if err != nil {
 		return err

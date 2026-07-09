@@ -83,6 +83,22 @@ target = "host"
 foo = { path = "libs/foo", rev = "v1" }`,
 			wantErr: "path dep cannot have rev or branch",
 		},
+		"git dep without rev": {
+			src: `name = "x"
+target = "host"
+
+[deps]
+foo = { git = "https://example/foo" }`,
+			wantErr: "git dep must pin rev",
+		},
+		"git dep with branch": {
+			src: `name = "x"
+target = "host"
+
+[deps]
+foo = { git = "https://example/foo", branch = "main" }`,
+			wantErr: "git dep must pin rev, not branch",
+		},
 		"malformed toml": {
 			src:     `name = `,
 			wantErr: "frothy.toml:",
@@ -263,6 +279,14 @@ targets = ["host"]
 [deps]
 y = { path = "../y", git = "https://example/y" }`,
 			wantErr: "declares both path and git",
+		},
+		"git dep with branch": {
+			src: `name = "x"
+targets = ["host"]
+
+[deps]
+y = { git = "https://example/y", branch = "main" }`,
+			wantErr: "git dep must pin rev, not branch",
 		},
 	}
 	for name, tc := range cases {
