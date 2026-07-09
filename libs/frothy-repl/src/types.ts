@@ -25,6 +25,9 @@ export type Unsubscribe = () => void;
 
 export interface ReplConnector {
   sendLine(line: string): Promise<Response>;
+  /** Send a raw Ctrl-C (0x03) out-of-band to interrupt a running command.
+   *  Bypasses the send queue; does not wait for a response. */
+  interrupt(): Promise<void>;
   onLine(cb: (line: string) => void): Unsubscribe;
   /** Fires once when the connector becomes closed, whether by read end/failure or close(). */
   onClose(cb: () => void): Unsubscribe;

@@ -11,21 +11,31 @@ export interface WebSerialPort {
 export class WebSerialTransport implements Transport {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private released: Promise<void> | null = null;
+  private writeChain: Promise<void> = Promise.resolve();
   private readonly port: WebSerialPort;
 
   constructor(port: WebSerialPort) {
     this.port = port;
   }
 
-  async write(bytes: Uint8Array): Promise<void> {
-    const writable = this.port.writable;
-    if (!writable) throw new Error("serial port is not writable");
-    const writer = writable.getWriter();
-    try {
-      await writer.write(bytes);
-    } finally {
-      writer.releaseLock();
-    }
+  // Serialize writes: an out-of-band interrupt (0x03) and a queued send can be
+  // issued concurrently, and `writable.getWriter()` throws if the stream is
+  // already locked to another writer. Chaining every write keeps the two from
+  // racing for the lock; each write is a few bytes, so the wait is negligible.
+  write(bytes: Uint8Array): Promise<void> {
+    const run = async (): Promise<void> => {
+      const writable = this.port.writable;
+      if (!writable) throw new Error("serial port is not writable");
+      const writer = writable.getWriter();
+      try {
+        await writer.write(bytes);
+      } finally {
+        writer.releaseLock();
+      }
+    };
+    const next = this.writeChain.then(run, run);
+    this.writeChain = next.catch(() => {});
+    return next;
   }
 
   async *read(): AsyncIterable<Uint8Array> {

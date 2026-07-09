@@ -59,3 +59,19 @@ test("onClose fires when the transport read ends", async () => {
   await repl.close();
   assert.equal(calls, 1);
 });
+
+test("interrupt writes Ctrl-C out of band while a send is pending", async () => {
+  const fake = new FakeTransport();
+  const repl = await createConnector(fake);
+
+  const pending = repl.sendLine("forever");
+  await Promise.resolve();
+  assert.deepEqual(fake.writes, ["forever"]);
+
+  await repl.interrupt();
+  assert.deepEqual(fake.writes, ["forever", "\x03"]);
+
+  fake.emit("ok\n> ");
+  assert.deepEqual(await pending, { kind: "ok" });
+  await repl.close();
+});
