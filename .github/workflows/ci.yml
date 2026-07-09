@@ -33,6 +33,7 @@ jobs:
       - run: make test-host-normal-transcript
       - run: make test-esp32-plain-host-transcript
       - run: make test-lib-e2e
+      - run: make examples
 
       - name: Go tests
         run: |

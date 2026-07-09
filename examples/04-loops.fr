@@ -1,0 +1,8 @@
+-- Loops
+-- Uses locals with here, mutation with set, repeat indexes, and while loops.
+-- @tag host
+
+to sum-to with n [ here t is 0; repeat n as i [ set t to t + i ]; t ]
+sum-to: 10 -- => 45
+to count-down with n [ here x is n; while x > 0 [ set x to x - 1 ]; x ]
+count-down: 9 -- => 0

@@ -439,6 +439,9 @@ host-normal:
 	$(MAKE) BOARD=host PROFILE=host_normal \
 		FROTHY_BINARY=build/host/frothy-host-normal frothy
 
+examples: host-normal ## Run host-safe examples through the host_normal REPL.
+	tools/run-examples.sh
+
 test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 	@out=$$(printf '%s\n' \
 		'status' \
@@ -790,4 +793,4 @@ vsix: ## Build the VS Code extension package.
 clean: ## Remove generated build outputs.
 	rm -rf build frothy test/test test/test-host-normal test/fixtures/projects/*/.frothy
 
-.PHONY: test test-unity help artifacts flash wipe-nvs web-bins test-host-normal host-normal host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean
+.PHONY: test test-unity help artifacts flash wipe-nvs web-bins test-host-normal host-normal examples host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean

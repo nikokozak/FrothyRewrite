@@ -1,0 +1,7 @@
+-- Attempt Rescue
+-- Handles a failed expression and reads error.code inside rescue.
+-- @tag host
+
+to safe-div with a, b [ attempt [ a / b ] rescue [ error.code ] ]
+safe-div: 10, 2 -- => 5
+safe-div: 10, 0 -- => 3

@@ -1,0 +1,11 @@
+-- Words
+-- Defines words, calls zero-argument words with a colon, and uses recursion.
+-- @tag host
+
+to double with n [ n * 2 ]
+double: 21 -- => 42
+to greet [ print: "hi" ]
+greet:
+to fib with n [ if n < 2 [ n ] else [ fib: n - 1 + fib: n - 2 ] ]
+fib: 10 -- => 55
+see double

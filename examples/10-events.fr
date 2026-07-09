@@ -1,0 +1,8 @@
+-- Events
+-- Registers timers from inside definition bodies for device-side async output.
+-- @tag device
+
+to start-ticking [ every 1000 [ print: "tick" ] ]
+to blink-later [ after 500 [ led.toggle: ] ]
+start-ticking:
+blink-later:

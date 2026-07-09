@@ -1,0 +1,11 @@
+-- Blink
+-- Uses GPIO and LED words; host runs the same calls against stubs.
+-- @tag host device
+
+gpio.output: 2
+gpio.write: 2, 0
+gpio.toggle: 2
+gpio.read: 2 -- => 1
+repeat 2 [ led.on:; led.off: ]
+gpio.toggle: $led_builtin
+gpio.read: $led_builtin -- => 1
