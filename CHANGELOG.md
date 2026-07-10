@@ -14,6 +14,11 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
   change is device-side, so the web editor and VS Code stop flagging a
   deliberate stop as a failure too.
 
+- **A `save` that can't persist a value now says which slot and why.**
+  Instead of a bare `unsupported (9)`, the error names the slot and the
+  reason — for example `cannot save slot 'x' - bound to a word this firmware
+  does not provide`.
+
 ### Fixed
 
 - **No more `esp_mmu_map` error log on save (ESP32).** With a saved image
