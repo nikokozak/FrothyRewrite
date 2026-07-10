@@ -6,6 +6,17 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-10
+
+### Fixed
+
+- **`save` no longer corrupts when a word matches a built-in.** Saving a word
+  whose bytecode is byte-identical to a built-in — for example `x is led.on`, or
+  a blink word that calls `led.on` — aborted with `corrupt data (11)`. The code
+  encoder's deduplication scanned base-image codes that the bind resolver skips,
+  so such a word was deduped away and then could not be resolved. The two scans
+  now agree, and the word gets its own record.
+
 ## [0.1.0] - 2026-07-09
 
 The first tagged release. Frothy is a live language for small 32-bit
