@@ -2141,14 +2141,14 @@ func availableVerbs() []verb {
 				"named explicitly with --port when several are.",
 			examples: "  frothy flash esp32_devkit_v1 --port /dev/cu.usbserial-0001\n" +
 				"      build the firmware and flash it to the board on that port"},
-		{name: "wipe", summary: "erase persisted device state on a wedged board (NVS only)", run: runWipeMain,
+		{name: "wipe", summary: "erase Frothy persistence on a wedged board", run: runWipeMain,
 			longDesc: "Wipe erases the persisted device state on a board wedged by a bad save, " +
-				"leaving the firmware in place. It rewrites the NVS partition only and requires " +
-				"--force so it cannot run by accident. Use it when a board refuses to boot the " +
-				"REPL because of corrupt persisted state; for a clean reset of user definitions " +
-				"on a running device, prefer wipe-user.",
+				"leaving the firmware and other partitions in place. It erases the dedicated " +
+				"Frothy persistence partition and requires --force so it cannot run by accident. " +
+				"Use it when a board refuses to boot the REPL because of corrupt persisted state; " +
+				"for a clean reset of user definitions on a running device, prefer wipe-user.",
 			examples: "  frothy wipe esp32_devkit_v1 --force --port /dev/cu.usbserial-0001\n" +
-				"      erase the NVS region on the board on that port"},
+				"      erase Frothy persistence on the board on that port"},
 		{name: "wipe-user", summary: "clear user-tier definitions on a running device; library tier survives", run: runWipeUserMain,
 			longDesc: "Wipe-user clears the user-tier definitions on a running device, leaving " +
 				"the library tier and the firmware in place. Use it when you want to start with " +

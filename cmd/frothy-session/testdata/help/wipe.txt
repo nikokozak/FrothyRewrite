@@ -1,10 +1,10 @@
-frothy wipe — erase persisted device state on a wedged board (NVS only)
+frothy wipe — erase Frothy persistence on a wedged board
 
-Wipe erases the persisted device state on a board wedged by a bad save, leaving the firmware in place. It rewrites the NVS partition only and requires --force so it cannot run by accident. Use it when a board refuses to boot the REPL because of corrupt persisted state; for a clean reset of user definitions on a running device, prefer wipe-user.
+Wipe erases the persisted device state on a board wedged by a bad save, leaving the firmware and other partitions in place. It erases the dedicated Frothy persistence partition and requires --force so it cannot run by accident. Use it when a board refuses to boot the REPL because of corrupt persisted state; for a clean reset of user definitions on a running device, prefer wipe-user.
 
 Examples:
   frothy wipe esp32_devkit_v1 --force --port /dev/cu.usbserial-0001
-      erase the NVS region on the board on that port
+      erase Frothy persistence on the board on that port
 
 Flags:
   -force
