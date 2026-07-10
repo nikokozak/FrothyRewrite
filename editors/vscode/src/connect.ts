@@ -44,20 +44,20 @@ function fireConnectionChanged(): void {
   if (onConnectionChanged) onConnectionChanged();
 }
 
-export function connect(): Promise<void> {
+export function connect(portOverride?: string): Promise<void> {
   if (connecting) return connecting;
-  connecting = doConnect().finally(() => {
+  connecting = doConnect(portOverride).finally(() => {
     connecting = undefined;
   });
   return connecting;
 }
 
-async function doConnect(): Promise<void> {
+async function doConnect(portOverride?: string): Promise<void> {
   await teardown();
 
   const cfg = vscode.workspace.getConfiguration('frothy');
   const bin = cfg.get<string>('binaryPath', 'frothy');
-  const port = cfg.get<string>('port', '');
+  const port = portOverride ?? cfg.get<string>('port', '');
   const baud = cfg.get<number>('baud', 115200);
 
   const args = ['session', '--records'];

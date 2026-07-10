@@ -11,6 +11,7 @@ const FROTHY_WORD = /[A-Za-z_$][A-Za-z0-9_.\-?]*/;
 
 let lastForm: string | undefined;
 let onLastFormChanged: (() => void) | undefined;
+let connecting: Promise<void> | undefined;
 
 interface SubmittedForm {
   source: string;
@@ -33,7 +34,11 @@ function setLastForm(form: string | undefined): void {
 }
 
 export function connect(): Promise<void> {
-  return proc.connect();
+  if (connecting) return connecting;
+  connecting = connectWithPortChoice().finally(() => {
+    connecting = undefined;
+  });
+  return connecting;
 }
 
 export async function disconnect(): Promise<void> {
@@ -240,6 +245,36 @@ async function inspectNamedWord(word: string): Promise<void> {
     return;
   }
   await inspectRequest(`see ${word}`);
+}
+
+async function connectWithPortChoice(): Promise<void> {
+  try {
+    await proc.connect();
+  } catch (err) {
+    if (!(err instanceof proc.SessionRecordError)) throw err;
+    const code = typeof err.record.code === 'string' ? err.record.code : '';
+    if (code === 'no_ports') {
+      const choice = await vscode.window.showErrorMessage(
+        'Frothy found no serial device. Plug one in or configure frothy.port.',
+        'Configure Port',
+      );
+      if (choice === 'Configure Port') {
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'frothy.port');
+      }
+      return;
+    }
+    if (code !== 'multiple_ports') throw err;
+
+    const candidates = Array.isArray(err.record.candidates)
+      ? [...new Set(err.record.candidates.filter((value): value is string =>
+          typeof value === 'string' && value.length > 0))]
+      : [];
+    if (candidates.length === 0) throw err;
+    const port = await vscode.window.showQuickPick(candidates, {
+      placeHolder: 'Choose the serial port for this Frothy session',
+    });
+    if (port) await proc.connect(port);
+  }
 }
 
 async function inspectRequest(source: string): Promise<string | undefined> {
