@@ -503,7 +503,7 @@ func TestPickPortChoosesSessionPortWhenUnset(t *testing.T) {
 	list := func() ([]string, error) {
 		return []string{"/dev/cu.usbserial-0001"}, nil
 	}
-	got, err := pickSessionPort("", list)
+	got, err := pickSessionPort("", list, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,9 +547,12 @@ func TestPickPortErrorsWhenNoSerialPortFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("err nil, want error")
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, "no serial port") || !strings.Contains(msg, "--port") {
-		t.Fatalf("err %q missing user guidance", msg)
+	if got, want := err.Error(), "no serial port found; pass --port"; got != want {
+		t.Fatalf("err %q, want %q", got, want)
+	}
+	var selection *portSelectionError
+	if !errors.As(err, &selection) || selection.code != recordErrorNoPorts || len(selection.candidates) != 0 {
+		t.Fatalf("selection error = %#v", selection)
 	}
 }
 
@@ -561,12 +564,13 @@ func TestPickPortErrorsAndListsCandidatesWhenAmbiguous(t *testing.T) {
 	if err == nil {
 		t.Fatal("err nil, want error")
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, "/dev/cu.usbmodem101") || !strings.Contains(msg, "/dev/cu.usbserial-0001") {
-		t.Fatalf("err %q does not list both candidates", msg)
+	if got, want := err.Error(), "multiple serial ports found: /dev/cu.usbmodem101, /dev/cu.usbserial-0001; pass --port to choose"; got != want {
+		t.Fatalf("err %q, want %q", got, want)
 	}
-	if !strings.Contains(msg, "--port") {
-		t.Fatalf("err %q does not mention --port", msg)
+	var selection *portSelectionError
+	if !errors.As(err, &selection) || selection.code != recordErrorMultiplePorts ||
+		strings.Join(selection.candidates, ",") != "/dev/cu.usbmodem101,/dev/cu.usbserial-0001" {
+		t.Fatalf("selection error = %#v", selection)
 	}
 }
 

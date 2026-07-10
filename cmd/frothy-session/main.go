@@ -1452,6 +1452,8 @@ const (
 	recordErrorDeviceLost      = "device_lost"
 	recordErrorInterruptFailed = "interrupt_failed"
 	recordErrorMirrorStale     = "mirror_stale"
+	recordErrorNoPorts         = "no_ports"
+	recordErrorMultiplePorts   = "multiple_ports"
 )
 
 func newRecordWriter(output io.Writer, session string) *recordWriter {
@@ -1596,11 +1598,15 @@ func (w *recordWriter) interrupt(state recordState, mirror recordMirror, settled
 	return w.write(recordInterrupt, state, mirror, fields)
 }
 
-func (w *recordWriter) sessionError(state recordState, mirror recordMirror, code string, message string) error {
-	return w.write(recordSessionError, state, mirror, map[string]any{
+func (w *recordWriter) sessionError(state recordState, mirror recordMirror, code string, message string, candidates ...string) error {
+	fields := map[string]any{
 		"code":    code,
 		"message": message,
-	})
+	}
+	if len(candidates) != 0 {
+		fields["candidates"] = candidates
+	}
+	return w.write(recordSessionError, state, mirror, fields)
 }
 
 func (w *recordWriter) sessionEnd(mirror recordMirror) error {
@@ -2060,6 +2066,19 @@ func isLikelySerialPort(path string) bool {
 	return false
 }
 
+type portSelectionError struct {
+	code       string
+	candidates []string
+}
+
+func (e *portSelectionError) Error() string {
+	if e.code == recordErrorMultiplePorts {
+		return fmt.Sprintf("multiple serial ports found: %s; pass --port to choose",
+			strings.Join(e.candidates, ", "))
+	}
+	return "no serial port found; pass --port"
+}
+
 // pickPort returns override if it is set. Otherwise it asks list for
 // candidates and returns the single USB-serial match. Zero or many matches
 // each return an error that tells the user what to do next.
@@ -2079,17 +2098,28 @@ func pickPort(override string, list portLister) (string, error) {
 	}
 	switch len(matches) {
 	case 0:
-		return "", errors.New("no serial port found; pass --port")
+		return "", &portSelectionError{code: recordErrorNoPorts}
 	case 1:
 		return matches[0], nil
 	default:
-		return "", fmt.Errorf("multiple serial ports found: %s; pass --port to choose",
-			strings.Join(matches, ", "))
+		return "", &portSelectionError{
+			code:       recordErrorMultiplePorts,
+			candidates: append([]string(nil), matches...),
+		}
 	}
 }
 
-func pickSessionPort(override string, list portLister) (string, error) {
-	return pickPort(override, list)
+func pickSessionPort(override string, list portLister, records *recordWriter) (string, error) {
+	chosen, err := pickPort(override, list)
+	if err == nil || records == nil {
+		return chosen, err
+	}
+	var selection *portSelectionError
+	if errors.As(err, &selection) {
+		_ = records.sessionError(recordStateError, recordMirrorNone,
+			selection.code, selection.Error(), selection.candidates...)
+	}
+	return "", err
 }
 
 type verb struct {
@@ -2782,23 +2812,6 @@ func runSessionMain() int {
 		return 0
 	}
 
-	chosen, err := pickSessionPort(*port, defaultPortLister)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "session: %v\n", err)
-		os.Exit(2)
-	}
-
-	dev, err := openSerial(chosen, *baud)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "serial: %v\n", err)
-		os.Exit(1)
-	}
-	defer dev.close()
-	tracker := &interruptTracker{}
-	stopForwardingInterrupts := forwardInterruptSignals(dev, os.Stderr, tracker)
-	defer stopForwardingInterrupts()
-	time.Sleep(*settle)
-
 	var recordOutput *recordWriter
 	if *records {
 		output, closeOutput, err := openRecordOutput(os.Stdout, *transcript)
@@ -2818,6 +2831,23 @@ func runSessionMain() int {
 			os.Exit(1)
 		}
 	}
+
+	chosen, err := pickSessionPort(*port, defaultPortLister, recordOutput)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "session: %v\n", err)
+		os.Exit(2)
+	}
+
+	dev, err := openSerial(chosen, *baud)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "serial: %v\n", err)
+		os.Exit(1)
+	}
+	defer dev.close()
+	tracker := &interruptTracker{}
+	stopForwardingInterrupts := forwardInterruptSignals(dev, os.Stderr, tracker)
+	defer stopForwardingInterrupts()
+	time.Sleep(*settle)
 
 	status, err := readDeviceStatus(dev, *timeout)
 	if err != nil {

@@ -18,6 +18,7 @@ type editorSessionView struct {
 	lastStatus       string
 	interruptSettled bool
 	errorCode        string
+	candidates       []string
 }
 
 func (v *editorSessionView) applyRecord(record map[string]any) {
@@ -69,6 +70,14 @@ func (v *editorSessionView) applyRecord(record map[string]any) {
 	case "session_error":
 		if code, ok := record["code"].(string); ok {
 			v.errorCode = code
+		}
+		if values, ok := record["candidates"].([]any); ok {
+			v.candidates = nil
+			for _, value := range values {
+				if candidate, ok := value.(string); ok {
+					v.candidates = append(v.candidates, candidate)
+				}
+			}
 		}
 	}
 }
@@ -185,5 +194,52 @@ func TestEditorSessionViewIgnoresUnknownRecordKind(t *testing.T) {
 	if view.session != "s1" || view.lastKind != "future_record" ||
 		view.state != "idle" || view.mirror != "clean" || view.errorCode != "" {
 		t.Fatalf("future record view = %#v", view)
+	}
+}
+
+func TestEditorSessionViewSeesPortSelectionErrors(t *testing.T) {
+	tests := []struct {
+		name           string
+		ports          []string
+		code           string
+		wantCandidates string
+	}{
+		{name: "none", ports: []string{"/dev/null"}, code: "no_ports"},
+		{
+			name:           "multiple",
+			ports:          []string{"/dev/cu.usbmodem101", "/dev/cu.usbserial-0001"},
+			code:           "multiple_ports",
+			wantCandidates: "/dev/cu.usbmodem101,/dev/cu.usbserial-0001",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out strings.Builder
+			records := newRecordWriter(&out, "s1")
+			if err := records.sessionStart(); err != nil {
+				t.Fatal(err)
+			}
+			_, err := pickSessionPort("", func() ([]string, error) {
+				return test.ports, nil
+			}, records)
+			if err == nil {
+				t.Fatal("pickSessionPort accepted invalid port selection")
+			}
+
+			decoded := decodeRecords(t, out.String())
+			if got, want := recordKinds(decoded), "session_start,session_error"; got != want {
+				t.Fatalf("record kinds %q, want %q", got, want)
+			}
+			var view editorSessionView
+			for _, record := range decoded {
+				view.applyRecord(record)
+			}
+			if view.state != "error" || view.mirror != "none" ||
+				view.errorCode != test.code ||
+				strings.Join(view.candidates, ",") != test.wantCandidates {
+				t.Fatalf("port selection view = %#v", view)
+			}
+		})
 	}
 }
