@@ -136,7 +136,9 @@ export async function browseWords(): Promise<void> {
   const response = await inspectRequest('words');
   if (!response) return;
 
-  const words = response.trim().split(/\s+/);
+  const lines = response.trim().split(/\r?\n/);
+  if (lines[0]?.trim() === 'words') lines.shift();
+  const words = lines.join(' ').split(/\s+/);
   if (words[words.length - 1] === 'ok') words.pop();
   const liveWords = [...new Set(words.filter(Boolean))];
   if (liveWords.length === 0) {
