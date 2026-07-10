@@ -120,6 +120,9 @@
   },
   "scripts": {
     "build": "tsc --noEmit && esbuild src/extension.ts --bundle --platform=node --target=node18 --external:vscode --format=cjs --outfile=out/extension.js",
+    "test": "npm run test:session-records",
+    "test:session-records": "esbuild test/session-records.test.ts --bundle --platform=node --target=node18 --format=cjs --outfile=out/test/session-records.test.js && node --test out/test/session-records.test.js",
+    "posttest": "node -e \"require('node:fs').rmSync('out/test', { recursive: true, force: true })\"",
     "vscode:prepublish": "npm run build",
     "package": "vsce package"
   },
