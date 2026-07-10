@@ -6,11 +6,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
-// bootstrapScriptPath is the script-relative location TB's contract names.
-// The bootstrap verb requires the script to exist in the repo root and fails
-// clearly when it does not (TB SPEC Closed-decision #7).
+// bootstrapScriptPath is relative to the Frothy source root.
 const bootstrapScriptPath = "tools/setup-esp-idf.sh"
 
 func runBootstrapMain() int {
@@ -53,8 +52,14 @@ func runBootstrapCommand(args []string, stdout io.Writer, stderr io.Writer, run 
 		return 2
 	}
 
-	if _, err := os.Stat(bootstrapScriptPath); err != nil {
-		fmt.Fprintf(stderr, "bootstrap: %s not found; run from the Frothy repo root\n", bootstrapScriptPath)
+	sourceRoot, err := resolveFrothySourceRoot(".")
+	if err != nil {
+		fmt.Fprintf(stderr, "bootstrap: %v\n", err)
+		return 2
+	}
+	scriptPath := filepath.Join(sourceRoot, bootstrapScriptPath)
+	if _, err := os.Stat(scriptPath); err != nil {
+		fmt.Fprintf(stderr, "bootstrap: %s not found\n", scriptPath)
 		return 2
 	}
 
@@ -62,5 +67,5 @@ func runBootstrapCommand(args []string, stdout io.Writer, stderr io.Writer, run 
 	if *force {
 		scriptArgs = append(scriptArgs, "--force")
 	}
-	return run(bootstrapScriptPath, scriptArgs, stdout, stderr)
+	return run(scriptPath, scriptArgs, stdout, stderr)
 }
