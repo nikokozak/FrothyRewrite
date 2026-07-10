@@ -27,6 +27,7 @@ jobs:
           cache-dependency-path: |
             libs/frothy-repl/package-lock.json
             libs/frothy-editor/package-lock.json
+            editors/vscode/package-lock.json
 
       - run: make test
       - run: make test-unity
@@ -53,6 +54,13 @@ jobs:
         run: |
           npm ci
           npm test
+
+      - name: VS Code extension npm tests
+        working-directory: editors/vscode
+        run: |
+          npm ci
+          npm test
+          npm run build
 
   esp32-build:
     runs-on: ubuntu-latest
