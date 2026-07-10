@@ -494,6 +494,7 @@ test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 		'status is cells(1)' \
 		'set status[0] to message' \
 		'status[0]' \
+		'led_ref is led.on' \
 		'save' \
 		'clear' \
 		'restore' \
@@ -501,12 +502,13 @@ test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 		'status[0]' \
 		'see message' \
 		'see counter' \
+		'see led_ref' \
 		'boot:' \
 		'see boot' \
 		'words' \
 		| build/host/frothy-host-normal); \
 	ok_count=$$(printf '%s\n' "$$out" | grep -c 'ok$$'); \
-	if [ "$$ok_count" != 54 ]; then \
+	if [ "$$ok_count" != 56 ]; then \
 		printf '%s\n' "$$out"; \
 		exit 1; \
 	fi; \
