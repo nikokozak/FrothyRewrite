@@ -6,6 +6,8 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-10
+
 ### Changed
 
 - **Interrupting a running program is no longer reported as an error.**
