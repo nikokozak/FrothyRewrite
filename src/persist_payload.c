@@ -534,7 +534,13 @@ static fr_err_t fr_persist_encode_code_ref(
   }
   FR_TRY(fr_code_get_instructions(runtime, runtime_code_id, &instructions));
 
-  for (uint16_t i = 0; i < *code_count; i++) {
+  /* Dedup only against other overlay records, never base-image codes — the
+   * same window fr_persist_find_code_ref resolves binds in. An overlay whose
+   * bytes happen to match a base word (e.g. `to w [ gpio.high: $led_builtin ]`,
+   * identical to led.on's body) must get its own record: if it deduped to the
+   * base code, find_code_ref (which skips base) could not resolve the bind and
+   * the save aborted with "corrupt data". */
+  for (uint16_t i = runtime->code.base_image_count; i < *code_count; i++) {
     bool same_code = false;
 
     if (runtime_code_ids[i] >= runtime->code.count) {
