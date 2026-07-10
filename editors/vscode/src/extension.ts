@@ -10,10 +10,9 @@ import { initStatusBar, updateStatusBar, disposeStatusBar } from './status-bar';
 const HANDLERS: Array<[string, () => unknown]> = [
   ['frothy.connect',       () => connectWithGuidance()],
   ['frothy.disconnect',    () => commands.disconnect()],
-  ['frothy.runLine',       () => commands.runLine()],
-  ['frothy.sendSelection', () => commands.sendSelection()],
-  ['frothy.runLast',       () => commands.runLast()],
-  ['frothy.sendFile',      () => commands.sendFile()],
+  ['frothy.runForm',       () => commands.runForm()],
+  ['frothy.runFile',       () => commands.runFile()],
+  ['frothy.rerun',         () => commands.rerun()],
   ['frothy.openExample',   () => commands.openExample()],
   ['frothy.see',           () => commands.see()],
   ['frothy.words',         () => commands.words()],

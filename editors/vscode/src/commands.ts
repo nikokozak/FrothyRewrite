@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as proc from './connect';
 import { FROTHY_EXAMPLES } from './examples.generated';
+import { formAt, splitForms } from './forms';
 import { appendLine, show } from './output';
 
 // Frothy identifiers may contain `.`, `?`, `_`, `-`, and `$name` constants
@@ -31,73 +32,39 @@ export async function disconnect(): Promise<void> {
   await proc.teardown();
 }
 
-// Send a single line — the current cursor line if no selection, otherwise
-// the first line of the selection. Updates lastForm.
-export function runLine(): void {
+export async function runForm(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
   if (!proc.isConnected()) {
     notConnectedHint();
     return;
   }
-  const line = currentLineText(editor);
-  if (!line) return;
-  if (!proc.writeLine(line)) {
-    notConnectedHint();
+
+  let source: string | undefined;
+  if (!editor.selection.isEmpty) {
+    const forms = splitForms(editor.document.getText(editor.selection));
+    if (forms.length === 1 && forms[0].complete) source = forms[0].source;
+  } else {
+    const form = formAt(editor.document, editor.selection.active.line);
+    if (form?.complete) source = form.source;
+  }
+  if (!source) {
+    await oneFormHint();
     return;
   }
-  setLastForm(line);
+  await submitForm(source, true);
 }
 
-// Send every non-empty line in the selection, in order. Updates lastForm
-// to the last line sent so runLast can repeat. If the connection drops
-// part-way through, stop and surface the warning rather than dropping
-// the rest of the lines silently.
-//
-// For multi-line batches, drop a "[run selection: N lines]" header into
-// the transcript so the device/session echoes that follow have context — at
-// 30+ lines the bare replies blur together otherwise.
-export function sendSelection(): void {
-  const editor = vscode.window.activeTextEditor;
-  if (!editor) return;
-  if (!proc.isConnected()) {
-    notConnectedHint();
-    return;
-  }
-  const text = editor.selection.isEmpty
-    ? currentLineText(editor)
-    : editor.document.getText(editor.selection);
-  if (!text) return;
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
-  if (lines.length === 0) return;
-  if (lines.length > 1) {
-    appendLine(`> [run selection: ${lines.length} lines]`);
-  }
-  let sent: string | undefined;
-  for (const line of lines) {
-    if (!proc.writeLine(line)) {
-      notConnectedHint();
-      break;
-    }
-    sent = line;
-  }
-  if (sent) setLastForm(sent);
-}
-
-// Repeat whatever runLine / sendSelection last sent.
-export function runLast(): void {
+export async function rerun(): Promise<void> {
   if (!proc.isConnected()) {
     notConnectedHint();
     return;
   }
   if (!lastForm) return;
-  if (!proc.writeLine(lastForm)) notConnectedHint();
+  await submitForm(lastForm, false);
 }
 
-// Send the current buffer through the open `frothy session` process. The
-// optional path is only for include resolution; the source itself is the
-// unsaved editor text.
-export async function sendFile(): Promise<void> {
+export async function runFile(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
   if (!proc.isConnected()) {
@@ -105,14 +72,24 @@ export async function sendFile(): Promise<void> {
     return;
   }
   const doc = editor.document;
+  const text = doc.getText();
+  const forms = splitForms(text);
+  if (forms.length === 0) {
+    vscode.window.showInformationMessage('Frothy: this file has no forms to run.');
+    return;
+  }
+  if (forms.some((form) => !form.complete)) {
+    vscode.window.showWarningMessage('Frothy: finish the incomplete form before running this file.');
+    return;
+  }
 
   const path = doc.isUntitled ? undefined : doc.fileName;
   const basename = path ? path.split(/[/\\]/).pop() ?? path : 'untitled buffer';
   const lineCount = doc.lineCount;
 
   show();
-  appendLine(`> [send file: ${basename} · ${lineCount} lines]`);
-  if (!proc.writeSourceBlock(doc.getText(), path)) notConnectedHint();
+  appendLine(`> [run file: ${basename} · ${lineCount} lines]`);
+  if (!proc.writeSourceBlock(text, path)) notConnectedHint();
 }
 
 export async function openExample(): Promise<void> {
@@ -167,11 +144,6 @@ export function interrupt(): void {
   if (!proc.interrupt()) notConnectedHint();
 }
 
-function currentLineText(editor: vscode.TextEditor): string {
-  const head = editor.selection.active;
-  return editor.document.lineAt(head.line).text.trim();
-}
-
 function wordUnderCursor(editor: vscode.TextEditor): string {
   const sel = editor.selection;
   if (!sel.isEmpty) return editor.document.getText(sel);
@@ -183,4 +155,23 @@ function notConnectedHint(): void {
   vscode.window.showWarningMessage(
     'Frothy: not connected. Click the status bar item or run "Frothy: Connect".',
   );
+}
+
+async function submitForm(source: string, remember: boolean): Promise<void> {
+  if (remember) setLastForm(source);
+  try {
+    await proc.request(source);
+  } catch (err) {
+    if (!(err instanceof proc.SessionRecordError)) {
+      vscode.window.showWarningMessage(`Frothy: ${(err as Error).message}`);
+    }
+  }
+}
+
+async function oneFormHint(): Promise<void> {
+  const choice = await vscode.window.showWarningMessage(
+    'Frothy: select one complete form, or run the whole file.',
+    'Run File',
+  );
+  if (choice === 'Run File') await vscode.commands.executeCommand('frothy.runFile');
 }

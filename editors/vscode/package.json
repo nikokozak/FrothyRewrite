@@ -1,7 +1,7 @@
 {
   "name": "frothy",
   "displayName": "Frothy",
-  "description": "Live Frothy workflow inside VS Code: connect to a board, run lines and selections, inspect slots, save and restore.",
+  "description": "Live Frothy workflow inside VS Code: connect to a board, run forms and files, inspect words, save and restore.",
   "version": "0.3.0",
   "publisher": "frothy",
   "engines": {
@@ -44,10 +44,9 @@
     "commands": [
       { "command": "frothy.connect",       "title": "Frothy: Connect",          "icon": "$(plug)" },
       { "command": "frothy.disconnect",    "title": "Frothy: Disconnect",       "icon": "$(debug-disconnect)" },
-      { "command": "frothy.runLine",       "title": "Frothy: Run Line",         "icon": "$(play)" },
-      { "command": "frothy.sendSelection", "title": "Frothy: Send Selection",   "icon": "$(run-all)" },
-      { "command": "frothy.runLast",       "title": "Frothy: Run Last Form",    "icon": "$(debug-rerun)" },
-      { "command": "frothy.sendFile",      "title": "Frothy: Send File",        "icon": "$(file-code)" },
+      { "command": "frothy.runForm",       "title": "Frothy: Run Form",         "icon": "$(play)" },
+      { "command": "frothy.runFile",       "title": "Frothy: Run File",         "icon": "$(file-code)" },
+      { "command": "frothy.rerun",         "title": "Frothy: Rerun",            "icon": "$(debug-rerun)" },
       { "command": "frothy.openExample",   "title": "Frothy: Open Example",     "icon": "$(book)" },
       { "command": "frothy.see",           "title": "Frothy: See Word",         "icon": "$(symbol-field)" },
       { "command": "frothy.words",         "title": "Frothy: List Words",       "icon": "$(list-unordered)" },
@@ -59,32 +58,27 @@
       { "command": "frothy.showOutput",    "title": "Frothy: Show Output",      "icon": "$(terminal)" }
     ],
     "keybindings": [
-      { "command": "frothy.runLine",       "key": "shift+enter",      "mac": "shift+enter",   "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
-      { "command": "frothy.sendSelection", "key": "ctrl+enter",       "mac": "cmd+enter",     "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
-      { "command": "frothy.runLast",       "key": "ctrl+alt+r",       "mac": "cmd+alt+r",     "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy && frothy.hasLastForm" },
-      { "command": "frothy.sendFile",      "key": "ctrl+shift+enter", "mac": "cmd+shift+enter","when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
+      { "command": "frothy.runForm",       "key": "ctrl+enter",       "mac": "cmd+enter",      "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
+      { "command": "frothy.runFile",       "key": "ctrl+shift+enter", "mac": "cmd+shift+enter", "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
+      { "command": "frothy.rerun",         "key": "ctrl+alt+r",       "mac": "cmd+alt+r",      "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy && frothy.hasLastForm" },
       { "command": "frothy.see",           "key": "ctrl+alt+b",       "mac": "cmd+alt+b",     "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
       { "command": "frothy.interrupt",     "key": "ctrl+alt+.",       "mac": "cmd+alt+.",     "when": "frothy.isConnected && frothy.isBusy" }
     ],
     "menus": {
       "editor/title": [
-        { "command": "frothy.connect",       "when": "editorLangId == frothy && !frothy.isConnected", "group": "navigation@1" },
-        { "command": "frothy.runLine",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "navigation@1" },
-        { "command": "frothy.sendSelection", "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "navigation@2" },
-        { "command": "frothy.runLast",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy && frothy.hasLastForm", "group": "navigation@3" },
-        { "command": "frothy.sendFile",      "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "navigation@4" },
-        { "command": "frothy.disconnect",    "when": "editorLangId == frothy &&  frothy.isConnected", "group": "navigation@5" }
+        { "command": "frothy.runForm",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "navigation@1" },
+        { "command": "frothy.interrupt",     "when": "editorLangId == frothy && frothy.isConnected && frothy.isBusy",  "group": "navigation@1" }
       ],
       "editor/context": [
-        { "command": "frothy.runLine",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@1" },
-        { "command": "frothy.sendSelection", "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy && editorHasSelection", "group": "frothy@2" },
-        { "command": "frothy.see",           "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@3" }
+        { "command": "frothy.runForm",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@1" },
+        { "command": "frothy.runFile",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@2" },
+        { "command": "frothy.rerun",         "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy && frothy.hasLastForm", "group": "frothy@3" },
+        { "command": "frothy.see",           "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@4" }
       ],
       "commandPalette": [
-        { "command": "frothy.runLine",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
-        { "command": "frothy.sendSelection", "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
-        { "command": "frothy.runLast",       "when": "frothy.isConnected && !frothy.isBusy && frothy.hasLastForm" },
-        { "command": "frothy.sendFile",      "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
+        { "command": "frothy.runForm",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
+        { "command": "frothy.runFile",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
+        { "command": "frothy.rerun",         "when": "frothy.isConnected && !frothy.isBusy && frothy.hasLastForm" },
         { "command": "frothy.openExample" },
         { "command": "frothy.see",           "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
         { "command": "frothy.disconnect",    "when": "frothy.isConnected" },
