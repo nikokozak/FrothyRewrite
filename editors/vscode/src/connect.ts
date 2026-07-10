@@ -1,8 +1,23 @@
 import { ChildProcess, spawn } from 'child_process';
 import * as vscode from 'vscode';
-import { appendChunk, appendLine, flushPartial, show } from './output';
+import { appendChunk, appendLine, appendSent, appendText, flushPartial, show } from './output';
+import {
+  emptySessionSnapshot,
+  parseSessionRecord,
+  reduceSessionRecord,
+  SessionRecord,
+  SessionSnapshot,
+} from './session-records';
+
+interface PendingRequest {
+  resolve: (text: string) => void;
+  reject: (error: Error) => void;
+}
 
 let child: ChildProcess | undefined;
+let snapshot = emptySessionSnapshot();
+let editorReady = false;
+let pendingRequest: PendingRequest | undefined;
 let onConnectionChanged: (() => void) | undefined;
 let intentionalExit = false;
 // Re-entrancy guard. Edges this prevents:
@@ -13,7 +28,12 @@ let intentionalExit = false;
 let connecting: Promise<void> | undefined;
 
 export function isConnected(): boolean {
-  return child !== undefined && child.exitCode === null && !child.killed;
+  return editorReady && child !== undefined && child.exitCode === null && !child.killed &&
+    snapshot.state !== 'stale' && snapshot.state !== 'error' && snapshot.state !== 'closed';
+}
+
+export function sessionSnapshot(): Readonly<SessionSnapshot> {
+  return snapshot;
 }
 
 export function setOnConnectionChanged(cb: () => void): void {
@@ -40,7 +60,7 @@ async function doConnect(): Promise<void> {
   const port = cfg.get<string>('port', '');
   const baud = cfg.get<number>('baud', 115200);
 
-  const args = ['session'];
+  const args = ['session', '--records'];
   if (port) {
     args.push('--port', port);
   }
@@ -53,33 +73,196 @@ async function doConnect(): Promise<void> {
   try {
     c = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (err) {
-    appendLine(`session: spawn failed: ${(err as Error).message}`);
-    return;
+    appendLine(`session: cannot start ${bin}: ${(err as Error).message}`);
+    throw err;
   }
   child = c;
+  snapshot = { state: 'syncing', mirror: 'none' };
+  editorReady = false;
   intentionalExit = false;
   fireConnectionChanged();
 
-  c.stdout?.on('data', (data: Buffer) => appendChunk(data.toString('utf8')));
-  c.stderr?.on('data', (data: Buffer) => appendChunk(data.toString('utf8')));
-  c.on('error', (err) => {
-    appendLine(`session: ${err.message}`);
-    if (child === c) {
+  await new Promise<void>((resolve, reject) => {
+    let stdoutBuffer = '';
+    let readySettled = false;
+    let recordFailed = false;
+
+    const rejectReady = (error: Error) => {
+      if (readySettled) return;
+      readySettled = true;
+      reject(error);
+    };
+    const failRecordStream = (error: Error) => {
+      if (recordFailed) return;
+      recordFailed = true;
+      appendLine(`records: ${error.message}`);
+      editorReady = false;
+      snapshot = { ...snapshot, state: 'error' };
+      rejectReady(error);
+      rejectPending(error);
+      fireConnectionChanged();
+      c.kill();
+    };
+
+    c.stdout?.on('data', (data: Buffer) => {
+      if (recordFailed) return;
+      stdoutBuffer += data.toString('utf8');
+      for (;;) {
+        const newline = stdoutBuffer.indexOf('\n');
+        if (newline < 0) break;
+        const line = stdoutBuffer.slice(0, newline);
+        stdoutBuffer = stdoutBuffer.slice(newline + 1);
+        if (line.trim().length === 0) continue;
+
+        let record: SessionRecord;
+        try {
+          record = parseSessionRecord(line);
+        } catch (err) {
+          failRecordStream(err as Error);
+          return;
+        }
+
+        if (record.kind === 'status') {
+          const next = reduceSessionRecord(snapshot, record);
+          if (record.state !== 'idle' || !next.profile || !next.mode) {
+            failRecordStream(new Error('status record is missing editor-ready device state'));
+            return;
+          }
+          snapshot = next;
+        } else {
+          snapshot = reduceSessionRecord(snapshot, record);
+        }
+        renderRecord(record);
+        settleRequest(record);
+
+        if (record.kind === 'status') {
+          editorReady = true;
+          if (!readySettled) {
+            readySettled = true;
+            resolve();
+          }
+        } else if (record.kind === 'session_error') {
+          editorReady = false;
+          rejectReady(new SessionRecordError(record));
+        } else if (record.kind === 'session_end') {
+          editorReady = false;
+          rejectReady(new Error('session ended before device status'));
+        }
+        fireConnectionChanged();
+      }
+    });
+    c.stderr?.on('data', (data: Buffer) => appendChunk(data.toString('utf8')));
+    c.on('error', (err) => {
+      appendLine(`session: cannot start ${bin}: ${err.message}`);
+      editorReady = false;
+      snapshot = { ...snapshot, state: 'error' };
+      rejectReady(err);
+      rejectPending(err);
+      if (child === c) child = undefined;
+      fireConnectionChanged();
+    });
+    c.on('exit', (code, signal) => {
+      if (child !== c) return;
+      flushPartial();
+      const detail = `code=${code ?? '-'}, signal=${signal ?? '-'}`;
+      const error = new Error(`session exited before device status (${detail})`);
+      if (intentionalExit) {
+        appendLine('session: disconnected');
+        snapshot = { ...snapshot, state: 'closed' };
+      } else {
+        appendLine(`session: exited (${detail})`);
+        if (snapshot.state !== 'stale' && snapshot.state !== 'error' && snapshot.state !== 'closed') {
+          snapshot = { ...snapshot, state: 'error' };
+        }
+      }
+      editorReady = false;
+      rejectReady(error);
+      rejectPending(error);
       child = undefined;
       fireConnectionChanged();
+    });
+  });
+}
+
+export class SessionRecordError extends Error {
+  constructor(readonly record: SessionRecord) {
+    super(recordString(record, 'message') ?? recordString(record, 'text') ??
+      recordString(record, 'status') ?? `session ${record.kind}`);
+    this.name = 'SessionRecordError';
+  }
+}
+
+export function request(source: string): Promise<string> {
+  if (!isConnected()) return Promise.reject(new Error('Frothy is not connected'));
+  if (pendingRequest) return Promise.reject(new Error('another Frothy request is still running'));
+
+  return new Promise<string>((resolve, reject) => {
+    pendingRequest = { resolve, reject };
+    const input = source.endsWith('\n') ? source : source + '\n';
+    if (!writeInput(input)) {
+      pendingRequest = undefined;
+      reject(new Error('Frothy session closed before the request was sent'));
     }
   });
-  c.on('exit', (code, signal) => {
-    if (child !== c) return;
-    flushPartial();
-    if (intentionalExit) {
-      appendLine('session: disconnected');
-    } else {
-      appendLine(`session: exited (code=${code ?? '-'}, signal=${signal ?? '-'})`);
+}
+
+function renderRecord(record: SessionRecord): void {
+  switch (record.kind) {
+    case 'status':
+      appendLine(`session: connected (${snapshot.profile}, ${snapshot.mode})`);
+      break;
+    case 'send':
+    case 'compile_error': {
+      const source = recordString(record, 'source');
+      if (source) appendSent(source);
+      const text = recordString(record, 'text') ?? recordString(record, 'status');
+      if (text) appendText(text);
+      break;
     }
-    child = undefined;
-    fireConnectionChanged();
-  });
+    case 'response': {
+      const text = recordString(record, 'text') ?? recordString(record, 'status');
+      if (text) appendText(text);
+      break;
+    }
+    case 'interrupt': {
+      const text = recordString(record, 'text') ?? recordString(record, 'status');
+      if (text) appendText(text);
+      break;
+    }
+    case 'session_error':
+      appendLine(`session: ${recordString(record, 'code') ?? 'error'}: ${recordString(record, 'message') ?? 'session failed'}`);
+      break;
+  }
+}
+
+function settleRequest(record: SessionRecord): void {
+  if (!pendingRequest) return;
+  switch (record.kind) {
+    case 'response': {
+      const pending = pendingRequest;
+      pendingRequest = undefined;
+      pending.resolve(recordString(record, 'text') ?? '');
+      break;
+    }
+    case 'compile_error':
+    case 'interrupt':
+    case 'session_error':
+      rejectPending(new SessionRecordError(record));
+      break;
+    case 'session_end':
+      rejectPending(new Error('Frothy session ended before a response'));
+      break;
+  }
+}
+
+function rejectPending(error: Error): void {
+  const pending = pendingRequest;
+  pendingRequest = undefined;
+  pending?.reject(error);
+}
+
+function recordString(record: SessionRecord, key: string): string | undefined {
+  return typeof record[key] === 'string' ? record[key] : undefined;
 }
 
 // Catch EPIPE / "write after end" / destroyed-stream errors that fire
@@ -88,23 +271,19 @@ async function doConnect(): Promise<void> {
 // genuine disconnect.
 //
 export function writeLine(text: string): boolean {
-  if (!isConnected() || !child?.stdin || child.stdin.destroyed) return false;
-  try {
-    show();
-    child.stdin.write(text + '\n');
-    return true;
-  } catch (err) {
-    appendLine(`write: ${(err as Error).message}`);
-    return false;
-  }
+  return writeInput(text + '\n');
 }
 
 export function writeSourceBlock(text: string, path?: string): boolean {
-  if (!isConnected() || !child?.stdin || child.stdin.destroyed) return false;
   const header = path ? `.source ${path}` : '.source';
+  return writeInput(`${header}\n${text}\n.end-source\n`);
+}
+
+function writeInput(text: string): boolean {
+  if (!isConnected() || !child?.stdin || child.stdin.destroyed) return false;
   try {
     show();
-    child.stdin.write(`${header}\n${text}\n.end-source\n`);
+    child.stdin.write(text);
     return true;
   } catch (err) {
     appendLine(`write: ${(err as Error).message}`);
@@ -126,16 +305,22 @@ export function interrupt(): boolean {
 // foreground device command, SIGINT asks the session to send a device interrupt;
 // SIGKILL is only the last resort.
 export async function teardown(): Promise<void> {
-  if (!child) return;
+  rejectPending(new Error('Frothy session disconnected'));
+  if (!child) {
+    editorReady = false;
+    snapshot = emptySessionSnapshot();
+    fireConnectionChanged();
+    return;
+  }
   const c = child;
   intentionalExit = true;
   c.stdin?.end();
   let exited = await waitForExit(c, 1000);
   if (exited) {
-    if (child === c) {
-      child = undefined;
-      fireConnectionChanged();
-    }
+    if (child === c) child = undefined;
+    editorReady = false;
+    snapshot = emptySessionSnapshot();
+    fireConnectionChanged();
     return;
   }
   c.kill('SIGINT');
@@ -146,8 +331,10 @@ export async function teardown(): Promise<void> {
   }
   if (child === c) {
     child = undefined;
-    fireConnectionChanged();
   }
+  editorReady = false;
+  snapshot = emptySessionSnapshot();
+  fireConnectionChanged();
 }
 
 function waitForExit(c: ChildProcess, ms: number): Promise<boolean> {

@@ -31,6 +31,12 @@ export function appendLine(text: string): void {
   getChannel().appendLine(text);
 }
 
+export function appendText(text: string): void {
+  const lines = text.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  for (const line of lines) getChannel().appendLine(stripCR(line));
+}
+
 // Echo a line the user (or extension) is about to send to the device, so
 // the transcript reads as a real conversation. The "> " prefix matches the
 // device's own prompt — the transcript grammar colors it bold blue.
