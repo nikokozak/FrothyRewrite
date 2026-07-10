@@ -6,6 +6,21 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+### Changed
+
+- **Interrupting a running program is no longer reported as an error.**
+  Stopping a loop with Ctrl-C or the boot button showed
+  `error: interrupted (10)`; it now prints a calm `ok — interrupted`. The
+  change is device-side, so the web editor and VS Code stop flagging a
+  deliberate stop as a failure too.
+
+### Fixed
+
+- **No more `esp_mmu_map` error log on save (ESP32).** With a saved image
+  already mounted, every `save` printed a benign but alarming
+  `E (…) esp_mmu_map: paddr block is mapped already`. Save re-mapped the slot
+  it had already mapped; it now reuses the existing mapping.
+
 ## [0.1.1] - 2026-07-10
 
 ### Fixed
