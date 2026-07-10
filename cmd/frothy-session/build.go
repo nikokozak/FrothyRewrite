@@ -174,11 +174,11 @@ func emitMainSource(projectDir, target string) error {
 }
 
 func runMake(projectDir, target string, stdout io.Writer, stderr io.Writer) error {
-	repoRoot := findRepoRoot(projectDir)
-	if repoRoot == "" {
-		return fmt.Errorf("frothy build: cannot locate repo root (no Makefile up the tree from %s)", projectDir)
+	sourceRoot, err := resolveFrothySourceRoot(projectDir)
+	if err != nil {
+		return err
 	}
-	args := []string{"-C", repoRoot, "artifacts", "BOARD=" + target,
+	args := []string{"-C", sourceRoot, "artifacts", "BOARD=" + target,
 		"FROTHY_LIB_NATIVES_C=" + filepath.Join(buildOutputDir(projectDir, target), "lib_natives.c"),
 		"FROTHY_LIBS_CMAKE=" + filepath.Join(buildOutputDir(projectDir, target), "libs.cmake"),
 	}
@@ -186,24 +186,4 @@ func runMake(projectDir, target string, stdout io.Writer, stderr io.Writer) erro
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return cmd.Run()
-}
-
-// findRepoRoot walks upward from start looking for a Makefile. The
-// build verb may run from a sub-project directory; the kernel
-// Makefile lives at the FrothyRewrite repo root.
-func findRepoRoot(start string) string {
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		return ""
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "Makefile")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
 }

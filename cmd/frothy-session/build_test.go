@@ -225,3 +225,33 @@ func TestRunBuildCommand_MissingManifest(t *testing.T) {
 		t.Fatalf("expected stderr to mention frothy.toml; got: %s", stderr.String())
 	}
 }
+
+func TestRunBuild_UsesSourceRootOutsideProject(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("test uses a POSIX make stub")
+	}
+	project := makeTempProject(t, "name = \"outside\"\ntarget = \"host\"\n", "", nil)
+	writeFile(t, filepath.Join(project, "Makefile"), "must not be used\n")
+	sourceRoot := makeSourceRoot(t)
+	t.Setenv(frothySourceRootEnv, sourceRoot)
+
+	binDir := t.TempDir()
+	makePath := filepath.Join(binDir, "make")
+	writeFile(t, makePath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+	if err := os.Chmod(makePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var stdout, stderr bytes.Buffer
+	if err := runBuild(buildOptions{projectDir: project}, &stdout, &stderr); err != nil {
+		t.Fatalf("runBuild: %v\nstderr: %s", err, stderr.String())
+	}
+	want := "-C\n" + sourceRoot + "\nartifacts\nBOARD=host\n"
+	if !strings.Contains(stdout.String(), want) {
+		t.Fatalf("make argv = %q, want prefix %q", stdout.String(), want)
+	}
+	if strings.Contains(stdout.String(), "-C\n"+project+"\n") {
+		t.Fatalf("make used project-local Makefile: %q", stdout.String())
+	}
+}
