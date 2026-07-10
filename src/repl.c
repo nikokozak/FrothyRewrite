@@ -2301,7 +2301,9 @@ fr_err_t fr_repl_run(fr_runtime_t *runtime, const fr_repl_io_t *io) {
 
     fr_diagnostic_t diag = {0};
     fr_err_t err = fr_repl_eval_line_to_writer(runtime, line, &writer, &diag);
-    if (err != FR_OK) {
+    if (err == FR_ERR_INTERRUPTED) {
+      FR_TRY(io->write_text("ok — interrupted\n"));
+    } else if (err != FR_OK) {
       char response[FR_REPL_OUTPUT_BYTES];
 
       FR_TRY(fr_repl_write_error(response, (uint16_t)sizeof(response), err,
