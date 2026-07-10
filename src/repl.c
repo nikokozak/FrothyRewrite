@@ -1024,6 +1024,29 @@ static fr_err_t fr_repl_append_runtime_context_line(
     FR_TRY(fr_repl_append_int(out, out_cap, used, diag->expected));
     FR_TRY(fr_repl_append(out, out_cap, used, ")\n"));
     return FR_OK;
+  case FR_DIAG_MSG_RUNTIME_SLOT_UNPERSISTABLE:
+    *out_wrote = true;
+    if (diag->context_name != NULL) {
+      FR_TRY(fr_repl_append(out, out_cap, used, "cannot save slot '"));
+      FR_TRY(fr_repl_append(out, out_cap, used, diag->context_name));
+      FR_TRY(fr_repl_append(out, out_cap, used, "' - "));
+    } else {
+      FR_TRY(fr_repl_append(out, out_cap, used, "cannot save - "));
+    }
+    switch (diag->got) {
+    case 0:
+      message = "bound to a word this firmware does not provide";
+      break;
+    case 2:
+      message = "bound to a live handle or buffer";
+      break;
+    case 1:
+    default:
+      message = "bound to a value this firmware cannot save";
+      break;
+    }
+    FR_TRY(fr_repl_append(out, out_cap, used, message));
+    return fr_repl_append_char(out, out_cap, used, '\n');
   case FR_DIAG_MSG_RUNTIME_STACK_OVERFLOW:
   case FR_DIAG_MSG_RUNTIME_STACK_UNDERFLOW:
   case FR_DIAG_MSG_RUNTIME_INTEGER_OVERFLOW:

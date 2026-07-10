@@ -1250,6 +1250,44 @@ static fr_err_t fr_persist_encode_value(
   return FR_ERR_UNSUPPORTED;
 }
 
+static void fr_persist_note_unpersistable_slot(const fr_runtime_t *runtime,
+                                               fr_slot_id_t slot_id,
+                                               fr_tagged_t value,
+                                               fr_err_t err) {
+  fr_native_id_t native_id = 0;
+  const char *name = NULL;
+  size_t name_length = 0;
+
+  if ((err != FR_ERR_UNSUPPORTED && err != FR_ERR_VOLATILE) ||
+      runtime->diag == NULL) {
+    return;
+  }
+
+  runtime->diag->kind = FR_DIAG_LIMIT;
+  runtime->diag->message_id = FR_DIAG_MSG_RUNTIME_SLOT_UNPERSISTABLE;
+  if (fr_tagged_decode_native_id(value, &native_id) == FR_OK &&
+      native_id >= runtime->natives.base_count) {
+    runtime->diag->got = 0;
+  } else if (err == FR_ERR_VOLATILE) {
+    runtime->diag->got = 2;
+  } else {
+    runtime->diag->got = 1;
+  }
+
+  runtime->diag->context_name = NULL;
+  name = fr_slot_name(runtime, slot_id);
+  if (name == NULL) {
+    return;
+  }
+  while (name[name_length] != '\0' &&
+         name_length + 1u < sizeof(runtime->diag->suggestion_text)) {
+    name_length++;
+  }
+  memcpy(runtime->diag->suggestion_text, name, name_length);
+  runtime->diag->suggestion_text[name_length] = '\0';
+  runtime->diag->context_name = runtime->diag->suggestion_text;
+}
+
 static fr_err_t fr_persist_check_no_volatile_handles(
     const fr_runtime_t *runtime) {
   if (runtime == NULL) {
@@ -1467,11 +1505,17 @@ static fr_err_t fr_persist_payload_write_finalized(
 
       FR_TRY(fr_persist_writer_u8(writer, tier));
     }
-    FR_TRY(fr_persist_encode_value(writer, runtime,
-                                   runtime->slots.current[slot_id],
-                                   runtime_code_ids, &code_count,
-                                   runtime_object_ids, object_kinds,
-                                   object_count));
+    {
+      fr_tagged_t value = runtime->slots.current[slot_id];
+      fr_err_t err = fr_persist_encode_value(
+          writer, runtime, value, runtime_code_ids, &code_count,
+          runtime_object_ids, object_kinds, object_count);
+
+      if (err != FR_OK) {
+        fr_persist_note_unpersistable_slot(runtime, slot_id, value, err);
+        return err;
+      }
+    }
   }
 
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
