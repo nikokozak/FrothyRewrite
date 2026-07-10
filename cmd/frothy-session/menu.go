@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -267,32 +266,13 @@ func defaultMenuContext() menuContext {
 	if root != "" {
 		ctx.canonical = true
 		ctx.repoRoot = root
-		ctx.boards = listMenuBoards(filepath.Join(root, "boards"))
+		ctx.boards = listFlashableBoards(filepath.Join(root, "boards"))
 	}
 	if _, err := os.Stat(filepath.Join(wd, "frothy.toml")); err == nil {
 		ctx.inProject = true
 	}
 	return ctx
 }
-func listMenuBoards(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var boards []string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if fileExists(filepath.Join(dir, name, "board.mk")) {
-			boards = append(boards, name)
-		}
-	}
-	sort.Strings(boards)
-	return boards
-}
-
 func defaultMenuExecutable() string {
 	if frothySelfPath != "" {
 		return frothySelfPath

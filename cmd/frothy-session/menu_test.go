@@ -169,6 +169,54 @@ func TestResolveMenuExecutableMakesRelativePathAbsolute(t *testing.T) {
 	}
 }
 
+func TestFlashableBoardUsesManifestTarget(t *testing.T) {
+	boardsDir := t.TempDir()
+	writeTestBoard(t, boardsDir, "esp32", `{"target":"esp-idf"}`)
+	writeTestBoard(t, boardsDir, "host", `{"target":"host"}`)
+	writeTestBoard(t, boardsDir, "malformed", `{`)
+
+	for _, test := range []struct {
+		id   string
+		want bool
+	}{
+		{id: "esp32", want: true},
+		{id: "host"},
+		{id: "malformed"},
+		{id: "missing"},
+		{id: "../esp32"},
+	} {
+		t.Run(test.id, func(t *testing.T) {
+			if got := flashableBoard(boardsDir, test.id); got != test.want {
+				t.Fatalf("flashableBoard(%q) = %v, want %v", test.id, got, test.want)
+			}
+		})
+	}
+}
+
+func TestMenuBoardListExcludesHostAndMalformedManifests(t *testing.T) {
+	root := makeSourceRoot(t)
+	boardsDir := filepath.Join(root, "boards")
+	writeTestBoard(t, boardsDir, "esp32_devkit_v1", `{"target":"esp-idf"}`)
+	writeTestBoard(t, boardsDir, "host", `{"target":"host"}`)
+	writeTestBoard(t, boardsDir, "broken", `{`)
+	t.Setenv(frothySourceRootEnv, root)
+
+	if got := strings.Join(defaultMenuContext().boards, ","); got != "esp32_devkit_v1" {
+		t.Fatalf("flashable boards = %q, want esp32_devkit_v1", got)
+	}
+}
+
+func writeTestBoard(t *testing.T, boardsDir, id, manifest string) {
+	t.Helper()
+	dir := filepath.Join(boardsDir, id)
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "board.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func assertMenuCalls(t *testing.T, got []menuCall, want []menuCall) {
 	t.Helper()
 	if len(got) != len(want) {
