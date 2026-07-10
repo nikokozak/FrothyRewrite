@@ -2,8 +2,15 @@
   "name": "frothy",
   "displayName": "Frothy",
   "description": "Live Frothy workflow inside VS Code: connect to a board, run forms and files, inspect words, save and restore.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "frothy",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nikokozak/FrothyRewrite.git",
+    "directory": "editors/vscode"
+  },
+  "homepage": "https://github.com/nikokozak/FrothyRewrite/tree/main/editors/vscode#readme",
   "engines": {
     "vscode": "^1.74.0"
   },

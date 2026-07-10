@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.0 — 2026-07-10
+
+The editor now follows the structured Frothy session contract and runs whole
+language forms.
+
+### Added
+
+- Native connecting, running, stale, and error states derived from
+  `frothy session --records`.
+- **Run Form**, **Run File**, and **Rerun** commands. Run Form accepts one
+  selected form or finds the form around the cursor.
+- Full-form diagnostics for host compile errors without pretending the device
+  reported an exact character offset.
+- **Browse Words** and **Inspect Word**, both backed by the connected device's
+  live vocabulary.
+- A native port picker when CLI discovery finds more than one serial device.
+- Native recovery actions for a missing CLI or missing serial device.
+
+### Changed
+
+- The old Run Line, Send Selection, Run Last Form, and Send File command IDs
+  were removed. This is a deliberate pre-release break rather than a layer of
+  compatibility aliases.
+- Cmd/Ctrl+Enter runs one form; Cmd/Ctrl+Shift+Enter runs the current file.
+- The extension activates for Frothy files and commands, not every VS Code
+  startup. Its status item stays hidden outside a Frothy editing/session
+  context.
+
+### Fixed
+
+- A spawned CLI process no longer counts as connected. The extension waits for
+  a valid device status record.
+- Split or coalesced stdout chunks no longer corrupt session state.
+- Multiline definitions are submitted and remembered as one form.
+
 ## 0.3.0 — 2026-07-09
 
 Editor-pass release: an example browser and corrected language support.
