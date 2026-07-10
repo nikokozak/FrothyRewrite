@@ -1180,6 +1180,9 @@ static uint16_t fr_esp_persist_mmap_length;
 static uint16_t fr_esp_persist_candidate_mmap_length;
 static bool fr_esp_persist_mmap_active;
 static bool fr_esp_persist_candidate_mmap_active;
+static uint8_t fr_esp_persist_mmap_slot;
+static uint8_t fr_esp_persist_candidate_mmap_slot;
+static bool fr_esp_persist_candidate_aliases_active;
 static struct {
   bool active;
   const esp_partition_t *partition;
@@ -1430,16 +1433,21 @@ void fr_platform_persist_unmount(void) {
     fr_esp_persist_mmap_handle = 0;
     fr_esp_persist_mmap_bytes = NULL;
     fr_esp_persist_mmap_length = 0;
+    fr_esp_persist_mmap_slot = 0;
+    fr_esp_persist_candidate_aliases_active = false;
   }
 }
 
 void fr_platform_persist_mount_discard(void) {
   if (fr_esp_persist_candidate_mmap_active) {
-    esp_partition_munmap(fr_esp_persist_candidate_mmap_handle);
+    if (!fr_esp_persist_candidate_aliases_active) {
+      esp_partition_munmap(fr_esp_persist_candidate_mmap_handle);
+    }
     fr_esp_persist_candidate_mmap_active = false;
     fr_esp_persist_candidate_mmap_handle = 0;
     fr_esp_persist_candidate_mmap_bytes = NULL;
     fr_esp_persist_candidate_mmap_length = 0;
+    fr_esp_persist_candidate_aliases_active = false;
   }
 }
 
@@ -1450,10 +1458,19 @@ fr_err_t fr_platform_persist_mount_commit(void) {
   if (!fr_esp_persist_candidate_mmap_active) {
     return FR_ERR_INVALID;
   }
+  if (fr_esp_persist_candidate_aliases_active) {
+    fr_esp_persist_candidate_mmap_handle = 0;
+    fr_esp_persist_candidate_mmap_bytes = NULL;
+    fr_esp_persist_candidate_mmap_length = 0;
+    fr_esp_persist_candidate_mmap_active = false;
+    fr_esp_persist_candidate_aliases_active = false;
+    return FR_OK;
+  }
   old_handle = fr_esp_persist_mmap_handle;
   fr_esp_persist_mmap_handle = fr_esp_persist_candidate_mmap_handle;
   fr_esp_persist_mmap_bytes = fr_esp_persist_candidate_mmap_bytes;
   fr_esp_persist_mmap_length = fr_esp_persist_candidate_mmap_length;
+  fr_esp_persist_mmap_slot = fr_esp_persist_candidate_mmap_slot;
   fr_esp_persist_mmap_active = true;
   fr_esp_persist_candidate_mmap_handle = 0;
   fr_esp_persist_candidate_mmap_bytes = NULL;
@@ -1548,6 +1565,21 @@ fr_err_t fr_platform_persist_mount(uint8_t image_index,
   if (info.total_length > UINT16_MAX) {
     return FR_ERR_CAPACITY;
   }
+  if (fr_esp_persist_mmap_active && slot == fr_esp_persist_mmap_slot) {
+    /* The requested slot is already memory-mapped (active). Mapping it again
+     * would make esp_mmu_map log a benign "already mapped" error, so reuse
+     * the existing mapping as the candidate. The active mapping owns the
+     * handle; commit/discard must not munmap this alias. */
+    fr_esp_persist_candidate_aliases_active = true;
+    fr_esp_persist_candidate_mmap_active = true;
+    fr_esp_persist_candidate_mmap_handle = 0;
+    fr_esp_persist_candidate_mmap_bytes = fr_esp_persist_mmap_bytes;
+    fr_esp_persist_candidate_mmap_length = fr_esp_persist_mmap_length;
+    fr_esp_persist_candidate_mmap_slot = slot;
+    *out_bytes = fr_esp_persist_mmap_bytes;
+    *out_length = fr_esp_persist_mmap_length;
+    return FR_OK;
+  }
 
   err = fr_esp_err(esp_partition_mmap(
       partition, fr_esp_persist_slot_offset(slot), info.total_length,
@@ -1559,6 +1591,8 @@ fr_err_t fr_platform_persist_mount(uint8_t image_index,
   fr_esp_persist_candidate_mmap_active = true;
   fr_esp_persist_candidate_mmap_bytes = (const uint8_t *)mapped;
   fr_esp_persist_candidate_mmap_length = (uint16_t)info.total_length;
+  fr_esp_persist_candidate_mmap_slot = slot;
+  fr_esp_persist_candidate_aliases_active = false;
   *out_bytes = (const uint8_t *)mapped;
   *out_length = (uint16_t)info.total_length;
   return FR_OK;
