@@ -1,10 +1,10 @@
-frothy connect — connect to a device's REPL
+frothy connect — open the human REPL over serial
 
-Connect opens an interactive REPL session against a running device over serial. It is the simplest way to type Frothy at a board and read what it prints back, with line history and a status probe that retries while the board is waking. For one-shot delivery of a file, use send instead; for a richer session that can compile on the host, use session.
+Connect is Frothy's human REPL over serial. Use it to type at a running board and read replies, with line history and a status probe that retries while the board is waking. For one-shot delivery of a file, use send. Editors and host-assisted compilation use session instead.
 
 Examples:
   frothy connect --port /dev/cu.usbserial-0001
-      open an interactive REPL against the board on that port
+      open the human REPL on the board on that port
 
 Flags:
   -baud int

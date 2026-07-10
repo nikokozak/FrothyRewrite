@@ -1,10 +1,10 @@
-frothy session — open an interactive REPL session over serial
+frothy session — run the structured editor and host-compile session
 
-Session opens a richer interactive REPL than connect: it can compile Frothy source on the host when the device advertises host-optional mode, accept .source/.end-source blocks from editor clients, replay a recorded transcript, or record one to NDJSON. Use it when connect is too thin for what you need; for a basic interactive REPL, connect is smaller and faster.
+Session is the structured serial path for editors and host-assisted compilation. It accepts .source/.end-source blocks, can compile Frothy source on the host when the device advertises host-optional mode, replay a recorded transcript, or emit NDJSON records. Human terminal use should normally start with connect.
 
 Examples:
-  frothy session --port /dev/cu.usbserial-0001
-      open an interactive REPL on that port, with host compile when offered
+  frothy session --records --port /dev/cu.usbserial-0001
+      emit the structured session records consumed by editor clients
 
   printf '.source main.fr\ninclude "helper.fr"\nmain:\n.end-source\n' | frothy session --port /dev/cu.usbserial-0001
       send unsaved source text as one editor-owned block

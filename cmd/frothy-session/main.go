@@ -2154,14 +2154,13 @@ func availableVerbs() []verb {
 				"unclear reasons. It does not modify anything; it only inspects.",
 			examples: "  frothy doctor\n" +
 				"      run every check and print the results"},
-		{name: "connect", group: "Work", summary: "connect to a device's REPL", run: runConnectMain,
-			longDesc: "Connect opens an interactive REPL session against a running device over " +
-				"serial. It is the simplest way to type Frothy at a board and read what it " +
-				"prints back, with line history and a status probe that retries while the " +
-				"board is waking. For one-shot delivery of a file, use send instead; for a " +
-				"richer session that can compile on the host, use session.",
+		{name: "connect", group: "Work", summary: "open the human REPL over serial", run: runConnectMain,
+			longDesc: "Connect is Frothy's human REPL over serial. Use it to type at a running " +
+				"board and read replies, with line history and a status probe that retries while " +
+				"the board is waking. For one-shot delivery of a file, use send. Editors and " +
+				"host-assisted compilation use session instead.",
 			examples: "  frothy connect --port /dev/cu.usbserial-0001\n" +
-				"      open an interactive REPL against the board on that port"},
+				"      open the human REPL on the board on that port"},
 		{name: "stop", group: "Recover", summary: "stop Frothy sessions that are holding serial ports", run: runStopMain,
 			longDesc: "Stop finds Frothy processes that are holding serial ports and asks them " +
 				"to exit so another command can use the board. It uses the system's process " +
@@ -2205,15 +2204,14 @@ func availableVerbs() []verb {
 				"installed.\" Pass --force to reinstall from scratch.",
 			examples: "  frothy bootstrap\n" +
 				"      install ESP-IDF v5.5 under ~/.froth/sdk/ (skip if already installed)"},
-		{name: "session", group: "Editor plumbing", summary: "open an interactive REPL session over serial", run: runSessionMain,
-			longDesc: "Session opens a richer interactive REPL than connect: it can compile " +
-				"Frothy source on the host when the device advertises host-optional mode, " +
-				"accept .source/.end-source blocks from editor clients, replay a recorded " +
-				"transcript, or record one to NDJSON. Use it when connect " +
-				"is too thin for what you need; for a basic interactive REPL, connect is " +
-				"smaller and faster.",
-			examples: "  frothy session --port /dev/cu.usbserial-0001\n" +
-				"      open an interactive REPL on that port, with host compile when offered\n\n" +
+		{name: "session", group: "Editor plumbing", summary: "run the structured editor and host-compile session", run: runSessionMain,
+			longDesc: "Session is the structured serial path for editors and host-assisted " +
+				"compilation. It accepts .source/.end-source blocks, can compile Frothy source " +
+				"on the host when the device advertises host-optional mode, replay a recorded " +
+				"transcript, or emit NDJSON records. Human terminal use should normally start " +
+				"with connect.",
+			examples: "  frothy session --records --port /dev/cu.usbserial-0001\n" +
+				"      emit the structured session records consumed by editor clients\n\n" +
 				"  printf '.source main.fr\\ninclude \"helper.fr\"\\nmain:\\n.end-source\\n' | frothy session --port /dev/cu.usbserial-0001\n" +
 				"      send unsaved source text as one editor-owned block"},
 	}
