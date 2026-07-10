@@ -406,19 +406,16 @@ flash: $(TARGET_FLASH_DEPS) ## Flash the selected board; requires BOARD_PORT.
 	$(TARGET_FLASH_CHECK)
 	$(TARGET_FLASH_COMMAND)
 
-# Offsets are the default ESP-IDF singleapp NVS range (partitions_singleapp.csv,
-# PARTITION_TABLE_OFFSET=0x8000, 0x1000 table). Update in lockstep with any
-# custom partition table.
-wipe-nvs: ## Erase the ESP32 NVS region used by Frothy persistence.
+wipe-persist: ## Erase the ESP32 Frothy persistence partition.
 	@if [ "$(BOARD)" != "esp32_devkit_v1" ]; then \
-		printf 'wipe-nvs: unsupported BOARD "%s"; only esp32_devkit_v1 is supported\n' "$(BOARD)"; \
+		printf 'wipe-persist: unsupported BOARD "%s"; only esp32_devkit_v1 is supported\n' "$(BOARD)"; \
 		exit 2; \
 	fi
 	@if [ -z "$(BOARD_PORT)" ]; then \
 		printf 'BOARD_PORT is required, for example BOARD_PORT=/dev/cu.usbserial-0001\n'; \
 		exit 2; \
 	fi
-	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && esptool.py --chip esp32 --port "$(BOARD_PORT)" erase_region 0x9000 0x6000
+	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && parttool.py --port "$(BOARD_PORT)" erase_partition --partition-name frothy
 
 # Merged .bin for the web flasher (T13b D11). Local esptool.py is
 # v4.12.dev1 which only accepts merge_bin (underscore).
@@ -801,4 +798,4 @@ vsix: ## Build the VS Code extension package.
 clean: ## Remove generated build outputs.
 	rm -rf build frothy test/test test/test-host-normal test/fixtures/projects/*/.frothy
 
-.PHONY: test test-unity help artifacts flash wipe-nvs web-bins test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean
+.PHONY: test test-unity help artifacts flash wipe-persist web-bins test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean

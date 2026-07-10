@@ -709,14 +709,14 @@ func TestFrothyWipeCommand(t *testing.T) {
 			name:       "happy path discovered port",
 			args:       []string{"--force", "esp32_devkit_v1"},
 			wantExit:   0,
-			wantArgv:   "wipe-nvs BOARD=esp32_devkit_v1 BOARD_PORT=/dev/cu.usbserial-0001",
+			wantArgv:   "wipe-persist BOARD=esp32_devkit_v1 BOARD_PORT=/dev/cu.usbserial-0001",
 			wantLister: true,
 		},
 		{
 			name:     "happy path explicit port",
 			args:     []string{"--force", "--port", "/dev/cu.usbmodem999", "esp32_devkit_v1"},
 			wantExit: 0,
-			wantArgv: "wipe-nvs BOARD=esp32_devkit_v1 BOARD_PORT=/dev/cu.usbmodem999",
+			wantArgv: "wipe-persist BOARD=esp32_devkit_v1 BOARD_PORT=/dev/cu.usbmodem999",
 		},
 	}
 

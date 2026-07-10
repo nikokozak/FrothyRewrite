@@ -2477,7 +2477,7 @@ func runWipeCommand(args []string, stdout io.Writer, stderr io.Writer, list port
 		return 2
 	}
 
-	if err := run("make", []string{"wipe-nvs", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
+	if err := run("make", []string{"wipe-persist", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
 		fmt.Fprintf(stderr, "wipe: %v\n", err)
 		return 1
 	}
