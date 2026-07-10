@@ -92,7 +92,7 @@ func TestSendHelpSnapshot(t *testing.T) {
 
 func TestFlashHelpSnapshot(t *testing.T) {
 	var out bytes.Buffer
-	if code := runFlashCommand([]string{"--help"}, &out, io.Discard, nil, nil, nil); code != 0 {
+	if code := runFlashCommand([]string{"--help"}, "", &out, io.Discard, nil, nil); code != 0 {
 		t.Fatalf("flash --help exit = %d, want 0", code)
 	}
 	checkGolden(t, "flash", out.Bytes())
@@ -100,7 +100,7 @@ func TestFlashHelpSnapshot(t *testing.T) {
 
 func TestWipeHelpSnapshot(t *testing.T) {
 	var out bytes.Buffer
-	if code := runWipeCommand([]string{"--help"}, &out, io.Discard, nil, nil); code != 0 {
+	if code := runWipeCommand([]string{"--help"}, "", &out, io.Discard, nil, nil); code != 0 {
 		t.Fatalf("wipe --help exit = %d, want 0", code)
 	}
 	checkGolden(t, "wipe", out.Bytes())

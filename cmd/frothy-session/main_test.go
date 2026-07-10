@@ -543,6 +543,7 @@ func TestPickPortErrorsAndListsCandidatesWhenAmbiguous(t *testing.T) {
 }
 
 func TestFrothyFlashBuildsMakeArgvWithDiscoveredPort(t *testing.T) {
+	root := makeFlashTestRoot(t)
 	var gotName string
 	var gotArgs []string
 	runner := func(name string, args []string) error {
@@ -550,58 +551,57 @@ func TestFrothyFlashBuildsMakeArgvWithDiscoveredPort(t *testing.T) {
 		gotArgs = args
 		return nil
 	}
-	known := func(b string) bool { return b == "esp32_devkit_v1" }
 	list := func() ([]string, error) {
 		return []string{"/dev/null", "/dev/cu.usbserial-0001"}, nil
 	}
 
 	var stderr bytes.Buffer
-	code := runFlashCommand([]string{"esp32_devkit_v1"}, io.Discard, &stderr, known, list, runner)
+	code := runFlashCommand([]string{"esp32_devkit_v1"}, root, io.Discard, &stderr, list, runner)
 	if code != 0 {
 		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
 	}
 	if gotName != "make" {
 		t.Fatalf("ran %q, want make", gotName)
 	}
-	want := []string{"flash", "BOARD=esp32_devkit_v1", "BOARD_PORT=/dev/cu.usbserial-0001"}
+	want := []string{"-C", root, "flash", "BOARD=esp32_devkit_v1", "BOARD_PORT=/dev/cu.usbserial-0001"}
 	if strings.Join(gotArgs, " ") != strings.Join(want, " ") {
 		t.Fatalf("argv=%q, want %q", gotArgs, want)
 	}
 }
 
 func TestFrothyFlashPortOverrideSkipsDiscovery(t *testing.T) {
+	root := makeFlashTestRoot(t)
 	var gotArgs []string
 	runner := func(_ string, args []string) error {
 		gotArgs = args
 		return nil
 	}
-	known := func(string) bool { return true }
 	list := func() ([]string, error) {
 		t.Fatal("lister must not run when --port is set")
 		return nil, nil
 	}
 
 	var stderr bytes.Buffer
-	code := runFlashCommand([]string{"--port", "/dev/cu.usbmodem999", "esp32_devkit_v1"}, io.Discard, &stderr, known, list, runner)
+	code := runFlashCommand([]string{"--port", "/dev/cu.usbmodem999", "esp32_devkit_v1"}, root, io.Discard, &stderr, list, runner)
 	if code != 0 {
 		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if got := strings.Join(gotArgs, " "); got != "flash BOARD=esp32_devkit_v1 BOARD_PORT=/dev/cu.usbmodem999" {
+	if got, want := strings.Join(gotArgs, " "), "-C "+root+" flash BOARD=esp32_devkit_v1 BOARD_PORT=/dev/cu.usbmodem999"; got != want {
 		t.Fatalf("argv=%q, want override port", got)
 	}
 }
 
 func TestFrothyFlashSuggestsStopWhenPortLooksBusy(t *testing.T) {
+	root := makeFlashTestRoot(t)
 	runner := func(string, []string) error {
 		return commandOutputError{err: errors.New("exit status 2"), output: "serial port is busy"}
 	}
-	known := func(string) bool { return true }
 	list := func() ([]string, error) {
 		return []string{"/dev/cu.usbserial-0001"}, nil
 	}
 
 	var stderr bytes.Buffer
-	code := runFlashCommand([]string{"esp32_devkit_v1"}, io.Discard, &stderr, known, list, runner)
+	code := runFlashCommand([]string{"esp32_devkit_v1"}, root, io.Discard, &stderr, list, runner)
 	if code != 1 {
 		t.Fatalf("exit code %d, want 1", code)
 	}
@@ -611,6 +611,7 @@ func TestFrothyFlashSuggestsStopWhenPortLooksBusy(t *testing.T) {
 }
 
 func TestFrothyFlashErrorsOnUnknownBoardBeforeInvokingMake(t *testing.T) {
+	root := makeFlashTestRoot(t)
 	runner := func(string, []string) error {
 		t.Fatal("runner must not run when the board is unknown")
 		return nil
@@ -619,10 +620,8 @@ func TestFrothyFlashErrorsOnUnknownBoardBeforeInvokingMake(t *testing.T) {
 		t.Fatal("lister must not run when the board is unknown")
 		return nil, nil
 	}
-	known := func(string) bool { return false }
-
 	var stderr bytes.Buffer
-	code := runFlashCommand([]string{"made_up_board"}, io.Discard, &stderr, known, list, runner)
+	code := runFlashCommand([]string{"made_up_board"}, root, io.Discard, &stderr, list, runner)
 	if code == 0 {
 		t.Fatal("exit code 0, want non-zero")
 	}
@@ -632,17 +631,17 @@ func TestFrothyFlashErrorsOnUnknownBoardBeforeInvokingMake(t *testing.T) {
 }
 
 func TestFrothyFlashErrorsWhenNoSerialPortFound(t *testing.T) {
+	root := makeFlashTestRoot(t)
 	runner := func(string, []string) error {
 		t.Fatal("runner must not run when port discovery fails")
 		return nil
 	}
-	known := func(string) bool { return true }
 	list := func() ([]string, error) {
 		return []string{"/dev/null", "/dev/random"}, nil
 	}
 
 	var stderr bytes.Buffer
-	code := runFlashCommand([]string{"esp32_devkit_v1"}, io.Discard, &stderr, known, list, runner)
+	code := runFlashCommand([]string{"esp32_devkit_v1"}, root, io.Discard, &stderr, list, runner)
 	if code == 0 {
 		t.Fatal("exit code 0, want non-zero")
 	}
@@ -652,17 +651,17 @@ func TestFrothyFlashErrorsWhenNoSerialPortFound(t *testing.T) {
 }
 
 func TestFrothyFlashErrorsWhenMultipleSerialPortsFound(t *testing.T) {
+	root := makeFlashTestRoot(t)
 	runner := func(string, []string) error {
 		t.Fatal("runner must not run when port discovery is ambiguous")
 		return nil
 	}
-	known := func(string) bool { return true }
 	list := func() ([]string, error) {
 		return []string{"/dev/cu.usbserial-0001", "/dev/cu.usbmodem101"}, nil
 	}
 
 	var stderr bytes.Buffer
-	code := runFlashCommand([]string{"esp32_devkit_v1"}, io.Discard, &stderr, known, list, runner)
+	code := runFlashCommand([]string{"esp32_devkit_v1"}, root, io.Discard, &stderr, list, runner)
 	if code == 0 {
 		t.Fatal("exit code 0, want non-zero")
 	}
@@ -672,6 +671,38 @@ func TestFrothyFlashErrorsWhenMultipleSerialPortsFound(t *testing.T) {
 	}
 	if !strings.Contains(msg, "--port") {
 		t.Fatalf("stderr missing --port guidance: %q", msg)
+	}
+}
+
+func TestFrothyFlashAndWipeRequireSourceRootBeforePortSelection(t *testing.T) {
+	list := func() ([]string, error) {
+		t.Fatal("lister must not run without a source root")
+		return nil, nil
+	}
+	runner := func(string, []string) error {
+		t.Fatal("runner must not run without a source root")
+		return nil
+	}
+	for _, test := range []struct {
+		name string
+		run  func(io.Writer) int
+	}{
+		{name: "flash", run: func(stderr io.Writer) int {
+			return runFlashCommand([]string{"esp32_devkit_v1"}, "", io.Discard, stderr, list, runner)
+		}},
+		{name: "wipe", run: func(stderr io.Writer) int {
+			return runWipeCommand([]string{"--force", "esp32_devkit_v1"}, "", io.Discard, stderr, list, runner)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			if code := test.run(&stderr); code != 2 {
+				t.Fatalf("exit code = %d, want 2", code)
+			}
+			if !strings.Contains(stderr.String(), frothySourceRootEnv) {
+				t.Fatalf("stderr = %q, want %s guidance", stderr.String(), frothySourceRootEnv)
+			}
+		})
 	}
 }
 
@@ -722,6 +753,7 @@ func TestFrothyWipeCommand(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			root := makeFlashTestRoot(t)
 			var gotName string
 			var gotArgs []string
 			var runnerCalls int
@@ -739,7 +771,7 @@ func TestFrothyWipeCommand(t *testing.T) {
 			}
 
 			var stdout, stderr bytes.Buffer
-			code := runWipeCommand(c.args, &stdout, &stderr, list, runner)
+			code := runWipeCommand(c.args, root, &stdout, &stderr, list, runner)
 			if code != c.wantExit {
 				t.Fatalf("exit code %d, want %d; stderr=%q", code, c.wantExit, stderr.String())
 			}
@@ -759,8 +791,9 @@ func TestFrothyWipeCommand(t *testing.T) {
 				if gotName != "make" {
 					t.Fatalf("ran %q, want make", gotName)
 				}
-				if got := strings.Join(gotArgs, " "); got != c.wantArgv {
-					t.Fatalf("argv=%q, want %q", got, c.wantArgv)
+				wantArgv := "-C " + root + " " + c.wantArgv
+				if got := strings.Join(gotArgs, " "); got != wantArgv {
+					t.Fatalf("argv=%q, want %q", got, wantArgv)
 				}
 				if stderr.Len() != 0 {
 					t.Fatalf("stderr must be empty on success; got %q", stderr.String())
@@ -777,6 +810,13 @@ func TestFrothyWipeCommand(t *testing.T) {
 			}
 		})
 	}
+}
+
+func makeFlashTestRoot(t *testing.T) string {
+	t.Helper()
+	root := makeSourceRoot(t)
+	writeTestBoard(t, filepath.Join(root, "boards"), "esp32_devkit_v1", `{"target":"esp-idf"}`)
+	return root
 }
 
 func TestFrothyDoctorExitsZeroWhenAllChecksPass(t *testing.T) {

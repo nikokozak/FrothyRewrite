@@ -2311,20 +2311,6 @@ func runSendCommand(args []string, stdout io.Writer, stderr io.Writer, newCompil
 	return runSessionMain()
 }
 
-// boardKnown is injected so tests can check unknown-board handling without
-// the boards/ tree being present.
-type boardKnown func(board string) bool
-
-// defaultBoardKnown matches the rule the Makefile uses (boards/<board>/board.mk
-// must exist), so the CLI refuses what make would refuse.
-func defaultBoardKnown(board string) bool {
-	if board == "" || strings.ContainsAny(board, "/\\") {
-		return false
-	}
-	info, err := os.Stat(filepath.Join("boards", board, "board.mk"))
-	return err == nil && !info.IsDir()
-}
-
 // commandRunner runs an external command. Injected so flash tests can capture
 // the make argv instead of executing make.
 type commandRunner func(name string, args []string) error
@@ -2361,12 +2347,22 @@ func defaultCommandRunner(name string, args []string) error {
 }
 
 func runFlashMain() int {
-	return runFlashCommand(os.Args[1:], os.Stdout, os.Stderr,
-		defaultBoardKnown, defaultPortLister, defaultCommandRunner)
+	args := os.Args[1:]
+	root := ""
+	if !helpRequested(args) {
+		var err error
+		root, err = resolveFrothySourceRoot(".")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "flash: %v\n", err)
+			return 2
+		}
+	}
+	return runFlashCommand(args, root, os.Stdout, os.Stderr,
+		defaultPortLister, defaultCommandRunner)
 }
 
-func runFlashCommand(args []string, stdout io.Writer, stderr io.Writer,
-	known boardKnown, list portLister, run commandRunner) int {
+func runFlashCommand(args []string, sourceRoot string, stdout io.Writer,
+	stderr io.Writer, list portLister, run commandRunner) int {
 	fs := flag.NewFlagSet("frothy flash", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.String("port", "", "serial port, for example /dev/cu.usbmodem101")
@@ -2398,7 +2394,11 @@ func runFlashCommand(args []string, stdout io.Writer, stderr io.Writer,
 	}
 	board := positional[0]
 
-	if !known(board) {
+	if sourceRoot == "" {
+		fmt.Fprintf(stderr, "flash: cannot find Frothy source root; set %s\n", frothySourceRootEnv)
+		return 2
+	}
+	if !flashableBoard(filepath.Join(sourceRoot, "boards"), board) {
 		fmt.Fprintf(stderr, "flash: unknown board %q\n", board)
 		return 2
 	}
@@ -2409,7 +2409,7 @@ func runFlashCommand(args []string, stdout io.Writer, stderr io.Writer,
 		return 2
 	}
 
-	if err := run("make", []string{"flash", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
+	if err := run("make", []string{"-C", sourceRoot, "flash", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
 		fmt.Fprintf(stderr, "flash: %v\n", err)
 		if strings.Contains(strings.ToLower(commandErrorText(err)), "busy") {
 			fmt.Fprintln(stderr, "flash: port is busy; try: frothy stop")
@@ -2420,10 +2420,21 @@ func runFlashCommand(args []string, stdout io.Writer, stderr io.Writer,
 }
 
 func runWipeMain() int {
-	return runWipeCommand(os.Args[1:], os.Stdout, os.Stderr, defaultPortLister, defaultCommandRunner)
+	args := os.Args[1:]
+	root := ""
+	if !helpRequested(args) {
+		var err error
+		root, err = resolveFrothySourceRoot(".")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "wipe: %v\n", err)
+			return 2
+		}
+	}
+	return runWipeCommand(args, root, os.Stdout, os.Stderr, defaultPortLister, defaultCommandRunner)
 }
 
-func runWipeCommand(args []string, stdout io.Writer, stderr io.Writer, list portLister, run commandRunner) int {
+func runWipeCommand(args []string, sourceRoot string, stdout io.Writer,
+	stderr io.Writer, list portLister, run commandRunner) int {
 	fs := flag.NewFlagSet("frothy wipe", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.String("port", "", "serial port, for example /dev/cu.usbserial-0001")
@@ -2456,7 +2467,11 @@ func runWipeCommand(args []string, stdout io.Writer, stderr io.Writer, list port
 	}
 	board := positional[0]
 
-	if board != "esp32_devkit_v1" {
+	if sourceRoot == "" {
+		fmt.Fprintf(stderr, "wipe: cannot find Frothy source root; set %s\n", frothySourceRootEnv)
+		return 2
+	}
+	if board != "esp32_devkit_v1" || !flashableBoard(filepath.Join(sourceRoot, "boards"), board) {
 		fmt.Fprintf(stderr, "wipe: unsupported board %q\n", board)
 		return 2
 	}
@@ -2477,7 +2492,7 @@ func runWipeCommand(args []string, stdout io.Writer, stderr io.Writer, list port
 		return 2
 	}
 
-	if err := run("make", []string{"wipe-persist", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
+	if err := run("make", []string{"-C", sourceRoot, "wipe-persist", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
 		fmt.Fprintf(stderr, "wipe: %v\n", err)
 		return 1
 	}
