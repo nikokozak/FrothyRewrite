@@ -7,6 +7,11 @@ export interface SourceForm {
   complete: boolean;
 }
 
+export interface TextDocumentLike {
+  getText(): string;
+  lineCount: number;
+}
+
 interface FormState {
   lines: string[];
   codeLines: string[];
@@ -22,7 +27,9 @@ interface FormState {
   endLine: number;
 }
 
-export function sourceForms(text: string): SourceForm[] {
+// ponytail: This mirror stops at selecting source spans. Replace it if the
+// compiler/session exposes spans; do not grow it into a second parser.
+export function splitForms(text: string): SourceForm[] {
   const forms: SourceForm[] = [];
   const state = emptyState();
   let lineStart = 0;
@@ -49,11 +56,12 @@ export function sourceForms(text: string): SourceForm[] {
   return forms;
 }
 
-export function sourceFormAt(text: string, offset: number): SourceForm | undefined {
-  if (!Number.isInteger(offset) || offset < 0 || offset > text.length) return undefined;
-  return sourceForms(text).find((form) =>
-    offset >= form.startOffset && offset <= form.endOffset,
-  );
+export function formAt(document: TextDocumentLike, line: number): SourceForm | undefined {
+  if (!Number.isInteger(line) || line < 0 || line >= document.lineCount) return undefined;
+  const forms = splitForms(document.getText());
+  const containing = forms.find((form) => line >= form.startLine && line <= form.endLine);
+  if (containing) return containing;
+  return forms.find((form) => form.startLine > line) ?? forms[forms.length - 1];
 }
 
 function appendLine(
