@@ -123,17 +123,36 @@ export async function openExample(): Promise<void> {
   await vscode.window.showTextDocument(doc);
 }
 
-// `see <word>` for the symbol under the cursor (or the active selection).
-export function see(): void {
+export async function browseWords(): Promise<void> {
+  if (!proc.isConnected()) {
+    notConnectedHint();
+    return;
+  }
+  const response = await inspectRequest('words');
+  if (!response) return;
+
+  const words = response.trim().split(/\s+/);
+  if (words[words.length - 1] === 'ok') words.pop();
+  const liveWords = [...new Set(words.filter(Boolean))];
+  if (liveWords.length === 0) {
+    vscode.window.showInformationMessage('Frothy: this device reported no inspectable words.');
+    return;
+  }
+  const word = await vscode.window.showQuickPick(liveWords, {
+    placeHolder: 'Choose a live Frothy word to inspect',
+  });
+  if (word) await inspectNamedWord(word);
+}
+
+export async function inspectWord(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
   const word = wordUnderCursor(editor);
-  if (!word) return;
-  if (!proc.writeLine(`see ${word}`)) notConnectedHint();
-}
-
-export function words(): void {
-  if (!proc.writeLine('words')) notConnectedHint();
+  if (!word) {
+    vscode.window.showWarningMessage('Frothy: select a word or place the cursor on one.');
+    return;
+  }
+  await inspectNamedWord(word);
 }
 
 export function status(): void {
@@ -160,7 +179,10 @@ export function interrupt(): void {
 
 function wordUnderCursor(editor: vscode.TextEditor): string {
   const sel = editor.selection;
-  if (!sel.isEmpty) return editor.document.getText(sel);
+  if (!sel.isEmpty) {
+    const selected = editor.document.getText(sel).trim();
+    return new RegExp(`^${FROTHY_WORD.source}$`).test(selected) ? selected : '';
+  }
   const range = editor.document.getWordRangeAtPosition(sel.active, FROTHY_WORD);
   return range ? editor.document.getText(range) : '';
 }
@@ -210,4 +232,33 @@ async function oneFormHint(): Promise<void> {
     'Run File',
   );
   if (choice === 'Run File') await vscode.commands.executeCommand('frothy.runFile');
+}
+
+async function inspectNamedWord(word: string): Promise<void> {
+  if (!proc.isConnected()) {
+    notConnectedHint();
+    return;
+  }
+  await inspectRequest(`see ${word}`);
+}
+
+async function inspectRequest(source: string): Promise<string | undefined> {
+  try {
+    const response = await proc.request(source);
+    const error = terminalError(response);
+    if (error) {
+      vscode.window.showErrorMessage(`Frothy: ${error}`);
+      return undefined;
+    }
+    return response;
+  } catch (err) {
+    vscode.window.showErrorMessage(`Frothy: ${(err as Error).message}`);
+    return undefined;
+  }
+}
+
+function terminalError(response: string): string | undefined {
+  const lines = response.trim().split(/\r?\n/);
+  const terminal = lines[lines.length - 1];
+  return terminal?.startsWith('error:') ? terminal : undefined;
 }

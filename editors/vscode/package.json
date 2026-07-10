@@ -48,8 +48,8 @@
       { "command": "frothy.runFile",       "title": "Frothy: Run File",         "icon": "$(file-code)" },
       { "command": "frothy.rerun",         "title": "Frothy: Rerun",            "icon": "$(debug-rerun)" },
       { "command": "frothy.openExample",   "title": "Frothy: Open Example",     "icon": "$(book)" },
-      { "command": "frothy.see",           "title": "Frothy: See Word",         "icon": "$(symbol-field)" },
-      { "command": "frothy.words",         "title": "Frothy: List Words",       "icon": "$(list-unordered)" },
+      { "command": "frothy.browseWords",   "title": "Frothy: Browse Words",     "icon": "$(list-unordered)" },
+      { "command": "frothy.inspectWord",   "title": "Frothy: Inspect Word",     "icon": "$(symbol-field)" },
       { "command": "frothy.status",        "title": "Frothy: Show Status",     "icon": "$(info)" },
       { "command": "frothy.mem",           "title": "Frothy: Memory",          "icon": "$(graph)" },
       { "command": "frothy.save",          "title": "Frothy: Save Overlay",     "icon": "$(save)" },
@@ -61,7 +61,6 @@
       { "command": "frothy.runForm",       "key": "ctrl+enter",       "mac": "cmd+enter",      "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
       { "command": "frothy.runFile",       "key": "ctrl+shift+enter", "mac": "cmd+shift+enter", "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
       { "command": "frothy.rerun",         "key": "ctrl+alt+r",       "mac": "cmd+alt+r",      "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy && frothy.hasLastForm" },
-      { "command": "frothy.see",           "key": "ctrl+alt+b",       "mac": "cmd+alt+b",     "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
       { "command": "frothy.interrupt",     "key": "ctrl+alt+.",       "mac": "cmd+alt+.",     "when": "frothy.isConnected && frothy.isBusy" }
     ],
     "menus": {
@@ -73,14 +72,15 @@
         { "command": "frothy.runForm",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@1" },
         { "command": "frothy.runFile",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@2" },
         { "command": "frothy.rerun",         "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy && frothy.hasLastForm", "group": "frothy@3" },
-        { "command": "frothy.see",           "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@4" }
+        { "command": "frothy.inspectWord",   "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@4" }
       ],
       "commandPalette": [
         { "command": "frothy.runForm",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
         { "command": "frothy.runFile",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
         { "command": "frothy.rerun",         "when": "frothy.isConnected && !frothy.isBusy && frothy.hasLastForm" },
         { "command": "frothy.openExample" },
-        { "command": "frothy.see",           "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
+        { "command": "frothy.browseWords",   "when": "frothy.isConnected && !frothy.isBusy" },
+        { "command": "frothy.inspectWord",   "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
         { "command": "frothy.disconnect",    "when": "frothy.isConnected" },
         { "command": "frothy.interrupt",     "when": "frothy.isConnected && frothy.isBusy" }
       ]
