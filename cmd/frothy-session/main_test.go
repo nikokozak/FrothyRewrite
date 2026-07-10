@@ -319,6 +319,34 @@ func TestFrothyHelpPrintsUsageToStdoutAndExitsZero(t *testing.T) {
 	}
 }
 
+func TestFrothyHelpGroupsCommands(t *testing.T) {
+	var out bytes.Buffer
+	printFrothyUsage(&out, availableVerbs())
+	last := -1
+	for _, group := range []string{"Start", "Work", "Project", "Recover", "Editor plumbing"} {
+		heading := group + ":"
+		if strings.Count(out.String(), heading) != 1 {
+			t.Fatalf("help must contain one %q heading:\n%s", heading, out.String())
+		}
+		at := strings.Index(out.String(), heading)
+		if at <= last {
+			t.Fatalf("help group %q is out of order:\n%s", group, out.String())
+		}
+		last = at
+	}
+	for _, want := range []string{
+		"Start:\n  menu",
+		"Work:\n  send",
+		"Project:\n  flash",
+		"Recover:\n  wipe",
+		"Editor plumbing:\n  session",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("help missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestFrothyWithoutVerbPrintsUsageToStderrAndExitsNonZero(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runFrothyCommand([]string{"/usr/local/bin/frothy"}, &stdout, &stderr, sessionStubVerbs())
@@ -867,12 +895,15 @@ func TestFrothyDoctorExitsNonZeroWhenAnyCheckFails(t *testing.T) {
 }
 
 func TestDoctorDeviceFailureReportsProbeErrorWithoutWipeAdvice(t *testing.T) {
-	detail := formatDoctorDeviceFailure("/dev/cu.usbserial-0001", errors.New("malformed status field: profilestatus"))
+	detail := formatDoctorUnresponsiveDevice("/dev/cu.usbserial-0001", errors.New("malformed status field: profilestatus"))
 	if !strings.Contains(detail, "malformed status field: profilestatus") {
 		t.Fatalf("detail missing probe error: %q", detail)
 	}
 	if strings.Contains(detail, "wipe") {
 		t.Fatalf("detail should not suggest wipe for a failed probe: %q", detail)
+	}
+	if !strings.Contains(detail, "expected before first flash") {
+		t.Fatalf("detail missing pre-flash context: %q", detail)
 	}
 }
 

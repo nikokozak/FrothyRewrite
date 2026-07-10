@@ -2094,6 +2094,7 @@ func pickSessionPort(override string, list portLister) (string, error) {
 
 type verb struct {
 	name     string
+	group    string
 	summary  string
 	longDesc string
 	examples string
@@ -2102,25 +2103,14 @@ type verb struct {
 
 func availableVerbs() []verb {
 	return []verb{
-		{name: "menu", summary: "choose common Frothy workflows from a numbered terminal menu", run: runMenuMain,
+		{name: "menu", group: "Start", summary: "choose common Frothy workflows from a numbered terminal menu", run: runMenuMain,
 			longDesc: "Menu is a small numbered guide for common Frothy workflows. It does " +
 				"not own device, build, flash, or serial behavior; it prints the equivalent " +
 				"command and runs the existing verb. Use it when you want help choosing the " +
 				"next step, then graduate to the verbs it shows.",
 			examples: "  frothy menu\n" +
 				"      open the numbered setup, connect, and recovery menu"},
-		{name: "session", summary: "open an interactive REPL session over serial", run: runSessionMain,
-			longDesc: "Session opens a richer interactive REPL than connect: it can compile " +
-				"Frothy source on the host when the device advertises host-optional mode, " +
-				"accept .source/.end-source blocks from editor clients, replay a recorded " +
-				"transcript, or record one to NDJSON. Use it when connect " +
-				"is too thin for what you need; for a basic interactive REPL, connect is " +
-				"smaller and faster.",
-			examples: "  frothy session --port /dev/cu.usbserial-0001\n" +
-				"      open an interactive REPL on that port, with host compile when offered\n\n" +
-				"  printf '.source main.fr\\ninclude \"helper.fr\"\\nmain:\\n.end-source\\n' | frothy session --port /dev/cu.usbserial-0001\n" +
-				"      send unsaved source text as one editor-owned block"},
-		{name: "send", summary: "compile a source file and apply or run each line", run: runSendMain,
+		{name: "send", group: "Work", summary: "compile a source file and apply or run each line", run: runSendMain,
 			longDesc: "Send compiles a Frothy source file and applies each definition to a " +
 				"connected board over serial, then runs any bare expressions line by line. " +
 				"Use it for one-shot delivery of a file you have already written, as opposed " +
@@ -2132,7 +2122,7 @@ func availableVerbs() []verb {
 				"      compile blink.fr and apply each line to the board on that port\n\n" +
 				"  frothy send blink.fr --dry-run\n" +
 				"      compile and print each line without opening serial"},
-		{name: "flash", summary: "build the board firmware and flash it over serial", run: runFlashMain,
+		{name: "flash", group: "Project", summary: "build the board firmware and flash it over serial", run: runFlashMain,
 			longDesc: "Flash builds the board firmware from source and writes it to a connected " +
 				"device over serial, replacing whatever was on the chip. Use it once per board " +
 				"to install Frothy itself, before send or connect can talk to a running device. " +
@@ -2141,7 +2131,7 @@ func availableVerbs() []verb {
 				"named explicitly with --port when several are.",
 			examples: "  frothy flash esp32_devkit_v1 --port /dev/cu.usbserial-0001\n" +
 				"      build the firmware and flash it to the board on that port"},
-		{name: "wipe", summary: "erase Frothy persistence on a wedged board", run: runWipeMain,
+		{name: "wipe", group: "Recover", summary: "erase Frothy persistence on a wedged board", run: runWipeMain,
 			longDesc: "Wipe erases the persisted device state on a board wedged by a bad save, " +
 				"leaving the firmware and other partitions in place. It erases the dedicated " +
 				"Frothy persistence partition and requires --force so it cannot run by accident. " +
@@ -2149,7 +2139,7 @@ func availableVerbs() []verb {
 				"for a clean reset of user definitions on a running device, prefer wipe-user.",
 			examples: "  frothy wipe esp32_devkit_v1 --force --port /dev/cu.usbserial-0001\n" +
 				"      erase Frothy persistence on the board on that port"},
-		{name: "wipe-user", summary: "clear user-tier definitions on a running device; library tier survives", run: runWipeUserMain,
+		{name: "wipe-user", group: "Recover", summary: "clear user-tier definitions on a running device; library tier survives", run: runWipeUserMain,
 			longDesc: "Wipe-user clears the user-tier definitions on a running device, leaving " +
 				"the library tier and the firmware in place. Use it when you want to start with " +
 				"a clean slate of your own definitions without touching library code the " +
@@ -2157,14 +2147,14 @@ func availableVerbs() []verb {
 				"user overlay.",
 			examples: "  frothy wipe-user --port /dev/cu.usbserial-0001\n" +
 				"      clear user-tier definitions on the board on that port"},
-		{name: "doctor", summary: "check the host's compile, flash, and serial setup", run: runDoctorMain,
+		{name: "doctor", group: "Start", summary: "check the host's compile, flash, and serial setup", run: runDoctorMain,
 			longDesc: "Doctor runs a short list of health checks for the host setup that send, " +
 				"flash, and connect rely on. Each check reports ok or fail with a short detail. " +
 				"Run it once after cloning, and again whenever a verb starts failing for " +
 				"unclear reasons. It does not modify anything; it only inspects.",
 			examples: "  frothy doctor\n" +
 				"      run every check and print the results"},
-		{name: "connect", summary: "connect to a device's REPL", run: runConnectMain,
+		{name: "connect", group: "Work", summary: "connect to a device's REPL", run: runConnectMain,
 			longDesc: "Connect opens an interactive REPL session against a running device over " +
 				"serial. It is the simplest way to type Frothy at a board and read what it " +
 				"prints back, with line history and a status probe that retries while the " +
@@ -2172,21 +2162,21 @@ func availableVerbs() []verb {
 				"richer session that can compile on the host, use session.",
 			examples: "  frothy connect --port /dev/cu.usbserial-0001\n" +
 				"      open an interactive REPL against the board on that port"},
-		{name: "stop", summary: "stop Frothy sessions that are holding serial ports", run: runStopMain,
+		{name: "stop", group: "Recover", summary: "stop Frothy sessions that are holding serial ports", run: runStopMain,
 			longDesc: "Stop finds Frothy processes that are holding serial ports and asks them " +
 				"to exit so another command can use the board. It uses the system's process " +
 				"and open-file tables, not a Frothy registry, and it never stops non-Frothy " +
 				"processes.",
 			examples: "  frothy stop\n" +
 				"      stop Frothy serial sessions so their ports can be reopened"},
-		{name: "init", summary: "scaffold a new Frothy project in the current directory", run: runInitMain,
+		{name: "init", group: "Project", summary: "scaffold a new Frothy project in the current directory", run: runInitMain,
 			longDesc: "Init scaffolds a new Frothy project in the current directory: a " +
 				"frothy.toml with the project name and target, a main.fr with a starter " +
 				"definition, and a .gitignore that excludes the local cache. It refuses to " +
 				"overwrite existing files, so it is safe to run by accident.",
 			examples: "  frothy init\n" +
 				"      create frothy.toml, main.fr, and .gitignore in the current directory"},
-		{name: "build", summary: "resolve libraries and build the project's firmware", run: runBuildMain,
+		{name: "build", group: "Project", summary: "resolve libraries and build the project's firmware", run: runBuildMain,
 			longDesc: "Build resolves the project's libraries from frothy.toml, generates the " +
 				"target sources, and runs make to produce the firmware image for the target " +
 				"named in the manifest. Missing git dependencies are fetched into the local " +
@@ -2194,20 +2184,20 @@ func availableVerbs() []verb {
 				"want to produce a flashable artifact without flashing it.",
 			examples: "  frothy build\n" +
 				"      build the project in the current directory"},
-		{name: "fetch", summary: "fetch git deps into the local cache", run: runFetchMain,
+		{name: "fetch", group: "Project", summary: "fetch git deps into the local cache", run: runFetchMain,
 			longDesc: "Fetch resolves git dependencies declared in frothy.toml into the local " +
 				"cache so build can find them offline. Each git dep must name a pinned rev; " +
 				"branch tracking is deliberately not part of this command.",
 			examples: "  frothy fetch\n" +
 				"      clone missing git deps and check out their pinned revs"},
-		{name: "install", summary: "send the project's library source to a device under install-library mode", run: runInstallMain,
+		{name: "install", group: "Project", summary: "send the project's library source to a device under install-library mode", run: runInstallMain,
 			longDesc: "Install sends the project's library source to a connected device under " +
 				"install-library mode, persisting the library tier on the board. Use it after " +
 				"build to deliver the library code your project depends on to the device. The " +
 				"user tier is untouched.",
 			examples: "  frothy install --port /dev/cu.usbserial-0001\n" +
 				"      send the project's library source to the board on that port"},
-		{name: "bootstrap", summary: "fetch and install the ESP-IDF SDK under ~/.froth/sdk/", run: runBootstrapMain,
+		{name: "bootstrap", group: "Start", summary: "fetch and install the ESP-IDF SDK under ~/.froth/sdk/", run: runBootstrapMain,
 			longDesc: "Bootstrap fetches and installs the ESP-IDF SDK that flash, build, and " +
 				"web-bins depend on, placing it under ~/.froth/sdk/esp-idf/ (or under $FROTH_HOME " +
 				"if set). It uses no sudo, never writes outside that tree, and is idempotent: a " +
@@ -2215,6 +2205,17 @@ func availableVerbs() []verb {
 				"installed.\" Pass --force to reinstall from scratch.",
 			examples: "  frothy bootstrap\n" +
 				"      install ESP-IDF v5.5 under ~/.froth/sdk/ (skip if already installed)"},
+		{name: "session", group: "Editor plumbing", summary: "open an interactive REPL session over serial", run: runSessionMain,
+			longDesc: "Session opens a richer interactive REPL than connect: it can compile " +
+				"Frothy source on the host when the device advertises host-optional mode, " +
+				"accept .source/.end-source blocks from editor clients, replay a recorded " +
+				"transcript, or record one to NDJSON. Use it when connect " +
+				"is too thin for what you need; for a basic interactive REPL, connect is " +
+				"smaller and faster.",
+			examples: "  frothy session --port /dev/cu.usbserial-0001\n" +
+				"      open an interactive REPL on that port, with host compile when offered\n\n" +
+				"  printf '.source main.fr\\ninclude \"helper.fr\"\\nmain:\\n.end-source\\n' | frothy session --port /dev/cu.usbserial-0001\n" +
+				"      send unsaved source text as one editor-owned block"},
 	}
 }
 
@@ -2508,6 +2509,10 @@ func formatDoctorDeviceFailure(port string, err error) string {
 	return fmt.Sprintf("no status from %s: %v", port, err)
 }
 
+func formatDoctorUnresponsiveDevice(port string, err error) string {
+	return formatDoctorDeviceFailure(port, err) + " (expected before first flash)"
+}
+
 func defaultDoctorChecks() []doctorCheck {
 	return []doctorCheck{
 		{
@@ -2554,7 +2559,7 @@ func defaultDoctorChecks() []doctorCheck {
 				defer dev.close()
 				time.Sleep(2 * time.Second)
 				if _, err := readDeviceStatus(dev, 3*time.Second); err != nil {
-					return false, formatDoctorDeviceFailure(port, err)
+					return false, formatDoctorUnresponsiveDevice(port, err)
 				}
 				return true, port
 			},
@@ -2656,9 +2661,21 @@ func printVerbHelp(out io.Writer, v verb, fs *flag.FlagSet) {
 func printFrothyUsage(out io.Writer, verbs []verb) {
 	fmt.Fprintln(out, "usage: frothy <verb> [options]")
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "verbs:")
+	fmt.Fprintln(out, "commands:")
+	printedGroups := make(map[string]bool)
 	for _, v := range verbs {
-		fmt.Fprintf(out, "  %-8s  %s\n", v.name, v.summary)
+		if printedGroups[v.group] {
+			continue
+		}
+		printedGroups[v.group] = true
+		if v.group != "" {
+			fmt.Fprintf(out, "\n%s:\n", v.group)
+		}
+		for _, grouped := range verbs {
+			if grouped.group == v.group {
+				fmt.Fprintf(out, "  %-10s  %s\n", grouped.name, grouped.summary)
+			}
+		}
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Run 'frothy <verb> --help' to see the verb's options.")
