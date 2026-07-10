@@ -262,7 +262,7 @@ func readLine(reader *bufio.Reader) (string, bool) {
 
 func defaultMenuContext() menuContext {
 	wd, _ := os.Getwd()
-	root := findFrothySourceRoot(wd)
+	root, _ := resolveFrothySourceRoot(wd)
 	ctx := menuContext{selfPath: defaultMenuExecutable()}
 	if root != "" {
 		ctx.canonical = true
@@ -274,20 +274,6 @@ func defaultMenuContext() menuContext {
 	}
 	return ctx
 }
-
-func findFrothySourceRoot(start string) string {
-	for dir := start; dir != ""; dir = filepath.Dir(dir) {
-		if fileExists(filepath.Join(dir, "Makefile")) && dirExists(filepath.Join(dir, "boards")) {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-	}
-	return ""
-}
-
 func listMenuBoards(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -305,16 +291,6 @@ func listMenuBoards(dir string) []string {
 	}
 	sort.Strings(boards)
 	return boards
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
-}
-
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
 }
 
 func defaultMenuExecutable() string {
