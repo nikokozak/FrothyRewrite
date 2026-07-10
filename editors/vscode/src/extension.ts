@@ -8,7 +8,7 @@ import { initStatusBar, updateStatusBar, disposeStatusBar } from './status-bar';
 // Single source of truth for command registration; package.json maps
 // IDs to titles + icons, extension.ts wires them to handlers.
 const HANDLERS: Array<[string, () => unknown]> = [
-  ['frothy.connect',       () => commands.connect()],
+  ['frothy.connect',       () => connectWithGuidance()],
   ['frothy.disconnect',    () => commands.disconnect()],
   ['frothy.runLine',       () => commands.runLine()],
   ['frothy.sendSelection', () => commands.sendSelection()],
@@ -41,19 +41,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Auto-connect when the user opens a Frothy file, if enabled.
   context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument(async (doc) => {
-      const cfg = vscode.workspace.getConfiguration('frothy');
-      if (!cfg.get<boolean>('autoConnect', false)) return;
-      if (doc.languageId !== 'frothy') return;
-      if (proc.isConnected()) return;
-      await commands.connect();
-    }),
+    vscode.workspace.onDidOpenTextDocument((doc) => void autoConnect(doc)),
+    vscode.window.onDidChangeActiveTextEditor(refreshContext),
   );
+  void autoConnect(vscode.window.activeTextEditor?.document);
 
-  // Refresh the status bar when the user changes frothy.port.
+  // Refresh the status bar when the user changes Frothy settings.
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('frothy.port')) refreshContext();
+      if (e.affectsConfiguration('frothy')) refreshContext();
     }),
   );
 }
@@ -66,12 +62,52 @@ export async function deactivate(): Promise<void> {
 
 function refreshContext(): void {
   const connected = proc.isConnected();
+  const snapshot = proc.sessionSnapshot();
+  const busy = snapshot.state === 'waiting' || snapshot.state === 'interrupting';
+  const frothyEditor = vscode.window.activeTextEditor?.document.languageId === 'frothy';
   void vscode.commands.executeCommand('setContext', 'frothy.isConnected', connected);
+  void vscode.commands.executeCommand('setContext', 'frothy.isBusy', busy);
   void vscode.commands.executeCommand('setContext', 'frothy.hasLastForm', commands.hasLastForm());
-  updateStatusBar(connected, currentPortLabel());
+  updateStatusBar(snapshot, connected, frothyEditor || snapshot.state !== 'closed', currentPortLabel());
 }
 
 function currentPortLabel(): string {
   const cfg = vscode.workspace.getConfiguration('frothy');
   return cfg.get<string>('port', '') || 'auto';
+}
+
+async function autoConnect(doc: vscode.TextDocument | undefined): Promise<void> {
+  if (!doc || doc.languageId !== 'frothy' || proc.isConnected()) return;
+  const cfg = vscode.workspace.getConfiguration('frothy');
+  if (!cfg.get<boolean>('autoConnect', false)) return;
+  await connectWithGuidance();
+}
+
+async function connectWithGuidance(): Promise<void> {
+  try {
+    await commands.connect();
+  } catch (err) {
+    const error = err as NodeJS.ErrnoException;
+    if (error.code === 'ENOENT') {
+      const choice = await vscode.window.showErrorMessage(
+        'Frothy could not find the CLI. Install it or configure frothy.binaryPath.',
+        'Configure CLI Path',
+        'Install CLI',
+      );
+      if (choice === 'Configure CLI Path') {
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'frothy.binaryPath');
+      } else if (choice === 'Install CLI') {
+        await vscode.env.openExternal(
+          vscode.Uri.parse('https://github.com/nikokozak/FrothyRewrite#develop-on-your-machine'),
+        );
+      }
+      return;
+    }
+
+    const choice = await vscode.window.showErrorMessage(
+      `Frothy could not connect: ${error.message}`,
+      'Show Output',
+    );
+    if (choice === 'Show Output') showOutput();
+  }
 }
