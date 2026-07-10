@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import * as proc from './connect';
+import { clearDiagnostics, reportCompileError } from './diagnostics';
 import { FROTHY_EXAMPLES } from './examples.generated';
-import { formAt, splitForms } from './forms';
+import { formAt, SourceForm, splitForms } from './forms';
 import { appendLine, show } from './output';
 
 // Frothy identifiers may contain `.`, `?`, `_`, `-`, and `$name` constants
@@ -10,6 +11,13 @@ const FROTHY_WORD = /[A-Za-z_$][A-Za-z0-9_.\-?]*/;
 
 let lastForm: string | undefined;
 let onLastFormChanged: (() => void) | undefined;
+
+interface SubmittedForm {
+  source: string;
+  document: vscode.TextDocument;
+  range: vscode.Range;
+  version: number;
+}
 
 export function hasLastForm(): boolean {
   return lastForm !== undefined && lastForm.length > 0;
@@ -40,19 +48,24 @@ export async function runForm(): Promise<void> {
     return;
   }
 
-  let source: string | undefined;
+  let submitted: SubmittedForm | undefined;
   if (!editor.selection.isEmpty) {
-    const forms = splitForms(editor.document.getText(editor.selection));
-    if (forms.length === 1 && forms[0].complete) source = forms[0].source;
+    const text = editor.document.getText(editor.selection);
+    const forms = splitForms(text);
+    if (forms.length === 1 && forms[0].complete) {
+      const selectionOffset = editor.document.offsetAt(editor.selection.start);
+      submitted = submittedForm(editor.document, forms[0], selectionOffset);
+    }
   } else {
     const form = formAt(editor.document, editor.selection.active.line);
-    if (form?.complete) source = form.source;
+    if (form?.complete) submitted = submittedForm(editor.document, form, 0);
   }
-  if (!source) {
+  if (!submitted) {
     await oneFormHint();
     return;
   }
-  await submitForm(source, true);
+  clearDiagnostics(editor.document);
+  await submitForm(submitted.source, true, submitted);
 }
 
 export async function rerun(): Promise<void> {
@@ -87,6 +100,7 @@ export async function runFile(): Promise<void> {
   const basename = path ? path.split(/[/\\]/).pop() ?? path : 'untitled buffer';
   const lineCount = doc.lineCount;
 
+  clearDiagnostics(doc);
   show();
   appendLine(`> [run file: ${basename} · ${lineCount} lines]`);
   if (!proc.writeSourceBlock(text, path)) notConnectedHint();
@@ -157,15 +171,37 @@ function notConnectedHint(): void {
   );
 }
 
-async function submitForm(source: string, remember: boolean): Promise<void> {
+async function submitForm(
+  source: string,
+  remember: boolean,
+  submitted?: SubmittedForm,
+): Promise<void> {
   if (remember) setLastForm(source);
   try {
     await proc.request(source);
   } catch (err) {
-    if (!(err instanceof proc.SessionRecordError)) {
+    if (err instanceof proc.SessionRecordError && err.record.kind === 'compile_error' && submitted) {
+      reportCompileError(submitted.document, submitted.range, submitted.version, err.record);
+    } else if (!(err instanceof proc.SessionRecordError)) {
       vscode.window.showWarningMessage(`Frothy: ${(err as Error).message}`);
     }
   }
+}
+
+function submittedForm(
+  document: vscode.TextDocument,
+  form: SourceForm,
+  baseOffset: number,
+): SubmittedForm {
+  return {
+    source: form.source,
+    document,
+    range: new vscode.Range(
+      document.positionAt(baseOffset + form.startOffset),
+      document.positionAt(baseOffset + form.endOffset),
+    ),
+    version: document.version,
+  };
 }
 
 async function oneFormHint(): Promise<void> {

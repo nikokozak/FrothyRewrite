@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as commands from './commands';
 import * as proc from './connect';
+import { clearDiagnostics, initDiagnostics } from './diagnostics';
 import { dispose as disposeOutput, show as showOutput } from './output';
 import { setOnConnectionChanged } from './connect';
 import { initStatusBar, updateStatusBar, disposeStatusBar } from './status-bar';
@@ -30,6 +31,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   initStatusBar(context);
+  initDiagnostics(context);
   refreshContext();
 
   // Keep both the status bar and the when-clause context in sync with
@@ -42,6 +44,8 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument((doc) => void autoConnect(doc)),
     vscode.window.onDidChangeActiveTextEditor(refreshContext),
+    vscode.workspace.onDidChangeTextDocument((event) => clearDiagnostics(event.document)),
+    vscode.workspace.onDidCloseTextDocument(clearDiagnostics),
   );
   void autoConnect(vscode.window.activeTextEditor?.document);
 
