@@ -13,6 +13,7 @@ export function initStatusBar(context: vscode.ExtensionContext): void {
 export function updateStatusBar(
   snapshot: Readonly<SessionSnapshot>,
   connected: boolean,
+  busy: boolean,
   visible: boolean,
   portLabel: string,
 ): void {
@@ -24,16 +25,16 @@ export function updateStatusBar(
 
   const profile = snapshot.profile ?? portLabel;
   const details = snapshot.mode ? `${profile}, ${snapshot.mode}` : profile;
-  if (connected && snapshot.state === 'waiting') {
-    item.text = '$(loading~spin) Frothy: Running';
-    item.backgroundColor = undefined;
-    item.command = 'frothy.interrupt';
-    item.tooltip = `Frothy is running on ${details} — click to interrupt`;
-  } else if (connected && snapshot.state === 'interrupting') {
+  if (connected && busy && snapshot.state === 'interrupting') {
     item.text = '$(debug-stop) Frothy: Interrupting';
     item.backgroundColor = undefined;
     item.command = 'frothy.interrupt';
     item.tooltip = `Frothy is interrupting ${details}`;
+  } else if (connected && busy) {
+    item.text = '$(loading~spin) Frothy: Running';
+    item.backgroundColor = undefined;
+    item.command = 'frothy.interrupt';
+    item.tooltip = `Frothy is running on ${details} — click to interrupt`;
   } else if (connected) {
     item.text = `$(plug) Frothy: ${profile}`;
     item.backgroundColor = undefined;

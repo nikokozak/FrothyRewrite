@@ -66,12 +66,12 @@ export async function deactivate(): Promise<void> {
 function refreshContext(): void {
   const connected = proc.isConnected();
   const snapshot = proc.sessionSnapshot();
-  const busy = snapshot.state === 'waiting' || snapshot.state === 'interrupting';
+  const busy = proc.isBusy();
   const frothyEditor = vscode.window.activeTextEditor?.document.languageId === 'frothy';
   void vscode.commands.executeCommand('setContext', 'frothy.isConnected', connected);
   void vscode.commands.executeCommand('setContext', 'frothy.isBusy', busy);
   void vscode.commands.executeCommand('setContext', 'frothy.hasLastForm', commands.hasLastForm());
-  updateStatusBar(snapshot, connected, frothyEditor || snapshot.state !== 'closed', currentPortLabel());
+  updateStatusBar(snapshot, connected, busy, frothyEditor || snapshot.state !== 'closed', currentPortLabel());
 }
 
 function currentPortLabel(): string {
