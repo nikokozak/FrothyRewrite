@@ -4,7 +4,7 @@ const DEFAULT_KEY = "frothy-editor:sketch";
 
 export interface SketchStorage {
   load(): string | null;
-  save(source: string): void;
+  save(source: string): boolean;
   download(source: string, filename?: string): void;
 }
 
@@ -19,10 +19,12 @@ export function makeStorage(key: string = DEFAULT_KEY): SketchStorage {
     },
     save(source: string) {
       try {
-        globalThis.localStorage?.setItem(key, source);
+        const storage = globalThis.localStorage;
+        if (!storage) return false;
+        storage.setItem(key, source);
+        return true;
       } catch {
-        // localStorage may be unavailable (private mode, no DOM). Save
-        // failure is non-fatal — caller may surface it.
+        return false;
       }
     },
     download(source: string, filename = "sketch.fr") {

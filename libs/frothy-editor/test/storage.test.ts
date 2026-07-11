@@ -15,7 +15,11 @@ function withDOM(): void {
   });
   // localStorage lives on dom.window; copy onto globalThis so the
   // storage module's globalThis.localStorage reads see it.
-  (globalThis as unknown as { localStorage: Storage }).localStorage = dom.window.localStorage;
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    writable: true,
+    value: dom.window.localStorage,
+  });
   (globalThis as unknown as { document: Document }).document = dom.window.document;
 }
 
@@ -30,7 +34,7 @@ test("storage: save then load round-trips the source", () => {
   const key = "frothy-editor:test-roundtrip";
   const s = makeStorage(key);
   const sketch = `to greet [ "hello, world" ]\ngreet\n`;
-  s.save(sketch);
+  assert.equal(s.save(sketch), true);
   assert.equal(s.load(), sketch);
 
   // A fresh storage handle reads the same key.
@@ -38,13 +42,25 @@ test("storage: save then load round-trips the source", () => {
   assert.equal(s2.load(), sketch);
 });
 
-test("storage: save tolerates a missing localStorage (no DOM)", () => {
+test("storage: save reports missing localStorage without throwing", () => {
   // Simulate a non-browser environment by stripping localStorage.
   delete (globalThis as unknown as { localStorage?: Storage }).localStorage;
   const s = makeStorage("frothy-editor:test-no-dom");
-  // Should not throw.
-  s.save("hello");
+  assert.equal(s.save("hello"), false);
   assert.equal(s.load(), null);
+});
+
+test("storage: save reports a localStorage write failure", () => {
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    writable: true,
+    value: {
+      getItem: () => null,
+      setItem: () => { throw new Error("quota exceeded"); },
+    },
+  });
+  const s = makeStorage("frothy-editor:test-throws");
+  assert.equal(s.save("hello"), false);
 });
 
 test("editor sendableLines drops blanks and full-line comments only", () => {

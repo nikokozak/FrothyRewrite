@@ -99,7 +99,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const downloadBtn = mkBtn(doc, "Download .fr", "frothy-btn");
   const saveStatus = doc.createElement("span");
   saveStatus.className = "frothy-save-status";
-  saveStatus.textContent = "saved";
+  saveStatus.setAttribute("role", "status");
+  saveStatus.setAttribute("aria-live", "polite");
+  saveStatus.textContent = "not saved locally";
   const echoToggle = doc.createElement("label");
   echoToggle.className = "frothy-echo-toggle";
   const echoBox = doc.createElement("input");
@@ -357,8 +359,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
 
   function save() {
     clearSaveTimer();
-    storage.save(currentSource());
-    saveStatus.textContent = "saved";
+    saveStatus.textContent = storage.save(currentSource())
+      ? "saved locally"
+      : "not saved—download .fr";
   }
 
   function download() {
