@@ -3,7 +3,7 @@
   "displayName": "Frothy",
   "description": "Live Frothy workflow inside VS Code: connect to a board, run forms and files, inspect words, save and restore.",
   "version": "0.4.0",
-  "publisher": "frothy",
+  "publisher": "NikolaiKozak",
   "license": "MIT",
   "repository": {
     "type": "git",
