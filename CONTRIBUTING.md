@@ -38,7 +38,8 @@ go test ./cmd/... ./internal/...
 (cd libs/frothy-editor && npm test)
 ```
 
-CI runs all of these on every pull request, plus an ESP32 firmware build.
+CI runs all of these on every pull request, plus both official ESP-IDF board
+builds.
 
 ## What A Good PR Looks Like
 
@@ -70,9 +71,10 @@ own `package.json` version); a release bundles a coherent set of them.
 tools/build-flasher-bundle.sh ~/Developer/frothy-site/static/test/flash/firmware
 ```
 
-This runs the normal ESP32 build, copies only the files listed by ESP-IDF's
-generated `flasher_args.json`, and writes their addresses plus the build version
-(from `git describe`) to the flasher `manifest.json`.
+This discovers every official ESP-IDF board, runs its normal build, copies only
+the files listed by ESP-IDF's generated `flasher_args.json`, and writes their
+addresses plus the build version (from `git describe`) to one flasher
+`manifest.json`.
 
 **Update the editor bundle** the same way:
 
@@ -94,6 +96,26 @@ The push triggers `.github/workflows/release.yml`, which builds the same
 segmented flasher bundle and `make vsix`, then attaches the manifest, firmware
 segments, and `.vsix` to a GitHub release. Re-vendor the site bundles from the
 tagged commit so the live site matches the release.
+
+**Publish the CLI through Homebrew** only after that tag archive is reachable.
+Render the proven formula template with the real release values:
+
+```sh
+version=X.Y.Z
+url="https://github.com/nikokozak/FrothyRewrite/archive/refs/tags/v${version}.tar.gz"
+curl -fL "$url" -o "/tmp/frothy-${version}.tar.gz"
+sha256="$(shasum -a 256 "/tmp/frothy-${version}.tar.gz" | cut -d ' ' -f 1)"
+sed -e "s|@VERSION@|${version}|g" \
+    -e "s|@URL@|${url}|g" \
+    -e "s|@SHA256@|${sha256}|g" \
+    packaging/homebrew/frothy.rb.in > /tmp/frothy.rb
+brew style /tmp/frothy.rb
+```
+
+Review `/tmp/frothy.rb`, then commit it as `Formula/frothy.rb` in the dedicated
+tap. The Homebrew package installs only `bin/frothy`; firmware development and
+ESP-IDF remain source-checkout workflows. Publishing the tap is a separate
+authorized release action, never part of an ordinary code push.
 
 ## Where To Talk
 

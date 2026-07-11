@@ -1,0 +1,22 @@
+# typed: strict
+# frozen_string_literal: true
+
+# Substitute only from a real, reachable Frothy release archive.
+class Frothy < Formula
+  desc "Live language kernel CLI for programmable devices"
+  homepage "https://frothy.dev"
+  url "@URL@"
+  version "@VERSION@"
+  sha256 "@SHA256@"
+  license "MIT"
+
+  depends_on "go" => :build
+
+  def install
+    system "make", "install-host", "PREFIX=#{prefix}", "GO_CACHE=#{buildpath}/.gocache"
+  end
+
+  test do
+    assert_match "usage: frothy <verb>", shell_output("#{bin}/frothy --help")
+  end
+end
