@@ -55,6 +55,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const storage: SketchStorage = makeStorage(opts.storageKey);
   const initial = storage.load() ?? opts.initialSource ?? DEFAULT_INITIAL_SOURCE;
   let saveTimer: ReturnType<Window["setTimeout"]> | null = null;
+  let sketchFilename = "sketch.fr";
 
   const root = doc.createElement("div");
   root.className = "frothy-editor";
@@ -96,7 +97,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const sendBufBtn = mkBtn(doc, "Send buffer", "frothy-btn");
   const interruptBtn = mkBtn(doc, "Interrupt", "frothy-btn");
   const clearOutputBtn = mkBtn(doc, "Clear output", "frothy-btn");
+  const openBtn = mkBtn(doc, "Open .fr", "frothy-btn");
   const downloadBtn = mkBtn(doc, "Download .fr", "frothy-btn");
+  const fileInput = doc.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".fr,.frothy,text/plain";
+  fileInput.hidden = true;
   const saveStatus = doc.createElement("span");
   saveStatus.className = "frothy-save-status";
   saveStatus.setAttribute("role", "status");
@@ -116,7 +122,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     sendBufBtn,
     interruptBtn,
     clearOutputBtn,
+    openBtn,
     downloadBtn,
+    fileInput,
     saveStatus,
     echoToggle,
   );
@@ -365,7 +373,21 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   }
 
   function download() {
-    storage.download(currentSource(), "sketch.fr");
+    storage.download(currentSource(), sketchFilename);
+  }
+
+  async function openSelectedFile(): Promise<void> {
+    const file = fileInput.files?.[0];
+    fileInput.value = "";
+    if (!file) return;
+    try {
+      const source = await file.text();
+      replaceSource(source);
+      sketchFilename = basename(file.name);
+      view.focus();
+    } catch (err) {
+      reportError(err);
+    }
   }
 
   connectBtn.addEventListener("click", () => {
@@ -379,6 +401,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   sendBufBtn.addEventListener("click", () => void sendBuffer());
   interruptBtn.addEventListener("click", () => void interrupt());
   clearOutputBtn.addEventListener("click", () => transcript.clear());
+  openBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => void openSelectedFile());
   downloadBtn.addEventListener("click", () => download());
   examplesSelect.addEventListener("change", () => {
     const example = FROTHY_EXAMPLES.find((entry) => entry.name === examplesSelect.value);
@@ -394,6 +418,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       return;
     }
     replaceSource(example.source);
+    sketchFilename = `${example.name}.fr`;
     examplesSelect.value = "";
     view.focus();
   });
@@ -453,6 +478,10 @@ function mkBtn(doc: Document, label: string, cls: string): HTMLButtonElement {
 
 function isDeviceErrorLine(line: string): boolean {
   return line.startsWith("error:") || /^err \d/.test(line);
+}
+
+function basename(path: string): string {
+  return path.split(/[/\\]/).pop() || "sketch.fr";
 }
 
 const LAYOUT_KEY = "frothy-editor:layout";
