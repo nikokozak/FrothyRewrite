@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build the ESP32 firmware segments and write the browser-flasher manifest.
-# Addresses come only from ESP-IDF's generated flasher_args.json, so the bundle
-# contains no bytes from gaps such as the NVS partition.
+# Build every official ESP-IDF board and write one browser-flasher bundle.
+# Addresses come only from each ESP-IDF build's flasher_args.json, so the
+# bundle contains no bytes from gaps such as the NVS partition.
 #
 # Prereq: ESP-IDF installed once via tools/setup-esp-idf.sh.
 # Usage: tools/build-flasher-bundle.sh <dest-firmware-dir>
@@ -11,74 +11,154 @@ set -euo pipefail
 
 dest="${1:?usage: build-flasher-bundle.sh <dest-firmware-dir>}"
 here="$(cd "$(dirname "$0")/.." && pwd)"
-board="esp32_devkit_v1"
-board_json="$here/boards/$board/board.json"
-
-[ -f "$board_json" ] || { echo "missing board manifest: $board_json" >&2; exit 1; }
-profile="$(node -e '
-const board = require(process.argv[1]);
-if (typeof board.profile !== "string" || !board.profile) throw new Error("board profile missing");
-process.stdout.write(board.profile);
-' "$board_json")"
-
 version="$(git -C "$here" describe --tags --always --dirty 2>/dev/null || echo unknown)"
-build_dir="$here/build/$board"
-flasher_args="$build_dir/flasher_args.json"
 
-make -C "$here" BOARD="$board" PROFILE="$profile" artifacts
-[ -f "$flasher_args" ] || { echo "missing ESP-IDF flasher arguments: $flasher_args" >&2; exit 1; }
-
-node - "$flasher_args" "$board_json" "$build_dir" "$dest" "$version" "$board" <<'NODE'
+node - "$here" "$dest" "$version" <<'NODE'
+const childProcess = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const [argsFile, boardFile, buildDir, destination, version, boardId] = process.argv.slice(2);
-const args = JSON.parse(fs.readFileSync(argsFile, "utf8"));
-const board = JSON.parse(fs.readFileSync(boardFile, "utf8"));
-if (typeof board.name !== "string" || !board.name) throw new Error("board name missing");
-if (typeof board.profile !== "string" || !board.profile) throw new Error("board profile missing");
-if (!args.flash_files || typeof args.flash_files !== "object" || Array.isArray(args.flash_files)) {
-  throw new Error("flasher_args.json has no flash_files object");
+const [root, destinationArg, version] = process.argv.slice(2);
+const boardsDir = path.join(root, "boards");
+const destination = path.resolve(destinationArg);
+const generatedSegment = /^.+-.+-0x[0-9a-fA-F]+\.bin$/;
+const bundleIdPattern = /^[a-z0-9_]+$/;
+const outputFiles = new Set();
+const builds = [];
+
+for (const entry of fs.readdirSync(boardsDir, { withFileTypes: true })
+  .filter((candidate) => candidate.isDirectory())
+  .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
+  const boardId = entry.name;
+  const boardFile = path.join(boardsDir, boardId, "board.json");
+  if (!fs.existsSync(boardFile)) continue;
+
+  const board = JSON.parse(fs.readFileSync(boardFile, "utf8"));
+  if (board.target !== "esp-idf") continue;
+  if (!bundleIdPattern.test(boardId)) throw new Error(`invalid board id: ${boardId}`);
+  if (typeof board.name !== "string" || !board.name) {
+    throw new Error(`${boardId}: board name missing`);
+  }
+  if (typeof board.profile !== "string" || !board.profile) {
+    throw new Error(`${boardId}: board profile missing`);
+  }
+  if (!bundleIdPattern.test(board.profile)) {
+    throw new Error(`${boardId}: invalid board profile ${board.profile}`);
+  }
+
+  const result = childProcess.spawnSync(
+    "make",
+    ["-C", root, `BOARD=${boardId}`, `PROFILE=${board.profile}`, "artifacts"],
+    { stdio: "inherit" },
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`${boardId}: firmware build failed`);
+
+  const buildRoot = path.join(root, "build", boardId);
+  const argsFile = path.join(buildRoot, "flasher_args.json");
+  if (!fs.existsSync(argsFile)) {
+    throw new Error(`${boardId}: missing ESP-IDF flasher arguments`);
+  }
+  const args = JSON.parse(fs.readFileSync(argsFile, "utf8"));
+  if (!args.flash_files || typeof args.flash_files !== "object" || Array.isArray(args.flash_files)) {
+    throw new Error(`${boardId}: flasher_args.json has no flash_files object`);
+  }
+
+  const addresses = new Set();
+  const prefix = `${boardId}-${board.profile}-`;
+  const segments = Object.entries(args.flash_files).map(([encodedAddress, relativeFile]) => {
+    const address = Number(encodedAddress);
+    if (!Number.isSafeInteger(address) || address < 0) {
+      throw new Error(`${boardId}: invalid flash address ${encodedAddress}`);
+    }
+    if (addresses.has(address)) {
+      throw new Error(`${boardId}: duplicate flash address ${encodedAddress}`);
+    }
+    addresses.add(address);
+    if (typeof relativeFile !== "string" || !relativeFile) {
+      throw new Error(`${boardId}: invalid flash file at ${encodedAddress}`);
+    }
+
+    const source = path.resolve(buildRoot, relativeFile);
+    const sourceRelative = path.relative(buildRoot, source);
+    if (sourceRelative.startsWith(`..${path.sep}`) || path.isAbsolute(sourceRelative)) {
+      throw new Error(`${boardId}: flash file escapes build directory: ${relativeFile}`);
+    }
+    if (!fs.statSync(source).isFile()) {
+      throw new Error(`${boardId}: flash file is missing: ${relativeFile}`);
+    }
+
+    const file = `${prefix}0x${address.toString(16).padStart(8, "0")}.bin`;
+    if (outputFiles.has(file)) throw new Error(`duplicate output file: ${file}`);
+    outputFiles.add(file);
+    return { address, file, source };
+  }).sort((a, b) => a.address - b.address);
+
+  if (segments.length === 0) {
+    throw new Error(`${boardId}: flasher_args.json lists no flash files`);
+  }
+  builds.push({ boardId, board, segments });
 }
 
-const prefix = `${boardId}-${board.profile}-`;
-const buildRoot = path.resolve(buildDir);
-const addresses = new Set();
-const segments = Object.entries(args.flash_files).map(([encodedAddress, relativeFile]) => {
-  const address = Number(encodedAddress);
-  if (!Number.isSafeInteger(address) || address < 0) {
-    throw new Error(`invalid flash address: ${encodedAddress}`);
-  }
-  if (addresses.has(address)) throw new Error(`duplicate flash address: ${encodedAddress}`);
-  addresses.add(address);
-  if (typeof relativeFile !== "string" || !relativeFile) {
-    throw new Error(`invalid flash file at ${encodedAddress}`);
-  }
-  const source = path.resolve(buildRoot, relativeFile);
-  if (!source.startsWith(buildRoot + path.sep) || !fs.statSync(source).isFile()) {
-    throw new Error(`flash file escapes build directory or is missing: ${relativeFile}`);
-  }
-  const file = `${prefix}0x${address.toString(16).padStart(8, "0")}.bin`;
-  return { address, file, source };
-}).sort((a, b) => a.address - b.address);
+if (builds.length === 0) throw new Error("no official ESP-IDF boards found");
 
-if (segments.length === 0) throw new Error("flasher_args.json lists no flash files");
-fs.mkdirSync(destination, { recursive: true });
-for (const file of fs.readdirSync(destination)) {
-  const generatedSegment = file.startsWith(prefix) && file.endsWith(".bin");
-  const legacyMergedImage = file === `${boardId}-${board.profile}.bin`;
-  if (generatedSegment || legacyMergedImage) fs.unlinkSync(path.join(destination, file));
-}
-for (const segment of segments) {
-  fs.copyFileSync(segment.source, path.join(destination, segment.file));
-}
-const manifest = [{
+const manifest = builds.map(({ boardId, board, segments }) => ({
   board: boardId,
   profile: board.profile,
   label: board.name,
   version,
   segments: segments.map(({ address, file }) => ({ address, file })),
-}];
-fs.writeFileSync(path.join(destination, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
-console.log(`built ${segments.length} flasher segments @ ${version} -> ${destination}`);
+}));
+
+const parent = path.dirname(destination);
+const destinationName = path.basename(destination);
+fs.mkdirSync(parent, { recursive: true });
+const stage = fs.mkdtempSync(path.join(parent, `.${destinationName}.stage-`));
+let backup = "";
+
+try {
+  if (fs.existsSync(destination)) {
+    if (!fs.lstatSync(destination).isDirectory()) {
+      throw new Error(`destination is not a directory: ${destination}`);
+    }
+    const currentLegacyImages = new Set(
+      builds.map(({ boardId, board }) => `${boardId}-${board.profile}.bin`),
+    );
+    for (const entry of fs.readdirSync(destination, { withFileTypes: true })) {
+      if (entry.name === "manifest.json" || generatedSegment.test(entry.name) ||
+          currentLegacyImages.has(entry.name)) {
+        continue;
+      }
+      fs.cpSync(path.join(destination, entry.name), path.join(stage, entry.name), {
+        recursive: true,
+      });
+    }
+  }
+
+  for (const { segments } of builds) {
+    for (const segment of segments) {
+      fs.copyFileSync(segment.source, path.join(stage, segment.file));
+    }
+  }
+  fs.writeFileSync(
+    path.join(stage, "manifest.json"),
+    JSON.stringify(manifest, null, 2) + "\n",
+  );
+
+  if (fs.existsSync(destination)) {
+    backup = path.join(parent, `.${destinationName}.backup-${process.pid}-${Date.now()}`);
+    fs.renameSync(destination, backup);
+  }
+  fs.renameSync(stage, destination);
+  if (backup) fs.rmSync(backup, { recursive: true, force: true });
+} catch (error) {
+  if (backup && fs.existsSync(backup) && !fs.existsSync(destination)) {
+    fs.renameSync(backup, destination);
+  }
+  if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true });
+  throw error;
+}
+
+const segmentCount = builds.reduce((count, build) => count + build.segments.length, 0);
+console.log(`built ${segmentCount} segments for ${builds.length} boards @ ${version} -> ${destination}`);
 NODE
