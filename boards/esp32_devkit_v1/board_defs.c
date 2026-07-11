@@ -21,6 +21,14 @@ const fr_base_def_t fr_board_base_defs[] = {
         .literal_tagged = FR_TAGGED_INT_LITERAL(FR_BOARD_LED_BUILTIN),
     },
     {
+        .slot_id = FR_SLOT_LED_ACTIVE_LEVEL,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$led_active_level",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TAGGED_INT_LITERAL(FR_BOARD_LED_ACTIVE_LEVEL),
+    },
+    {
         .slot_id = FR_SLOT_A0,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
         .name = "$a0",

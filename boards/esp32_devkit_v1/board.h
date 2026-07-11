@@ -6,6 +6,7 @@
 #define FR_BOARD_UART_RX 3
 
 #define FR_BOARD_LED_BUILTIN 2u
+#define FR_BOARD_LED_ACTIVE_LEVEL 1u
 #define FR_BOARD_A0 34u
 #define FR_BOARD_BOOT_BUTTON 0u
 #define FR_BOARD_I2C_SDA 21u

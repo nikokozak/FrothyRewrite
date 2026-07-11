@@ -184,7 +184,7 @@ enum {
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
-              FR_TEST_SOURCE_WORDS "\nok\n"
+              " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
   "gpio.read adc.read adc.above millis micros" FR_TEST_UART_WORDS             \
@@ -193,7 +193,7 @@ enum {
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
-              FR_TEST_SOURCE_WORDS " led\nok\n"
+              " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
   "gpio.read adc.read adc.above millis micros" FR_TEST_UART_WORDS             \
@@ -202,9 +202,9 @@ enum {
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
-              FR_TEST_SOURCE_WORDS " led myblink\nok\n"
+              " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
-  (14 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
+  (15 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
@@ -218,7 +218,7 @@ enum {
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
-              FR_TEST_SOURCE_WORDS "\nok\n"
+              " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
@@ -226,7 +226,7 @@ enum {
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
-              FR_TEST_SOURCE_WORDS " led\nok\n"
+              " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
@@ -234,9 +234,9 @@ enum {
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_EVENT_TEST_WORDS                                          \
-              FR_TEST_SOURCE_WORDS " led myblink\nok\n"
+              " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
-  (11 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
+  (12 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
    FR_TEST_PWM_SLOT_COUNT + FR_TEST_I2C_SLOT_COUNT +                          \
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
@@ -438,28 +438,36 @@ static void test_base_def_contract(void) {
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
   CHECK("fire-event slot follows bytes block",
         FR_SLOT_FIRE_EVENT == FR_SLOT_AFTER_BYTES);
-  CHECK("board local slot ids follow fire-event slot",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_FIRE_EVENT + 1);
+  CHECK("board capability slot follows fire-event slot",
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_FIRE_EVENT + 1);
+  CHECK("board local slot ids follow board capability slots",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #else
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("board local slot ids follow event cancel slot",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board capability slot follows event cancel slot",
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board local slot ids follow board capability slots",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #endif
 #elif FR_FEATURE_PAD
   CHECK("event register slot follows pad ids",
         FR_SLOT_EVENT_REGISTER == FR_TEST_PAD_LAST_SLOT + 1);
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("board local slot ids follow event cancel slot",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board capability slot follows event cancel slot",
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board local slot ids follow board capability slots",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #else
   CHECK("event register slot follows math block",
         FR_SLOT_EVENT_REGISTER == FR_SLOT_AFTER_MATH);
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("board local slot ids follow event cancel slot",
-        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board capability slot follows event cancel slot",
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board local slot ids follow board capability slots",
+        FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #endif
 
   for (uint16_t layer_index = 0; layer_index < fr_base_def_layer_count();
@@ -6365,6 +6373,9 @@ static void test_image(void) {
   CHECK("base image installs led builtin constant",
         fr_slot_read(&runtime, FR_SLOT_LED_BUILTIN, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 13);
+  CHECK("base image installs led active level",
+        fr_slot_read(&runtime, FR_SLOT_LED_ACTIVE_LEVEL, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
   CHECK("base image installs one tagged word",
         fr_slot_read(&runtime, FR_SLOT_ONE, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
@@ -6376,6 +6387,8 @@ static void test_image(void) {
             strcmp(fr_base_slot_name_at(2), "one") == 0 &&
             strcmp(fr_base_slot_name_at(3), "gpio.write") == 0 &&
             strcmp(fr_base_slot_name_at(4), "$led_builtin") == 0 &&
+            strcmp(fr_base_slot_name_at(FR_TEST_BASE_SLOT_COUNT - 1),
+                   "$led_active_level") == 0 &&
             fr_base_slot_name_at(FR_TEST_BASE_SLOT_COUNT) == NULL &&
             strcmp(fr_base_slot_name(FR_SLOT_BOOT), "boot") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_MS), "ms") == 0 &&
@@ -6388,7 +6401,9 @@ static void test_image(void) {
             strcmp(fr_base_slot_name(FR_SLOT_MILLIS), "millis") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_MICROS), "micros") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_LED_BUILTIN), "$led_builtin") ==
-                0);
+                0 &&
+            strcmp(fr_base_slot_name(FR_SLOT_LED_ACTIVE_LEVEL),
+                   "$led_active_level") == 0);
 #if FR_FEATURE_SOURCE_BASE
   CHECK("base image names source word at board-local base",
         strcmp(fr_base_slot_name(FR_SLOT_BOARD_LOCAL_BASE), "gpio.high") == 0);
@@ -6474,6 +6489,8 @@ static void test_image(void) {
             slot_id == FR_SLOT_MICROS &&
             fr_base_slot_id_for_name("$led_builtin", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_LED_BUILTIN &&
+            fr_base_slot_id_for_name("$led_active_level", &slot_id) == FR_OK &&
+            slot_id == FR_SLOT_LED_ACTIVE_LEVEL &&
             fr_base_slot_id_for_name("missing", &slot_id) == FR_ERR_NOT_FOUND);
 #if FR_FEATURE_TEXT && FR_FEATURE_REPL
   CHECK("base image looks up print slot name",
@@ -6538,6 +6555,8 @@ static void test_image(void) {
             fr_base_slot_layer(FR_SLOT_MICROS, &layer) == FR_OK &&
             layer == FR_BASE_LAYER_TARGET &&
             fr_base_slot_layer(FR_SLOT_LED_BUILTIN, &layer) == FR_OK &&
+            layer == FR_BASE_LAYER_BOARD &&
+            fr_base_slot_layer(FR_SLOT_LED_ACTIVE_LEVEL, &layer) == FR_OK &&
             layer == FR_BASE_LAYER_BOARD &&
             fr_base_slot_layer(FR_SLOT_ONE, &layer) == FR_OK &&
             layer == FR_BASE_LAYER_CORE);
@@ -12211,6 +12230,10 @@ static void test_repl(void) {
         fr_repl_eval_line(&runtime, "$led_builtin", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "13\nok\n") == 0);
+  CHECK("repl displays board led active level",
+        fr_repl_eval_line(&runtime, "$led_active_level", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
 #else
   CHECK("repl runs numeric boot",
         fr_repl_eval_line(&runtime, "0:", out, sizeof(out)) == FR_OK &&
@@ -12249,6 +12272,10 @@ static void test_repl(void) {
         fr_repl_eval_line(&runtime, "see $led_builtin", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "base board 13\nok\n") == 0);
+  CHECK("repl sees board led active level",
+        fr_repl_eval_line(&runtime, "see $led_active_level", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "base board 1\nok\n") == 0);
 #if FR_TAGGED_INT_MAX >= 115200
   CHECK("repl evaluates roomier int",
         fr_repl_eval_line(&runtime, "115200", out, sizeof(out)) == FR_OK &&
@@ -13988,13 +14015,17 @@ static void test_source_base_word_proofs(void) {
        "to gpio.toggle with pin [ gpio.write: pin, 1 - gpio.read: pin ]"},
       {"gpio.output", "to gpio.output with pin [ gpio.mode: pin, 1 ]"},
       {"gpio.input", "to gpio.input with pin [ gpio.mode: pin, 0 ]"},
-      {"led.on", "to led.on [ gpio.high: $led_builtin ]"},
-      {"led.off", "to led.off [ gpio.low: $led_builtin ]"},
+      {"led.on",
+       "to led.on [ gpio.write: $led_builtin, $led_active_level ]"},
+      {"led.off",
+       "to led.off [ gpio.write: $led_builtin, 1 - $led_active_level ]"},
       {"led.toggle", "to led.toggle [ gpio.toggle: $led_builtin ]"},
       {"blink", "to blink with pin, count, wait [ repeat count [ gpio.high: "
                 "pin ; ms: wait ; gpio.low: pin ; ms: wait ] ]"},
-      {"led.blink", "to led.blink with count, wait [ blink: $led_builtin, "
-                    "count, wait ]"},
+      {"led.blink", "to led.blink with count, wait [ repeat count [ "
+                    "gpio.write: $led_builtin, $led_active_level ; ms: wait ; "
+                    "gpio.write: $led_builtin, 1 - $led_active_level ; ms: "
+                    "wait ] ]"},
       {"wrap", "to wrap with value, size [ if size <= 0 [ 0 ] else "
                "[ value % size ] ]"},
       {"random.chance?", "to random.chance? with numer, denom [ if denom <= 0 "
