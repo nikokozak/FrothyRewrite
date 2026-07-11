@@ -670,6 +670,37 @@ test-esp32-plain-host-transcript: esp32-plain-host ## Replay the esp32_plain pro
 	done; \
 	printf 'esp32_plain host transcript ok\n'
 
+seeed-xiao-host:
+	$(MAKE) BOARD=seeed_xiao_esp32s3 TARGET=host PROFILE=esp32_plain \
+		BUILD_DIR=build/seeed-xiao-host \
+		FROTHY_BINARY=build/seeed-xiao-host/frothy frothy
+
+test-seeed-xiao-host-transcript: seeed-xiao-host ## Prove XIAO logical LED levels on host GPIO hooks.
+	@out=$$(printf '%s\n' \
+		'$$led_active_level' \
+		'gpio.output: $$led_builtin' \
+		'led.on:' \
+		'gpio.read: $$led_builtin' \
+		'led.off:' \
+		'gpio.read: $$led_builtin' \
+		| build/seeed-xiao-host/frothy); \
+	expected=$$(printf '%s\n' \
+		'> 0' \
+		'ok' \
+		'> ok' \
+		'> ok' \
+		'> 0' \
+		'ok' \
+		'> ok' \
+		'> 1' \
+		'ok' \
+		'> '); \
+	if [ "$$out" != "$$expected" ]; then \
+		printf '%s\nXIAO logical LED transcript did not match\n' "$$out"; \
+		exit 1; \
+	fi; \
+	printf 'XIAO logical LED transcript ok\n'
+
 frothy-host-command: ## Build the user-facing frothy CLI binary.
 	GOCACHE=$(GO_CACHE) go build -o $(FROTHY_HOST_COMMAND_BINARY) ./cmd/frothy-session
 
@@ -781,4 +812,4 @@ vsix: ## Build the VS Code extension package.
 clean: ## Remove generated build outputs.
 	rm -rf build frothy test/test test/test-host-normal test/fixtures/projects/*/.frothy
 
-.PHONY: test test-esp-idf-console-boundary test-unity help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript frothy-host-command cli install-host test-install-host print-config vsix clean
+.PHONY: test test-esp-idf-console-boundary test-unity help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript seeed-xiao-host test-seeed-xiao-host-transcript frothy-host-command cli install-host test-install-host print-config vsix clean

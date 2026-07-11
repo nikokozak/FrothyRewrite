@@ -1,10 +1,9 @@
 /*
- * Plain ESP32 DevKit V1 profile.
+ * Plain roomier ESP-IDF profile.
  *
- * This is the first roomier device proof profile after host_normal. It uses
- * the normal 32-bit tagged word contract and gives on-device source, names,
- * cells, and NVS persistence enough room to be useful over ordinary UART0
- * serial before workshop distribution grows its own shape.
+ * Official ESP32 boards share this 32-bit tagged word contract. It gives
+ * on-device source, names, cells, and NVS persistence enough room to be useful
+ * over the board-selected human serial console.
  */
 
 #pragma once

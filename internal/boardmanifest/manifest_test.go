@@ -95,3 +95,26 @@ func TestEsp32DevkitV1BoardManifest(t *testing.T) {
 		}
 	}
 }
+
+func TestSeeedXiaoEsp32s3BoardManifest(t *testing.T) {
+	m := loadManifest(t, filepath.Join(repoRoot(t), "boards", "seeed_xiao_esp32s3", "board.json"))
+	checkRequired(t, "seeed_xiao_esp32s3", m)
+	if m.Chip != "esp32s3" || m.Target != "esp-idf" || m.Profile != "esp32_plain" {
+		t.Errorf("seeed_xiao_esp32s3: got chip=%q target=%q profile=%q", m.Chip, m.Target, m.Profile)
+	}
+	wantPins := map[string]int{
+		"$led_builtin": 21,
+		"$boot_button": 0,
+		"$a0":          1,
+		"$sda":         5,
+		"$scl":         6,
+		"uart_tx":      43,
+		"uart_rx":      44,
+		"uart_baud":    115200,
+	}
+	for key, want := range wantPins {
+		if got, ok := m.Pins[key]; !ok || got != want {
+			t.Errorf("seeed_xiao_esp32s3: pin %s = %d, want %d", key, got, want)
+		}
+	}
+}
