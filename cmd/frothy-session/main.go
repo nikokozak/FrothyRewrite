@@ -1766,9 +1766,13 @@ func runSendCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 
-	_, err := readFileLines(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "send: %v\n", err)
+		return 1
+	}
+	if info.IsDir() {
+		fmt.Fprintf(stderr, "send: %s is not a file\n", path)
 		return 1
 	}
 

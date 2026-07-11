@@ -329,6 +329,17 @@ func TestFrothySendErrorsOnMissingFile(t *testing.T) {
 	}
 }
 
+func TestFrothySendRejectsDirectory(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runSendCommand([]string{"--port", "/dev/cu.test", t.TempDir()}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "is not a file") {
+		t.Fatalf("stderr missing file-kind error: %q", stderr.String())
+	}
+}
+
 func TestFrothySendErrorsWhenPortMissing(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runSendCommand([]string{"some.frothy"}, &stdout, &stderr)
