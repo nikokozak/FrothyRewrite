@@ -281,10 +281,7 @@ UNITY_T15B_TCP_TEST_BINARY ?= $(BUILD_DIR)/test-unity-t15b-tcp
 UNITY_T14_POWER_TEST_BINARY ?= $(BUILD_DIR)/test-unity-t14-power
 UNITY_T16_BYTES_TEST_BINARY ?= $(BUILD_DIR)/test-unity-t16-bytes
 FROTHY_BINARY ?= frothy
-# Helper basename must match compilerProgramName in cmd/frothy-session.
-OVERLAY_COMPILER ?= $(BUILD_DIR)/frothy-compile-overlay
 FROTHY_HOST_COMMAND_BINARY ?= build/host/frothy
-FROTHY_SESSION_BINARY ?= build/host/frothy-session
 LIB_E2E_PROJECT ?= test/fixtures/projects/mixed-demo
 LIB_E2E_BUILD_DIR ?= build/lib-e2e
 LIB_E2E_BINARY ?= $(LIB_E2E_BUILD_DIR)/frothy.elf
@@ -292,12 +289,10 @@ GO_CACHE ?= $(abspath build/host/go-cache)
 INSTALL_TEST_ROOT ?= build/install-host-root
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
-LIBEXECDIR ?= $(PREFIX)/libexec/frothy
 INSTALL ?= install
 INSTALL_DIR ?= $(INSTALL) -d
 INSTALL_PROGRAM ?= $(INSTALL) -m 0755
 HOST_INSTALL_BINDIR = $(DESTDIR)$(BINDIR)
-HOST_INSTALL_LIBEXECDIR = $(DESTDIR)$(LIBEXECDIR)
 # Vendor-SDK targets can delegate artifact work by setting TARGET_BUILD_COMMAND,
 # TARGET_SIZE_COMMAND, TARGET_FLASH_DEPS, and TARGET_FLASH_COMMAND in target.mk.
 ARTIFACTS = $(ARTIFACT_ELF) $(if $(TARGET_OBJCOPY),$(ARTIFACT_HEX)) $(if $(TARGET_SIZE)$(TARGET_SIZE_COMMAND),$(ARTIFACT_SIZE))
@@ -666,18 +661,12 @@ test-esp32-plain-host-transcript: esp32-plain-host ## Replay the esp32_plain pro
 	done; \
 	printf 'esp32_plain host transcript ok\n'
 
-host-overlay-compiler:
-	$(MAKE) BOARD=host PROFILE=host_small \
-		OVERLAY_COMPILER=build/host/frothy-compile-overlay \
-		build/host/frothy-compile-overlay
-
-frothy-host-command: host-overlay-compiler ## Build the user-facing frothy CLI binary.
+frothy-host-command: ## Build the user-facing frothy CLI binary.
 	GOCACHE=$(GO_CACHE) go build -o $(FROTHY_HOST_COMMAND_BINARY) ./cmd/frothy-session
 
 # Build the user-facing `frothy` CLI for local use without a system install.
-# It lands next to its frothy-compile-overlay helper (resolved as a sibling),
-# so the only step left is putting that directory on PATH — which the recipe
-# prints. No symlinking required.
+# The only step left is putting its directory on PATH, which the recipe prints.
+# No symlinking required.
 cli: frothy-host-command ## Build the local frothy CLI and print PATH setup.
 	@bindir='$(abspath $(dir $(FROTHY_HOST_COMMAND_BINARY)))'; \
 	printf '\n  \033[32m✓\033[0m Built the frothy CLI  ->  %s/frothy\n\n' "$$bindir"; \
@@ -688,43 +677,30 @@ cli: frothy-host-command ## Build the local frothy CLI and print PATH setup.
 	printf '      \033[1msource ~/.zshrc\033[0m\n\n'; \
 	printf '  Then run \033[1mfrothy --help\033[0m from anywhere.\n\n'
 
-frothy-session: host-overlay-compiler
-	GOCACHE=$(GO_CACHE) go build -o $(FROTHY_SESSION_BINARY) ./cmd/frothy-session
-
-install-host: frothy-host-command frothy-session host-overlay-compiler ## Install host binaries under DESTDIR/PREFIX.
+install-host: frothy-host-command ## Install the host CLI under DESTDIR/PREFIX.
 	$(INSTALL_DIR) "$(HOST_INSTALL_BINDIR)"
-	$(INSTALL_DIR) "$(HOST_INSTALL_LIBEXECDIR)"
 	$(INSTALL_PROGRAM) "$(FROTHY_HOST_COMMAND_BINARY)" "$(HOST_INSTALL_BINDIR)/frothy"
-	$(INSTALL_PROGRAM) "$(FROTHY_SESSION_BINARY)" "$(HOST_INSTALL_BINDIR)/frothy-session"
-	$(INSTALL_PROGRAM) "$(OVERLAY_COMPILER)" "$(HOST_INSTALL_LIBEXECDIR)/frothy-compile-overlay"
 
 test-install-host:
 	rm -rf "$(INSTALL_TEST_ROOT)"
 	$(MAKE) install-host DESTDIR="$(abspath $(INSTALL_TEST_ROOT))" PREFIX=/usr/local
-	@out=$$(cd "$(abspath $(INSTALL_TEST_ROOT))" && printf '%s\n' \
-		'time is 200' \
-		'blink is fn [ ms: time ]' \
-		'blink:' \
-		| env -i PATH=/usr/bin:/bin "$(abspath $(INSTALL_TEST_ROOT))/usr/local/bin/frothy" session --dry-run); \
-	apply_count=$$(printf '%s\n' "$$out" | grep -c '^apply '); \
-	run_count=$$(printf '%s\n' "$$out" | grep -c '^run '); \
-	if [ "$$apply_count" != 2 ] || [ "$$run_count" != 1 ]; then \
-		printf '%s\n' "$$out"; \
-		exit 1; \
-	fi; \
+	@test -x "$(abspath $(INSTALL_TEST_ROOT))/usr/local/bin/frothy"; \
+	test ! -e "$(abspath $(INSTALL_TEST_ROOT))/usr/local/bin/frothy-session"; \
+	test ! -e "$(abspath $(INSTALL_TEST_ROOT))/usr/local/libexec/frothy/frothy-compile-overlay"; \
 	tmp=$$(mktemp -d); \
 	trap 'rm -rf "$$tmp"' EXIT; \
 	cp -R "$(abspath $(INSTALL_TEST_ROOT))/usr" "$$tmp/usr"; \
-	doctor_out=$$(cd "$$tmp" && env -i PATH=/usr/bin:/bin "$$tmp/usr/local/bin/frothy" doctor 2>&1 || true); \
-	if ! printf '%s\n' "$$doctor_out" | grep -q 'ok    compiler: .*libexec/frothy/frothy-compile-overlay'; then \
-		printf '%s\nmissing installed compiler check\n' "$$doctor_out"; \
+	help_out=$$(cd "$$tmp" && env -i PATH=/usr/bin:/bin "$$tmp/usr/local/bin/frothy" --help); \
+	if ! printf '%s\n' "$$help_out" | grep -q 'usage: frothy <verb>'; then \
+		printf '%s\nmissing installed help output\n' "$$help_out"; \
 		exit 1; \
 	fi; \
-	if printf '%s\n' "$$doctor_out" | grep -Eq '  (make|esp-idf-installed):'; then \
+	doctor_out=$$(cd "$$tmp" && env -i PATH=/usr/bin:/bin "$$tmp/usr/local/bin/frothy" doctor 2>&1 || true); \
+	if printf '%s\n' "$$doctor_out" | grep -Eq '  (compiler|make|esp-idf-installed):'; then \
 		printf '%s\nunexpected firmware check outside source checkout\n' "$$doctor_out"; \
 		exit 1; \
 	fi; \
-	printf 'install host dry-run ok\n'
+	printf 'install host smoke ok\n'
 
 $(TEST_BINARY): $(TEST_DEPS)
 	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 -DFR_HOST_TEST_HELPERS=1 $(TEST_SOURCES) $(FR_LDFLAGS) -o $@
@@ -769,9 +745,6 @@ $(UNITY_T16_BYTES_TEST_BINARY): $(UNITY_T16_BYTES_TEST_SOURCES) $(KERNEL_DEPS) $
 		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 -DFR_HOST_TEST_HELPERS=1 $(UNITY_T16_BYTES_TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
-$(OVERLAY_COMPILER): tools/frothy-compile-overlay.c $(FROTHY_DEPS) | $(BUILD_DIR)
-	$(FR_CC) $(FR_CFLAGS) tools/frothy-compile-overlay.c $(KERNEL_SOURCES) $(PLATFORM_SOURCES) $(PERSISTENCE_SOURCES) $(FR_LDFLAGS) -o $@
-
 print-config: ## Print the selected board, target, profile, and build paths.
 	@printf 'BOARD=%s\n' "$(BOARD)"
 	@printf 'BOARD_DIR=%s\n' "$(BOARD_DIR)"
@@ -799,4 +772,4 @@ vsix: ## Build the VS Code extension package.
 clean: ## Remove generated build outputs.
 	rm -rf build frothy test/test test/test-host-normal test/fixtures/projects/*/.frothy
 
-.PHONY: test test-unity help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean
+.PHONY: test test-unity help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript frothy-host-command cli install-host test-install-host print-config vsix clean
