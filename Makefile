@@ -411,8 +411,8 @@ flash: $(TARGET_FLASH_DEPS) ## Flash the selected board; requires BOARD_PORT.
 	$(TARGET_FLASH_COMMAND)
 
 wipe-persist: ## Erase the ESP32 Frothy persistence partition.
-	@if [ "$(BOARD)" != "esp32_devkit_v1" ]; then \
-		printf 'wipe-persist: unsupported BOARD "%s"; only esp32_devkit_v1 is supported\n' "$(BOARD)"; \
+	@if [ "$(TARGET)" != "esp-idf" ]; then \
+		printf 'wipe-persist: board "%s" uses target "%s", not esp-idf\n' "$(BOARD)" "$(TARGET)"; \
 		exit 2; \
 	fi
 	@if [ -z "$(BOARD_PORT)" ]; then \

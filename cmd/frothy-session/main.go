@@ -1950,7 +1950,7 @@ func runWipeCommand(args []string, sourceRoot string, stdout io.Writer,
 		fmt.Fprintf(stderr, "wipe: cannot find Frothy source root; set %s\n", frothySourceRootEnv)
 		return 2
 	}
-	if board != "esp32_devkit_v1" || !flashableBoard(filepath.Join(sourceRoot, "boards"), board) {
+	if !flashableBoard(filepath.Join(sourceRoot, "boards"), board) {
 		fmt.Fprintf(stderr, "wipe: unsupported board %q\n", board)
 		return 2
 	}
@@ -1961,7 +1961,7 @@ func runWipeCommand(args []string, sourceRoot string, stdout io.Writer,
 			shown = "<port>"
 		}
 		fmt.Fprintln(stderr, "wipe: refusing to erase persisted device state without --force")
-		fmt.Fprintf(stderr, "      frothy wipe --force esp32_devkit_v1 --port %s\n", shown)
+		fmt.Fprintf(stderr, "      frothy wipe --force %s --port %s\n", board, shown)
 		return 2
 	}
 

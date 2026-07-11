@@ -633,6 +633,12 @@ func TestFrothyWipeCommand(t *testing.T) {
 			wantExit: 0,
 			wantArgv: "wipe-persist BOARD=esp32_devkit_v1 BOARD_PORT=/dev/cu.usbmodem999",
 		},
+		{
+			name:     "xiao happy path explicit port",
+			args:     []string{"--force", "--port", "/dev/cu.usbmodem999", "seeed_xiao_esp32s3"},
+			wantExit: 0,
+			wantArgv: "wipe-persist BOARD=seeed_xiao_esp32s3 BOARD_PORT=/dev/cu.usbmodem999",
+		},
 	}
 
 	for _, c := range cases {
@@ -700,6 +706,7 @@ func makeFlashTestRoot(t *testing.T) string {
 	t.Helper()
 	root := makeSourceRoot(t)
 	writeTestBoard(t, filepath.Join(root, "boards"), "esp32_devkit_v1", `{"target":"esp-idf"}`)
+	writeTestBoard(t, filepath.Join(root, "boards"), "seeed_xiao_esp32s3", `{"target":"esp-idf"}`)
 	return root
 }
 
