@@ -2261,7 +2261,7 @@ func availableVerbs() []verb {
 				"      send the project's library source to the board on that port"},
 		{name: "bootstrap", group: "Start", summary: "fetch and install the ESP-IDF SDK under ~/.froth/sdk/", run: runBootstrapMain,
 			longDesc: "Bootstrap fetches and installs the ESP-IDF SDK that flash, build, and " +
-				"web-bins depend on, placing it under ~/.froth/sdk/esp-idf/ (or under $FROTH_HOME " +
+				"firmware bundle generation depend on, placing it under ~/.froth/sdk/esp-idf/ (or under $FROTH_HOME " +
 				"if set). It uses no sudo, never writes outside that tree, and is idempotent: a " +
 				"successful install drops a marker file, and a re-run exits 0 with \"already " +
 				"installed.\" Pass --force to reinstall from scratch.",

@@ -53,9 +53,9 @@ verified it.
 ## Releasing And Vendored Bundles
 
 The website (frothy.dev) serves two things built from this repo: the web
-flasher's firmware binary and the browser editor bundle. Both are vendored —
+flasher's firmware segments and the browser editor bundle. Both are vendored —
 built here, copied into the site — so the site stays self-contained and works
-offline. The firmware `.bin` carries embedded build timestamps and is never
+offline. Firmware files carry embedded build timestamps and are never
 byte-identical between builds, so "update it" always means "rebuild and
 re-vendor", never "diff the bytes".
 
@@ -67,11 +67,12 @@ own `package.json` version); a release bundles a coherent set of them.
 `frothy bootstrap`):
 
 ```sh
-tools/build-flasher-bundle.sh ~/Developer/frothy-site/static/test/flash
+tools/build-flasher-bundle.sh ~/Developer/frothy-site/static/test/flash/firmware
 ```
 
-This runs `make web-bins`, copies the merged binary in, and stamps the build
-version (from `git describe`) into the flasher `manifest.json`.
+This runs the normal ESP32 build, copies only the files listed by ESP-IDF's
+generated `flasher_args.json`, and writes their addresses plus the build version
+(from `git describe`) to the flasher `manifest.json`.
 
 **Update the editor bundle** the same way:
 
@@ -89,10 +90,10 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The push triggers `.github/workflows/release.yml`, which builds `make web-bins`
-and `make vsix` and attaches the firmware binary and the `.vsix` to a GitHub
-release. Re-vendor the site bundles from the tagged commit so the live site
-matches the release.
+The push triggers `.github/workflows/release.yml`, which builds the same
+segmented flasher bundle and `make vsix`, then attaches the manifest, firmware
+segments, and `.vsix` to a GitHub release. Re-vendor the site bundles from the
+tagged commit so the live site matches the release.
 
 ## Where To Talk
 
