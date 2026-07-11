@@ -417,17 +417,6 @@ wipe-persist: ## Erase the ESP32 Frothy persistence partition.
 	fi
 	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && parttool.py --port "$(BOARD_PORT)" erase_partition --partition-name frothy
 
-# Merged .bin for the web flasher (T13b D11). Local esptool.py is
-# v4.12.dev1 which only accepts merge_bin (underscore).
-web-bins: ## Build the merged ESP32 binary for the web flasher.
-	$(MAKE) BOARD=esp32_devkit_v1 PROFILE=esp32_plain artifacts
-	@mkdir -p web/flash/firmware
-	. "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && esptool.py --chip esp32 merge_bin \
-		-o web/flash/firmware/esp32_devkit_v1-esp32_plain.bin \
-		0x1000 build/esp32_devkit_v1/bootloader/bootloader.bin \
-		0x8000 build/esp32_devkit_v1/partition_table/partition-table.bin \
-		0x10000 build/esp32_devkit_v1/frothy.bin
-
 test-host-normal: ## Run the core C suite with the host_normal profile.
 	$(MAKE) BOARD=host PROFILE=host_normal \
 		TEST_BINARY=test/test-host-normal test
@@ -798,4 +787,4 @@ vsix: ## Build the VS Code extension package.
 clean: ## Remove generated build outputs.
 	rm -rf build frothy test/test test/test-host-normal test/fixtures/projects/*/.frothy
 
-.PHONY: test test-unity help artifacts flash wipe-persist web-bins test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean
+.PHONY: test test-unity help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript host-overlay-compiler frothy-host-command frothy-session cli install-host test-install-host print-config vsix clean

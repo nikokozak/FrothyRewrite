@@ -27,22 +27,18 @@ jobs:
       - name: Install ESP-IDF
         run: tools/setup-esp-idf.sh
 
-      - name: Build web flasher binary
-        run: |
-          . "$HOME/.froth/sdk/esp-idf/export.sh"
-          make web-bins
-
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
+
+      - name: Build web flasher bundle
+        run: tools/build-flasher-bundle.sh dist-release
 
       - name: Build VS Code extension
         run: make vsix
 
       - name: Collect artifacts
         run: |
-          mkdir -p dist-release
-          cp web/flash/firmware/esp32_devkit_v1-esp32_plain.bin dist-release/
           cp editors/vscode/frothy-*.vsix dist-release/
           ls -l dist-release
 
