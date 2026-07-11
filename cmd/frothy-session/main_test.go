@@ -1258,20 +1258,20 @@ func TestSourceFormReaderPromptsAndGroupsMultilineTopForms(t *testing.T) {
 	reader := newSourceFormReader(strings.NewReader("boot is fn [\n  one\n]\nwords\n"))
 	var out strings.Builder
 
-	source, ok, err := reader.next(&out, nil)
+	read, ok, err := reader.next(&out, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || source != "boot is fn [ one ]" {
-		t.Fatalf("first source=%q ok=%v, want grouped boot form", source, ok)
+	if !ok || read.source != "boot is fn [ one ]" {
+		t.Fatalf("first source=%q ok=%v, want grouped boot form", read.source, ok)
 	}
 
-	source, ok, err = reader.next(&out, nil)
+	read, ok, err = reader.next(&out, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || source != "words" {
-		t.Fatalf("second source=%q ok=%v, want words", source, ok)
+	if !ok || read.source != "words" {
+		t.Fatalf("second source=%q ok=%v, want words", read.source, ok)
 	}
 	if got, want := out.String(), "frothy> .. .. frothy> "; got != want {
 		t.Fatalf("prompts %q, want %q", got, want)
@@ -1282,12 +1282,12 @@ func TestSourceFormReaderIgnoresCommentBrackets(t *testing.T) {
 	reader := newSourceFormReader(strings.NewReader("-- header\nboot is fn [\n  -* ignored [ [\n  ] *-\n  one\n]\n"))
 	var out strings.Builder
 
-	source, ok, err := reader.next(&out, nil)
+	read, ok, err := reader.next(&out, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || source != "boot is fn [ -* ignored [ [ ] *- one ]" {
-		t.Fatalf("source=%q ok=%v, want grouped form with comments ignored", source, ok)
+	if !ok || read.source != "boot is fn [ -* ignored [ [ ] *- one ]" {
+		t.Fatalf("source=%q ok=%v, want grouped form with comments ignored", read.source, ok)
 	}
 	if got, want := out.String(), "frothy> frothy> .. .. .. .. "; got != want {
 		t.Fatalf("prompts %q, want %q", got, want)
@@ -1320,12 +1320,12 @@ func TestSourceFormReaderCtrlCDropsPendingForm(t *testing.T) {
 	})
 	var out strings.Builder
 
-	source, ok, err := reader.next(&out, tracker)
+	read, ok, err := reader.next(&out, tracker)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || source != "words" {
-		t.Fatalf("source=%q ok=%v, want next line as top form after Ctrl-C", source, ok)
+	if !ok || read.source != "words" {
+		t.Fatalf("source=%q ok=%v, want next line as top form after Ctrl-C", read.source, ok)
 	}
 	if got, want := out.String(), "frothy> .. "; got != want {
 		t.Fatalf("prompts %q, want %q", got, want)
@@ -2557,6 +2557,49 @@ func TestRecordsGroupMultilineTopForm(t *testing.T) {
 	}
 	if got, want := strings.Join(comp.lines, "\n"), "boot is fn [ one ]"; got != want {
 		t.Fatalf("compiled %q, want %q", got, want)
+	}
+}
+
+func TestRecordsSourceBlockEndsAfterAllExpandedForms(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "helper.fr"), []byte("helper is fn [ 1 ]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rootPath := filepath.Join(dir, "unsaved-main.fr")
+	input := strings.NewReader(strings.Join([]string{
+		".source " + rootPath,
+		"include \"helper.fr\"",
+		"main is fn [ helper: ]",
+		".end-source",
+		"",
+	}, "\n"))
+	dev := &fakeDevice{responses: []string{statusResponse("device"), "ok\n", "ok\n"}}
+	var out strings.Builder
+
+	if err := runRecordsTestSession(t, input, &out, nil, dev, time.Second, false, &interruptTracker{}); err != nil {
+		t.Fatal(err)
+	}
+	records := decodeRecords(t, out.String())
+	if got, want := recordKinds(records), "session_start,status,send,response,send,response,source_end,session_end"; got != want {
+		t.Fatalf("record kinds %q, want %q", got, want)
+	}
+	end := recordWithKind(records, "source_end")
+	if end["state"] != "idle" || end["mirror"] != "none" {
+		t.Fatalf("source_end record = %#v", end)
+	}
+}
+
+func TestRecordsEmptySourceBlockStillEnds(t *testing.T) {
+	dev := &fakeDevice{responses: []string{statusResponse("device")}}
+	var out strings.Builder
+	input := strings.NewReader(".source\n-- no forms\n.end-source\n")
+
+	if err := runRecordsTestSession(t, input, &out, nil, dev, time.Second, false, &interruptTracker{}); err != nil {
+		t.Fatal(err)
+	}
+	records := decodeRecords(t, out.String())
+	if got, want := recordKinds(records), "session_start,status,source_end,session_end"; got != want {
+		t.Fatalf("record kinds %q, want %q", got, want)
 	}
 }
 

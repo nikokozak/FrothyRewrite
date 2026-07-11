@@ -943,10 +943,16 @@ func sourceNeedsContinuation(source string) bool {
 }
 
 type sourceFormReader struct {
-	scanner           *bufio.Scanner
-	state             sourceFormState
-	queued            []string
-	allowSourceBlocks bool
+	scanner               *bufio.Scanner
+	state                 sourceFormState
+	queued                []string
+	sourceBlockEndPending bool
+	allowSourceBlocks     bool
+}
+
+type sourceFormRead struct {
+	source         string
+	sourceBlockEnd bool
 }
 
 func newSourceFormReader(input io.Reader) *sourceFormReader {
@@ -959,12 +965,16 @@ func newSessionSourceFormReader(input io.Reader) *sourceFormReader {
 	return reader
 }
 
-func (r *sourceFormReader) next(prompt io.Writer, interrupts *interruptTracker) (string, bool, error) {
+func (r *sourceFormReader) next(prompt io.Writer, interrupts *interruptTracker) (sourceFormRead, bool, error) {
 	for {
 		if len(r.queued) > 0 {
 			source := r.queued[0]
 			r.queued = r.queued[1:]
-			return source, true, nil
+			return sourceFormRead{source: source}, true, nil
+		}
+		if r.sourceBlockEndPending {
+			r.sourceBlockEndPending = false
+			return sourceFormRead{sourceBlockEnd: true}, true, nil
 		}
 		if prompt != nil {
 			if r.state.hasPending() {
@@ -975,14 +985,14 @@ func (r *sourceFormReader) next(prompt io.Writer, interrupts *interruptTracker) 
 		}
 		if !r.scanner.Scan() {
 			if err := r.scanner.Err(); err != nil {
-				return "", false, err
+				return sourceFormRead{}, false, err
 			}
 			if r.state.hasPending() {
 				source := r.state.source()
 				r.state.reset()
-				return "", false, fmt.Errorf("incomplete top form: %s", source)
+				return sourceFormRead{}, false, fmt.Errorf("incomplete top form: %s", source)
 			}
-			return "", false, nil
+			return sourceFormRead{}, false, nil
 		}
 		if interrupts != nil && interrupts.consumeIdle() {
 			r.state.reset()
@@ -993,15 +1003,16 @@ func (r *sourceFormReader) next(prompt io.Writer, interrupts *interruptTracker) 
 			if isSourceBlock {
 				forms, err := r.readSourceBlock(path)
 				if err != nil {
-					return "", false, err
+					return sourceFormRead{}, false, err
 				}
 				r.queued = forms
+				r.sourceBlockEndPending = true
 				continue
 			}
 		}
 
 		if source, complete := r.state.appendLine(r.scanner.Text()); complete {
-			return source, true, nil
+			return sourceFormRead{source: source}, true, nil
 		}
 	}
 }
@@ -1058,14 +1069,16 @@ func collectSourceForms(input io.Reader) ([]string, error) {
 	reader := newSourceFormReader(input)
 	var forms []string
 	for {
-		source, ok, err := reader.next(nil, nil)
+		read, ok, err := reader.next(nil, nil)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
 			return forms, nil
 		}
-		forms = append(forms, source)
+		if !read.sourceBlockEnd {
+			forms = append(forms, read.source)
+		}
 	}
 }
 
@@ -1424,6 +1437,7 @@ const (
 	recordCompileError recordKind = "compile_error"
 	recordResponse     recordKind = "response"
 	recordInterrupt    recordKind = "interrupt"
+	recordSourceEnd    recordKind = "source_end"
 	recordSessionError recordKind = "session_error"
 	recordSessionEnd   recordKind = "session_end"
 )
@@ -1598,6 +1612,10 @@ func (w *recordWriter) interrupt(state recordState, mirror recordMirror, settled
 	return w.write(recordInterrupt, state, mirror, fields)
 }
 
+func (w *recordWriter) sourceEnd(mirror recordMirror) error {
+	return w.write(recordSourceEnd, recordStateIdle, mirror, nil)
+}
+
 func (w *recordWriter) sessionError(state recordState, mirror recordMirror, code string, message string, candidates ...string) error {
 	fields := map[string]any{
 		"code":    code,
@@ -1670,13 +1688,17 @@ func (t *interruptTracker) consumeIdle() bool {
 func runDry(input io.Reader, output io.Writer, comp sessionCompiler) error {
 	reader := newSessionSourceFormReader(input)
 	for {
-		source, ok, err := reader.next(nil, nil)
+		read, ok, err := reader.next(nil, nil)
 		if err != nil {
 			return err
 		}
 		if !ok {
 			return nil
 		}
+		if read.sourceBlockEnd {
+			continue
+		}
+		source := read.source
 
 		result, err := comp.compile(source)
 		if err != nil {
@@ -1731,13 +1753,17 @@ func runSerialWithModeAndInterrupts(input io.Reader, output io.Writer, comp sess
 
 	reader := newSessionSourceFormReader(input)
 	for {
-		source, ok, err := reader.next(output, interrupts)
+		read, ok, err := reader.next(output, interrupts)
 		if err != nil {
 			return err
 		}
 		if !ok {
 			return nil
 		}
+		if read.sourceBlockEnd {
+			continue
+		}
+		source := read.source
 
 		result := compileResult{action: actionPass, line: source}
 		if useCompiler {
@@ -1826,7 +1852,7 @@ func runSerialRecordsWithMode(input io.Reader, records *recordWriter, comp sessi
 	mirror := initialMirror(useCompiler)
 	reader := newSessionSourceFormReader(input)
 	for {
-		source, ok, err := reader.next(nil, interrupts)
+		read, ok, err := reader.next(nil, interrupts)
 		if err != nil {
 			_ = records.sessionError(recordStateError, mirror, recordErrorSourceFailed, err.Error())
 			return err
@@ -1834,6 +1860,13 @@ func runSerialRecordsWithMode(input io.Reader, records *recordWriter, comp sessi
 		if !ok {
 			return records.sessionEnd(mirror)
 		}
+		if read.sourceBlockEnd {
+			if err := records.sourceEnd(mirror); err != nil {
+				return err
+			}
+			continue
+		}
+		source := read.source
 
 		result := compileResult{action: actionPass, line: source}
 		if useCompiler {

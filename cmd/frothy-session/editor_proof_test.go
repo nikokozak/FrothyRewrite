@@ -19,6 +19,7 @@ type editorSessionView struct {
 	interruptSettled bool
 	errorCode        string
 	candidates       []string
+	sourceComplete   bool
 }
 
 func (v *editorSessionView) applyRecord(record map[string]any) {
@@ -46,6 +47,7 @@ func (v *editorSessionView) applyRecord(record map[string]any) {
 			}
 		}
 	case "send":
+		v.sourceComplete = false
 		if source, ok := record["source"].(string); ok {
 			v.lastSource = source
 		}
@@ -67,6 +69,8 @@ func (v *editorSessionView) applyRecord(record map[string]any) {
 		if status, ok := record["status"].(string); ok {
 			v.lastStatus = status
 		}
+	case "source_end":
+		v.sourceComplete = true
 	case "session_error":
 		if code, ok := record["code"].(string); ok {
 			v.errorCode = code
@@ -194,6 +198,19 @@ func TestEditorSessionViewIgnoresUnknownRecordKind(t *testing.T) {
 	if view.session != "s1" || view.lastKind != "future_record" ||
 		view.state != "idle" || view.mirror != "clean" || view.errorCode != "" {
 		t.Fatalf("future record view = %#v", view)
+	}
+}
+
+func TestEditorSessionViewTracksSourceBlockCompletion(t *testing.T) {
+	view := editorSessionView{}
+	view.applyRecord(map[string]any{
+		"kind": "send", "state": "waiting", "mirror": "none", "source": "one",
+	})
+	view.applyRecord(map[string]any{
+		"kind": "source_end", "state": "idle", "mirror": "none",
+	})
+	if !view.sourceComplete || view.state != "idle" || view.lastKind != "source_end" {
+		t.Fatalf("source end view = %#v", view)
 	}
 }
 
