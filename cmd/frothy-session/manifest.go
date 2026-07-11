@@ -7,8 +7,8 @@ import (
 )
 
 // SPEC D5 + D7 + D13. frothy.toml at the project root declares name,
-// target, and deps. lib.toml inside a library declares name, version,
-// targets, extension sources, and natives. parseProjectManifest and
+// board, and deps. lib.toml inside a library declares name, version,
+// boards, extension sources, and natives. parseProjectManifest and
 // parseLibraryManifest take the raw bytes and return validated structs.
 // Disk I/O sits in the build verb; tests exercise the parsers directly.
 //
@@ -17,15 +17,15 @@ import (
 // and rev/branch only mean anything on a git dep.
 
 type projectManifest struct {
-	Name   string                 `toml:"name"`
-	Target string                 `toml:"target"`
-	Deps   map[string]manifestDep `toml:"deps"`
+	Name  string                 `toml:"name"`
+	Board string                 `toml:"board"`
+	Deps  map[string]manifestDep `toml:"deps"`
 }
 
 type libraryManifest struct {
 	Name      string                 `toml:"name"`
 	Version   string                 `toml:"version"`
-	Targets   []string               `toml:"targets"`
+	Boards    []string               `toml:"boards"`
 	Extension *manifestExtension     `toml:"extension"`
 	Natives   []manifestNative       `toml:"natives"`
 	Deps      map[string]manifestDep `toml:"deps"`
@@ -60,8 +60,8 @@ func parseProjectManifest(data []byte) (projectManifest, error) {
 	if m.Name == "" {
 		return projectManifest{}, fmt.Errorf("frothy.toml: missing name")
 	}
-	if m.Target == "" {
-		return projectManifest{}, fmt.Errorf("frothy.toml: missing target")
+	if m.Board == "" {
+		return projectManifest{}, fmt.Errorf("frothy.toml: missing board")
 	}
 	for n, d := range m.Deps {
 		if err := validateManifestDep(n, d); err != nil {
@@ -83,8 +83,8 @@ func parseLibraryManifest(data []byte) (libraryManifest, error) {
 	if m.Name == "" {
 		return libraryManifest{}, fmt.Errorf("lib.toml: missing name")
 	}
-	if len(m.Targets) == 0 {
-		return libraryManifest{}, fmt.Errorf("lib.toml %s: missing targets", m.Name)
+	if len(m.Boards) == 0 {
+		return libraryManifest{}, fmt.Errorf("lib.toml %s: missing boards", m.Name)
 	}
 	if m.Extension != nil && len(m.Extension.Sources) == 0 {
 		return libraryManifest{}, fmt.Errorf("lib.toml %s: [extension] declared without sources", m.Name)

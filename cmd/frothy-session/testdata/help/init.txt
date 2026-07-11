@@ -1,6 +1,6 @@
 frothy init — scaffold a new Frothy project in the current directory
 
-Init scaffolds a new Frothy project in the current directory: a frothy.toml with the project name and target, a main.fr with a starter definition, and a .gitignore that excludes the local cache. It refuses to overwrite existing files, so it is safe to run by accident.
+Init scaffolds a new Frothy project in the current directory: a frothy.toml with the project name and board, a main.fr with a starter definition, and a .gitignore that excludes the local cache. It refuses to overwrite existing files, so it is safe to run by accident.
 
 Examples:
   frothy init

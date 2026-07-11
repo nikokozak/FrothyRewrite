@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 )
 
-// frothy build reads frothy.toml, resolves deps, target-gates, emits
-// libs.cmake + lib_natives.c into .frothy/build/<target>/, writes the
+// frothy build reads frothy.toml, resolves deps, board-gates, emits
+// libs.cmake + lib_natives.c into .frothy/build/<board>/, writes the
 // merged lib.fr stream to library.fr (consumed by `frothy install`)
 // and the include-resolved main.fr to main.fr (consumed by `frothy
 // send`), then invokes make for the kernel build. Flashing is a
@@ -70,23 +70,23 @@ func runBuild(opts buildOptions, stdout io.Writer, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := targetGateLibraries(proj.Target, libs, opts.projectDir); err != nil {
+	if err := boardGateLibraries(proj.Board, libs); err != nil {
 		return err
 	}
-	if err := emitGeneratedFiles(opts.projectDir, proj.Target, libs); err != nil {
+	if err := emitGeneratedFiles(opts.projectDir, proj.Board, libs); err != nil {
 		return err
 	}
-	if err := emitLibrarySource(opts.projectDir, proj.Target, libs); err != nil {
+	if err := emitLibrarySource(opts.projectDir, proj.Board, libs); err != nil {
 		return err
 	}
-	if err := emitMainSource(opts.projectDir, proj.Target); err != nil {
+	if err := emitMainSource(opts.projectDir, proj.Board); err != nil {
 		return err
 	}
 	if opts.skipMake {
-		fmt.Fprintf(stdout, "frothy build: generator emission complete for target %s (--no-make set)\n", proj.Target)
+		fmt.Fprintf(stdout, "frothy build: generator emission complete for board %s (--no-make set)\n", proj.Board)
 		return nil
 	}
-	return runMake(opts.projectDir, proj.Target, stdout, stderr)
+	return runMake(opts.projectDir, proj.Board, stdout, stderr)
 }
 
 func readProjectManifest(projectDir string) (projectManifest, error) {
@@ -97,14 +97,14 @@ func readProjectManifest(projectDir string) (projectManifest, error) {
 	return parseProjectManifest(bytes)
 }
 
-// .frothy/build/<target>/ is the SPEC's neutral output path (D10 +
+// .frothy/build/<board>/ is the SPEC's neutral output path (D10 +
 // Resolved-during-pre-loop). Survives changes to CMake/make build dirs.
-func buildOutputDir(projectDir, target string) string {
-	return filepath.Join(projectDir, ".frothy", "build", target)
+func buildOutputDir(projectDir, board string) string {
+	return filepath.Join(projectDir, ".frothy", "build", board)
 }
 
-func emitGeneratedFiles(projectDir, target string, libs []resolvedLibrary) error {
-	outDir := buildOutputDir(projectDir, target)
+func emitGeneratedFiles(projectDir, board string, libs []resolvedLibrary) error {
+	outDir := buildOutputDir(projectDir, board)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func sourceLoader(path string) (string, error) {
 	return string(bytes), nil
 }
 
-func emitLibrarySource(projectDir, target string, libs []resolvedLibrary) error {
+func emitLibrarySource(projectDir, board string, libs []resolvedLibrary) error {
 	var merged []byte
 	for _, lib := range libs {
 		src, err := preprocessInclude(filepath.Join(lib.path, "lib.fr"), sourceLoader)
@@ -146,11 +146,11 @@ func emitLibrarySource(projectDir, target string, libs []resolvedLibrary) error 
 		}
 		merged = append(merged, []byte(src)...)
 	}
-	outPath := filepath.Join(buildOutputDir(projectDir, target), "library.fr")
+	outPath := filepath.Join(buildOutputDir(projectDir, board), "library.fr")
 	return os.WriteFile(outPath, merged, 0o644)
 }
 
-func emitMainSource(projectDir, target string) error {
+func emitMainSource(projectDir, board string) error {
 	mainFr := filepath.Join(projectDir, "main.fr")
 	var content []byte
 	if _, err := os.Stat(mainFr); err == nil {
@@ -160,7 +160,7 @@ func emitMainSource(projectDir, target string) error {
 		}
 		content = []byte(src)
 	}
-	outDir := buildOutputDir(projectDir, target)
+	outDir := buildOutputDir(projectDir, board)
 	outPath := filepath.Join(outDir, "main.fr")
 	if err := os.WriteFile(outPath, content, 0o644); err != nil {
 		return err
@@ -173,14 +173,14 @@ func emitMainSource(projectDir, target string) error {
 	return nil
 }
 
-func runMake(projectDir, target string, stdout io.Writer, stderr io.Writer) error {
+func runMake(projectDir, board string, stdout io.Writer, stderr io.Writer) error {
 	sourceRoot, err := resolveFrothySourceRoot(projectDir)
 	if err != nil {
 		return err
 	}
-	args := []string{"-C", sourceRoot, "artifacts", "BOARD=" + target,
-		"FROTHY_LIB_NATIVES_C=" + filepath.Join(buildOutputDir(projectDir, target), "lib_natives.c"),
-		"FROTHY_LIBS_CMAKE=" + filepath.Join(buildOutputDir(projectDir, target), "libs.cmake"),
+	args := []string{"-C", sourceRoot, "artifacts", "BOARD=" + board,
+		"FROTHY_LIB_NATIVES_C=" + filepath.Join(buildOutputDir(projectDir, board), "lib_natives.c"),
+		"FROTHY_LIBS_CMAKE=" + filepath.Join(buildOutputDir(projectDir, board), "libs.cmake"),
 	}
 	cmd := exec.Command("make", args...)
 	cmd.Stdout = stdout

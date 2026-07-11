@@ -11,9 +11,9 @@ import (
 
 const (
 	initFrothyToml = `name   = "blink"
-target = "esp32_devkit_v1"
+board  = "esp32_devkit_v1"
 `
-	initMainFr    = `boot is fn [ led.blink: 3, 100 ]
+	initMainFr = `boot is fn [ led.blink: 3, 100 ]
 `
 	initGitignore = `.frothy/
 `

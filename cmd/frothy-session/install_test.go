@@ -17,17 +17,17 @@ func fakeInstallFactory(dev *fakeDevice) installDeviceFactory {
 	}
 }
 
-func writeFrothyToml(t *testing.T, dir, target string) {
+func writeFrothyToml(t *testing.T, dir, board string) {
 	t.Helper()
-	manifest := "name = \"install-test\"\ntarget = \"" + target + "\"\n"
+	manifest := "name = \"install-test\"\nboard = \"" + board + "\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "frothy.toml"), []byte(manifest), 0o644); err != nil {
 		t.Fatalf("write frothy.toml: %v", err)
 	}
 }
 
-func writeLibraryFr(t *testing.T, dir, target, content string) string {
+func writeLibraryFr(t *testing.T, dir, board, content string) string {
 	t.Helper()
-	buildDir := filepath.Join(dir, ".frothy", "build", target)
+	buildDir := filepath.Join(dir, ".frothy", "build", board)
 	if err := os.MkdirAll(buildDir, 0o755); err != nil {
 		t.Fatalf("mkdir build dir: %v", err)
 	}

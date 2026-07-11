@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// SPEC D10 + D13. frothy build emits two files per target build dir:
-// libs.cmake (extension sources + include dirs the per-target CMake
+// SPEC D10 + D13. frothy build emits two files per board build dir:
+// libs.cmake (extension sources + include dirs the board's CMake
 // include()s) and lib_natives.c (extern decls + strong override of the
 // fr_lib_natives table the kernel's weak default leaves empty).
 //

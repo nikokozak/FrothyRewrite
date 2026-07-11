@@ -1,6 +1,6 @@
 name    = "test-mixed"
 version = "0.1.0"
-targets = ["host", "esp32_devkit_v1"]
+boards  = ["host", "esp32_devkit_v1"]
 
 [extension]
 sources = ["native/test_mixed.c"]

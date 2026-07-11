@@ -25,7 +25,7 @@ func makeTempProject(t *testing.T, projectToml, mainFr string, libsContent map[s
 
 func TestRunBuild_PureModulesLibrary(t *testing.T) {
 	dir := makeTempProject(t, `name = "blink"
-target = "host"
+board = "host"
 
 [deps]
 servo = { path = "libs/servo" }
@@ -70,7 +70,7 @@ servo = { path = "libs/servo" }
 
 func TestRunBuild_MixedLibraryEmitsNatives(t *testing.T) {
 	dir := makeTempProject(t, `name = "stage"
-target = "host"
+board = "host"
 
 [deps]
 neopixel = { path = "libs/neopixel" }
@@ -78,7 +78,7 @@ neopixel = { path = "libs/neopixel" }
 		"libs/neopixel/lib.fr":            "to neopixel.use [ ]\n",
 		"libs/neopixel/native/neopixel.c": "/* extension */\n",
 		"libs/neopixel/lib.toml": `name = "neopixel"
-targets = ["host"]
+boards = ["host"]
 
 [extension]
 sources = ["native/neopixel.c"]
@@ -110,9 +110,9 @@ c_function = "fr_lib_neopixel_show"
 	}
 }
 
-func TestRunBuild_TargetGateFailure(t *testing.T) {
+func TestRunBuild_BoardGateFailure(t *testing.T) {
 	dir := makeTempProject(t, `name = "blink"
-target = "atmega328p"
+board = "atmega328p"
 
 [deps]
 neopixel = { path = "libs/neopixel" }
@@ -120,7 +120,7 @@ neopixel = { path = "libs/neopixel" }
 		"libs/neopixel/lib.fr":            "",
 		"libs/neopixel/native/neopixel.c": "",
 		"libs/neopixel/lib.toml": `name = "neopixel"
-targets = ["esp32_devkit_v1"]
+boards = ["esp32_devkit_v1"]
 
 [extension]
 sources = ["native/neopixel.c"]
@@ -129,9 +129,9 @@ sources = ["native/neopixel.c"]
 	var stdout, stderr bytes.Buffer
 	err := runBuild(buildOptions{projectDir: dir, skipMake: true}, &stdout, &stderr)
 	if err == nil {
-		t.Fatal("expected target gate to fail")
+		t.Fatal("expected board gate to fail")
 	}
-	want := "library neopixel does not support target atmega328p"
+	want := "library neopixel does not support board atmega328p"
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("got %q, want it to contain %q", err.Error(), want)
 	}
@@ -139,7 +139,7 @@ sources = ["native/neopixel.c"]
 
 func TestRunBuild_LibraryToLibraryDep(t *testing.T) {
 	dir := makeTempProject(t, `name = "show"
-target = "host"
+board = "host"
 
 [deps]
 stage = { path = "libs/stage" }
@@ -147,7 +147,7 @@ stage = { path = "libs/stage" }
 		"libs/servo/lib.fr": "to servo.attach [ ]\n",
 		"libs/stage/lib.fr": "to stage.go [ ]\n",
 		"libs/stage/lib.toml": `name = "stage"
-targets = ["host"]
+boards = ["host"]
 
 [deps]
 servo = { path = "../servo" }
@@ -172,7 +172,7 @@ servo = { path = "../servo" }
 
 func TestRunBuild_IncludeResolved(t *testing.T) {
 	dir := makeTempProject(t, `name = "blink"
-target = "host"
+board = "host"
 
 [deps]
 math = { path = "libs/math" }
@@ -192,7 +192,7 @@ math = { path = "libs/math" }
 
 func TestRunBuild_DropsStaleProgramFr(t *testing.T) {
 	dir := makeTempProject(t, `name = "blink"
-target = "host"
+board = "host"
 
 [deps]
 servo = { path = "libs/servo" }
@@ -230,7 +230,7 @@ func TestRunBuild_UsesSourceRootOutsideProject(t *testing.T) {
 	if os.PathSeparator == '\\' {
 		t.Skip("test uses a POSIX make stub")
 	}
-	project := makeTempProject(t, "name = \"outside\"\ntarget = \"host\"\n", "", nil)
+	project := makeTempProject(t, "name = \"outside\"\nboard = \"host\"\n", "", nil)
 	writeFile(t, filepath.Join(project, "Makefile"), "must not be used\n")
 	sourceRoot := makeSourceRoot(t)
 	t.Setenv(frothySourceRootEnv, sourceRoot)

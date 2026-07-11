@@ -16,7 +16,7 @@ func TestRunFetch_GitDepClonesPinnedRev(t *testing.T) {
 	remote, revs, _ := makeBareGitRepo(t, []map[string]string{
 		{
 			"lib.toml": `name = "servo"
-targets = ["host"]
+boards = ["host"]
 `,
 			"lib.fr": "to servo.first [ ]\n",
 		},
@@ -140,7 +140,7 @@ func TestRunFetch_RecursiveExtProtocolDoesNotExecute(t *testing.T) {
 	remote, revs, _ := makeBareGitRepo(t, []map[string]string{
 		{
 			"lib.toml": fmt.Sprintf(`name = "servo"
-targets = ["host"]
+boards = ["host"]
 
 [deps]
 evil = { git = %q, rev = "abc123" }
@@ -228,14 +228,14 @@ func TestRunBuild_GitDepRecursesThroughPathAndGitDeps(t *testing.T) {
 	servoRemote, servoRevs, _ := makeBareGitRepo(t, []map[string]string{
 		{
 			"lib.toml": fmt.Sprintf(`name = "servo"
-targets = ["host"]
+boards = ["host"]
 
 [deps]
 helper = { git = %q, rev = %q }
 local = { path = "local" }
 `, helperRemote, helperRevs[0]),
 			"lib.fr":         "to servo.use [ helper.use: local.use: ]\n",
-			"local/lib.toml": "name = \"local\"\ntargets = [\"host\"]\n",
+			"local/lib.toml": "name = \"local\"\nboards = [\"host\"]\n",
 			"local/lib.fr":   "to local.use [ ]\n",
 		},
 	})
@@ -259,7 +259,7 @@ local = { path = "local" }
 func projectWithGitDep(t *testing.T, remote, rev string) string {
 	t.Helper()
 	return makeTempProject(t, fmt.Sprintf(`name = "blink"
-target = "host"
+board = "host"
 
 [deps]
 servo = { git = %q, rev = %q }
@@ -268,7 +268,7 @@ servo = { git = %q, rev = %q }
 
 func minimalGitLibrary(name string) map[string]string {
 	return map[string]string{
-		"lib.toml": fmt.Sprintf("name = %q\ntargets = [\"host\"]\n", name),
+		"lib.toml": fmt.Sprintf("name = %q\nboards = [\"host\"]\n", name),
 		"lib.fr":   fmt.Sprintf("to %s.use [ ]\n", name),
 	}
 }

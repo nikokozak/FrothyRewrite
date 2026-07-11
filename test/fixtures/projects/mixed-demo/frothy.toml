@@ -1,5 +1,5 @@
 name   = "mixed-demo"
-target = "host"
+board  = "host"
 
 [deps]
 test-mixed = { path = "../../test-mixed" }

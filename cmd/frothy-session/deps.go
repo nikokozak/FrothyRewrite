@@ -186,10 +186,10 @@ func loadLibraryAt(libPath string, requireManifest bool, requireNameMatchesDir b
 	}, nil
 }
 
-// targetGateLibraries checks that every dep with a lib.toml lists the
-// project's target in its targets array. Pure-modules libraries (no
-// lib.toml) implicitly support every target per SPEC D7.
-func targetGateLibraries(target string, libs []resolvedLibrary, projectDir string) error {
+// boardGateLibraries checks that every dep with a lib.toml lists the
+// project's board in its boards array. Pure-modules libraries (no
+// lib.toml) implicitly support every board per SPEC D7.
+func boardGateLibraries(board string, libs []resolvedLibrary) error {
 	for _, lib := range libs {
 		manifestPath := filepath.Join(lib.path, "lib.toml")
 		bytes, err := os.ReadFile(manifestPath)
@@ -204,14 +204,14 @@ func targetGateLibraries(target string, libs []resolvedLibrary, projectDir strin
 			return err
 		}
 		matched := false
-		for _, t := range m.Targets {
-			if t == target {
+		for _, supportedBoard := range m.Boards {
+			if supportedBoard == board {
 				matched = true
 				break
 			}
 		}
 		if !matched {
-			return fmt.Errorf("library %s does not support target %s (targets: %s)", lib.name, target, joinChain(m.Targets))
+			return fmt.Errorf("library %s does not support board %s (boards: %s)", lib.name, board, joinChain(m.Boards))
 		}
 	}
 	return nil

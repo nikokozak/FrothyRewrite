@@ -66,7 +66,7 @@ func runInstallCommand(args []string, stdout io.Writer, stderr io.Writer, list p
 		return 1
 	}
 
-	libraryPath := filepath.Join(buildOutputDir(absProject, proj.Target), "library.fr")
+	libraryPath := filepath.Join(buildOutputDir(absProject, proj.Board), "library.fr")
 	if _, err := os.Stat(libraryPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(stderr, "error: library.fr not found at %s; run frothy build first\n", libraryPath)

@@ -2233,14 +2233,14 @@ func availableVerbs() []verb {
 				"      stop Frothy serial sessions so their ports can be reopened"},
 		{name: "init", group: "Project", summary: "scaffold a new Frothy project in the current directory", run: runInitMain,
 			longDesc: "Init scaffolds a new Frothy project in the current directory: a " +
-				"frothy.toml with the project name and target, a main.fr with a starter " +
+				"frothy.toml with the project name and board, a main.fr with a starter " +
 				"definition, and a .gitignore that excludes the local cache. It refuses to " +
 				"overwrite existing files, so it is safe to run by accident.",
 			examples: "  frothy init\n" +
 				"      create frothy.toml, main.fr, and .gitignore in the current directory"},
 		{name: "build", group: "Project", summary: "resolve libraries and build the project's firmware", run: runBuildMain,
 			longDesc: "Build resolves the project's libraries from frothy.toml, generates the " +
-				"target sources, and runs make to produce the firmware image for the target " +
+				"board-specific sources, and runs make to produce the firmware image for the board " +
 				"named in the manifest. Missing git dependencies are fetched into the local " +
 				"cache first. Use it when you have changed library code or board settings and " +
 				"want to produce a flashable artifact without flashing it.",

@@ -7,13 +7,13 @@ import (
 
 func TestParseProjectManifestMinimum(t *testing.T) {
 	src := `name = "blink"
-target = "esp32_devkit_v1"
+board = "esp32_devkit_v1"
 `
 	got, err := parseProjectManifest([]byte(src))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.Name != "blink" || got.Target != "esp32_devkit_v1" {
+	if got.Name != "blink" || got.Board != "esp32_devkit_v1" {
 		t.Fatalf("unexpected fields: %+v", got)
 	}
 	if len(got.Deps) != 0 {
@@ -23,7 +23,7 @@ target = "esp32_devkit_v1"
 
 func TestParseProjectManifestWithDeps(t *testing.T) {
 	src := `name = "stage-lights"
-target = "esp32_devkit_v1"
+board = "esp32_devkit_v1"
 
 [deps]
 servo    = { path = "libs/servo" }
@@ -48,20 +48,24 @@ func TestParseProjectManifestRejects(t *testing.T) {
 		wantErr string
 	}{
 		"missing name": {
-			src:     `target = "esp32_devkit_v1"`,
+			src:     `board = "esp32_devkit_v1"`,
 			wantErr: "missing name",
 		},
-		"missing target": {
+		"missing board": {
 			src:     `name = "blink"`,
-			wantErr: "missing target",
+			wantErr: "missing board",
+		},
+		"old target key": {
+			src:     `name = "blink"` + "\n" + `target = "esp32_devkit_v1"`,
+			wantErr: `unknown key "target"`,
 		},
 		"unknown top key": {
-			src:     `name = "x"` + "\n" + `target = "host"` + "\n" + `boards = ["esp32"]`,
+			src:     `name = "x"` + "\n" + `board = "host"` + "\n" + `boards = ["esp32"]`,
 			wantErr: "unknown key",
 		},
 		"dep with neither path nor git": {
 			src: `name = "x"
-target = "host"
+board = "host"
 
 [deps]
 foo = { rev = "v1" }`,
@@ -69,7 +73,7 @@ foo = { rev = "v1" }`,
 		},
 		"dep with both path and git": {
 			src: `name = "x"
-target = "host"
+board = "host"
 
 [deps]
 foo = { path = "libs/foo", git = "https://example/foo" }`,
@@ -77,7 +81,7 @@ foo = { path = "libs/foo", git = "https://example/foo" }`,
 		},
 		"path dep with rev": {
 			src: `name = "x"
-target = "host"
+board = "host"
 
 [deps]
 foo = { path = "libs/foo", rev = "v1" }`,
@@ -85,7 +89,7 @@ foo = { path = "libs/foo", rev = "v1" }`,
 		},
 		"git dep without rev": {
 			src: `name = "x"
-target = "host"
+board = "host"
 
 [deps]
 foo = { git = "https://example/foo" }`,
@@ -93,7 +97,7 @@ foo = { git = "https://example/foo" }`,
 		},
 		"git dep with branch": {
 			src: `name = "x"
-target = "host"
+board = "host"
 
 [deps]
 foo = { git = "https://example/foo", branch = "main" }`,
@@ -120,7 +124,7 @@ foo = { git = "https://example/foo", branch = "main" }`,
 func TestParseLibraryManifestPureWithDeps(t *testing.T) {
 	src := `name = "stage"
 version = "0.1.0"
-targets = ["esp32_devkit_v1"]
+boards = ["esp32_devkit_v1"]
 
 [deps]
 servo = { path = "../servo" }
@@ -132,8 +136,8 @@ servo = { path = "../servo" }
 	if got.Name != "stage" || got.Version != "0.1.0" {
 		t.Fatalf("unexpected fields: %+v", got)
 	}
-	if len(got.Targets) != 1 || got.Targets[0] != "esp32_devkit_v1" {
-		t.Fatalf("unexpected targets: %+v", got.Targets)
+	if len(got.Boards) != 1 || got.Boards[0] != "esp32_devkit_v1" {
+		t.Fatalf("unexpected boards: %+v", got.Boards)
 	}
 	if got.Extension != nil {
 		t.Fatalf("expected no extension, got %+v", got.Extension)
@@ -146,7 +150,7 @@ servo = { path = "../servo" }
 func TestParseLibraryManifestMixed(t *testing.T) {
 	src := `name    = "neopixel"
 version = "0.1.0"
-targets = ["host", "esp32_devkit_v1"]
+boards = ["host", "esp32_devkit_v1"]
 
 [extension]
 sources = ["native/neopixel.c"]
@@ -188,33 +192,38 @@ func TestParseLibraryManifestRejects(t *testing.T) {
 		wantErr string
 	}{
 		"missing name": {
-			src:     `targets = ["host"]`,
+			src:     `boards = ["host"]`,
 			wantErr: "missing name",
 		},
-		"missing targets": {
+		"missing boards": {
 			src:     `name = "x"`,
-			wantErr: "missing targets",
+			wantErr: "missing boards",
 		},
-		"empty targets": {
+		"empty boards": {
 			src: `name = "x"
-targets = []`,
-			wantErr: "missing targets",
+boards = []`,
+			wantErr: "missing boards",
+		},
+		"old targets key": {
+			src: `name = "x"
+targets = ["host"]`,
+			wantErr: `unknown key "targets"`,
 		},
 		"unknown top key": {
 			src: `name = "x"
-targets = ["host"]
+boards = ["host"]
 authors = ["me"]`,
 			wantErr: "unknown key",
 		},
 		"extension without sources": {
 			src: `name = "x"
-targets = ["host"]
+boards = ["host"]
 [extension]`,
 			wantErr: "[extension] declared without sources",
 		},
 		"natives without extension": {
 			src: `name = "x"
-targets = ["host"]
+boards = ["host"]
 
 [[natives]]
 name = "x.do"
@@ -224,7 +233,7 @@ c_function = "fr_lib_x_do"`,
 		},
 		"native missing name": {
 			src: `name = "x"
-targets = ["host"]
+boards = ["host"]
 
 [extension]
 sources = ["native/x.c"]
@@ -236,7 +245,7 @@ c_function = "fr_lib_x_do"`,
 		},
 		"native missing c_function": {
 			src: `name = "x"
-targets = ["host"]
+boards = ["host"]
 
 [extension]
 sources = ["native/x.c"]
@@ -248,7 +257,7 @@ arity = 0`,
 		},
 		"native arity too big": {
 			src: `name = "x"
-targets = ["host"]
+boards = ["host"]
 
 [extension]
 sources = ["native/x.c"]
@@ -261,7 +270,7 @@ c_function = "fr_lib_x_do"`,
 		},
 		"native arity negative": {
 			src: `name = "x"
-targets = ["host"]
+boards = ["host"]
 
 [extension]
 sources = ["native/x.c"]
@@ -274,7 +283,7 @@ c_function = "fr_lib_x_do"`,
 		},
 		"dep both path and git": {
 			src: `name = "x"
-targets = ["host"]
+boards = ["host"]
 
 [deps]
 y = { path = "../y", git = "https://example/y" }`,
@@ -282,7 +291,7 @@ y = { path = "../y", git = "https://example/y" }`,
 		},
 		"git dep with branch": {
 			src: `name = "x"
-targets = ["host"]
+boards = ["host"]
 
 [deps]
 y = { git = "https://example/y", branch = "main" }`,

@@ -25,8 +25,8 @@ func TestResolveDeps_PureModulesPathDep(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "libs/servo/lib.fr"), "to servo.attach [ ]\n")
 
 	proj := projectManifest{
-		Name:   "blink",
-		Target: "host",
+		Name:  "blink",
+		Board: "host",
 		Deps: map[string]manifestDep{
 			"servo": {Path: "libs/servo"},
 		},
@@ -50,7 +50,7 @@ func TestResolveDeps_MixedLibrary(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "libs/neopixel/lib.fr"), "to neopixel.use [ ]\n")
 	writeFile(t, filepath.Join(dir, "libs/neopixel/native/neopixel.c"), "/* placeholder */\n")
 	writeFile(t, filepath.Join(dir, "libs/neopixel/lib.toml"), `name = "neopixel"
-targets = ["host", "esp32_devkit_v1"]
+boards = ["host", "esp32_devkit_v1"]
 
 [extension]
 sources = ["native/neopixel.c"]
@@ -61,9 +61,9 @@ arity = 1
 c_function = "fr_lib_neopixel_show"
 `)
 	proj := projectManifest{
-		Name:   "stage",
-		Target: "host",
-		Deps:   map[string]manifestDep{"neopixel": {Path: "libs/neopixel"}},
+		Name:  "stage",
+		Board: "host",
+		Deps:  map[string]manifestDep{"neopixel": {Path: "libs/neopixel"}},
 	}
 	libs, err := resolveDeps(dir, proj)
 	if err != nil {
@@ -89,15 +89,15 @@ func TestResolveDeps_LibraryDep(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "libs/servo/lib.fr"), "to servo.attach [ ]\n")
 	writeFile(t, filepath.Join(dir, "libs/stage/lib.fr"), "to stage.go [ ]\n")
 	writeFile(t, filepath.Join(dir, "libs/stage/lib.toml"), `name = "stage"
-targets = ["host"]
+boards = ["host"]
 
 [deps]
 servo = { path = "../servo" }
 `)
 	proj := projectManifest{
-		Name:   "show",
-		Target: "host",
-		Deps:   map[string]manifestDep{"stage": {Path: "libs/stage"}},
+		Name:  "show",
+		Board: "host",
+		Deps:  map[string]manifestDep{"stage": {Path: "libs/stage"}},
 	}
 	libs, err := resolveDeps(dir, proj)
 	if err != nil {
@@ -113,22 +113,22 @@ func TestResolveDeps_Cycle(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "libs/servo/lib.fr"), "")
 	writeFile(t, filepath.Join(dir, "libs/servo/lib.toml"), `name = "servo"
-targets = ["host"]
+boards = ["host"]
 
 [deps]
 stage = { path = "../stage" }
 `)
 	writeFile(t, filepath.Join(dir, "libs/stage/lib.fr"), "")
 	writeFile(t, filepath.Join(dir, "libs/stage/lib.toml"), `name = "stage"
-targets = ["host"]
+boards = ["host"]
 
 [deps]
 servo = { path = "../servo" }
 `)
 	proj := projectManifest{
-		Name:   "show",
-		Target: "host",
-		Deps:   map[string]manifestDep{"stage": {Path: "libs/stage"}},
+		Name:  "show",
+		Board: "host",
+		Deps:  map[string]manifestDep{"stage": {Path: "libs/stage"}},
 	}
 	_, err := resolveDeps(dir, proj)
 	if err == nil {
@@ -143,9 +143,9 @@ func TestResolveDeps_GitDepNotFetched(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("FROTH_HOME", t.TempDir())
 	proj := projectManifest{
-		Name:   "blink",
-		Target: "host",
-		Deps:   map[string]manifestDep{"servo": {Git: "https://example/x", Rev: "abc123"}},
+		Name:  "blink",
+		Board: "host",
+		Deps:  map[string]manifestDep{"servo": {Git: "https://example/x", Rev: "abc123"}},
 	}
 	_, err := resolveDeps(dir, proj)
 	if err == nil || !strings.Contains(err.Error(), "git dep not fetched; run frothy fetch") {
@@ -160,9 +160,9 @@ func TestResolveDeps_MissingLibFr(t *testing.T) {
 		t.Fatal(err)
 	}
 	proj := projectManifest{
-		Name:   "blink",
-		Target: "host",
-		Deps:   map[string]manifestDep{"empty": {Path: "libs/empty"}},
+		Name:  "blink",
+		Board: "host",
+		Deps:  map[string]manifestDep{"empty": {Path: "libs/empty"}},
 	}
 	_, err := resolveDeps(dir, proj)
 	if err == nil || !strings.Contains(err.Error(), "lib.fr missing") {
@@ -175,12 +175,12 @@ func TestResolveDeps_DirNameMismatch(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "libs/servo/lib.fr"), "")
 	writeFile(t, filepath.Join(dir, "libs/servo/lib.toml"), `name = "other"
-targets = ["host"]
+boards = ["host"]
 `)
 	proj := projectManifest{
-		Name:   "blink",
-		Target: "host",
-		Deps:   map[string]manifestDep{"servo": {Path: "libs/servo"}},
+		Name:  "blink",
+		Board: "host",
+		Deps:  map[string]manifestDep{"servo": {Path: "libs/servo"}},
 	}
 	_, err := resolveDeps(dir, proj)
 	if err == nil || !strings.Contains(err.Error(), "does not match directory") {
@@ -188,36 +188,36 @@ targets = ["host"]
 	}
 }
 
-// targetGateLibraries: target not in lib.toml's targets list fails with
+// boardGateLibraries: board not in lib.toml's boards list fails with
 // the SPEC-specified message.
-func TestTargetGateLibraries_Mismatch(t *testing.T) {
+func TestBoardGateLibraries_Mismatch(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "libs/neopixel/lib.fr"), "")
 	writeFile(t, filepath.Join(dir, "libs/neopixel/lib.toml"), `name = "neopixel"
-targets = ["esp32_devkit_v1"]
+boards = ["esp32_devkit_v1"]
 
 [extension]
 sources = ["native/x.c"]
 `)
 	writeFile(t, filepath.Join(dir, "libs/neopixel/native/x.c"), "")
 	libs := []resolvedLibrary{{name: "neopixel", path: filepath.Join(dir, "libs/neopixel")}}
-	err := targetGateLibraries("atmega328p", libs, dir)
+	err := boardGateLibraries("atmega328p", libs)
 	if err == nil {
-		t.Fatal("expected target gate failure")
+		t.Fatal("expected board gate failure")
 	}
-	want := "library neopixel does not support target atmega328p"
+	want := "library neopixel does not support board atmega328p"
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("got %q, want it to contain %q", err.Error(), want)
 	}
 }
 
-// targetGateLibraries: pure-modules library (no lib.toml) is always
+// boardGateLibraries: pure-modules library (no lib.toml) is always
 // allowed.
-func TestTargetGateLibraries_PureModulesAlwaysAllowed(t *testing.T) {
+func TestBoardGateLibraries_PureModulesAlwaysAllowed(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "libs/helpers/lib.fr"), "")
 	libs := []resolvedLibrary{{name: "helpers", path: filepath.Join(dir, "libs/helpers")}}
-	if err := targetGateLibraries("atmega328p", libs, dir); err != nil {
+	if err := boardGateLibraries("atmega328p", libs); err != nil {
 		t.Fatalf("pure-modules library should not gate: %v", err)
 	}
 }

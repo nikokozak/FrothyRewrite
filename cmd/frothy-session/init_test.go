@@ -17,7 +17,7 @@ func TestFrothyInitWritesSkeleton(t *testing.T) {
 
 	// Literal bytes so a drift in the production constants fails this test.
 	want := map[string]string{
-		"frothy.toml": "name   = \"blink\"\ntarget = \"esp32_devkit_v1\"\n",
+		"frothy.toml": "name   = \"blink\"\nboard  = \"esp32_devkit_v1\"\n",
 		"main.fr":     "boot is fn [ led.blink: 3, 100 ]\n",
 		".gitignore":  ".frothy/\n",
 	}
