@@ -63,7 +63,14 @@ jobs:
           npm run build
 
   esp32-build:
+    name: ESP-IDF (${{ matrix.board }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board:
+          - esp32_devkit_v1
+          - seeed_xiao_esp32s3
     steps:
       - uses: actions/checkout@v4
 
@@ -78,7 +85,7 @@ jobs:
       - name: Install ESP-IDF
         run: tools/setup-esp-idf.sh
 
-      - name: Build ESP32 firmware
+      - name: Build firmware
         run: |
           . "$HOME/.froth/sdk/esp-idf/export.sh"
-          make artifacts BOARD=esp32_devkit_v1
+          make artifacts BOARD="${{ matrix.board }}"

@@ -1,8 +1,8 @@
 name: Release
 
-# Cut a release from a version tag: build the web-flasher binary and the VS Code
-# extension, then attach both to a GitHub release. See the "Releasing" section
-# of CONTRIBUTING.md.
+# Cut a release from a version tag: build each web-flasher firmware and the VS
+# Code extension, then attach them to a GitHub release. See the "Releasing"
+# section of CONTRIBUTING.md.
 on:
   push:
     tags: ["v*"]
@@ -40,6 +40,11 @@ jobs:
       - name: Collect artifacts
         run: |
           cp editors/vscode/frothy-*.vsix dist-release/
+          segment_count="$(find dist-release -maxdepth 1 -type f -name '*-*-0x*.bin' | wc -l | tr -d ' ')"
+          vsix_count="$(find dist-release -maxdepth 1 -type f -name 'frothy-*.vsix' | wc -l | tr -d ' ')"
+          test "$segment_count" = 6
+          test "$vsix_count" = 1
+          test -f dist-release/manifest.json
           ls -l dist-release
 
       - name: Create GitHub release
