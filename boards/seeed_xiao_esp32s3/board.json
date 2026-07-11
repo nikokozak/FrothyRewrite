@@ -1,0 +1,17 @@
+{
+  "name": "Seeed Studio XIAO ESP32S3",
+  "chip": "esp32s3",
+  "target": "esp-idf",
+  "profile": "esp32_plain",
+  "peripherals": ["gpio", "adc", "uart", "pwm", "i2c"],
+  "pins": {
+    "$led_builtin": 21,
+    "$boot_button": 0,
+    "$a0": 1,
+    "$sda": 5,
+    "$scl": 6,
+    "uart_tx": 43,
+    "uart_rx": 44,
+    "uart_baud": 115200
+  }
+}
