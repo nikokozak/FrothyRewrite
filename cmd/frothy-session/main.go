@@ -1912,6 +1912,10 @@ func runWipeMain() int {
 	return runWipeCommand(args, root, os.Stdout, os.Stderr, defaultPortLister, defaultCommandRunner)
 }
 
+func wipeRecoveryHint(port string) string {
+	return fmt.Sprintf("choose the board explicitly: frothy wipe --force BOARD --port %s", port)
+}
+
 func runWipeCommand(args []string, sourceRoot string, stdout io.Writer,
 	stderr io.Writer, list portLister, run commandRunner) int {
 	fs := flag.NewFlagSet("frothy wipe", flag.ContinueOnError)
@@ -2287,7 +2291,7 @@ func runSessionMain() int {
 		if recordOutput != nil {
 			_ = recordOutput.sessionError(recordStateError, recordErrorStatusFailed, err.Error())
 		}
-		fmt.Fprintf(os.Stderr, "status: device silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s: %v\n", chosen, err)
+		fmt.Fprintf(os.Stderr, "status: device silent or wedged; %s: %v\n", wipeRecoveryHint(chosen), err)
 		os.Exit(1)
 	}
 

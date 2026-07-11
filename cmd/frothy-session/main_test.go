@@ -702,6 +702,18 @@ func TestFrothyWipeCommand(t *testing.T) {
 	}
 }
 
+func TestWipeRecoveryHintRequiresExplicitBoard(t *testing.T) {
+	got := wipeRecoveryHint("/dev/cu.usbmodem101")
+	for _, want := range []string{"choose the board explicitly", "wipe --force BOARD", "/dev/cu.usbmodem101"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("hint %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "esp32_devkit_v1") {
+		t.Fatalf("generic recovery hint guesses a board: %q", got)
+	}
+}
+
 func makeFlashTestRoot(t *testing.T) string {
 	t.Helper()
 	root := makeSourceRoot(t)
