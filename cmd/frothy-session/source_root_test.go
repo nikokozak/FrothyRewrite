@@ -90,7 +90,8 @@ func TestSourceRootResolvesSymlink(t *testing.T) {
 
 func TestSourceRootNotFound(t *testing.T) {
 	got, err := resolveFrothySourceRootFrom(t.TempDir(), "", filepath.Join(t.TempDir(), "frothy"))
-	if err == nil || !strings.Contains(err.Error(), "set "+frothySourceRootEnv) {
+	if err == nil || !strings.Contains(err.Error(), "firmware commands require a Frothy source checkout") ||
+		!strings.Contains(err.Error(), "set "+frothySourceRootEnv) {
 		t.Fatalf("root = %q, err = %v; want setup guidance", got, err)
 	}
 	if got != "" {

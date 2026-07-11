@@ -31,7 +31,7 @@ func resolveFrothySourceRootFrom(start, override, executable string) (string, er
 			return root, nil
 		}
 	}
-	return "", fmt.Errorf("cannot find Frothy source root; set %s", frothySourceRootEnv)
+	return "", fmt.Errorf("firmware commands require a Frothy source checkout; clone Frothy and run from it, or set %s", frothySourceRootEnv)
 }
 
 func walkForFrothySourceRoot(start string) string {
