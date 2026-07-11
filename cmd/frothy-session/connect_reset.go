@@ -1,8 +1,7 @@
-// Reset detection. The ESP32 ROM bootloader prints a small set of
+// Reset detection. ESP ROM bootloaders print a small set of
 // line-start prefixes when the chip resets. A line counts as part of
 // the banner only if its trimmed form starts with one of those
-// prefixes; `rst:0x` or `boot:0x` appearing mid-text in normal output
-// does not match.
+// prefixes; a prefix appearing mid-text in normal output does not match.
 //
 // Sample banner from the ESP32 ROM (POWERON path, DevKit V-5 target),
 // sourced from the ESP32 TRM "Boot Mode" section, the ESP-IDF startup
@@ -25,6 +24,7 @@ import "strings"
 
 var resetBannerPrefixes = []string{
 	"ets ",
+	"ESP-ROM:",
 	"rst:0x",
 	"boot:0x",
 	"load:0x",
