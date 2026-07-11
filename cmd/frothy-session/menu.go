@@ -24,6 +24,7 @@ type menuVerbRunner func(verb string, args []string, interactive bool) int
 
 const menuBack = -1
 const menuEOF = -2
+const frothyFlasherURL = "https://frothy.dev/flash/"
 
 var frothySelfPath string
 
@@ -89,8 +90,10 @@ func runMenu(stdin io.Reader, stdout io.Writer, stderr io.Writer,
 
 func printMenuHome(out io.Writer, ctx menuContext) {
 	setup := "Set up a board"
-	if !ctx.canonical && ctx.inProject {
+	if ctx.canonical && ctx.inProject {
 		setup = "Build and install this project"
+	} else if !ctx.canonical {
+		setup = "Flash a board in your browser"
 	}
 	fmt.Fprintln(out, "Frothy")
 	fmt.Fprintln(out)
@@ -104,7 +107,7 @@ func printMenuHome(out io.Writer, ctx menuContext) {
 
 func runMenuSetup(reader *bufio.Reader, stdout io.Writer, stderr io.Writer,
 	ctx menuContext, run menuVerbRunner) int {
-	if !ctx.canonical && ctx.inProject {
+	if ctx.canonical && ctx.inProject {
 		if code := runMenuVerb(stdout, run, "build", nil, false); code != 0 {
 			return recoverAfterMenuFailure(reader, stdout, stderr, ctx, run, code)
 		}
@@ -115,8 +118,9 @@ func runMenuSetup(reader *bufio.Reader, stdout io.Writer, stderr io.Writer,
 	}
 
 	if !ctx.canonical {
-		fmt.Fprintln(stderr, "menu: run from the Frothy source tree or a Frothy project")
-		return 2
+		fmt.Fprintf(stdout, "Open %s in a desktop WebSerial browser.\n", frothyFlasherURL)
+		fmt.Fprintln(stdout, "Firmware development commands require a Frothy source checkout.")
+		return 0
 	}
 	if len(ctx.boards) == 0 {
 		fmt.Fprintln(stderr, "menu: no boards found under boards/")
@@ -148,13 +152,19 @@ func recoverAfterMenuFailure(reader *bufio.Reader, stdout io.Writer, stderr io.W
 func runMenuRecovery(reader *bufio.Reader, stdout io.Writer, stderr io.Writer,
 	ctx menuContext, run menuVerbRunner) int {
 	for {
+		rawWipe := "Board is wedged: erase persisted device state"
+		sdkRepair := "Install or repair ESP-IDF"
+		if !ctx.canonical {
+			rawWipe += " (source checkout required)"
+			sdkRepair += " (source checkout required)"
+		}
 		fmt.Fprintln(stdout, "Something's wrong")
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stdout, "  1) Port is busy: stop Frothy serial sessions")
 		fmt.Fprintln(stdout, "  2) Clear my user definitions on a running board")
-		fmt.Fprintln(stdout, "  3) Board is wedged: erase persisted device state")
+		fmt.Fprintf(stdout, "  3) %s\n", rawWipe)
 		fmt.Fprintln(stdout, "  4) Check setup with doctor")
-		fmt.Fprintln(stdout, "  5) Install or repair ESP-IDF")
+		fmt.Fprintf(stdout, "  5) %s\n", sdkRepair)
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stdout, "  b) back")
 		fmt.Fprintln(stdout, "  q) quit")
@@ -176,7 +186,7 @@ func runMenuRecovery(reader *bufio.Reader, stdout io.Writer, stderr io.Writer,
 			return runMenuVerb(stdout, run, "wipe-user", nil, false)
 		case "3":
 			if !ctx.canonical || len(ctx.boards) == 0 {
-				fmt.Fprintln(stderr, "menu: wipe needs a board from the Frothy source tree")
+				fmt.Fprintln(stderr, "menu: raw persistence recovery requires a Frothy source checkout")
 				return 2
 			}
 			board, ok := chooseBoard(reader, stdout, ctx.boards)
@@ -187,6 +197,10 @@ func runMenuRecovery(reader *bufio.Reader, stdout io.Writer, stderr io.Writer,
 		case "4":
 			return runMenuVerb(stdout, run, "doctor", nil, false)
 		case "5":
+			if !ctx.canonical {
+				fmt.Fprintln(stderr, "menu: ESP-IDF setup requires a Frothy source checkout")
+				return 2
+			}
 			return runMenuVerb(stdout, run, "bootstrap", nil, false)
 		default:
 			fmt.Fprintln(stdout, "Choose 1, 2, 3, 4, 5, b, or q.")

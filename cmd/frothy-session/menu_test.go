@@ -50,7 +50,7 @@ func TestMenuSetupBoardRoutesThroughExistingVerbs(t *testing.T) {
 }
 
 func TestMenuProjectSetupBuildsInstallsThenConnects(t *testing.T) {
-	ctx := menuContext{inProject: true}
+	ctx := menuContext{canonical: true, inProject: true}
 	var out, errBuf bytes.Buffer
 	var calls []menuCall
 
@@ -65,6 +65,43 @@ func TestMenuProjectSetupBuildsInstallsThenConnects(t *testing.T) {
 		{verb: "connect", interactive: true},
 	}
 	assertMenuCalls(t, calls, want)
+}
+
+func TestInstalledMenuSetupPointsToBrowserFlasher(t *testing.T) {
+	for _, ctx := range []menuContext{{}, {inProject: true}} {
+		var out, errBuf bytes.Buffer
+		var calls []menuCall
+
+		code := runMenuCommand(nil, strings.NewReader("1\n"), &out, &errBuf, ctx, recordingMenuRunner(nil, &calls))
+
+		if code != 0 {
+			t.Fatalf("menu exit = %d, want 0; stderr=%q", code, errBuf.String())
+		}
+		if !strings.Contains(out.String(), frothyFlasherURL) ||
+			!strings.Contains(out.String(), "Firmware development commands require a Frothy source checkout") {
+			t.Fatalf("stdout = %q, want browser and source-checkout guidance", out.String())
+		}
+		if len(calls) != 0 {
+			t.Fatalf("calls = %#v, want none", calls)
+		}
+	}
+}
+
+func TestInstalledMenuDoesNotRunSourceRecovery(t *testing.T) {
+	for _, choice := range []string{"3", "5"} {
+		var out, errBuf bytes.Buffer
+		var calls []menuCall
+
+		code := runMenuCommand(nil, strings.NewReader("3\n"+choice+"\n"), &out, &errBuf,
+			menuContext{}, recordingMenuRunner(nil, &calls))
+
+		if code != 2 || !strings.Contains(errBuf.String(), "requires a Frothy source checkout") {
+			t.Fatalf("choice %s: exit=%d stderr=%q", choice, code, errBuf.String())
+		}
+		if len(calls) != 0 {
+			t.Fatalf("choice %s: calls = %#v, want none", choice, calls)
+		}
+	}
 }
 
 func TestMenuFlashFailureDoesNotConnect(t *testing.T) {
