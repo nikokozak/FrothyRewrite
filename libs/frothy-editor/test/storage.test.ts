@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 
-import { DEFAULT_INITIAL_SOURCE, sendableLines, shouldConfirmReplace } from "../src/editor.js";
+import { DEFAULT_INITIAL_SOURCE, shouldConfirmReplace } from "../src/editor.js";
 import { makeStorage } from "../src/storage.js";
 
 function withDOM(): void {
@@ -61,34 +61,6 @@ test("storage: save reports a localStorage write failure", () => {
   });
   const s = makeStorage("frothy-editor:test-throws");
   assert.equal(s.save("hello"), false);
-});
-
-test("editor sendableLines drops blanks and full-line comments only", () => {
-  const source = `
--- header comment
-  1 + 1 -- => 2
-
-to greet [ "hello, world" ]
-  -- another comment
-greet:
-`;
-
-  assert.deepEqual(sendableLines(source), [
-    "1 + 1 -- => 2",
-    'to greet [ "hello, world" ]',
-    "greet:",
-  ]);
-});
-
-test("editor default source starts with a comment and sends a zero-arg call", () => {
-  assert.deepEqual(sendableLines(DEFAULT_INITIAL_SOURCE), [
-    'to greet [ "hello, world" ]',
-    "greet:",
-  ]);
-});
-
-test("editor sendableLines returns no lines for blank/comment-only source", () => {
-  assert.deepEqual(sendableLines(" \n-- nothing here\n\t-- still a comment\n"), []);
 });
 
 test("editor shouldConfirmReplace protects real non-default sketches only", () => {

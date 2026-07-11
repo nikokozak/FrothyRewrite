@@ -512,16 +512,6 @@ function saveLayout(layout: Layout): void {
   }
 }
 
-export function sendableLines(text: string): string[] {
-  const lines: string[] = [];
-  for (const raw of text.split("\n")) {
-    const line = raw.trim();
-    if (line.length === 0 || line.startsWith("--")) continue;
-    lines.push(line);
-  }
-  return lines;
-}
-
 export function shouldConfirmReplace(current: string, incoming: string): boolean {
   const trimmedCurrent = current.trim();
   return trimmedCurrent.length > 0
