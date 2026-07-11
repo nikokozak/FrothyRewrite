@@ -75,3 +75,18 @@ test("interrupt writes Ctrl-C out of band while a send is pending", async () => 
   assert.deepEqual(await pending, { kind: "ok" });
   await repl.close();
 });
+
+test("transcript retains the latest 1,000 lines without dropping subscribers", async () => {
+  const fake = new FakeTransport();
+  const repl = await createConnector(fake);
+  const seen: string[] = [];
+  repl.onLine((line) => seen.push(line));
+
+  const lines = Array.from({ length: 1_200 }, (_, index) => `line-${index}`);
+  fake.emit(lines.join("\n") + "\n");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(seen.length, 1_200);
+  assert.deepEqual(repl.transcript(), lines.slice(200));
+  await repl.close();
+});

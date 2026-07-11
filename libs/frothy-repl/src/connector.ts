@@ -10,6 +10,7 @@ const PROMPT = "> ";
 const ASYNC_PREFIX = "! ";
 const ERROR_RE = /^error: (.+) \((\d+)\)$/;
 const LEGACY_ERROR_RE = /^err (\d+)$/;
+const MAX_TRANSCRIPT_LINES = 1_000;
 
 type Pending = {
   lines: string[];
@@ -91,6 +92,9 @@ class Connector implements ReplConnector {
 
   private acceptLine(line: string): void {
     this.lines.push(line);
+    if (this.lines.length > MAX_TRANSCRIPT_LINES) {
+      this.lines.splice(0, this.lines.length - MAX_TRANSCRIPT_LINES);
+    }
     for (const cb of this.subscribers) cb(line);
 
     // Async event lines are delivered to subscribers above but never fold into
