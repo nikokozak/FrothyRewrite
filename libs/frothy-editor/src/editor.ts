@@ -43,6 +43,8 @@ export interface EditorHandle {
   destroy(): void;
 }
 
+type EditorSessionState = "disconnected" | "connecting" | "idle" | "running";
+
 export function mountEditor(opts: EditorOptions): EditorHandle {
   const doc = opts.mount.ownerDocument;
   const unloadTarget = (doc.defaultView ?? globalThis) as Pick<
@@ -194,13 +196,25 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   // equal to the input (send `7` → echo `7` → result `7`) still shows.
   let suppressEcho = true;
   let pendingEcho: string | null = null;
+  let sessionState: EditorSessionState = "disconnected";
+  let connectedProfile = "";
 
-  function setConnected(label: string, connected: boolean) {
-    connectBtn.textContent = label;
+  function setSessionState(next: EditorSessionState, profile?: string): void {
+    sessionState = next;
+    if (profile) connectedProfile = profile;
+    if (next === "disconnected") connectedProfile = "";
+    const connected = next === "idle" || next === "running";
+    root.dataset.state = next;
+    root.setAttribute("aria-busy", String(next === "connecting" || next === "running"));
+    connectBtn.textContent = next === "connecting"
+      ? "Connecting…"
+      : connected ? `connected · ${connectedProfile}` : "Connect";
+    connectBtn.disabled = next === "connecting";
     connectBtn.classList.toggle("frothy-btn-connected", connected);
-    runFormBtn.disabled = !connected;
-    runFileBtn.disabled = !connected;
-    interruptBtn.disabled = !connected;
+    runFormBtn.disabled = next !== "idle";
+    runFileBtn.disabled = next !== "idle";
+    interruptBtn.disabled = next !== "running";
+    interruptBtn.classList.toggle("frothy-btn-primary", next === "running");
   }
 
   function reportError(err: unknown) {
@@ -226,7 +240,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     repl = null;
     currentPort = null;
     pendingEcho = null;
-    setConnected("Connect", false);
+    setSessionState("disconnected");
     transcript.note("device disconnected");
   }
 
@@ -246,13 +260,16 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     }
   }
 
-  setConnected("Connect", false);
+  setSessionState("disconnected");
   unloadTarget.addEventListener("beforeunload", releaseBeforeUnload);
 
   async function connect(): Promise<void> {
+    if (sessionState !== "disconnected") return;
+    setSessionState("connecting");
     const nav = globalThis.navigator;
     if (!nav?.serial) {
       reportError(new Error("Web Serial requires Chrome or Edge"));
+      setSessionState("disconnected");
       return;
     }
     try {
@@ -272,12 +289,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       unsubscribeClose = connectedRepl.onClose(() => handleConnectorClose(connectedRepl));
       pendingEcho = "status";
       const status = await repl.status();
-      setConnected(`connected · ${status.profile}`, true);
+      setSessionState("idle", status.profile);
       if (opts.onConnect) opts.onConnect(status);
     } catch (err) {
       if (repl) await disconnect();
       reportError(err);
-      setConnected("Connect", false);
+      setSessionState("disconnected");
     }
   }
 
@@ -287,8 +304,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     repl = null;
     currentPort = null;
     pendingEcho = null;
+    setSessionState("disconnected");
     if (closing) await closing.close().catch(() => undefined);
-    setConnected("Connect", false);
   }
 
   function currentSource(): string {
@@ -302,7 +319,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   }
 
   async function runForm(): Promise<void> {
-    if (!repl) return;
+    if (!repl || sessionState !== "idle") return;
     const selection = view.state.selection.main;
     let source: string | undefined;
     if (!selection.empty) {
@@ -317,11 +334,17 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       transcript.note("select one complete form or Run File");
       return;
     }
-    await sendForm(source);
+    const runningRepl = repl;
+    setSessionState("running");
+    try {
+      await sendForm(source);
+    } finally {
+      if (repl === runningRepl) setSessionState("idle");
+    }
   }
 
   async function runFile(): Promise<void> {
-    if (!repl) return;
+    if (!repl || sessionState !== "idle") return;
     const forms = splitForms(currentSource());
     if (forms.length === 0) {
       transcript.note("(empty file)");
@@ -331,13 +354,19 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       transcript.note("finish the incomplete form before running this file");
       return;
     }
-    for (const form of forms) {
-      const response = await sendForm(form.source);
-      if (!response) return;
-      if (response.kind === "error") {
-        transcript.note("stopped: form errored");
-        return;
+    const runningRepl = repl;
+    setSessionState("running");
+    try {
+      for (const form of forms) {
+        const response = await sendForm(form.source);
+        if (!response) return;
+        if (response.kind === "error") {
+          transcript.note("stopped: form errored");
+          return;
+        }
       }
+    } finally {
+      if (repl === runningRepl) setSessionState("idle");
     }
   }
 
@@ -354,6 +383,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   }
 
   async function interrupt(): Promise<void> {
+    if (sessionState !== "running") return;
     try {
       await repl?.interrupt();
     } catch (err) {
@@ -402,9 +432,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   }
 
   connectBtn.addEventListener("click", () => {
-    if (repl) {
+    if (sessionState === "idle" || sessionState === "running") {
       void disconnect();
-    } else {
+    } else if (sessionState === "disconnected") {
       void connect();
     }
   });
