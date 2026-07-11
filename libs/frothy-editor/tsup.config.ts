@@ -2,8 +2,8 @@ import { defineConfig } from "tsup";
 
 // Two bundles:
 // - "esm": the library shape (externalizes peer deps; consumers bring CodeMirror).
-// - "browser": a single self-contained file for static demo pages
-//   (web/editor/) — inlines everything.
+// - "browser": a self-contained file vendored into FrothySite by
+//   tools/build-editor-bundle.sh — inlines everything.
 
 export default defineConfig([
   {

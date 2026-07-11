@@ -1,8 +1,0 @@
-[
-  {
-    "board": "esp32_devkit_v1",
-    "profile": "esp32_plain",
-    "file": "firmware/esp32_devkit_v1-esp32_plain.bin",
-    "label": "ESP32 DevKit V1 — plain"
-  }
-]
