@@ -84,7 +84,7 @@ func TestHelpAliasDispatchesKnownVerb(t *testing.T) {
 
 func TestSendHelpSnapshot(t *testing.T) {
 	var out bytes.Buffer
-	if code := runSendCommand([]string{"--help"}, &out, io.Discard, nil); code != 0 {
+	if code := runSendCommand([]string{"--help"}, &out, io.Discard); code != 0 {
 		t.Fatalf("send --help exit = %d, want 0", code)
 	}
 	checkGolden(t, "send", out.Bytes())

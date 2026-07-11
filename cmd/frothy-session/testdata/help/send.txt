@@ -1,23 +1,14 @@
-frothy send — compile a source file and apply or run each line
+frothy send — send a source file through the board's compiler
 
-Send compiles a Frothy source file and applies each definition to a connected board over serial, then runs any bare expressions line by line. Use it for one-shot delivery of a file you have already written, as opposed to session or connect, which keep an interactive prompt open. It talks to the device through the serial port named by --port, at the baud rate given by --baud. With --dry-run it compiles and prints each line without opening serial, so you can check a file before a board is attached.
+Send sends a Frothy source file to a connected board over serial. The board compiles each definition and runs bare expressions line by line. Use it for one-shot delivery of a file you have already written, as opposed to session or connect, which keep an interactive prompt open. It talks to the device through the serial port named by --port, at the baud rate given by --baud.
 
 Examples:
   frothy send blink.fr --port /dev/cu.usbserial-0001
-      compile blink.fr and apply each line to the board on that port
-
-  frothy send blink.fr --dry-run
-      compile and print each line without opening serial
+      send blink.fr through the compiler on the board on that port
 
 Flags:
   -baud int
     	serial baud rate (default 115200)
-  -compiler string
-    	C overlay compiler helper
-  -dry-run
-    	compile lines without opening serial
-  -host-compile
-    	use host compiler when the device advertises host-optional mode
   -port string
     	serial port, for example /dev/cu.usbmodem101
   -settle duration

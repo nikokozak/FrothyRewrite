@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -31,27 +30,6 @@ func TestFrothySessionProcessChild(t *testing.T) {
 	os.Exit(0)
 }
 
-func TestFrothySessionFakeCompilerChild(t *testing.T) {
-	if os.Getenv("FROTHY_SESSION_FAKE_COMPILER_CHILD") != "1" {
-		return
-	}
-
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		switch scanner.Text() {
-		case "@target":
-			fmt.Println("target profile=test profile_hash=1234abcd max_slots=16 host_names=8 word_size=16 int_min=-16384 int_max=16383 apply_bytes=92")
-		case "forever [ 1 ]":
-			fmt.Println("send run dead")
-		case "@commit", "@drop":
-			fmt.Println("ok")
-		default:
-			fmt.Println("error: capacity exceeded (4)")
-		}
-	}
-	os.Exit(0)
-}
-
 func childSessionArgs() []string {
 	for i, arg := range os.Args {
 		if arg == "--" {
@@ -59,23 +37,6 @@ func childSessionArgs() []string {
 		}
 	}
 	return nil
-}
-
-func fakeCompilerPath(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "fake-frothy-compiler")
-	script := fmt.Sprintf(
-		"#!/bin/sh\nFROTHY_SESSION_FAKE_COMPILER_CHILD=1 exec %s -test.run=TestFrothySessionFakeCompilerChild\n",
-		shellQuote(os.Args[0]),
-	)
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func shellQuote(text string) string {
-	return "'" + strings.ReplaceAll(text, "'", "'\\''") + "'"
 }
 
 func TestFrothySessionRecordsAcrossProcessBoundary(t *testing.T) {
@@ -191,7 +152,6 @@ func TestFrothySessionProcessSignalInterruptsForegroundRun(t *testing.T) {
 		"--",
 		"--records",
 		"--port", slavePath,
-		"--compiler", fakeCompilerPath(t),
 		"--settle", "0s",
 		"--timeout", "5s",
 	)
@@ -223,8 +183,8 @@ func TestFrothySessionProcessSignalInterruptsForegroundRun(t *testing.T) {
 
 	select {
 	case line := <-foregroundLine:
-		if line != "run dead" {
-			t.Fatalf("foreground line %q, want run dead", line)
+		if line != "forever [ 1 ]" {
+			t.Fatalf("foreground line %q, want source form", line)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatalf("fake serial did not receive foreground run\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
@@ -260,7 +220,7 @@ func TestFrothySessionProcessSignalInterruptsForegroundRun(t *testing.T) {
 		t.Fatalf("record kinds %q, want %q\nstdout:\n%s\nstderr:\n%s", got, want, stdout.String(), stderr.String())
 	}
 	interrupt := recordWithKind(records, "interrupt")
-	if interrupt["state"] != "idle" || interrupt["mirror"] != "clean" ||
+	if interrupt["state"] != "idle" || interrupt["mirror"] != "none" ||
 		interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
 		t.Fatalf("interrupt record = %#v\nstdout:\n%s\nstderr:\n%s", interrupt, stdout.String(), stderr.String())
 	}
@@ -327,12 +287,12 @@ func serveProcessInterruptFakeDevice(master *os.File, foregroundLine chan<- stri
 
 			switch strings.TrimSpace(line) {
 			case "status":
-				if _, err := master.Write([]byte(statusResponse("host-required") + "> ")); err != nil {
+				if _, err := master.Write([]byte(statusResponse("device") + "> ")); err != nil {
 					errs <- fmt.Errorf("fake serial status: %w", err)
 					return
 				}
-			case "run dead":
-				foregroundLine <- "run dead"
+			case "forever [ 1 ]":
+				foregroundLine <- "forever [ 1 ]"
 				count := 0
 				for {
 					b, err := reader.ReadByte()

@@ -1392,18 +1392,12 @@ func resolvedCleanPath(path string) (string, error) {
 	return filepath.Clean(left), nil
 }
 
-func validateSessionOptions(filePath string, dryRun bool, records bool, transcript string, replay string) (int, error) {
-	if records && dryRun {
-		return 2, errors.New("--records cannot be combined with --dry-run")
-	}
+func validateSessionOptions(filePath string, records bool, transcript string, replay string) (int, error) {
 	if transcript != "" && !records {
 		return 2, errors.New("--transcript requires --records")
 	}
 	if replay != "" && filePath != "" {
 		return 2, errors.New("--replay cannot be combined with --file")
-	}
-	if replay != "" && dryRun {
-		return 2, errors.New("--replay cannot be combined with --dry-run")
 	}
 	// Replaying with records is allowed: it re-runs accepted source through the
 	// normal live path while capturing a fresh observation stream.
@@ -2173,18 +2167,15 @@ func availableVerbs() []verb {
 				"next step, then graduate to the verbs it shows.",
 			examples: "  frothy menu\n" +
 				"      open the numbered setup, connect, and recovery menu"},
-		{name: "send", group: "Work", summary: "compile a source file and apply or run each line", run: runSendMain,
-			longDesc: "Send compiles a Frothy source file and applies each definition to a " +
-				"connected board over serial, then runs any bare expressions line by line. " +
+		{name: "send", group: "Work", summary: "send a source file through the board's compiler", run: runSendMain,
+			longDesc: "Send sends a Frothy source file to a connected board over serial. The " +
+				"board compiles each definition and runs bare expressions line by line. " +
 				"Use it for one-shot delivery of a file you have already written, as opposed " +
 				"to session or connect, which keep an interactive prompt open. It talks to the " +
 				"device through the serial port named by --port, at the baud rate given by " +
-				"--baud. With --dry-run it compiles and prints each line without opening serial, " +
-				"so you can check a file before a board is attached.",
+				"--baud.",
 			examples: "  frothy send blink.fr --port /dev/cu.usbserial-0001\n" +
-				"      compile blink.fr and apply each line to the board on that port\n\n" +
-				"  frothy send blink.fr --dry-run\n" +
-				"      compile and print each line without opening serial"},
+				"      send blink.fr through the compiler on the board on that port"},
 		{name: "flash", group: "Project", summary: "build the board firmware and flash it over serial", run: runFlashMain,
 			longDesc: "Flash builds the board firmware from source and writes it to a connected " +
 				"device over serial, replacing whatever was on the chip. Use it once per board " +
@@ -2220,8 +2211,8 @@ func availableVerbs() []verb {
 		{name: "connect", group: "Work", summary: "open the human REPL over serial", run: runConnectMain,
 			longDesc: "Connect is Frothy's human REPL over serial. Use it to type at a running " +
 				"board and read replies, with line history and a status probe that retries while " +
-				"the board is waking. For one-shot delivery of a file, use send. Editors and " +
-				"host-assisted compilation use session instead.",
+				"the board is waking. For one-shot delivery of a file, use send. Editors use " +
+				"session instead.",
 			examples: "  frothy connect --port /dev/cu.usbserial-0001\n" +
 				"      open the human REPL on the board on that port"},
 		{name: "stop", group: "Recover", summary: "stop Frothy sessions that are holding serial ports", run: runStopMain,
@@ -2267,12 +2258,11 @@ func availableVerbs() []verb {
 				"installed.\" Pass --force to reinstall from scratch.",
 			examples: "  frothy bootstrap\n" +
 				"      install ESP-IDF v5.5 under ~/.froth/sdk/ (skip if already installed)"},
-		{name: "session", group: "Editor plumbing", summary: "run the structured editor and host-compile session", run: runSessionMain,
-			longDesc: "Session is the structured serial path for editors and host-assisted " +
-				"compilation. It accepts .source/.end-source blocks, can compile Frothy source " +
-				"on the host when the device advertises host-optional mode, replay a recorded " +
-				"transcript, or emit NDJSON records. Human terminal use should normally start " +
-				"with connect.",
+		{name: "session", group: "Editor plumbing", summary: "run the structured editor session", run: runSessionMain,
+			longDesc: "Session is the structured serial path for editors. It accepts " +
+				".source/.end-source blocks, sends source through the board's compiler, replays " +
+				"recorded transcripts, or emits NDJSON records. Human terminal use should " +
+				"normally start with connect.",
 			examples: "  frothy session --records --port /dev/cu.usbserial-0001\n" +
 				"      emit the structured session records consumed by editor clients\n\n" +
 				"  printf '.source main.fr\\ninclude \"helper.fr\"\\nmain:\\n.end-source\\n' | frothy session --port /dev/cu.usbserial-0001\n" +
@@ -2280,31 +2270,18 @@ func availableVerbs() []verb {
 	}
 }
 
-type sendCompilerFactory func(path string) (sessionCompiler, func(), error)
-
-func defaultSendCompilerFactory(path string) (sessionCompiler, func(), error) {
-	c, err := startCompiler(path, shareTerminalInterrupt)
-	if err != nil {
-		return nil, nil, err
-	}
-	return c, c.close, nil
-}
-
 func runSendMain() int {
-	return runSendCommand(os.Args[1:], os.Stdout, os.Stderr, defaultSendCompilerFactory)
+	return runSendCommand(os.Args[1:], os.Stdout, os.Stderr)
 }
 
-func runSendCommand(args []string, stdout io.Writer, stderr io.Writer, newCompiler sendCompilerFactory) int {
+func runSendCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("frothy send", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		dryRun       = fs.Bool("dry-run", false, "compile lines without opening serial")
-		port         = fs.String("port", "", "serial port, for example /dev/cu.usbmodem101")
-		baud         = fs.Int("baud", 115200, "serial baud rate")
-		compilerPath = fs.String("compiler", defaultCompilerPath(), "C overlay compiler helper")
-		hostCompile  = fs.Bool("host-compile", false, "use host compiler when the device advertises host-optional mode")
-		timeout      = fs.Duration("timeout", 3*time.Second, "serial prompt timeout")
-		settle       = fs.Duration("settle", 2*time.Second, "delay after opening serial")
+		port    = fs.String("port", "", "serial port, for example /dev/cu.usbmodem101")
+		baud    = fs.Int("baud", 115200, "serial baud rate")
+		timeout = fs.Duration("timeout", 3*time.Second, "serial prompt timeout")
+		settle  = fs.Duration("settle", 2*time.Second, "delay after opening serial")
 	)
 	if helpRequested(args) {
 		printVerbHelp(stdout, helpFor("send"), fs)
@@ -2332,38 +2309,22 @@ func runSendCommand(args []string, stdout io.Writer, stderr io.Writer, newCompil
 	}
 	path := positional[0]
 
-	if !*dryRun && *port == "" {
-		fmt.Fprintln(stderr, "send: --port is required unless --dry-run is set")
+	if *port == "" {
+		fmt.Fprintln(stderr, "send: --port is required")
 		return 2
 	}
 
-	lines, err := readFileLines(path)
+	_, err := readFileLines(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "send: %v\n", err)
 		return 1
 	}
 
-	if *dryRun {
-		comp, closeComp, err := newCompiler(*compilerPath)
-		if err != nil {
-			fmt.Fprintf(stderr, "compiler: %v\n", err)
-			return 1
-		}
-		defer closeComp()
-		if err := runDry(readerFromLines(lines), stdout, comp); err != nil {
-			fmt.Fprintf(stderr, "send: %v\n", err)
-			return 1
-		}
-		return 0
-	}
-
-	// Reuse session's --file path so the compile+apply engine is not forked.
+	// Reuse session's --file path so file ordering and serial handling stay in
+	// one place.
 	sessionArgs := []string{os.Args[0], "--file", path, "--port", *port,
-		"--baud", strconv.Itoa(*baud), "--compiler", *compilerPath,
+		"--baud", strconv.Itoa(*baud),
 		"--timeout", timeout.String(), "--settle", settle.String()}
-	if *hostCompile {
-		sessionArgs = append(sessionArgs, "--host-compile")
-	}
 	oldArgs := os.Args
 	os.Args = sessionArgs
 	defer func() { os.Args = oldArgs }()
@@ -2791,17 +2752,14 @@ func runFrothyCommand(args []string, stdout io.Writer, stderr io.Writer, verbs [
 
 func runSessionMain() int {
 	var (
-		port         = flag.String("port", "", "serial port, for example /dev/cu.usbmodem101")
-		baud         = flag.Int("baud", 115200, "serial baud rate")
-		compilerPath = flag.String("compiler", defaultCompilerPath(), "C overlay compiler helper")
-		dryRun       = flag.Bool("dry-run", false, "print device lines without opening serial")
-		filePath     = flag.String("file", "", "load source lines from a file, applying boot definitions last")
-		hostCompile  = flag.Bool("host-compile", false, "use host compiler when the device advertises host-optional mode")
-		records      = flag.Bool("records", false, "emit NDJSON session records on stdout")
-		transcript   = flag.String("transcript", "", "write NDJSON session records to a file; requires --records")
-		replay       = flag.String("replay", "", "replay accepted source from an NDJSON record transcript")
-		timeout      = flag.Duration("timeout", 3*time.Second, "serial prompt timeout")
-		settle       = flag.Duration("settle", 2*time.Second, "delay after opening serial")
+		port       = flag.String("port", "", "serial port, for example /dev/cu.usbmodem101")
+		baud       = flag.Int("baud", 115200, "serial baud rate")
+		filePath   = flag.String("file", "", "load source lines from a file, applying boot definitions last")
+		records    = flag.Bool("records", false, "emit NDJSON session records on stdout")
+		transcript = flag.String("transcript", "", "write NDJSON session records to a file; requires --records")
+		replay     = flag.String("replay", "", "replay accepted source from an NDJSON record transcript")
+		timeout    = flag.Duration("timeout", 3*time.Second, "serial prompt timeout")
+		settle     = flag.Duration("settle", 2*time.Second, "delay after opening serial")
 	)
 	if helpRequested(os.Args[1:]) {
 		printVerbHelp(os.Stdout, helpFor("session"), flag.CommandLine)
@@ -2809,7 +2767,7 @@ func runSessionMain() int {
 	}
 	flag.Parse()
 
-	if exitCode, err := validateSessionOptions(*filePath, *dryRun, *records, *transcript, *replay); err != nil {
+	if exitCode, err := validateSessionOptions(*filePath, *records, *transcript, *replay); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(exitCode)
 	}
@@ -2829,21 +2787,6 @@ func runSessionMain() int {
 			os.Exit(1)
 		}
 		input = readerFromLines(lines)
-	}
-
-	if *dryRun {
-		comp, err := startCompiler(*compilerPath, shareTerminalInterrupt)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "compiler: %v\n", err)
-			os.Exit(1)
-		}
-		defer comp.close()
-
-		if err := runDry(input, os.Stdout, comp); err != nil {
-			fmt.Fprintf(os.Stderr, "session: %v\n", err)
-			os.Exit(1)
-		}
-		return 0
 	}
 
 	var recordOutput *recordWriter
@@ -2892,8 +2835,8 @@ func runSessionMain() int {
 		os.Exit(1)
 	}
 
-	useCompiler, err := status.useHostCompiler(*hostCompile)
-	if err != nil {
+	if status.compiler != compilerDevice {
+		err := fmt.Errorf("device requires unsupported compiler mode %s", status.compiler)
 		if recordOutput != nil {
 			_ = recordOutput.sessionError(recordStateError, recordMirrorNone, recordErrorStatusFailed, err.Error())
 		}
@@ -2901,40 +2844,19 @@ func runSessionMain() int {
 		os.Exit(1)
 	}
 
-	var comp sessionCompiler
-	if useCompiler {
-		started, err := startCompiler(*compilerPath, isolateTerminalInterrupt)
-		if err != nil {
-			if recordOutput != nil {
-				_ = recordOutput.sessionError(recordStateError, recordMirrorClean, recordErrorHelperFailed, err.Error())
-			}
-			fmt.Fprintf(os.Stderr, "compiler: %v\n", err)
-			os.Exit(1)
-		}
-		defer started.close()
-		if err := verifyCompilerTarget(started, status); err != nil {
-			if recordOutput != nil {
-				_ = recordOutput.sessionError(recordStateError, recordMirrorClean, recordErrorHelperFailed, err.Error())
-			}
-			fmt.Fprintf(os.Stderr, "compiler: %v\n", err)
-			os.Exit(1)
-		}
-		comp = started
-	}
-
 	if recordOutput != nil {
-		if err := recordOutput.status(status, useCompiler); err != nil {
+		if err := recordOutput.status(status, false); err != nil {
 			fmt.Fprintf(os.Stderr, "records: %v\n", err)
 			os.Exit(1)
 		}
-		if err := runSerialRecordsWithMode(input, recordOutput, comp, dev, *timeout, useCompiler, tracker); err != nil {
+		if err := runSerialRecordsWithMode(input, recordOutput, nil, dev, *timeout, false, tracker); err != nil {
 			fmt.Fprintf(os.Stderr, "session: %v\n", err)
 			os.Exit(1)
 		}
 		return 0
 	}
 
-	if err := runSerialWithModeAndInterrupts(input, os.Stdout, comp, dev, *timeout, useCompiler, tracker); err != nil {
+	if err := runSerialWithModeAndInterrupts(input, os.Stdout, nil, dev, *timeout, false, tracker); err != nil {
 		fmt.Fprintf(os.Stderr, "session: %v\n", err)
 		os.Exit(1)
 	}

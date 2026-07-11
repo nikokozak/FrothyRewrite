@@ -386,14 +386,14 @@ func TestFrothyDispatchesSessionVerbAndRewritesArgs(t *testing.T) {
 	verbs := []verb{{name: "session", summary: "stub", run: func() int { ran = true; return 0 }}}
 
 	var stdout, stderr bytes.Buffer
-	code := runFrothyCommand([]string{"/usr/local/bin/frothy", "session", "--dry-run"}, &stdout, &stderr, verbs)
+	code := runFrothyCommand([]string{"/usr/local/bin/frothy", "session", "--records"}, &stdout, &stderr, verbs)
 	if code != 0 {
 		t.Fatalf("exit code %d, want 0", code)
 	}
 	if !ran {
 		t.Fatal("verb run was not called")
 	}
-	if got, want := strings.Join(os.Args, "\n"), "/usr/local/bin/frothy session\n--dry-run"; got != want {
+	if got, want := strings.Join(os.Args, "\n"), "/usr/local/bin/frothy session\n--records"; got != want {
 		t.Fatalf("os.Args = %q, want %q", got, want)
 	}
 }
@@ -411,68 +411,24 @@ func TestFrothyDispatchPropagatesVerbExitCode(t *testing.T) {
 	}
 }
 
-func TestFrothySendDryRunCompilesFileToApplyAndRunLines(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "src.frothy")
-	if err := os.WriteFile(file, []byte("see 42\nlet x is 1\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	fake := &fakeCompiler{
-		results: []compileResult{
-			{action: actionSend, line: "see 42"},
-			{action: actionApply, line: "apply x 01 00"},
-		},
-	}
-	factory := func(_ string) (sessionCompiler, func(), error) {
-		return fake, func() {}, nil
-	}
-
-	var stdout, stderr bytes.Buffer
-	code := runSendCommand([]string{"--dry-run", file}, &stdout, &stderr, factory)
-	if code != 0 {
-		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
-	}
-	want := "see 42\napply x 01 00\n"
-	if got := stdout.String(); got != want {
-		t.Fatalf("stdout=%q, want %q", got, want)
-	}
-	if fake.commits != 1 {
-		t.Fatalf("commits=%d, want 1", fake.commits)
-	}
-}
-
-func TestFrothySendDryRunFlagAfterFile(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "src.frothy")
-	if err := os.WriteFile(file, []byte("see 42\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	fake := &fakeCompiler{
-		results: []compileResult{{action: actionSend, line: "see 42"}},
-	}
-	factory := func(_ string) (sessionCompiler, func(), error) {
-		return fake, func() {}, nil
-	}
-
-	var stdout, stderr bytes.Buffer
-	code := runSendCommand([]string{file, "--dry-run"}, &stdout, &stderr, factory)
-	if code != 0 {
-		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
-	}
-	if got := stdout.String(); got != "see 42\n" {
-		t.Fatalf("stdout=%q, want %q", got, "see 42\n")
+func TestFrothySendRejectsRetiredCompilerFlags(t *testing.T) {
+	for _, retired := range []string{"--dry-run", "--compiler", "--host-compile"} {
+		t.Run(retired, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runSendCommand([]string{retired}, &stdout, &stderr)
+			if code != 2 {
+				t.Fatalf("exit code %d, want 2; stderr=%q", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "flag provided but not defined") {
+				t.Fatalf("stderr does not reject %s: %q", retired, stderr.String())
+			}
+		})
 	}
 }
 
 func TestFrothySendErrorsOnMissingFile(t *testing.T) {
-	factory := func(_ string) (sessionCompiler, func(), error) {
-		t.Fatal("compiler factory must not run when the file is missing")
-		return nil, nil, nil
-	}
 	var stdout, stderr bytes.Buffer
-	code := runSendCommand([]string{"--dry-run", "/nonexistent/missing-source.frothy"}, &stdout, &stderr, factory)
+	code := runSendCommand([]string{"--port", "/dev/cu.test", "/nonexistent/missing-source.frothy"}, &stdout, &stderr)
 	if code == 0 {
 		t.Fatal("exit code 0, want non-zero")
 	}
@@ -484,13 +440,9 @@ func TestFrothySendErrorsOnMissingFile(t *testing.T) {
 	}
 }
 
-func TestFrothySendErrorsWhenPortMissingWithoutDryRun(t *testing.T) {
-	factory := func(_ string) (sessionCompiler, func(), error) {
-		t.Fatal("compiler factory must not run on the missing-port path")
-		return nil, nil, nil
-	}
+func TestFrothySendErrorsWhenPortMissing(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := runSendCommand([]string{"some.frothy"}, &stdout, &stderr, factory)
+	code := runSendCommand([]string{"some.frothy"}, &stdout, &stderr)
 	if code == 0 {
 		t.Fatal("exit code 0, want non-zero")
 	}
@@ -2369,20 +2321,12 @@ func TestValidateSessionOptionsRejectsReplayConflicts(t *testing.T) {
 	tests := []struct {
 		name       string
 		filePath   string
-		dryRun     bool
 		records    bool
 		transcript string
 		replay     string
 		wantCode   int
 		wantError  string
 	}{
-		{
-			name:      "records dry run",
-			dryRun:    true,
-			records:   true,
-			wantCode:  2,
-			wantError: "--records cannot be combined with --dry-run",
-		},
 		{
 			name:       "transcript without records",
 			transcript: other,
@@ -2395,13 +2339,6 @@ func TestValidateSessionOptionsRejectsReplayConflicts(t *testing.T) {
 			replay:    replay,
 			wantCode:  2,
 			wantError: "--replay cannot be combined with --file",
-		},
-		{
-			name:      "replay dry run",
-			dryRun:    true,
-			replay:    replay,
-			wantCode:  2,
-			wantError: "--replay cannot be combined with --dry-run",
 		},
 		{
 			name:       "same replay transcript",
@@ -2421,7 +2358,7 @@ func TestValidateSessionOptionsRejectsReplayConflicts(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			code, err := validateSessionOptions(test.filePath, test.dryRun, test.records, test.transcript, test.replay)
+			code, err := validateSessionOptions(test.filePath, test.records, test.transcript, test.replay)
 			if test.wantError == "" {
 				if err != nil || code != 0 {
 					t.Fatalf("validateSessionOptions() = code %d err %v, want success", code, err)
