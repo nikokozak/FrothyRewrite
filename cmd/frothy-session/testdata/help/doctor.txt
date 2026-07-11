@@ -1,6 +1,6 @@
-frothy doctor — check the host's compile, flash, and serial setup
+frothy doctor — check the installed CLI, device, and available firmware tools
 
-Doctor runs a short list of health checks for the host setup that send, flash, and connect rely on. Each check reports ok or fail with a short detail. Run it once after cloning, and again whenever a verb starts failing for unclear reasons. It does not modify anything; it only inspects.
+Doctor checks the installed compiler helper and serial device. When a Frothy source checkout is available, it also checks the Make and ESP-IDF tools used for firmware development. A package installation does not need those firmware checks for connect, send, or editor use. It does not modify anything.
 
 Examples:
   frothy doctor

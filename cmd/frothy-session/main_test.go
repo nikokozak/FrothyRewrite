@@ -898,6 +898,28 @@ func TestFrothyDoctorExitsNonZeroWhenAnyCheckFails(t *testing.T) {
 	}
 }
 
+func TestDoctorChecksIncludeFirmwareOnlyWithSource(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		includeFirmware bool
+		want            string
+	}{
+		{name: "installed", want: "compiler,serial,device"},
+		{name: "source", includeFirmware: true, want: "compiler,make,serial,device,esp-idf-installed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			checks := doctorChecks(test.includeFirmware)
+			names := make([]string, 0, len(checks))
+			for _, check := range checks {
+				names = append(names, check.name)
+			}
+			if got := strings.Join(names, ","); got != test.want {
+				t.Fatalf("checks = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestDoctorDeviceFailureReportsProbeErrorWithoutWipeAdvice(t *testing.T) {
 	detail := formatDoctorUnresponsiveDevice("/dev/cu.usbserial-0001", errors.New("malformed status field: profilestatus"))
 	if !strings.Contains(detail, "malformed status field: profilestatus") {

@@ -2210,11 +2210,11 @@ func availableVerbs() []verb {
 				"user overlay.",
 			examples: "  frothy wipe-user --port /dev/cu.usbserial-0001\n" +
 				"      clear user-tier definitions on the board on that port"},
-		{name: "doctor", group: "Start", summary: "check the host's compile, flash, and serial setup", run: runDoctorMain,
-			longDesc: "Doctor runs a short list of health checks for the host setup that send, " +
-				"flash, and connect rely on. Each check reports ok or fail with a short detail. " +
-				"Run it once after cloning, and again whenever a verb starts failing for " +
-				"unclear reasons. It does not modify anything; it only inspects.",
+		{name: "doctor", group: "Start", summary: "check the installed CLI, device, and available firmware tools", run: runDoctorMain,
+			longDesc: "Doctor checks the installed compiler helper and serial device. When a " +
+				"Frothy source checkout is available, it also checks the Make and ESP-IDF tools " +
+				"used for firmware development. A package installation does not need those " +
+				"firmware checks for connect, send, or editor use. It does not modify anything.",
 			examples: "  frothy doctor\n" +
 				"      run every check and print the results"},
 		{name: "connect", group: "Work", summary: "open the human REPL over serial", run: runConnectMain,
@@ -2575,18 +2575,25 @@ func formatDoctorUnresponsiveDevice(port string, err error) string {
 }
 
 func defaultDoctorChecks() []doctorCheck {
-	return []doctorCheck{
+	_, sourceErr := resolveFrothySourceRoot(".")
+	return doctorChecks(sourceErr == nil)
+}
+
+func doctorChecks(includeFirmware bool) []doctorCheck {
+	checks := []doctorCheck{
 		{
 			name: "compiler",
 			run: func() (bool, string) {
 				path := defaultCompilerPath()
 				if path == "" {
-					return false, "frothy-compile-overlay not found; run make cli"
+					return false, "frothy-compile-overlay not found; reinstall Frothy"
 				}
 				return true, path
 			},
 		},
-		{
+	}
+	if includeFirmware {
+		checks = append(checks, doctorCheck{
 			name: "make",
 			run: func() (bool, string) {
 				path, err := exec.LookPath("make")
@@ -2595,8 +2602,10 @@ func defaultDoctorChecks() []doctorCheck {
 				}
 				return true, path
 			},
-		},
-		{
+		})
+	}
+	checks = append(checks,
+		doctorCheck{
 			name: "serial",
 			run: func() (bool, string) {
 				chosen, err := pickPort("", defaultPortLister)
@@ -2606,7 +2615,7 @@ func defaultDoctorChecks() []doctorCheck {
 				return true, chosen
 			},
 		},
-		{
+		doctorCheck{
 			name: "device",
 			run: func() (bool, string) {
 				port, err := pickPort("", defaultPortLister)
@@ -2625,7 +2634,9 @@ func defaultDoctorChecks() []doctorCheck {
 				return true, port
 			},
 		},
-		{
+	)
+	if includeFirmware {
+		checks = append(checks, doctorCheck{
 			name: "esp-idf-installed",
 			run: func() (bool, string) {
 				home := os.Getenv("FROTH_HOME")
@@ -2638,8 +2649,9 @@ func defaultDoctorChecks() []doctorCheck {
 				}
 				return true, filepath.Join(home, "sdk", "esp-idf")
 			},
-		},
+		})
 	}
+	return checks
 }
 
 func runDoctorMain() int {
