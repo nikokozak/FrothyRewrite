@@ -509,38 +509,16 @@ fr_err_t fr_platform_gpio_read(uint16_t pin, uint16_t *out_value) {
 
 static bool fr_esp_adc1_channel_for_pin(uint16_t pin,
                                         adc_channel_t *out_channel) {
+  adc_unit_t unit = ADC_UNIT_1;
+
   if (out_channel == NULL) {
     return false;
   }
 
-  switch (pin) {
-  case 36:
-    *out_channel = ADC_CHANNEL_0;
-    return true;
-  case 37:
-    *out_channel = ADC_CHANNEL_1;
-    return true;
-  case 38:
-    *out_channel = ADC_CHANNEL_2;
-    return true;
-  case 39:
-    *out_channel = ADC_CHANNEL_3;
-    return true;
-  case 32:
-    *out_channel = ADC_CHANNEL_4;
-    return true;
-  case 33:
-    *out_channel = ADC_CHANNEL_5;
-    return true;
-  case 34:
-    *out_channel = ADC_CHANNEL_6;
-    return true;
-  case 35:
-    *out_channel = ADC_CHANNEL_7;
-    return true;
-  default:
+  if (adc_oneshot_io_to_channel((int)pin, &unit, out_channel) != ESP_OK) {
     return false;
   }
+  return unit == ADC_UNIT_1;
 }
 
 static fr_err_t fr_esp_adc1_init(void) {
