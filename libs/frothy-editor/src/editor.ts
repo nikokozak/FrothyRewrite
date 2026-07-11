@@ -311,6 +311,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       unsubscribeClose = connectedRepl.onClose(() => handleConnectorClose(connectedRepl));
       pendingEcho = "status";
       const status = await repl.status();
+      if (repl !== connectedRepl) return;
       setSessionState("idle", status.profile);
       if (opts.onConnect) opts.onConnect(status);
     } catch (err) {
