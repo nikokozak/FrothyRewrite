@@ -7,16 +7,17 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { createConnector, WebSerialTransport } from "@frothy/repl";
-import type { ReplConnector, Status } from "@frothy/repl";
+import type { ReplConnector, Response, Status } from "@frothy/repl";
 
 import { FROTHY_EXAMPLES } from "./examples.generated.js";
+import { formAt, splitForms } from "./forms.js";
 import { frothyLanguage, frothyHighlight } from "./highlight.js";
 import { mountTranscript } from "./transcript.js";
 import type { Transcript } from "./transcript.js";
 import { makeStorage } from "./storage.js";
 import type { SketchStorage } from "./storage.js";
 
-export const DEFAULT_INITIAL_SOURCE = `-- Welcome to Frothy. Edit, then Send buffer (Cmd/Ctrl+Enter).
+export const DEFAULT_INITIAL_SOURCE = `-- Welcome to Frothy. Edit, then Run File (Cmd/Ctrl+Shift+Enter).
 to greet [ "hello, world" ]
 greet:
 `;
@@ -34,8 +35,8 @@ export interface EditorHandle {
   setSource(src: string): void;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  sendLine(): Promise<void>;
-  sendBuffer(): Promise<void>;
+  runForm(): Promise<void>;
+  runFile(): Promise<void>;
   save(): void;
   download(): void;
   transcript(): readonly string[];
@@ -93,8 +94,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
 
   const commandBar = doc.createElement("div");
   commandBar.className = "frothy-editor-cmdbar";
-  const sendLineBtn = mkBtn(doc, "Send line", "frothy-btn");
-  const sendBufBtn = mkBtn(doc, "Send buffer", "frothy-btn");
+  const runFormBtn = mkBtn(doc, "Run Form", "frothy-btn");
+  const runFileBtn = mkBtn(doc, "Run File", "frothy-btn");
   const interruptBtn = mkBtn(doc, "Interrupt", "frothy-btn");
   const clearOutputBtn = mkBtn(doc, "Clear output", "frothy-btn");
   const openBtn = mkBtn(doc, "Open .fr", "frothy-btn");
@@ -118,8 +119,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   });
   echoToggle.append(echoBox, doc.createTextNode(" Hide echo"));
   commandBar.append(
-    sendLineBtn,
-    sendBufBtn,
+    runFormBtn,
+    runFileBtn,
     interruptBtn,
     clearOutputBtn,
     openBtn,
@@ -197,8 +198,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   function setConnected(label: string, connected: boolean) {
     connectBtn.textContent = label;
     connectBtn.classList.toggle("frothy-btn-connected", connected);
-    sendLineBtn.disabled = !connected;
-    sendBufBtn.disabled = !connected;
+    runFormBtn.disabled = !connected;
+    runFileBtn.disabled = !connected;
     interruptBtn.disabled = !connected;
   }
 
@@ -290,12 +291,6 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     setConnected("Connect", false);
   }
 
-  function currentLine(): string {
-    const head = view.state.selection.main.head;
-    const line = view.state.doc.lineAt(head);
-    return line.text;
-  }
-
   function currentSource(): string {
     return view.state.doc.toString();
   }
@@ -306,39 +301,55 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     });
   }
 
-  async function sendLine(): Promise<void> {
+  async function runForm(): Promise<void> {
     if (!repl) return;
-    const [line] = sendableLines(currentLine());
-    if (!line) return;
-    transcript.appendHost(line);
-    pendingEcho = line;
-    try {
-      await repl.sendLine(line);
-    } catch (err) {
-      reportError(err);
+    const selection = view.state.selection.main;
+    let source: string | undefined;
+    if (!selection.empty) {
+      const forms = splitForms(view.state.sliceDoc(selection.from, selection.to));
+      if (forms.length === 1 && forms[0].complete) source = forms[0].source;
+    } else {
+      const line = view.state.doc.lineAt(selection.head).number - 1;
+      const form = formAt(currentSource(), line);
+      if (form?.complete) source = form.source;
+    }
+    if (!source) {
+      transcript.note("select one complete form or Run File");
+      return;
+    }
+    await sendForm(source);
+  }
+
+  async function runFile(): Promise<void> {
+    if (!repl) return;
+    const forms = splitForms(currentSource());
+    if (forms.length === 0) {
+      transcript.note("(empty file)");
+      return;
+    }
+    if (forms.some((form) => !form.complete)) {
+      transcript.note("finish the incomplete form before running this file");
+      return;
+    }
+    for (const form of forms) {
+      const response = await sendForm(form.source);
+      if (!response) return;
+      if (response.kind === "error") {
+        transcript.note("stopped: form errored");
+        return;
+      }
     }
   }
 
-  async function sendBuffer(): Promise<void> {
-    if (!repl) return;
-    const lines = sendableLines(view.state.doc.toString());
-    if (lines.length === 0) {
-      transcript.note("(empty buffer)");
-      return;
-    }
-    for (const line of lines) {
-      transcript.appendHost(line);
-      pendingEcho = line;
-      try {
-        const res = await repl.sendLine(line);
-        if (res.kind === "error") {
-          transcript.note("stopped: line errored");
-          break;
-        }
-      } catch (err) {
-        reportError(err);
-        return;
-      }
+  async function sendForm(source: string): Promise<Response | null> {
+    if (!repl) return null;
+    transcript.appendHost(source);
+    pendingEcho = source;
+    try {
+      return await repl.sendLine(source);
+    } catch (err) {
+      reportError(err);
+      return null;
     }
   }
 
@@ -397,8 +408,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       void connect();
     }
   });
-  sendLineBtn.addEventListener("click", () => void sendLine());
-  sendBufBtn.addEventListener("click", () => void sendBuffer());
+  runFormBtn.addEventListener("click", () => void runForm());
+  runFileBtn.addEventListener("click", () => void runFile());
   interruptBtn.addEventListener("click", () => void interrupt());
   clearOutputBtn.addEventListener("click", () => transcript.clear());
   openBtn.addEventListener("click", () => fileInput.click());
@@ -423,18 +434,14 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     view.focus();
   });
 
-  // Keyboard: Shift+Enter sends current line; Cmd/Ctrl+Enter sends buffer.
+  // Keyboard: Cmd/Ctrl+Enter runs one form; add Shift to run the file.
   editorHost.addEventListener(
     "keydown",
     (ev) => {
-      if (ev.key === "Enter" && ev.shiftKey) {
-        ev.preventDefault();
-        void sendLine();
-        return;
-      }
       if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
         ev.preventDefault();
-        void sendBuffer();
+        if (ev.shiftKey) void runFile();
+        else void runForm();
       }
     },
     { capture: true },
@@ -449,8 +456,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     },
     connect,
     disconnect,
-    sendLine,
-    sendBuffer,
+    runForm,
+    runFile,
     save,
     download,
     transcript() {
