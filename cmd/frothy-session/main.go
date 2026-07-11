@@ -2211,7 +2211,7 @@ func availableVerbs() []verb {
 			examples: "  frothy wipe-user --port /dev/cu.usbserial-0001\n" +
 				"      clear user-tier definitions on the board on that port"},
 		{name: "doctor", group: "Start", summary: "check the installed CLI, device, and available firmware tools", run: runDoctorMain,
-			longDesc: "Doctor checks the installed compiler helper and serial device. When a " +
+			longDesc: "Doctor checks serial discovery and the connected device. When a " +
 				"Frothy source checkout is available, it also checks the Make and ESP-IDF tools " +
 				"used for firmware development. A package installation does not need those " +
 				"firmware checks for connect, send, or editor use. It does not modify anything.",
@@ -2580,18 +2580,7 @@ func defaultDoctorChecks() []doctorCheck {
 }
 
 func doctorChecks(includeFirmware bool) []doctorCheck {
-	checks := []doctorCheck{
-		{
-			name: "compiler",
-			run: func() (bool, string) {
-				path := defaultCompilerPath()
-				if path == "" {
-					return false, "frothy-compile-overlay not found; reinstall Frothy"
-				}
-				return true, path
-			},
-		},
-	}
+	var checks []doctorCheck
 	if includeFirmware {
 		checks = append(checks, doctorCheck{
 			name: "make",

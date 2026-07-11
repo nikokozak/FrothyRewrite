@@ -853,9 +853,9 @@ func makeFlashTestRoot(t *testing.T) string {
 
 func TestFrothyDoctorExitsZeroWhenAllChecksPass(t *testing.T) {
 	checks := []doctorCheck{
-		{name: "compiler", run: func() (bool, string) { return true, "/opt/frothy/libexec/frothy-compile-overlay" }},
 		{name: "make", run: func() (bool, string) { return true, "/usr/bin/make" }},
 		{name: "serial", run: func() (bool, string) { return true, "/dev/cu.usbserial-0001" }},
+		{name: "device", run: func() (bool, string) { return true, "/dev/cu.usbserial-0001" }},
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -864,9 +864,9 @@ func TestFrothyDoctorExitsZeroWhenAllChecksPass(t *testing.T) {
 		t.Fatalf("exit code %d, want 0; stderr=%q", code, stderr.String())
 	}
 	for _, want := range []string{
-		"ok    compiler: /opt/frothy/libexec/frothy-compile-overlay\n",
 		"ok    make: /usr/bin/make\n",
 		"ok    serial: /dev/cu.usbserial-0001\n",
+		"ok    device: /dev/cu.usbserial-0001\n",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q: %q", want, stdout.String())
@@ -879,7 +879,6 @@ func TestFrothyDoctorExitsZeroWhenAllChecksPass(t *testing.T) {
 
 func TestFrothyDoctorExitsNonZeroWhenAnyCheckFails(t *testing.T) {
 	checks := []doctorCheck{
-		{name: "compiler", run: func() (bool, string) { return true, "/opt/frothy/libexec/frothy-compile-overlay" }},
 		{name: "make", run: func() (bool, string) { return false, "not on PATH; install build tools" }},
 		{name: "serial", run: func() (bool, string) { return true, "/dev/cu.usbserial-0001" }},
 	}
@@ -892,8 +891,7 @@ func TestFrothyDoctorExitsNonZeroWhenAnyCheckFails(t *testing.T) {
 	if !strings.Contains(stdout.String(), "fail  make: not on PATH; install build tools\n") {
 		t.Fatalf("stdout missing failed check: %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "ok    compiler: ") ||
-		!strings.Contains(stdout.String(), "ok    serial: ") {
+	if !strings.Contains(stdout.String(), "ok    serial: ") {
 		t.Fatalf("stdout missing passing checks: %q", stdout.String())
 	}
 }
@@ -904,8 +902,8 @@ func TestDoctorChecksIncludeFirmwareOnlyWithSource(t *testing.T) {
 		includeFirmware bool
 		want            string
 	}{
-		{name: "installed", want: "compiler,serial,device"},
-		{name: "source", includeFirmware: true, want: "compiler,make,serial,device,esp-idf-installed"},
+		{name: "installed", want: "serial,device"},
+		{name: "source", includeFirmware: true, want: "make,serial,device,esp-idf-installed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			checks := doctorChecks(test.includeFirmware)
