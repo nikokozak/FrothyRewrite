@@ -19,28 +19,6 @@ import (
 	"time"
 )
 
-type compileAction int
-
-const (
-	actionPass compileAction = iota
-	actionApply
-	actionSend
-	actionClear
-	actionError
-)
-
-type compileResult struct {
-	action compileAction
-	line   string
-}
-
-type sessionCompiler interface {
-	targetProfile() (compilerTarget, error)
-	compile(line string) (compileResult, error)
-	commit() error
-	drop() error
-}
-
 type sessionDevice interface {
 	syncPrompt(timeout time.Duration) error
 	sendLine(line string, timeout time.Duration, promptSeen func()) (string, error)
@@ -50,9 +28,7 @@ type sessionDevice interface {
 type compilerMode string
 
 const (
-	compilerDevice       compilerMode = "device"
-	compilerHostRequired compilerMode = "host-required"
-	compilerHostOptional compilerMode = "host-optional"
+	compilerDevice compilerMode = "device"
 )
 
 type deviceStatus struct {
@@ -68,199 +44,15 @@ type deviceStatus struct {
 	applyBytes  uint16
 }
 
-type compilerTarget struct {
-	profile     string
-	profileHash string
-	wordSize    uint16
-	intMin      int64
-	intMax      int64
-	applyBytes  uint16
-}
-
 var errPromptTimeout = errors.New("timed out waiting for prompt")
 
 const (
-	deviceInterruptedStatus  = "error: interrupted (10)"
-	promptPrimary            = "frothy> "
-	promptContinuation       = ".. "
-	shareTerminalInterrupt   = false
-	isolateTerminalInterrupt = true
-	// Keep this basename in sync with OVERLAY_COMPILER in the Makefile.
-	compilerProgramName = "frothy-compile-overlay"
+	deviceInterruptedStatus = "error: interrupted (10)"
+	promptPrimary           = "frothy> "
+	promptContinuation      = ".. "
 )
 
 var canonicalErrorStatusPattern = regexp.MustCompile(`^error: .+\([0-9]+\)$`)
-
-func executableFileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir() && info.Mode().Perm()&0111 != 0
-}
-
-func defaultCompilerPath() string {
-	return defaultCompilerPathFrom(os.Executable, filepath.EvalSymlinks, executableFileExists, exec.LookPath)
-}
-
-func defaultCompilerPathFrom(
-	executable func() (string, error),
-	evalSymlinks func(string) (string, error),
-	isExecutable func(string) bool,
-	lookPath func(string) (string, error),
-) string {
-	if exe, err := executable(); err == nil {
-		if resolved, err := evalSymlinks(exe); err == nil {
-			exe = resolved
-		}
-		for _, candidate := range compilerCandidatesForExecutable(exe) {
-			if isExecutable(candidate) {
-				return candidate
-			}
-		}
-	}
-
-	if path, err := lookPath(compilerProgramName); err == nil {
-		return path
-	}
-
-	return ""
-}
-
-func compilerCandidatesForExecutable(exe string) []string {
-	dir := filepath.Dir(exe)
-	return []string{
-		filepath.Clean(filepath.Join(dir, "..", "libexec", "frothy", compilerProgramName)),
-		filepath.Join(dir, compilerProgramName),
-	}
-}
-
-type compiler struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Scanner
-	stderr *lockedBuffer
-}
-
-type lockedBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *lockedBuffer) Write(data []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(data)
-}
-
-func (b *lockedBuffer) Snapshot() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-func startCompiler(path string, isolateInterrupt bool) (*compiler, error) {
-	if path == "" {
-		return nil, errors.New("cannot find frothy-compile-overlay; pass --compiler or run make cli")
-	}
-
-	cmd := exec.Command(path)
-	stderr := &lockedBuffer{}
-	cmd.Stderr = stderr
-	if isolateInterrupt {
-		configureCompilerProcess(cmd)
-	}
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	scanner := bufio.NewScanner(stdoutPipe)
-	scanner.Buffer(make([]byte, 0, 1024), 64*1024)
-	return &compiler{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: scanner,
-		stderr: stderr,
-	}, nil
-}
-
-func (c *compiler) close() {
-	_ = c.stdin.Close()
-	_ = c.cmd.Wait()
-}
-
-func (c *compiler) request(line string) (string, error) {
-	if _, err := fmt.Fprintln(c.stdin, line); err != nil {
-		return "", err
-	}
-	if !c.stdout.Scan() {
-		if err := c.stdout.Err(); err != nil {
-			return "", err
-		}
-		if text := strings.TrimSpace(c.stderr.Snapshot()); text != "" {
-			return "", errors.New(text)
-		}
-		return "", errors.New("compiler helper exited")
-	}
-	return c.stdout.Text(), nil
-}
-
-func (c *compiler) targetProfile() (compilerTarget, error) {
-	out, err := c.request("@target")
-	if err != nil {
-		return compilerTarget{}, err
-	}
-	return parseCompilerTarget(out)
-}
-
-func (c *compiler) compile(line string) (compileResult, error) {
-	out, err := c.request(line)
-	if err != nil {
-		return compileResult{}, err
-	}
-	switch {
-	case out == "pass":
-		return compileResult{action: actionPass, line: line}, nil
-	case strings.HasPrefix(out, "apply "):
-		return compileResult{action: actionApply, line: out}, nil
-	case strings.HasPrefix(out, "send "):
-		return compileResult{action: actionSend, line: strings.TrimPrefix(out, "send ")}, nil
-	case out == "clear":
-		return compileResult{action: actionClear, line: "clear"}, nil
-	case strings.HasPrefix(out, "error: "):
-		return compileResult{action: actionError, line: out}, nil
-	default:
-		return compileResult{}, fmt.Errorf("unexpected compiler response %q", out)
-	}
-}
-
-func (c *compiler) commit() error {
-	out, err := c.request("@commit")
-	if err != nil {
-		return err
-	}
-	if out != "ok" {
-		return fmt.Errorf("compiler commit failed: %s", out)
-	}
-	return nil
-}
-
-func (c *compiler) drop() error {
-	out, err := c.request("@drop")
-	if err != nil {
-		return err
-	}
-	if out != "ok" {
-		return fmt.Errorf("compiler drop failed: %s", out)
-	}
-	return nil
-}
 
 type serialDevice struct {
 	file    *os.File
@@ -469,32 +261,6 @@ func promptRecoveredAfterInterrupt(partial string, recovery string) bool {
 		responseSettledAfterInterrupt(partial+recovery)
 }
 
-func affectsCompilerMirror(action compileAction) bool {
-	return action == actionApply || action == actionClear
-}
-
-func recordAction(action compileAction) string {
-	switch action {
-	case actionPass:
-		return "direct"
-	case actionSend:
-		return "eval"
-	case actionApply:
-		return "apply"
-	case actionClear:
-		return "clear"
-	default:
-		return "unknown"
-	}
-}
-
-func compileErrorReason(line string) string {
-	if strings.HasPrefix(strings.TrimSpace(line), "error: capacity exceeded") {
-		return "budget"
-	}
-	return "source"
-}
-
 func validProfileHash(hash string) bool {
 	if len(hash) != 8 {
 		return false
@@ -596,9 +362,7 @@ func parseDeviceStatus(response string) (deviceStatus, error) {
 		if !validProfileHash(status.profileHash) {
 			return deviceStatus{}, errors.New("status missing profile_hash")
 		}
-		switch status.compiler {
-		case compilerDevice, compilerHostRequired, compilerHostOptional:
-		default:
+		if status.compiler != compilerDevice {
 			return deviceStatus{}, fmt.Errorf("status unsupported compiler mode: %s", status.compiler)
 		}
 		if status.names == "" {
@@ -646,58 +410,6 @@ func parseInt64Field(values map[string]string, name string) (int64, error) {
 	return value, nil
 }
 
-func parseCompilerTarget(response string) (compilerTarget, error) {
-	fields := strings.Fields(strings.TrimSpace(response))
-	if len(fields) < 3 || fields[0] != "target" {
-		return compilerTarget{}, fmt.Errorf("malformed compiler target: %s", response)
-	}
-
-	values := make(map[string]string)
-	for _, field := range fields[1:] {
-		key, value, ok := strings.Cut(field, "=")
-		if !ok || key == "" || value == "" {
-			return compilerTarget{}, fmt.Errorf("malformed compiler target field: %s", field)
-		}
-		values[key] = value
-	}
-
-	applyBytes, err := parseUint16Field(values, "apply_bytes")
-	if err != nil {
-		return compilerTarget{}, err
-	}
-	wordSize, err := parseUint16Field(values, "word_size")
-	if err != nil {
-		return compilerTarget{}, err
-	}
-	intMin, err := parseInt64Field(values, "int_min")
-	if err != nil {
-		return compilerTarget{}, err
-	}
-	intMax, err := parseInt64Field(values, "int_max")
-	if err != nil {
-		return compilerTarget{}, err
-	}
-
-	target := compilerTarget{
-		profile:     values["profile"],
-		profileHash: values["profile_hash"],
-		wordSize:    wordSize,
-		intMin:      intMin,
-		intMax:      intMax,
-		applyBytes:  applyBytes,
-	}
-	if target.profile == "" || target.profile == "unknown" {
-		return compilerTarget{}, errors.New("compiler target missing profile")
-	}
-	if !validProfileHash(target.profileHash) {
-		return compilerTarget{}, errors.New("compiler target missing profile_hash")
-	}
-	if err := validateIntRange("compiler target", target.wordSize, target.intMin, target.intMax); err != nil {
-		return compilerTarget{}, err
-	}
-	return target, nil
-}
-
 func retryableStatusResponse(response string, err error) bool {
 	status := responseStatus(response)
 	errText := ""
@@ -707,31 +419,6 @@ func retryableStatusResponse(response string, err error) bool {
 	return status == "" ||
 		status == "ok" && (errText == "status response missing frothy status line" ||
 			strings.HasPrefix(errText, "malformed status "))
-}
-
-func verifyCompilerTarget(comp sessionCompiler, status deviceStatus) error {
-	if comp == nil {
-		return errors.New("host compiler is required by device status")
-	}
-	target, err := comp.targetProfile()
-	if err != nil {
-		return err
-	}
-	if target.profileHash != status.profileHash {
-		return fmt.Errorf("compiler target %s/%s does not match device %s/%s",
-			target.profile, target.profileHash, status.profile, status.profileHash)
-	}
-	if target.applyBytes != status.applyBytes {
-		return fmt.Errorf("compiler target apply_bytes=%d does not match device apply_bytes=%d",
-			target.applyBytes, status.applyBytes)
-	}
-	if target.wordSize != status.wordSize || target.intMin != status.intMin ||
-		target.intMax != status.intMax {
-		return fmt.Errorf("compiler target word_size=%d int_range=%d..%d does not match device word_size=%d int_range=%d..%d",
-			target.wordSize, target.intMin, target.intMax,
-			status.wordSize, status.intMin, status.intMax)
-	}
-	return nil
 }
 
 func readDeviceStatus(dev sessionDevice, timeout time.Duration) (deviceStatus, error) {
@@ -771,22 +458,6 @@ func readDeviceStatus(dev sessionDevice, timeout time.Duration) (deviceStatus, e
 	}
 
 	return deviceStatus{}, lastErr
-}
-
-func (s deviceStatus) useHostCompiler(hostCompile bool) (bool, error) {
-	switch s.compiler {
-	case compilerDevice:
-		if hostCompile {
-			return false, errors.New("device did not advertise host compilation")
-		}
-		return false, nil
-	case compilerHostRequired:
-		return true, nil
-	case compilerHostOptional:
-		return hostCompile, nil
-	default:
-		return false, fmt.Errorf("unsupported compiler mode: %s", s.compiler)
-	}
 }
 
 type sourceFormState struct {
@@ -1455,11 +1126,9 @@ const (
 
 const (
 	recordErrorStatusFailed    = "status_failed"
-	recordErrorHelperFailed    = "helper_failed"
 	recordErrorSourceFailed    = "source_failed"
 	recordErrorDeviceLost      = "device_lost"
 	recordErrorInterruptFailed = "interrupt_failed"
-	recordErrorMirrorStale     = "mirror_stale"
 	recordErrorNoPorts         = "no_ports"
 	recordErrorMultiplePorts   = "multiple_ports"
 )
@@ -1512,27 +1181,6 @@ func (w *recordWriter) write(kind recordKind, state recordState, mirror recordMi
 	return w.encoder.Encode(record)
 }
 
-func initialMirror(useCompiler bool) recordMirror {
-	if useCompiler {
-		return recordMirrorClean
-	}
-	return recordMirrorNone
-}
-
-func pendingMirrorForAction(action compileAction, mirror recordMirror) recordMirror {
-	if affectsCompilerMirror(action) {
-		return recordMirrorPending
-	}
-	return mirror
-}
-
-func selectedMode(status deviceStatus, useCompiler bool) string {
-	if useCompiler {
-		return string(status.compiler)
-	}
-	return string(compilerDevice)
-}
-
 func deviceStatusFields(status deviceStatus) map[string]any {
 	return map[string]any{
 		"profile":      status.profile,
@@ -1552,47 +1200,30 @@ func (w *recordWriter) sessionStart() error {
 	return w.write(recordSessionStart, recordStateSyncing, recordMirrorNone, nil)
 }
 
-func (w *recordWriter) status(status deviceStatus, useCompiler bool) error {
-	return w.write(recordStatus, recordStateIdle, initialMirror(useCompiler), map[string]any{
-		"mode":   selectedMode(status, useCompiler),
+func (w *recordWriter) status(status deviceStatus) error {
+	return w.write(recordStatus, recordStateIdle, recordMirrorNone, map[string]any{
+		"mode":   string(status.compiler),
 		"device": deviceStatusFields(status),
 	})
 }
 
-func (w *recordWriter) send(source string, result compileResult, mirror recordMirror) error {
-	return w.write(recordSend, recordStateWaiting, pendingMirrorForAction(result.action, mirror), map[string]any{
+func (w *recordWriter) send(source string) error {
+	return w.write(recordSend, recordStateWaiting, recordMirrorNone, map[string]any{
 		"source": source,
-		"line":   result.line,
-		"action": recordAction(result.action),
+		"line":   source,
+		"action": "direct",
 	})
 }
 
-func (w *recordWriter) compileError(source string, result compileResult, mirror recordMirror) error {
-	text := result.line
-	if text != "" && !strings.HasSuffix(text, "\n") {
-		text += "\n"
-	}
-	return w.write(recordCompileError, recordStateIdle, mirror, map[string]any{
-		"source": source,
-		"reason": compileErrorReason(result.line),
-		"status": responseStatus(text),
-		"text":   text,
-	})
-}
-
-func (w *recordWriter) response(response string, mirror recordMirror, mirrorAction string) error {
-	fields := map[string]any{
+func (w *recordWriter) response(response string) error {
+	return w.write(recordResponse, recordStateIdle, recordMirrorNone, map[string]any{
 		"status": responseStatus(response),
 		"ok":     responseOK(response),
 		"text":   response,
-	}
-	if mirrorAction != "" {
-		fields["mirror_action"] = mirrorAction
-	}
-	return w.write(recordResponse, recordStateIdle, mirror, fields)
+	})
 }
 
-func (w *recordWriter) interrupt(state recordState, mirror recordMirror, settled bool, text string, code string) error {
+func (w *recordWriter) interrupt(state recordState, settled bool, text string, code string) error {
 	fields := map[string]any{
 		"settled": settled,
 	}
@@ -1603,14 +1234,14 @@ func (w *recordWriter) interrupt(state recordState, mirror recordMirror, settled
 	if code != "" {
 		fields["code"] = code
 	}
-	return w.write(recordInterrupt, state, mirror, fields)
+	return w.write(recordInterrupt, state, recordMirrorNone, fields)
 }
 
-func (w *recordWriter) sourceEnd(mirror recordMirror) error {
-	return w.write(recordSourceEnd, recordStateIdle, mirror, nil)
+func (w *recordWriter) sourceEnd() error {
+	return w.write(recordSourceEnd, recordStateIdle, recordMirrorNone, nil)
 }
 
-func (w *recordWriter) sessionError(state recordState, mirror recordMirror, code string, message string, candidates ...string) error {
+func (w *recordWriter) sessionError(state recordState, code string, message string, candidates ...string) error {
 	fields := map[string]any{
 		"code":    code,
 		"message": message,
@@ -1618,11 +1249,11 @@ func (w *recordWriter) sessionError(state recordState, mirror recordMirror, code
 	if len(candidates) != 0 {
 		fields["candidates"] = candidates
 	}
-	return w.write(recordSessionError, state, mirror, fields)
+	return w.write(recordSessionError, state, recordMirrorNone, fields)
 }
 
-func (w *recordWriter) sessionEnd(mirror recordMirror) error {
-	return w.write(recordSessionEnd, recordStateClosed, mirror, nil)
+func (w *recordWriter) sessionEnd() error {
+	return w.write(recordSessionEnd, recordStateClosed, recordMirrorNone, nil)
 }
 
 type interruptTracker struct {
@@ -1679,72 +1310,15 @@ func (t *interruptTracker) consumeIdle() bool {
 	return requested
 }
 
-func runDry(input io.Reader, output io.Writer, comp sessionCompiler) error {
-	reader := newSessionSourceFormReader(input)
-	for {
-		read, ok, err := reader.next(nil, nil)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return nil
-		}
-		if read.sourceBlockEnd {
-			continue
-		}
-		source := read.source
-
-		result, err := comp.compile(source)
-		if err != nil {
-			return err
-		}
-		switch result.action {
-		case actionPass:
-			fmt.Fprintln(output, result.line)
-		case actionApply:
-			fmt.Fprintln(output, result.line)
-			if err := comp.commit(); err != nil {
-				return err
-			}
-		case actionClear:
-			fmt.Fprintln(output, result.line)
-			if err := comp.commit(); err != nil {
-				return err
-			}
-		case actionSend:
-			fmt.Fprintln(output, result.line)
-		case actionError:
-			fmt.Fprintln(output, result.line)
-		}
-	}
-}
-
-func runSerial(input io.Reader, output io.Writer, comp sessionCompiler, dev sessionDevice, timeout time.Duration) error {
-	status, err := readDeviceStatus(dev, timeout)
+func runSerial(input io.Reader, output io.Writer, dev sessionDevice, timeout time.Duration) error {
+	_, err := readDeviceStatus(dev, timeout)
 	if err != nil {
 		return err
 	}
-	useCompiler, err := status.useHostCompiler(false)
-	if err != nil {
-		return err
-	}
-	if useCompiler {
-		if err := verifyCompilerTarget(comp, status); err != nil {
-			return err
-		}
-	}
-	return runSerialWithMode(input, output, comp, dev, timeout, useCompiler)
+	return runSerialWithInterrupts(input, output, dev, timeout, nil)
 }
 
-func runSerialWithMode(input io.Reader, output io.Writer, comp sessionCompiler, dev sessionDevice, timeout time.Duration, useCompiler bool) error {
-	return runSerialWithModeAndInterrupts(input, output, comp, dev, timeout, useCompiler, nil)
-}
-
-func runSerialWithModeAndInterrupts(input io.Reader, output io.Writer, comp sessionCompiler, dev sessionDevice, timeout time.Duration, useCompiler bool, interrupts *interruptTracker) error {
-	if useCompiler && comp == nil {
-		return errors.New("host compiler is required by device status")
-	}
-
+func runSerialWithInterrupts(input io.Reader, output io.Writer, dev sessionDevice, timeout time.Duration, interrupts *interruptTracker) error {
 	reader := newSessionSourceFormReader(input)
 	for {
 		read, ok, err := reader.next(output, interrupts)
@@ -1755,20 +1329,6 @@ func runSerialWithModeAndInterrupts(input io.Reader, output io.Writer, comp sess
 			return nil
 		}
 		if read.sourceBlockEnd {
-			continue
-		}
-		source := read.source
-
-		result := compileResult{action: actionPass, line: source}
-		if useCompiler {
-			compiled, err := comp.compile(source)
-			if err != nil {
-				return err
-			}
-			result = compiled
-		}
-		if result.action == actionError {
-			fmt.Fprintln(output, result.line)
 			continue
 		}
 
@@ -1782,110 +1342,65 @@ func runSerialWithModeAndInterrupts(input io.Reader, output io.Writer, comp sess
 				promptSeen = true
 			}
 		}
-		response, err := dev.sendLine(result.line, timeout, onPromptSeen)
+		response, err := dev.sendLine(read.source, timeout, onPromptSeen)
 		if interrupts != nil && !promptSeen {
 			interrupted = interrupts.consume()
 		}
 		if err != nil {
 			if errors.Is(err, errPromptTimeout) {
-				if err := handlePromptTimeout(output, comp, dev, timeout, result, response); err != nil {
+				if err := handlePromptTimeout(output, dev, timeout, response); err != nil {
 					return err
 				}
 				continue
-			}
-			if affectsCompilerMirror(result.action) {
-				if comp != nil {
-					_ = comp.drop()
-				}
 			}
 			return err
 		}
 		printDeviceResponse(output, response)
 		if interrupted {
-			if err := handleSignalInterrupt(comp, result, response); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if affectsCompilerMirror(result.action) {
-			if responseOK(response) {
-				if err := comp.commit(); err != nil {
-					return err
-				}
-			} else if err := comp.drop(); err != nil {
+			if err := handleSignalInterrupt(response); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func handleSignalInterrupt(comp sessionCompiler, result compileResult, response string) error {
-	if affectsCompilerMirror(result.action) {
-		if comp != nil {
-			_ = comp.drop()
-		}
-		return errors.New("device update interrupted; compiler mirror stale")
-	}
+func handleSignalInterrupt(response string) error {
 	if !responseSettledAfterInterrupt(response) {
 		return fmt.Errorf("interrupt recovery returned %q; session state unknown", responseStatus(response))
 	}
 	return nil
 }
 
-func runSerialRecordsWithMode(input io.Reader, records *recordWriter, comp sessionCompiler, dev sessionDevice, timeout time.Duration, useCompiler bool, interrupts *interruptTracker) error {
+func runSerialRecords(input io.Reader, records *recordWriter, dev sessionDevice, timeout time.Duration, interrupts *interruptTracker) error {
 	if interrupts == nil {
 		return errors.New("record session requires interrupt tracker")
 	}
-	if useCompiler && comp == nil {
-		err := errors.New("host compiler is required by device status")
-		_ = records.sessionError(recordStateError, initialMirror(useCompiler), recordErrorHelperFailed, err.Error())
-		return err
-	}
 
-	mirror := initialMirror(useCompiler)
 	reader := newSessionSourceFormReader(input)
 	for {
 		read, ok, err := reader.next(nil, interrupts)
 		if err != nil {
-			_ = records.sessionError(recordStateError, mirror, recordErrorSourceFailed, err.Error())
+			_ = records.sessionError(recordStateError, recordErrorSourceFailed, err.Error())
 			return err
 		}
 		if !ok {
-			return records.sessionEnd(mirror)
+			return records.sessionEnd()
 		}
 		if read.sourceBlockEnd {
-			if err := records.sourceEnd(mirror); err != nil {
-				return err
-			}
-			continue
-		}
-		source := read.source
-
-		result := compileResult{action: actionPass, line: source}
-		if useCompiler {
-			compiled, err := comp.compile(source)
-			if err != nil {
-				_ = records.sessionError(recordStateError, mirror, recordErrorHelperFailed, err.Error())
-				return err
-			}
-			result = compiled
-		}
-		if result.action == actionError {
-			if err := records.compileError(source, result, mirror); err != nil {
+			if err := records.sourceEnd(); err != nil {
 				return err
 			}
 			continue
 		}
 
-		if err := records.send(source, result, mirror); err != nil {
+		if err := records.send(read.source); err != nil {
 			return err
 		}
 
 		interrupted := false
 		promptSeen := false
 		interrupts.arm()
-		response, err := dev.sendLine(result.line, timeout, func() {
+		response, err := dev.sendLine(read.source, timeout, func() {
 			interrupted = interrupts.commandPromptSeen()
 			promptSeen = true
 		})
@@ -1894,111 +1409,58 @@ func runSerialRecordsWithMode(input io.Reader, records *recordWriter, comp sessi
 		}
 		if err != nil {
 			if errors.Is(err, errPromptTimeout) {
-				if err := handleRecordPromptTimeout(records, comp, dev, timeout, result, response, mirror); err != nil {
+				if err := handleRecordPromptTimeout(records, dev, timeout, response); err != nil {
 					return err
 				}
 				continue
 			}
-			return handleRecordDeviceError(records, comp, result, mirror, err)
+			return handleRecordDeviceError(records, err)
 		}
 		if interrupted {
-			if err := handleRecordSignalInterrupt(records, comp, result, response, mirror); err != nil {
+			if err := handleRecordSignalInterrupt(records, response); err != nil {
 				return err
 			}
 			continue
 		}
-
-		nextMirror, mirrorAction, err := finishRecordMirror(comp, result, response, mirror)
-		if err != nil {
-			_ = records.sessionError(recordStateStale, recordMirrorStale, recordErrorMirrorStale, err.Error())
-			return err
-		}
-		mirror = nextMirror
-		if err := records.response(response, mirror, mirrorAction); err != nil {
+		if err := records.response(response); err != nil {
 			return err
 		}
 	}
 }
 
-func finishRecordMirror(comp sessionCompiler, result compileResult, response string, mirror recordMirror) (recordMirror, string, error) {
-	if !affectsCompilerMirror(result.action) {
-		return mirror, "", nil
-	}
-	if responseOK(response) {
-		if err := comp.commit(); err != nil {
-			return recordMirrorStale, "", err
-		}
-		return recordMirrorClean, "commit", nil
-	}
-	if err := comp.drop(); err != nil {
-		return recordMirrorStale, "", err
-	}
-	return recordMirrorClean, "drop", nil
-}
-
-func handleRecordDeviceError(records *recordWriter, comp sessionCompiler, result compileResult, mirror recordMirror, err error) error {
-	if affectsCompilerMirror(result.action) {
-		if comp != nil {
-			_ = comp.drop()
-		}
-		_ = records.sessionError(recordStateStale, recordMirrorStale, recordErrorMirrorStale, err.Error())
-		return err
-	}
-	_ = records.sessionError(recordStateError, mirror, recordErrorDeviceLost, err.Error())
+func handleRecordDeviceError(records *recordWriter, err error) error {
+	_ = records.sessionError(recordStateError, recordErrorDeviceLost, err.Error())
 	return err
 }
 
-func handleRecordPromptTimeout(records *recordWriter, comp sessionCompiler, dev sessionDevice, timeout time.Duration, result compileResult, partial string, mirror recordMirror) error {
+func handleRecordPromptTimeout(records *recordWriter, dev sessionDevice, timeout time.Duration, partial string) error {
 	recovery, recoverErr := dev.interrupt(timeout)
 	text := partial + recovery
 	settled := recoverErr == nil && promptRecoveredAfterInterrupt(partial, recovery)
 
-	if affectsCompilerMirror(result.action) {
-		if comp != nil {
-			_ = comp.drop()
-		}
-		_ = records.interrupt(recordStateStale, recordMirrorStale, settled, text, "")
-		err := errors.New("device update timed out; compiler mirror stale")
-		if recoverErr != nil {
-			err = fmt.Errorf("device update timed out; compiler mirror stale; interrupt recovery failed: %w", recoverErr)
-		}
-		_ = records.sessionError(recordStateStale, recordMirrorStale, recordErrorMirrorStale, err.Error())
-		return err
-	}
-
 	if recoverErr != nil {
 		err := fmt.Errorf("interrupt recovery failed: %w", recoverErr)
-		_ = records.interrupt(recordStateError, mirror, false, text, recordErrorInterruptFailed)
-		_ = records.sessionError(recordStateError, mirror, recordErrorInterruptFailed, err.Error())
+		_ = records.interrupt(recordStateError, false, text, recordErrorInterruptFailed)
+		_ = records.sessionError(recordStateError, recordErrorInterruptFailed, err.Error())
 		return err
 	}
 	if !settled {
 		err := fmt.Errorf("interrupt recovery returned %q; session state unknown", responseStatus(text))
-		_ = records.interrupt(recordStateError, mirror, false, text, recordErrorInterruptFailed)
-		_ = records.sessionError(recordStateError, mirror, recordErrorInterruptFailed, err.Error())
+		_ = records.interrupt(recordStateError, false, text, recordErrorInterruptFailed)
+		_ = records.sessionError(recordStateError, recordErrorInterruptFailed, err.Error())
 		return err
 	}
-	return records.interrupt(recordStateIdle, mirror, true, text, "")
+	return records.interrupt(recordStateIdle, true, text, "")
 }
 
-func handleRecordSignalInterrupt(records *recordWriter, comp sessionCompiler, result compileResult, response string, mirror recordMirror) error {
-	settled := responseSettledAfterInterrupt(response)
-	if affectsCompilerMirror(result.action) {
-		if comp != nil {
-			_ = comp.drop()
-		}
-		_ = records.interrupt(recordStateStale, recordMirrorStale, settled, response, "")
-		err := errors.New("device update interrupted; compiler mirror stale")
-		_ = records.sessionError(recordStateStale, recordMirrorStale, recordErrorMirrorStale, err.Error())
-		return err
-	}
-	if !settled {
+func handleRecordSignalInterrupt(records *recordWriter, response string) error {
+	if !responseSettledAfterInterrupt(response) {
 		err := fmt.Errorf("interrupt recovery returned %q; session state unknown", responseStatus(response))
-		_ = records.interrupt(recordStateError, mirror, false, response, recordErrorInterruptFailed)
-		_ = records.sessionError(recordStateError, mirror, recordErrorInterruptFailed, err.Error())
+		_ = records.interrupt(recordStateError, false, response, recordErrorInterruptFailed)
+		_ = records.sessionError(recordStateError, recordErrorInterruptFailed, err.Error())
 		return err
 	}
-	return records.interrupt(recordStateIdle, mirror, true, response, "")
+	return records.interrupt(recordStateIdle, true, response, "")
 }
 
 func printDeviceResponse(output io.Writer, response string) {
@@ -2008,20 +1470,10 @@ func printDeviceResponse(output io.Writer, response string) {
 	}
 }
 
-func handlePromptTimeout(output io.Writer, comp sessionCompiler, dev sessionDevice, timeout time.Duration, result compileResult, partial string) error {
+func handlePromptTimeout(output io.Writer, dev sessionDevice, timeout time.Duration, partial string) error {
 	recovery, recoverErr := dev.interrupt(timeout)
 	recoveredResponse := partial + recovery
 	printDeviceResponse(output, recoveredResponse)
-
-	if affectsCompilerMirror(result.action) {
-		if comp != nil {
-			_ = comp.drop()
-		}
-		if recoverErr != nil {
-			return fmt.Errorf("device update timed out; compiler mirror stale; interrupt recovery failed: %w", recoverErr)
-		}
-		return errors.New("device update timed out; compiler mirror stale")
-	}
 
 	if recoverErr != nil {
 		return fmt.Errorf("interrupt recovery failed: %w", recoverErr)
@@ -2143,8 +1595,8 @@ func pickSessionPort(override string, list portLister, records *recordWriter) (s
 	}
 	var selection *portSelectionError
 	if errors.As(err, &selection) {
-		_ = records.sessionError(recordStateError, recordMirrorNone,
-			selection.code, selection.Error(), selection.candidates...)
+		_ = records.sessionError(recordStateError, selection.code,
+			selection.Error(), selection.candidates...)
 	}
 	return "", err
 }
@@ -2829,34 +2281,25 @@ func runSessionMain() int {
 	status, err := readDeviceStatus(dev, *timeout)
 	if err != nil {
 		if recordOutput != nil {
-			_ = recordOutput.sessionError(recordStateError, recordMirrorNone, recordErrorStatusFailed, err.Error())
+			_ = recordOutput.sessionError(recordStateError, recordErrorStatusFailed, err.Error())
 		}
 		fmt.Fprintf(os.Stderr, "status: device silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s: %v\n", chosen, err)
 		os.Exit(1)
 	}
 
-	if status.compiler != compilerDevice {
-		err := fmt.Errorf("device requires unsupported compiler mode %s", status.compiler)
-		if recordOutput != nil {
-			_ = recordOutput.sessionError(recordStateError, recordMirrorNone, recordErrorStatusFailed, err.Error())
-		}
-		fmt.Fprintf(os.Stderr, "status: %v\n", err)
-		os.Exit(1)
-	}
-
 	if recordOutput != nil {
-		if err := recordOutput.status(status, false); err != nil {
+		if err := recordOutput.status(status); err != nil {
 			fmt.Fprintf(os.Stderr, "records: %v\n", err)
 			os.Exit(1)
 		}
-		if err := runSerialRecordsWithMode(input, recordOutput, nil, dev, *timeout, false, tracker); err != nil {
+		if err := runSerialRecords(input, recordOutput, dev, *timeout, tracker); err != nil {
 			fmt.Fprintf(os.Stderr, "session: %v\n", err)
 			os.Exit(1)
 		}
 		return 0
 	}
 
-	if err := runSerialWithModeAndInterrupts(input, os.Stdout, nil, dev, *timeout, false, tracker); err != nil {
+	if err := runSerialWithInterrupts(input, os.Stdout, dev, *timeout, tracker); err != nil {
 		fmt.Fprintf(os.Stderr, "session: %v\n", err)
 		os.Exit(1)
 	}

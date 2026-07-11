@@ -13,7 +13,7 @@ import (
 	"frothyrewrite/internal/testpty"
 )
 
-func TestConnectRejectsHostRequiredOverPTY(t *testing.T) {
+func TestConnectRejectsUnsupportedCompilerOverPTY(t *testing.T) {
 	master, slave, slavePath, err := testpty.Open()
 	if err != nil {
 		t.Skip(err)
@@ -24,7 +24,7 @@ func TestConnectRejectsHostRequiredOverPTY(t *testing.T) {
 	defer master.Close()
 	defer slave.Close()
 
-	deviceErrs := serveHostRequiredFakeDevice(master)
+	deviceErrs := serveUnsupportedCompilerFakeDevice(master)
 
 	var stderr bytes.Buffer
 	args := []string{
@@ -42,15 +42,12 @@ func TestConnectRejectsHostRequiredOverPTY(t *testing.T) {
 		t.Fatalf("exit code = %d, want 1; stderr=%q", code, stderr.String())
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "host-required") {
-		t.Fatalf("stderr missing 'host-required': %q", out)
-	}
-	if !strings.Contains(out, "frothy session") && !strings.Contains(out, "frothy send") {
-		t.Fatalf("stderr missing redirect to session/send: %q", out)
+	if !strings.Contains(out, "unsupported compiler mode: host-required") {
+		t.Fatalf("stderr missing unsupported compiler mode: %q", out)
 	}
 }
 
-func serveHostRequiredFakeDevice(master *os.File) <-chan error {
+func serveUnsupportedCompilerFakeDevice(master *os.File) <-chan error {
 	errs := make(chan error, 1)
 	go func() {
 		defer close(errs)

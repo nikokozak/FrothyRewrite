@@ -12,44 +12,6 @@ import (
 	"time"
 )
 
-type fakeCompiler struct {
-	target      compilerTarget
-	targetErr   error
-	targetCalls int
-	results     []compileResult
-	lines       []string
-	commits     int
-	drops       int
-}
-
-func (c *fakeCompiler) targetProfile() (compilerTarget, error) {
-	c.targetCalls += 1
-	if c.targetErr != nil {
-		return compilerTarget{}, c.targetErr
-	}
-	return c.target, nil
-}
-
-func (c *fakeCompiler) compile(line string) (compileResult, error) {
-	c.lines = append(c.lines, line)
-	if len(c.results) == 0 {
-		return compileResult{}, io.ErrUnexpectedEOF
-	}
-	result := c.results[0]
-	c.results = c.results[1:]
-	return result, nil
-}
-
-func (c *fakeCompiler) commit() error {
-	c.commits += 1
-	return nil
-}
-
-func (c *fakeCompiler) drop() error {
-	c.drops += 1
-	return nil
-}
-
 type fakeDevice struct {
 	responses          []string
 	responseErrs       []error
@@ -219,79 +181,6 @@ func statusResponse(compiler string) string {
 func statusResponse32(compiler string) string {
 	return "status\r\nfrothy status v1 profile=test32 profile_hash=bead1234 compiler=" +
 		compiler + " names=device storage=volatile interrupt=cooperative word_size=32 int_min=-1073741824 int_max=1073741823 apply_bytes=128\r\nok\r\n"
-}
-
-func targetProfile(hash string) compilerTarget {
-	return compilerTarget{
-		profile:     "test",
-		profileHash: hash,
-		wordSize:    16,
-		intMin:      -16384,
-		intMax:      16383,
-		applyBytes:  92,
-	}
-}
-
-func targetProfile32(hash string) compilerTarget {
-	return compilerTarget{
-		profile:     "test32",
-		profileHash: hash,
-		wordSize:    32,
-		intMin:      -1073741824,
-		intMax:      1073741823,
-		applyBytes:  128,
-	}
-}
-
-func TestDefaultCompilerPathPrefersSiblingHelper(t *testing.T) {
-	exe := filepath.Join(t.TempDir(), "frothy-session")
-	helper := filepath.Join(filepath.Dir(exe), compilerProgramName)
-
-	got := defaultCompilerPathFrom(
-		func() (string, error) { return exe, nil },
-		func(path string) (string, error) { return path, nil },
-		func(path string) bool { return path == helper },
-		func(string) (string, error) { return "", os.ErrNotExist },
-	)
-	if got != helper {
-		t.Fatalf("default compiler path = %q, want %q", got, helper)
-	}
-}
-
-func TestDefaultCompilerPathUsesResolvedLibexecHelper(t *testing.T) {
-	prefix := t.TempDir()
-	exe := filepath.Join(prefix, "bin", "frothy-session")
-	resolvedExe := filepath.Join(prefix, "Cellar", "frothy", "0.1.0", "bin", "frothy-session")
-	helper := filepath.Join(prefix, "Cellar", "frothy", "0.1.0", "libexec", "frothy", compilerProgramName)
-
-	got := defaultCompilerPathFrom(
-		func() (string, error) { return exe, nil },
-		func(path string) (string, error) {
-			if path != exe {
-				t.Fatalf("resolved unexpected path %q", path)
-			}
-			return resolvedExe, nil
-		},
-		func(path string) bool { return path == helper },
-		func(string) (string, error) { return "", os.ErrNotExist },
-	)
-	if got != helper {
-		t.Fatalf("default compiler path = %q, want %q", got, helper)
-	}
-}
-
-func TestDefaultCompilerPathFallsBackToLookPath(t *testing.T) {
-	want := filepath.Join(t.TempDir(), compilerProgramName)
-
-	got := defaultCompilerPathFrom(
-		func() (string, error) { return "", os.ErrNotExist },
-		func(path string) (string, error) { return path, nil },
-		func(string) bool { return false },
-		func(string) (string, error) { return want, nil },
-	)
-	if got != want {
-		t.Fatalf("default compiler path = %q, want %q", got, want)
-	}
 }
 
 func sessionStubVerbs() []verb {
@@ -884,12 +773,12 @@ func TestDoctorDeviceFailureReportsProbeErrorWithoutWipeAdvice(t *testing.T) {
 }
 
 func TestParseDeviceStatus(t *testing.T) {
-	status, err := parseDeviceStatus(statusResponse("host-required"))
+	status, err := parseDeviceStatus(statusResponse("device"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if status.profile != "test" || status.profileHash != "1234abcd" ||
-		status.compiler != compilerHostRequired || status.names != "device" ||
+		status.compiler != compilerDevice || status.names != "device" ||
 		status.storage != "volatile" || status.interrupt != "cooperative" ||
 		status.wordSize != 16 || status.intMin != -16384 ||
 		status.intMax != 16383 || status.applyBytes != 92 {
@@ -898,22 +787,23 @@ func TestParseDeviceStatus(t *testing.T) {
 }
 
 func TestParseDeviceStatus32BitContract(t *testing.T) {
-	status, err := parseDeviceStatus(statusResponse32("host-required"))
+	status, err := parseDeviceStatus(statusResponse32("device"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if status.profile != "test32" || status.profileHash != "bead1234" ||
-		status.compiler != compilerHostRequired || status.wordSize != 32 ||
+		status.compiler != compilerDevice || status.wordSize != 32 ||
 		status.intMin != -1073741824 || status.intMax != 1073741823 ||
 		status.applyBytes != 128 {
 		t.Fatalf("status = %+v", status)
 	}
 }
 
-func TestParseDeviceStatusRejectsUnknownCompiler(t *testing.T) {
-	_, err := parseDeviceStatus(statusResponse("unknown"))
-	if err == nil {
-		t.Fatal("parseDeviceStatus accepted unknown compiler")
+func TestParseDeviceStatusRejectsUnsupportedCompiler(t *testing.T) {
+	for _, mode := range []string{"unknown", "host-required", "host-optional"} {
+		if _, err := parseDeviceStatus(statusResponse(mode)); err == nil {
+			t.Fatalf("parseDeviceStatus accepted compiler mode %q", mode)
+		}
 	}
 }
 
@@ -957,60 +847,15 @@ func TestParseDeviceStatusRejectsWrongIntRangeForWordSize(t *testing.T) {
 	}
 }
 
-func TestParseCompilerTarget(t *testing.T) {
-	target, err := parseCompilerTarget("target profile=test profile_hash=1234abcd word_size=16 int_min=-16384 int_max=16383 apply_bytes=92")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target.profile != "test" || target.profileHash != "1234abcd" ||
-		target.wordSize != 16 || target.intMin != -16384 ||
-		target.intMax != 16383 || target.applyBytes != 92 {
-		t.Fatalf("target = %+v", target)
-	}
-}
-
-func TestParseCompilerTarget32BitContract(t *testing.T) {
-	target, err := parseCompilerTarget("target profile=test32 profile_hash=bead1234 word_size=32 int_min=-1073741824 int_max=1073741823 apply_bytes=128")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target.profile != "test32" || target.profileHash != "bead1234" ||
-		target.wordSize != 32 || target.intMin != -1073741824 ||
-		target.intMax != 1073741823 || target.applyBytes != 128 {
-		t.Fatalf("target = %+v", target)
-	}
-}
-
-func TestParseCompilerTargetRejectsBadHash(t *testing.T) {
-	_, err := parseCompilerTarget("target profile=test profile_hash=not-hex word_size=16 int_min=-16384 int_max=16383 apply_bytes=92")
-	if err == nil {
-		t.Fatal("parseCompilerTarget accepted bad profile hash")
-	}
-}
-
-func TestParseCompilerTargetRejectsUnsupportedWordSize(t *testing.T) {
-	_, err := parseCompilerTarget("target profile=test profile_hash=1234abcd word_size=64 int_min=-16384 int_max=16383 apply_bytes=92")
-	if err == nil {
-		t.Fatal("parseCompilerTarget accepted unsupported word size")
-	}
-}
-
-func TestParseCompilerTargetRejectsWrongIntRangeForWordSize(t *testing.T) {
-	_, err := parseCompilerTarget("target profile=test profile_hash=1234abcd word_size=32 int_min=-16384 int_max=16383 apply_bytes=92")
-	if err == nil {
-		t.Fatal("parseCompilerTarget accepted wrong int range")
-	}
-}
-
 func TestReadDeviceStatusRetriesPromptOnlyResponse(t *testing.T) {
-	dev := &fakeDevice{responses: []string{"", statusResponse("host-required")}}
+	dev := &fakeDevice{responses: []string{"", statusResponse("device")}}
 
 	status, err := readDeviceStatus(dev, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.compiler != compilerHostRequired {
-		t.Fatalf("compiler = %s, want %s", status.compiler, compilerHostRequired)
+	if status.compiler != compilerDevice {
+		t.Fatalf("compiler = %s, want %s", status.compiler, compilerDevice)
 	}
 	if got, want := strings.Join(dev.sent, "\n"), "status\nstatus"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
@@ -1101,68 +946,6 @@ func TestReadDeviceStatusDoesNotRetryDeviceError(t *testing.T) {
 	}
 	if dev.syncs != 0 {
 		t.Fatalf("syncs=%d, want 0", dev.syncs)
-	}
-}
-
-func TestVerifyCompilerTargetRejectsApplyBytesMismatch(t *testing.T) {
-	comp := &fakeCompiler{target: compilerTarget{
-		profile:     "test",
-		profileHash: "1234abcd",
-		wordSize:    16,
-		intMin:      -16384,
-		intMax:      16383,
-		applyBytes:  60,
-	}}
-	status := deviceStatus{
-		profile:     "test",
-		profileHash: "1234abcd",
-		compiler:    compilerHostRequired,
-		wordSize:    16,
-		intMin:      -16384,
-		intMax:      16383,
-		applyBytes:  92,
-	}
-
-	err := verifyCompilerTarget(comp, status)
-	if err == nil {
-		t.Fatal("verifyCompilerTarget accepted apply_bytes mismatch")
-	}
-}
-
-func TestVerifyCompilerTargetRejectsWordSizeMismatch(t *testing.T) {
-	comp := &fakeCompiler{target: compilerTarget{
-		profile:     "test",
-		profileHash: "1234abcd",
-		wordSize:    32,
-		intMin:      -1073741824,
-		intMax:      1073741823,
-		applyBytes:  92,
-	}}
-	status := deviceStatus{
-		profile:     "test",
-		profileHash: "1234abcd",
-		compiler:    compilerHostRequired,
-		wordSize:    16,
-		intMin:      -16384,
-		intMax:      16383,
-		applyBytes:  92,
-	}
-
-	err := verifyCompilerTarget(comp, status)
-	if err == nil {
-		t.Fatal("verifyCompilerTarget accepted word_size mismatch")
-	}
-}
-
-func TestVerifyCompilerTargetAccepts32BitContract(t *testing.T) {
-	status, err := parseDeviceStatus(statusResponse32("host-required"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	comp := &fakeCompiler{target: targetProfile32("bead1234")}
-
-	if err := verifyCompilerTarget(comp, status); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -1374,43 +1157,24 @@ func TestReadFileLinesDoesNotInterpretSourceBlockCommands(t *testing.T) {
 	}
 }
 
-func TestSerialCompilesMultilineTopFormOnce(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-		},
-	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "ok\n"}}
+func TestSerialSendsMultilineTopFormOnce(t *testing.T) {
+	dev := &fakeDevice{responses: []string{statusResponse("device"), "ok\n"}}
 	var out strings.Builder
 
-	err := runSerial(strings.NewReader("boot is fn [\n  one\n]\n"), &out, comp, dev, time.Second)
+	err := runSerial(strings.NewReader("boot is fn [\n  one\n]\n"), &out, dev, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(comp.lines, "\n"), "boot is fn [ one ]"; got != want {
-		t.Fatalf("compiled %q, want %q", got, want)
-	}
-	if got, want := strings.Join(dev.sent, "\n"), "status\napply 0102"; got != want {
+	if got, want := strings.Join(dev.sent, "\n"), "status\nboot is fn [ one ]"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
-	}
-	if comp.commits != 1 || comp.drops != 0 {
-		t.Fatalf("commits=%d drops=%d, want commits=1 drops=0", comp.commits, comp.drops)
 	}
 	if got, want := out.String(), "frothy> .. .. ok\nfrothy> "; got != want {
 		t.Fatalf("output %q, want %q", got, want)
 	}
 }
 
-func TestSerialSourceBlockCompilesBufferedFormsInSession(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-			{action: actionApply, line: "apply 0304"},
-		},
-	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "ok\n", "ok\n"}}
+func TestSerialSourceBlockSendsBufferedFormsInSession(t *testing.T) {
+	dev := &fakeDevice{responses: []string{statusResponse("device"), "ok\n", "ok\n"}}
 	var out strings.Builder
 
 	input := strings.NewReader(strings.Join([]string{
@@ -1422,14 +1186,11 @@ func TestSerialSourceBlockCompilesBufferedFormsInSession(t *testing.T) {
 		".end-source",
 		"",
 	}, "\n"))
-	err := runSerial(input, &out, comp, dev, time.Second)
+	err := runSerial(input, &out, dev, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(comp.lines, "\n"), "led is $led_builtin\nboot is fn [ blink: ]"; got != want {
-		t.Fatalf("compiled %q, want %q", got, want)
-	}
-	if got, want := strings.Join(dev.sent, "\n"), "status\napply 0102\napply 0304"; got != want {
+	if got, want := strings.Join(dev.sent, "\n"), "status\nled is $led_builtin\nboot is fn [ blink: ]"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
 }
@@ -1440,14 +1201,7 @@ func TestSerialSourceBlockUsesPathForIncludesWithoutSavingRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	rootPath := filepath.Join(dir, "unsaved-main.fr")
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-			{action: actionApply, line: "apply 0304"},
-		},
-	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "ok\n", "ok\n"}}
+	dev := &fakeDevice{responses: []string{statusResponse("device"), "ok\n", "ok\n"}}
 	var out strings.Builder
 
 	input := strings.NewReader(strings.Join([]string{
@@ -1457,12 +1211,12 @@ func TestSerialSourceBlockUsesPathForIncludesWithoutSavingRoot(t *testing.T) {
 		".end-source",
 		"",
 	}, "\n"))
-	err := runSerial(input, &out, comp, dev, time.Second)
+	err := runSerial(input, &out, dev, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(comp.lines, "\n"), "helper is fn [ 1 ]\nmain is fn [ helper: ]"; got != want {
-		t.Fatalf("compiled %q, want %q", got, want)
+	if got, want := strings.Join(dev.sent, "\n"), "status\nhelper is fn [ 1 ]\nmain is fn [ helper: ]"; got != want {
+		t.Fatalf("sent %q, want %q", got, want)
 	}
 }
 
@@ -1475,11 +1229,7 @@ func TestSerialSourceBlockPathMayContainSpaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	rootPath := filepath.Join(dir, "main.fr")
-	comp := &fakeCompiler{
-		target:  targetProfile("1234abcd"),
-		results: []compileResult{{action: actionApply, line: "apply 0102"}},
-	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "ok\n"}}
+	dev := &fakeDevice{responses: []string{statusResponse("device"), "ok\n"}}
 	var out strings.Builder
 
 	input := strings.NewReader(strings.Join([]string{
@@ -1488,70 +1238,20 @@ func TestSerialSourceBlockPathMayContainSpaces(t *testing.T) {
 		".end-source",
 		"",
 	}, "\n"))
-	err := runSerial(input, &out, comp, dev, time.Second)
+	err := runSerial(input, &out, dev, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(comp.lines, "\n"), "helper is fn [ 1 ]"; got != want {
-		t.Fatalf("compiled %q, want %q", got, want)
-	}
-}
-
-func TestSerialApplyRejectDropsCompilerMirror(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-		},
-	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "error: unsupported (9)\n"}}
-	var out strings.Builder
-
-	err := runSerial(strings.NewReader("led is $led_builtin\n"), &out, comp, dev, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if comp.commits != 0 || comp.drops != 1 {
-		t.Fatalf("commits=%d drops=%d, want commits=0 drops=1", comp.commits, comp.drops)
-	}
-	if comp.targetCalls != 1 {
-		t.Fatalf("targetCalls=%d, want 1", comp.targetCalls)
-	}
-	if got, want := strings.Join(dev.sent, "\n"), "status\napply 0102"; got != want {
+	if got, want := strings.Join(dev.sent, "\n"), "status\nhelper is fn [ 1 ]"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
 }
 
-func TestSerialClearCommitFollowsDeviceOK(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionClear, line: "clear"},
-		},
-	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "ok\n"}}
-	var out strings.Builder
-
-	err := runSerial(strings.NewReader("clear\n"), &out, comp, dev, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if comp.commits != 1 || comp.drops != 0 {
-		t.Fatalf("commits=%d drops=%d, want commits=1 drops=0", comp.commits, comp.drops)
-	}
-	if comp.targetCalls != 1 {
-		t.Fatalf("targetCalls=%d, want 1", comp.targetCalls)
-	}
-	if got, want := strings.Join(dev.sent, "\n"), "status\nclear"; got != want {
-		t.Fatalf("sent %q, want %q", got, want)
-	}
-}
-
-func TestSerialDeviceCompilerModeSendsSourceWithoutHelper(t *testing.T) {
+func TestSerialDeviceCompilerModeSendsSource(t *testing.T) {
 	dev := &fakeDevice{responses: []string{statusResponse("device"), "ok\n"}}
 	var out strings.Builder
 
-	err := runSerial(strings.NewReader("led is $led_builtin\n"), &out, nil, dev, time.Second)
+	err := runSerial(strings.NewReader("led is $led_builtin\n"), &out, dev, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1560,44 +1260,26 @@ func TestSerialDeviceCompilerModeSendsSourceWithoutHelper(t *testing.T) {
 	}
 }
 
-func TestSerialRefusesUnknownStatusBeforeCompiling(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-		},
-	}
+func TestSerialRefusesUnknownStatusBeforeSendingSource(t *testing.T) {
 	dev := &fakeDevice{responses: []string{statusResponse("unknown")}}
 	var out strings.Builder
 
-	err := runSerial(strings.NewReader("led is $led_builtin\n"), &out, comp, dev, time.Second)
+	err := runSerial(strings.NewReader("led is $led_builtin\n"), &out, dev, time.Second)
 	if err == nil {
 		t.Fatal("runSerial accepted unknown compiler status")
-	}
-	if comp.targetCalls != 0 || len(comp.lines) != 0 || comp.commits != 0 || comp.drops != 0 {
-		t.Fatalf("compiler used after bad status: %+v", comp)
 	}
 	if got, want := strings.Join(dev.sent, "\n"), "status"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
 }
 
-func TestSerialRefusesTargetHashMismatchBeforeCompiling(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("deadbeef"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-		},
-	}
+func TestSerialRefusesRetiredHostCompilerMode(t *testing.T) {
 	dev := &fakeDevice{responses: []string{statusResponse("host-required")}}
 	var out strings.Builder
 
-	err := runSerial(strings.NewReader("led is $led_builtin\n"), &out, comp, dev, time.Second)
+	err := runSerial(strings.NewReader("led is $led_builtin\n"), &out, dev, time.Second)
 	if err == nil {
-		t.Fatal("runSerial accepted mismatched compiler target")
-	}
-	if comp.targetCalls != 1 || len(comp.lines) != 0 || comp.commits != 0 || comp.drops != 0 {
-		t.Fatalf("compiler advanced after target mismatch: %+v", comp)
+		t.Fatal("runSerial accepted retired host-required mode")
 	}
 	if got, want := strings.Join(dev.sent, "\n"), "status"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
@@ -1605,16 +1287,9 @@ func TestSerialRefusesTargetHashMismatchBeforeCompiling(t *testing.T) {
 }
 
 func TestSerialForegroundTimeoutInterruptsAndContinues(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionSend, line: "run dead"},
-			{action: actionSend, line: "run beef"},
-		},
-	}
 	dev := &fakeDevice{
 		responses: []string{
-			statusResponse("host-required"),
+			statusResponse("device"),
 			"error: interrupted (",
 			"ok\n",
 		},
@@ -1625,17 +1300,14 @@ func TestSerialForegroundTimeoutInterruptsAndContinues(t *testing.T) {
 	}
 	var out strings.Builder
 
-	err := runSerial(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, comp, dev, time.Second)
+	err := runSerial(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, dev, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dev.interrupts != 1 {
 		t.Fatalf("interrupts=%d, want 1", dev.interrupts)
 	}
-	if comp.commits != 0 || comp.drops != 0 {
-		t.Fatalf("commits=%d drops=%d, want both 0", comp.commits, comp.drops)
-	}
-	if got, want := strings.Join(dev.sent, "\n"), "status\nrun dead\nrun beef"; got != want {
+	if got, want := strings.Join(dev.sent, "\n"), "status\nforever [ 1 ]\nblink:"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
 	if !strings.Contains(out.String(), "error: interrupted (10)\n") || !strings.Contains(out.String(), "ok\n") {
@@ -1644,16 +1316,9 @@ func TestSerialForegroundTimeoutInterruptsAndContinues(t *testing.T) {
 }
 
 func TestSerialForegroundTimeoutRequiresSettledRecovery(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionSend, line: "run dead"},
-			{action: actionSend, line: "run beef"},
-		},
-	}
 	dev := &fakeDevice{
 		responses: []string{
-			statusResponse("host-required"),
+			statusResponse("device"),
 			"",
 		},
 		responseErrs: []error{nil, errPromptTimeout},
@@ -1663,32 +1328,22 @@ func TestSerialForegroundTimeoutRequiresSettledRecovery(t *testing.T) {
 	}
 	var out strings.Builder
 
-	err := runSerial(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, comp, dev, time.Second)
+	err := runSerial(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, dev, time.Second)
 	if err == nil {
 		t.Fatal("runSerial accepted unsettled interrupt recovery")
 	}
 	if dev.interrupts != 1 {
 		t.Fatalf("interrupts=%d, want 1", dev.interrupts)
 	}
-	if got, want := strings.Join(dev.sent, "\n"), "status\nrun dead"; got != want {
+	if got, want := strings.Join(dev.sent, "\n"), "status\nforever [ 1 ]"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
-	}
-	if len(comp.lines) != 1 {
-		t.Fatalf("compiled lines=%q, want only first foreground line", strings.Join(comp.lines, "\n"))
 	}
 }
 
 func TestSerialForegroundTimeoutFailsWhenInterruptDoesNotRecover(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionSend, line: "run dead"},
-			{action: actionSend, line: "run beef"},
-		},
-	}
 	dev := &fakeDevice{
 		responses: []string{
-			statusResponse("host-required"),
+			statusResponse("device"),
 			"tick\n",
 		},
 		responseErrs: []error{nil, errPromptTimeout},
@@ -1701,7 +1356,7 @@ func TestSerialForegroundTimeoutFailsWhenInterruptDoesNotRecover(t *testing.T) {
 	}
 	var out strings.Builder
 
-	err := runSerial(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, comp, dev, time.Second)
+	err := runSerial(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, dev, time.Second)
 	if err == nil {
 		t.Fatal("runSerial accepted failed interrupt recovery")
 	}
@@ -1711,210 +1366,35 @@ func TestSerialForegroundTimeoutFailsWhenInterruptDoesNotRecover(t *testing.T) {
 	if dev.interrupts != 1 {
 		t.Fatalf("interrupts=%d, want 1", dev.interrupts)
 	}
-	if got, want := strings.Join(dev.sent, "\n"), "status\nrun dead"; got != want {
+	if got, want := strings.Join(dev.sent, "\n"), "status\nforever [ 1 ]"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
-	}
-	if len(comp.lines) != 1 {
-		t.Fatalf("compiled lines=%q, want only first foreground line", strings.Join(comp.lines, "\n"))
 	}
 }
 
 func TestSerialSignalInterruptUsesTracker(t *testing.T) {
 	tracker := &interruptTracker{}
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionSend, line: "run dead"},
-			{action: actionSend, line: "run beef"},
-		},
-	}
 	dev := &fakeDevice{
 		responses: []string{
 			"error: interrupted (10)\n",
 			"ok\n",
 		},
 		onSend: func(line string) {
-			if line == "run dead" {
+			if line == "forever [ 1 ]" {
 				tracker.request()
 			}
 		},
 	}
 	var out strings.Builder
 
-	err := runSerialWithModeAndInterrupts(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, comp, dev, time.Second, true, tracker)
+	err := runSerialWithInterrupts(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, dev, time.Second, tracker)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(dev.sent, "\n"), "run dead\nrun beef"; got != want {
+	if got, want := strings.Join(dev.sent, "\n"), "forever [ 1 ]\nblink:"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
-	}
-	if got, want := strings.Join(comp.lines, "\n"), "forever [ 1 ]\nblink:"; got != want {
-		t.Fatalf("compiled %q, want %q", got, want)
-	}
-	if comp.commits != 0 || comp.drops != 0 {
-		t.Fatalf("commits=%d drops=%d, want both 0", comp.commits, comp.drops)
 	}
 	if got, want := out.String(), "frothy> error: interrupted (10)\nfrothy> ok\nfrothy> "; got != want {
 		t.Fatalf("output %q, want %q", got, want)
-	}
-}
-
-func TestSerialSignalInterruptDuringUpdateStalesMirror(t *testing.T) {
-	tests := []struct {
-		name   string
-		action compileAction
-		line   string
-		source string
-	}{
-		{name: "apply", action: actionApply, line: "apply 0102", source: "time is 200\n"},
-		{name: "clear", action: actionClear, line: "clear", source: "clear\n"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			tracker := &interruptTracker{}
-			comp := &fakeCompiler{
-				target: targetProfile("1234abcd"),
-				results: []compileResult{
-					{action: test.action, line: test.line},
-				},
-			}
-			dev := &fakeDevice{
-				responses: []string{
-					"error: interrupted (10)\n",
-				},
-				onSend: func(line string) {
-					if line == test.line {
-						tracker.request()
-					}
-				},
-			}
-			var out strings.Builder
-
-			err := runSerialWithModeAndInterrupts(strings.NewReader(test.source), &out, comp, dev, time.Second, true, tracker)
-			if err == nil {
-				t.Fatalf("runSerialWithModeAndInterrupts accepted interrupted %s", test.name)
-			}
-			if !strings.Contains(err.Error(), "compiler mirror stale") {
-				t.Fatalf("error %q does not explain stale mirror", err)
-			}
-			if comp.commits != 0 || comp.drops != 1 {
-				t.Fatalf("commits=%d drops=%d, want commits=0 drops=1", comp.commits, comp.drops)
-			}
-			if got, want := strings.Join(dev.sent, "\n"), test.line; got != want {
-				t.Fatalf("sent %q, want %q", got, want)
-			}
-			if got, want := out.String(), "frothy> error: interrupted (10)\n"; got != want {
-				t.Fatalf("output %q, want %q", got, want)
-			}
-		})
-	}
-}
-
-func TestSerialLateSignalAfterAcceptedUpdateCommits(t *testing.T) {
-	tests := []struct {
-		name   string
-		action compileAction
-		line   string
-		source string
-	}{
-		{name: "apply", action: actionApply, line: "apply 0102", source: "time is 200\n"},
-		{name: "clear", action: actionClear, line: "clear", source: "clear\n"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			tracker := &interruptTracker{}
-			comp := &fakeCompiler{
-				target: targetProfile("1234abcd"),
-				results: []compileResult{
-					{action: test.action, line: test.line},
-				},
-			}
-			var dev *fakeDevice
-			dev = &fakeDevice{
-				responses: []string{
-					"ok\n",
-				},
-				afterPrompt: func(line string) {
-					if line == test.line && tracker.requestAndShouldForward() {
-						_ = dev.sendInterrupt()
-					}
-				},
-			}
-			var out strings.Builder
-
-			err := runSerialWithModeAndInterrupts(strings.NewReader(test.source), &out, comp, dev, time.Second, true, tracker)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if comp.commits != 1 || comp.drops != 0 {
-				t.Fatalf("commits=%d drops=%d, want commits=1 drops=0", comp.commits, comp.drops)
-			}
-			if dev.interrupts != 0 {
-				t.Fatalf("interrupts=%d, want 0", dev.interrupts)
-			}
-			if got, want := strings.Join(dev.sent, "\n"), test.line; got != want {
-				t.Fatalf("sent %q, want %q", got, want)
-			}
-			if got, want := out.String(), "frothy> ok\nfrothy> "; got != want {
-				t.Fatalf("output %q, want %q", got, want)
-			}
-		})
-	}
-}
-
-func TestSerialUpdateTimeoutDropsMirrorAndStopsStale(t *testing.T) {
-	tests := []struct {
-		name   string
-		action compileAction
-		line   string
-	}{
-		{name: "apply", action: actionApply, line: "apply 0102"},
-		{name: "clear", action: actionClear, line: "clear"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			comp := &fakeCompiler{
-				target: targetProfile("1234abcd"),
-				results: []compileResult{
-					{action: test.action, line: test.line},
-					{action: actionSend, line: "run beef"},
-				},
-			}
-			dev := &fakeDevice{
-				responses: []string{
-					statusResponse("host-required"),
-					"",
-				},
-				responseErrs: []error{nil, errPromptTimeout},
-				interruptResponses: []string{
-					"error: interrupted (10)\n",
-				},
-			}
-			var out strings.Builder
-
-			err := runSerial(strings.NewReader("blink is fn [ forever [ 1 ] ]\nblink:\n"), &out, comp, dev, time.Second)
-			if err == nil {
-				t.Fatal("runSerial accepted timeout during mirror-affecting update")
-			}
-			if !strings.Contains(err.Error(), "compiler mirror stale") {
-				t.Fatalf("error %q does not explain stale mirror", err)
-			}
-			if comp.commits != 0 || comp.drops != 1 {
-				t.Fatalf("commits=%d drops=%d, want commits=0 drops=1", comp.commits, comp.drops)
-			}
-			if dev.interrupts != 1 {
-				t.Fatalf("interrupts=%d, want 1", dev.interrupts)
-			}
-			if got, want := strings.Join(dev.sent, "\n"), "status\n"+test.line; got != want {
-				t.Fatalf("sent %q, want %q", got, want)
-			}
-			if len(comp.lines) != 1 {
-				t.Fatalf("compiled lines=%q, want only first update line", strings.Join(comp.lines, "\n"))
-			}
-		})
 	}
 }
 
@@ -1996,7 +1476,7 @@ func recordWithKind(records []map[string]any, kind string) map[string]any {
 	return nil
 }
 
-func runRecordsTestSession(t *testing.T, input io.Reader, output io.Writer, comp sessionCompiler, dev sessionDevice, timeout time.Duration, hostCompile bool, tracker *interruptTracker) error {
+func runRecordsTestSession(t *testing.T, input io.Reader, output io.Writer, dev sessionDevice, timeout time.Duration, tracker *interruptTracker) error {
 	t.Helper()
 	records := newRecordWriter(output, "s1")
 	if err := records.sessionStart(); err != nil {
@@ -2004,24 +1484,13 @@ func runRecordsTestSession(t *testing.T, input io.Reader, output io.Writer, comp
 	}
 	status, err := readDeviceStatus(dev, timeout)
 	if err != nil {
-		_ = records.sessionError(recordStateError, recordMirrorNone, recordErrorStatusFailed, err.Error())
+		_ = records.sessionError(recordStateError, recordErrorStatusFailed, err.Error())
 		return err
 	}
-	useCompiler, err := status.useHostCompiler(hostCompile)
-	if err != nil {
-		_ = records.sessionError(recordStateError, recordMirrorNone, recordErrorStatusFailed, err.Error())
-		return err
-	}
-	if useCompiler {
-		if err := verifyCompilerTarget(comp, status); err != nil {
-			_ = records.sessionError(recordStateError, recordMirrorClean, recordErrorHelperFailed, err.Error())
-			return err
-		}
-	}
-	if err := records.status(status, useCompiler); err != nil {
+	if err := records.status(status); err != nil {
 		t.Fatal(err)
 	}
-	return runSerialRecordsWithMode(input, records, comp, dev, timeout, useCompiler, tracker)
+	return runSerialRecords(input, records, dev, timeout, tracker)
 }
 
 func TestOpenRecordOutputWritesTranscriptCopy(t *testing.T) {
@@ -2036,7 +1505,7 @@ func TestOpenRecordOutputWritesTranscriptCopy(t *testing.T) {
 	if err := records.sessionStart(); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.sessionEnd(recordMirrorNone); err != nil {
+	if err := records.sessionEnd(); err != nil {
 		t.Fatal(err)
 	}
 	if err := closeOutput(); err != nil {
@@ -2208,16 +1677,16 @@ func TestReplayLinesFromWrittenRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := records.status(status, false); err != nil {
+	if err := records.status(status); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.send("words", compileResult{action: actionPass, line: "words"}, recordMirrorNone); err != nil {
+	if err := records.send("words"); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.response("ok\n", recordMirrorNone, ""); err != nil {
+	if err := records.response("ok\n"); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.sessionEnd(recordMirrorNone); err != nil {
+	if err := records.sessionEnd(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2233,46 +1702,33 @@ func TestReplayLinesFromWrittenRecords(t *testing.T) {
 func TestReplayLinesUseNormalSerialSessionPath(t *testing.T) {
 	transcript := strings.Join([]string{
 		`{"v":1,"session":"s1","seq":1,"kind":"session_start","state":"syncing","mirror":"none"}`,
-		`{"v":1,"session":"s1","seq":2,"kind":"status","state":"idle","mirror":"clean"}`,
-		`{"v":1,"session":"s1","seq":3,"kind":"send","state":"waiting","mirror":"pending","source":"time is 200","line":"apply 0102","action":"apply"}`,
-		`{"v":1,"session":"s1","seq":4,"kind":"response","state":"idle","mirror":"clean","status":"ok","ok":true,"text":"ok\n","mirror_action":"commit"}`,
-		`{"v":1,"session":"s1","seq":5,"kind":"send","state":"waiting","mirror":"clean","source":"blink:","line":"run dead","action":"eval"}`,
-		`{"v":1,"session":"s1","seq":6,"kind":"response","state":"idle","mirror":"clean","status":"ok","ok":true,"text":"ok\n"}`,
-		`{"v":1,"session":"s1","seq":7,"kind":"session_end","state":"closed","mirror":"clean"}`,
+		`{"v":1,"session":"s1","seq":2,"kind":"status","state":"idle","mirror":"none"}`,
+		`{"v":1,"session":"s1","seq":3,"kind":"send","state":"waiting","mirror":"none","source":"time is 200","line":"time is 200","action":"direct"}`,
+		`{"v":1,"session":"s1","seq":4,"kind":"response","state":"idle","mirror":"none","status":"ok","ok":true,"text":"ok\n"}`,
+		`{"v":1,"session":"s1","seq":5,"kind":"send","state":"waiting","mirror":"none","source":"blink:","line":"blink:","action":"direct"}`,
+		`{"v":1,"session":"s1","seq":6,"kind":"response","state":"idle","mirror":"none","status":"ok","ok":true,"text":"ok\n"}`,
+		`{"v":1,"session":"s1","seq":7,"kind":"session_end","state":"closed","mirror":"none"}`,
 	}, "\n") + "\n"
 	lines, err := replayLinesFromTranscript(strings.NewReader(transcript))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-			{action: actionSend, line: "run dead"},
-		},
-	}
 	dev := &fakeDevice{
 		responses: []string{
-			statusResponse("host-required"),
+			statusResponse("device"),
 			"ok\n",
 			"ok\n",
 		},
 	}
 	var out strings.Builder
 
-	err = runSerial(readerFromLines(lines), &out, comp, dev, time.Second)
+	err = runSerial(readerFromLines(lines), &out, dev, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(comp.lines, "\n"), "time is 200\nblink:"; got != want {
-		t.Fatalf("compiled %q, want %q", got, want)
-	}
-	if got, want := strings.Join(dev.sent, "\n"), "status\napply 0102\nrun dead"; got != want {
+	if got, want := strings.Join(dev.sent, "\n"), "status\ntime is 200\nblink:"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
-	}
-	if comp.commits != 1 || comp.drops != 0 {
-		t.Fatalf("commits=%d drops=%d, want commits=1 drops=0", comp.commits, comp.drops)
 	}
 	if got, want := out.String(), "frothy> ok\nfrothy> ok\nfrothy> "; got != want {
 		t.Fatalf("output %q, want %q", got, want)
@@ -2385,121 +1841,11 @@ func TestReadReplayLinesReturnsOpenError(t *testing.T) {
 	}
 }
 
-func TestRecordsAcceptedApplyCommit(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-		},
-	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "ok\n"}}
-	var out strings.Builder
-
-	err := runRecordsTestSession(t, strings.NewReader("time is 200\n"), &out, comp, dev, time.Second, false, &interruptTracker{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	records := decodeRecords(t, out.String())
-	if got, want := recordKinds(records), "session_start,status,send,response,session_end"; got != want {
-		t.Fatalf("record kinds %q, want %q", got, want)
-	}
-	status := recordWithKind(records, "status")
-	if status["mode"] != "host-required" || status["mirror"] != "clean" {
-		t.Fatalf("status record = %#v", status)
-	}
-	device := status["device"].(map[string]any)
-	if device["compiler"] != "host-required" || device["apply_bytes"] != float64(92) {
-		t.Fatalf("device status = %#v", device)
-	}
-	send := recordWithKind(records, "send")
-	if send["action"] != "apply" || send["mirror"] != "pending" ||
-		send["source"] != "time is 200" || send["line"] != "apply 0102" {
-		t.Fatalf("send record = %#v", send)
-	}
-	response := recordWithKind(records, "response")
-	if response["mirror"] != "clean" || response["mirror_action"] != "commit" ||
-		response["ok"] != true || response["status"] != "ok" {
-		t.Fatalf("response record = %#v", response)
-	}
-	if comp.commits != 1 || comp.drops != 0 {
-		t.Fatalf("commits=%d drops=%d, want commits=1 drops=0", comp.commits, comp.drops)
-	}
-	sessionEnd := recordWithKind(records, "session_end")
-	if sessionEnd["mirror"] != "clean" {
-		t.Fatalf("session_end record = %#v", sessionEnd)
-	}
-}
-
-func TestRecordsLateSignalAfterAcceptedUpdateCommits(t *testing.T) {
-	tests := []struct {
-		name   string
-		action compileAction
-		line   string
-		source string
-	}{
-		{name: "apply", action: actionApply, line: "apply 0102", source: "time is 200\n"},
-		{name: "clear", action: actionClear, line: "clear", source: "clear\n"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			tracker := &interruptTracker{}
-			comp := &fakeCompiler{
-				target: targetProfile("1234abcd"),
-				results: []compileResult{
-					{action: test.action, line: test.line},
-				},
-			}
-			var dev *fakeDevice
-			dev = &fakeDevice{
-				responses: []string{
-					statusResponse("host-required"),
-					"ok\n",
-				},
-				afterPrompt: func(line string) {
-					if line == test.line && tracker.requestAndShouldForward() {
-						_ = dev.sendInterrupt()
-					}
-				},
-			}
-			var out strings.Builder
-
-			err := runRecordsTestSession(t, strings.NewReader(test.source), &out, comp, dev, time.Second, false, tracker)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			records := decodeRecords(t, out.String())
-			if got, want := recordKinds(records), "session_start,status,send,response,session_end"; got != want {
-				t.Fatalf("record kinds %q, want %q", got, want)
-			}
-			response := recordWithKind(records, "response")
-			if response["mirror"] != "clean" || response["mirror_action"] != "commit" ||
-				response["ok"] != true || response["status"] != "ok" {
-				t.Fatalf("response record = %#v", response)
-			}
-			if comp.commits != 1 || comp.drops != 0 {
-				t.Fatalf("commits=%d drops=%d, want commits=1 drops=0", comp.commits, comp.drops)
-			}
-			if dev.interrupts != 0 {
-				t.Fatalf("interrupts=%d, want 0", dev.interrupts)
-			}
-		})
-	}
-}
-
 func TestRecordsGroupMultilineTopForm(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-		},
-	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "ok\n"}}
+	dev := &fakeDevice{responses: []string{statusResponse("device"), "ok\n"}}
 	var out strings.Builder
 
-	err := runRecordsTestSession(t, strings.NewReader("boot is fn [\n  one\n]\n"), &out, comp, dev, time.Second, false, &interruptTracker{})
+	err := runRecordsTestSession(t, strings.NewReader("boot is fn [\n  one\n]\n"), &out, dev, time.Second, &interruptTracker{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2509,11 +1855,8 @@ func TestRecordsGroupMultilineTopForm(t *testing.T) {
 		t.Fatalf("record kinds %q, want %q", got, want)
 	}
 	send := recordWithKind(records, "send")
-	if send["source"] != "boot is fn [ one ]" || send["line"] != "apply 0102" {
+	if send["source"] != "boot is fn [ one ]" || send["line"] != "boot is fn [ one ]" {
 		t.Fatalf("send record = %#v", send)
-	}
-	if got, want := strings.Join(comp.lines, "\n"), "boot is fn [ one ]"; got != want {
-		t.Fatalf("compiled %q, want %q", got, want)
 	}
 }
 
@@ -2533,7 +1876,7 @@ func TestRecordsSourceBlockEndsAfterAllExpandedForms(t *testing.T) {
 	dev := &fakeDevice{responses: []string{statusResponse("device"), "ok\n", "ok\n"}}
 	var out strings.Builder
 
-	if err := runRecordsTestSession(t, input, &out, nil, dev, time.Second, false, &interruptTracker{}); err != nil {
+	if err := runRecordsTestSession(t, input, &out, dev, time.Second, &interruptTracker{}); err != nil {
 		t.Fatal(err)
 	}
 	records := decodeRecords(t, out.String())
@@ -2551,7 +1894,7 @@ func TestRecordsEmptySourceBlockStillEnds(t *testing.T) {
 	var out strings.Builder
 	input := strings.NewReader(".source\n-- no forms\n.end-source\n")
 
-	if err := runRecordsTestSession(t, input, &out, nil, dev, time.Second, false, &interruptTracker{}); err != nil {
+	if err := runRecordsTestSession(t, input, &out, dev, time.Second, &interruptTracker{}); err != nil {
 		t.Fatal(err)
 	}
 	records := decodeRecords(t, out.String())
@@ -2564,7 +1907,7 @@ func TestRecordsSourceBlockInputErrorIsNotDeviceLost(t *testing.T) {
 	dev := &fakeDevice{responses: []string{statusResponse("device")}}
 	var out strings.Builder
 
-	err := runRecordsTestSession(t, strings.NewReader(".source main.fr\nmissing end\n"), &out, nil, dev, time.Second, false, &interruptTracker{})
+	err := runRecordsTestSession(t, strings.NewReader(".source main.fr\nmissing end\n"), &out, dev, time.Second, &interruptTracker{})
 	if err == nil {
 		t.Fatal("runRecordsTestSession accepted unterminated source block")
 	}
@@ -2579,40 +1922,11 @@ func TestRecordsSourceBlockInputErrorIsNotDeviceLost(t *testing.T) {
 	}
 }
 
-func TestRecordsRejectedApplyDropsMirror(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-		},
-	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "error: unsupported (9)\n"}}
-	var out strings.Builder
-
-	err := runRecordsTestSession(t, strings.NewReader("time is 200\n"), &out, comp, dev, time.Second, false, &interruptTracker{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	records := decodeRecords(t, out.String())
-	if got, want := recordKinds(records), "session_start,status,send,response,session_end"; got != want {
-		t.Fatalf("record kinds %q, want %q", got, want)
-	}
-	response := recordWithKind(records, "response")
-	if response["mirror"] != "clean" || response["mirror_action"] != "drop" ||
-		response["ok"] != false || response["status"] != "error: unsupported (9)" {
-		t.Fatalf("response record = %#v", response)
-	}
-	if comp.commits != 0 || comp.drops != 1 {
-		t.Fatalf("commits=%d drops=%d, want commits=0 drops=1", comp.commits, comp.drops)
-	}
-}
-
 func TestRecordsDeviceCompilerDirectSend(t *testing.T) {
 	dev := &fakeDevice{responses: []string{statusResponse("device"), "ok\n"}}
 	var out strings.Builder
 
-	err := runRecordsTestSession(t, strings.NewReader("words\n"), &out, nil, dev, time.Second, false, &interruptTracker{})
+	err := runRecordsTestSession(t, strings.NewReader("words\n"), &out, dev, time.Second, &interruptTracker{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2631,105 +1945,10 @@ func TestRecordsDeviceCompilerDirectSend(t *testing.T) {
 	}
 }
 
-func TestRecordsCompileErrorDoesNotSendDeviceLine(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionError, line: "error: capacity exceeded (4)"},
-		},
-	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required")}}
-	var out strings.Builder
-
-	err := runRecordsTestSession(t, strings.NewReader("too_big is fn [ words ]\n"), &out, comp, dev, time.Second, false, &interruptTracker{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	records := decodeRecords(t, out.String())
-	if got, want := recordKinds(records), "session_start,status,compile_error,session_end"; got != want {
-		t.Fatalf("record kinds %q, want %q", got, want)
-	}
-	compileError := recordWithKind(records, "compile_error")
-	if compileError["reason"] != "budget" || compileError["status"] != "error: capacity exceeded (4)" {
-		t.Fatalf("compile_error record = %#v", compileError)
-	}
-	if got, want := strings.Join(dev.sent, "\n"), "status"; got != want {
-		t.Fatalf("sent %q, want %q", got, want)
-	}
-}
-
-func TestRecordsUpdateTimeoutEmitsStale(t *testing.T) {
-	tests := []struct {
-		name   string
-		action compileAction
-		line   string
-	}{
-		{name: "apply", action: actionApply, line: "apply 0102"},
-		{name: "clear", action: actionClear, line: "clear"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			comp := &fakeCompiler{
-				target: targetProfile("1234abcd"),
-				results: []compileResult{
-					{action: test.action, line: test.line},
-				},
-			}
-			dev := &fakeDevice{
-				responses: []string{
-					statusResponse("host-required"),
-					"",
-				},
-				responseErrs: []error{nil, errPromptTimeout},
-				interruptResponses: []string{
-					"error: interrupted (10)\n",
-				},
-			}
-			var out strings.Builder
-
-			err := runRecordsTestSession(t, strings.NewReader("blink is fn [ words ]\n"), &out, comp, dev, time.Second, false, &interruptTracker{})
-			if err == nil {
-				t.Fatal("runSerialRecords accepted stale update timeout")
-			}
-
-			records := decodeRecords(t, out.String())
-			if got, want := recordKinds(records), "session_start,status,send,interrupt,session_error"; got != want {
-				t.Fatalf("record kinds %q, want %q", got, want)
-			}
-			send := recordWithKind(records, "send")
-			if send["action"] != recordAction(test.action) || send["mirror"] != "pending" {
-				t.Fatalf("send record = %#v", send)
-			}
-			interrupt := recordWithKind(records, "interrupt")
-			if interrupt["state"] != "stale" || interrupt["mirror"] != "stale" ||
-				interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
-				t.Fatalf("interrupt record = %#v", interrupt)
-			}
-			sessionError := recordWithKind(records, "session_error")
-			if sessionError["state"] != "stale" || sessionError["mirror"] != "stale" ||
-				sessionError["code"] != "mirror_stale" {
-				t.Fatalf("session_error record = %#v", sessionError)
-			}
-			if comp.commits != 0 || comp.drops != 1 {
-				t.Fatalf("commits=%d drops=%d, want commits=0 drops=1", comp.commits, comp.drops)
-			}
-		})
-	}
-}
-
 func TestRecordsForegroundTimeoutInterruptsAndContinues(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionSend, line: "run dead"},
-			{action: actionSend, line: "run beef"},
-		},
-	}
 	dev := &fakeDevice{
 		responses: []string{
-			statusResponse("host-required"),
+			statusResponse("device"),
 			"error: interrupted (",
 			"ok\n",
 		},
@@ -2740,7 +1959,7 @@ func TestRecordsForegroundTimeoutInterruptsAndContinues(t *testing.T) {
 	}
 	var out strings.Builder
 
-	err := runRecordsTestSession(t, strings.NewReader("forever [ 1 ]\nblink:\n"), &out, comp, dev, time.Second, false, &interruptTracker{})
+	err := runRecordsTestSession(t, strings.NewReader("forever [ 1 ]\nblink:\n"), &out, dev, time.Second, &interruptTracker{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2750,37 +1969,31 @@ func TestRecordsForegroundTimeoutInterruptsAndContinues(t *testing.T) {
 		t.Fatalf("record kinds %q, want %q", got, want)
 	}
 	interrupt := recordWithKind(records, "interrupt")
-	if interrupt["state"] != "idle" || interrupt["mirror"] != "clean" ||
+	if interrupt["state"] != "idle" || interrupt["mirror"] != "none" ||
 		interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
 		t.Fatalf("interrupt record = %#v", interrupt)
 	}
-	if got, want := strings.Join(dev.sent, "\n"), "status\nrun dead\nrun beef"; got != want {
+	if got, want := strings.Join(dev.sent, "\n"), "status\nforever [ 1 ]\nblink:"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
 }
 
 func TestRecordsSignalInterruptUsesTracker(t *testing.T) {
 	tracker := &interruptTracker{}
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionSend, line: "run dead"},
-		},
-	}
 	dev := &fakeDevice{
 		responses: []string{
-			statusResponse("host-required"),
+			statusResponse("device"),
 			"error: interrupted (10)\n",
 		},
 		onSend: func(line string) {
-			if line == "run dead" {
+			if line == "forever [ 1 ]" {
 				tracker.request()
 			}
 		},
 	}
 	var out strings.Builder
 
-	err := runRecordsTestSession(t, strings.NewReader("forever [ 1 ]\n"), &out, comp, dev, time.Second, false, tracker)
+	err := runRecordsTestSession(t, strings.NewReader("forever [ 1 ]\n"), &out, dev, time.Second, tracker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2790,79 +2003,28 @@ func TestRecordsSignalInterruptUsesTracker(t *testing.T) {
 		t.Fatalf("record kinds %q, want %q", got, want)
 	}
 	interrupt := recordWithKind(records, "interrupt")
-	if interrupt["state"] != "idle" || interrupt["mirror"] != "clean" ||
+	if interrupt["state"] != "idle" || interrupt["mirror"] != "none" ||
 		interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
 		t.Fatalf("interrupt record = %#v", interrupt)
-	}
-}
-
-func TestRecordsSignalInterruptDuringApplyStalesMirror(t *testing.T) {
-	tracker := &interruptTracker{}
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-		},
-	}
-	dev := &fakeDevice{
-		responses: []string{
-			statusResponse("host-required"),
-			"error: interrupted (10)\n",
-		},
-		onSend: func(line string) {
-			if line == "apply 0102" {
-				tracker.request()
-			}
-		},
-	}
-	var out strings.Builder
-
-	err := runRecordsTestSession(t, strings.NewReader("time is 200\n"), &out, comp, dev, time.Second, false, tracker)
-	if err == nil {
-		t.Fatal("runRecordsTestSession accepted interrupted apply")
-	}
-
-	records := decodeRecords(t, out.String())
-	if got, want := recordKinds(records), "session_start,status,send,interrupt,session_error"; got != want {
-		t.Fatalf("record kinds %q, want %q", got, want)
-	}
-	interrupt := recordWithKind(records, "interrupt")
-	if interrupt["state"] != "stale" || interrupt["mirror"] != "stale" ||
-		interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
-		t.Fatalf("interrupt record = %#v", interrupt)
-	}
-	sessionError := recordWithKind(records, "session_error")
-	if sessionError["state"] != "stale" || sessionError["mirror"] != "stale" ||
-		sessionError["code"] != "mirror_stale" {
-		t.Fatalf("session_error record = %#v", sessionError)
-	}
-	if comp.commits != 0 || comp.drops != 1 {
-		t.Fatalf("commits=%d drops=%d, want commits=0 drops=1", comp.commits, comp.drops)
 	}
 }
 
 func TestRecordsUnsettledSignalInterruptFails(t *testing.T) {
 	tracker := &interruptTracker{}
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionSend, line: "run dead"},
-		},
-	}
 	dev := &fakeDevice{
 		responses: []string{
-			statusResponse("host-required"),
+			statusResponse("device"),
 			"boot banner\n",
 		},
 		onSend: func(line string) {
-			if line == "run dead" {
+			if line == "forever [ 1 ]" {
 				tracker.request()
 			}
 		},
 	}
 	var out strings.Builder
 
-	err := runRecordsTestSession(t, strings.NewReader("forever [ 1 ]\n"), &out, comp, dev, time.Second, false, tracker)
+	err := runRecordsTestSession(t, strings.NewReader("forever [ 1 ]\n"), &out, dev, time.Second, tracker)
 	if err == nil {
 		t.Fatal("runRecordsTestSession accepted unsettled interrupt")
 	}
@@ -2872,12 +2034,12 @@ func TestRecordsUnsettledSignalInterruptFails(t *testing.T) {
 		t.Fatalf("record kinds %q, want %q", got, want)
 	}
 	interrupt := recordWithKind(records, "interrupt")
-	if interrupt["state"] != "error" || interrupt["mirror"] != "clean" ||
+	if interrupt["state"] != "error" || interrupt["mirror"] != "none" ||
 		interrupt["settled"] != false || interrupt["code"] != "interrupt_failed" {
 		t.Fatalf("interrupt record = %#v", interrupt)
 	}
 	sessionError := recordWithKind(records, "session_error")
-	if sessionError["state"] != "error" || sessionError["mirror"] != "clean" ||
+	if sessionError["state"] != "error" || sessionError["mirror"] != "none" ||
 		sessionError["code"] != "interrupt_failed" {
 		t.Fatalf("session_error record = %#v", sessionError)
 	}

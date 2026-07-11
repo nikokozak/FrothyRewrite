@@ -87,16 +87,10 @@ func (v *editorSessionView) applyRecord(record map[string]any) {
 }
 
 func TestEditorSessionViewTracksLiveRecordState(t *testing.T) {
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-		},
-	}
-	dev := &fakeDevice{responses: []string{statusResponse("host-required"), "ok\n"}}
+	dev := &fakeDevice{responses: []string{statusResponse("device"), "ok\n"}}
 	var out strings.Builder
 
-	err := runRecordsTestSession(t, strings.NewReader("time is 200\n"), &out, comp, dev, time.Second, false, &interruptTracker{})
+	err := runRecordsTestSession(t, strings.NewReader("time is 200\n"), &out, dev, time.Second, &interruptTracker{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,56 +105,50 @@ func TestEditorSessionViewTracksLiveRecordState(t *testing.T) {
 		view.applyRecord(record)
 		switch record["kind"] {
 		case "status":
-			if view.state != "idle" || view.mirror != "clean" ||
-				view.mode != "host-required" || view.profile != "test" {
+			if view.state != "idle" || view.mirror != "none" ||
+				view.mode != "device" || view.profile != "test" {
 				t.Fatalf("status view = %#v", view)
 			}
 		case "send":
-			if view.state != "waiting" || view.mirror != "pending" ||
-				view.lastSource != "time is 200" || view.lastLine != "apply 0102" {
+			if view.state != "waiting" || view.mirror != "none" ||
+				view.lastSource != "time is 200" || view.lastLine != "time is 200" {
 				t.Fatalf("send view = %#v", view)
 			}
 		case "response":
-			if view.state != "idle" || view.mirror != "clean" ||
+			if view.state != "idle" || view.mirror != "none" ||
 				view.lastStatus != "ok" {
 				t.Fatalf("response view = %#v", view)
 			}
 		case "session_end":
-			if view.state != "closed" || view.mirror != "clean" || view.lastKind != "session_end" {
+			if view.state != "closed" || view.mirror != "none" || view.lastKind != "session_end" {
 				t.Fatalf("session_end view = %#v", view)
 			}
 		}
 	}
 }
 
-func TestEditorSessionViewTracksStaleMirror(t *testing.T) {
+func TestEditorSessionViewTracksInterruptRecovery(t *testing.T) {
 	tracker := &interruptTracker{}
-	comp := &fakeCompiler{
-		target: targetProfile("1234abcd"),
-		results: []compileResult{
-			{action: actionApply, line: "apply 0102"},
-		},
-	}
 	dev := &fakeDevice{
 		responses: []string{
-			statusResponse("host-required"),
+			statusResponse("device"),
 			"error: interrupted (10)\n",
 		},
 		onSend: func(line string) {
-			if line == "apply 0102" {
+			if line == "forever [ 1 ]" {
 				tracker.request()
 			}
 		},
 	}
 	var out strings.Builder
 
-	err := runRecordsTestSession(t, strings.NewReader("time is 200\n"), &out, comp, dev, time.Second, false, tracker)
-	if err == nil {
-		t.Fatal("runRecordsTestSession accepted interrupted apply")
+	err := runRecordsTestSession(t, strings.NewReader("forever [ 1 ]\n"), &out, dev, time.Second, tracker)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	records := decodeRecords(t, out.String())
-	if got, want := recordKinds(records), "session_start,status,send,interrupt,session_error"; got != want {
+	if got, want := recordKinds(records), "session_start,status,send,interrupt,session_end"; got != want {
 		t.Fatalf("record kinds %q, want %q", got, want)
 	}
 
@@ -169,18 +157,13 @@ func TestEditorSessionViewTracksStaleMirror(t *testing.T) {
 		view.applyRecord(record)
 		switch record["kind"] {
 		case "send":
-			if view.state != "waiting" || view.mirror != "pending" || view.lastLine != "apply 0102" {
+			if view.state != "waiting" || view.mirror != "none" || view.lastLine != "forever [ 1 ]" {
 				t.Fatalf("send view = %#v", view)
 			}
 		case "interrupt":
-			if view.state != "stale" || view.mirror != "stale" ||
+			if view.state != "idle" || view.mirror != "none" ||
 				!view.interruptSettled || view.lastStatus != "error: interrupted (10)" {
 				t.Fatalf("interrupt view = %#v", view)
-			}
-		case "session_error":
-			if view.state != "stale" || view.mirror != "stale" ||
-				view.errorCode != "mirror_stale" {
-				t.Fatalf("session_error view = %#v", view)
 			}
 		}
 	}

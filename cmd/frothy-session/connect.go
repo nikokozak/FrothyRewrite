@@ -84,16 +84,11 @@ func runConnectCommandWithStopper(args []string, stdin io.Reader, stdout io.Writ
 	defer closeDev()
 	time.Sleep(*settle)
 
-	status, err := readDeviceStatus(dev, *timeout)
+	_, err = readDeviceStatus(dev, *timeout)
 	if err != nil {
 		fmt.Fprintf(stderr, "connect: device silent or wedged; try frothy wipe --force esp32_devkit_v1 --port %s: %v\n", chosen, err)
 		return 1
 	}
-	if status.compiler == compilerHostRequired {
-		fmt.Fprintln(stderr, "frothy connect: device advertises host-required mode; use frothy session or frothy send instead")
-		return 1
-	}
-
 	if interactive == nil {
 		fmt.Fprintln(stderr, "frothy connect: not yet implemented")
 		return 1
