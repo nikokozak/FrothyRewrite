@@ -70,6 +70,11 @@ export function parseSessionRecord(line: string): SessionRecord {
   return value as SessionRecord;
 }
 
+export function recordFailed(record: SessionRecord): boolean {
+  return record.kind === 'compile_error' ||
+    (record.kind === 'response' && record.ok === false);
+}
+
 export function reduceSessionRecord(
   snapshot: SessionSnapshot,
   record: SessionRecord,

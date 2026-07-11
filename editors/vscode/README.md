@@ -40,7 +40,7 @@ The extension expects `frothy` on `PATH`, or set `frothy.binaryPath`.
 - **Editor title.** Shows Run Form while idle and Interrupt while running.
 - **Editor context menu.** Run Form, Run File, Rerun, and Inspect Word appear
   when valid for the current Frothy file and session state.
-- **Problems.** Host compile failures mark the complete form that failed.
+- **Problems.** Device-reported failures mark the complete form that failed.
 - **Output channel.** Shows the serial session transcript while keeping focus
   in the source editor.
 

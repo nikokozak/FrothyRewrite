@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   emptySessionSnapshot,
   parseSessionRecord,
+  recordFailed,
   reduceSessionRecord,
   SessionSnapshot,
 } from '../src/session-records';
@@ -49,8 +50,8 @@ test('the reducer derives the small live editor snapshot from session records', 
       seq: 2,
       kind: 'status',
       state: 'idle',
-      mirror: 'clean',
-      mode: 'host-required',
+      mirror: 'none',
+      mode: 'device',
       device: { profile: 'test' },
     }),
     record({
@@ -59,9 +60,9 @@ test('the reducer derives the small live editor snapshot from session records', 
       seq: 3,
       kind: 'send',
       state: 'waiting',
-      mirror: 'pending',
+      mirror: 'none',
       source: 'time is 200',
-      line: 'apply 0102',
+      line: 'time is 200',
     }),
     record({
       v: 1,
@@ -69,8 +70,9 @@ test('the reducer derives the small live editor snapshot from session records', 
       seq: 4,
       kind: 'response',
       state: 'idle',
-      mirror: 'clean',
+      mirror: 'none',
       status: 'ok',
+      ok: true,
       text: 'ok\n',
     }),
     record({
@@ -79,7 +81,7 @@ test('the reducer derives the small live editor snapshot from session records', 
       seq: 5,
       kind: 'compile_error',
       state: 'idle',
-      mirror: 'clean',
+      mirror: 'none',
       status: 'error: bad source (8)',
       text: 'error: bad source (8)\n',
     }),
@@ -89,21 +91,33 @@ test('the reducer derives the small live editor snapshot from session records', 
       seq: 6,
       kind: 'interrupt',
       state: 'idle',
-      mirror: 'clean',
+      mirror: 'none',
       settled: true,
       text: 'error: interrupted (10)\n',
     }),
-    record({ v: 1, session: 's1', seq: 7, kind: 'session_end', state: 'closed', mirror: 'clean' }),
+    record({ v: 1, session: 's1', seq: 7, kind: 'session_end', state: 'closed', mirror: 'none' }),
   ]) {
     snapshot = reduceSessionRecord(snapshot, next);
   }
 
   assert.equal(snapshot.state, 'closed');
-  assert.equal(snapshot.mirror, 'clean');
+  assert.equal(snapshot.mirror, 'none');
   assert.equal(snapshot.profile, 'test');
-  assert.equal(snapshot.mode, 'host-required');
+  assert.equal(snapshot.mode, 'device');
   assert.equal(snapshot.lastError?.status, 'error: bad source (8)');
   assert.equal(snapshot.lastResultText, 'error: interrupted (10)\n');
+});
+
+test('failed device responses and legacy compile errors reject editor requests', () => {
+  assert.equal(recordFailed(record({
+    v: 1, session: 's1', seq: 1, kind: 'response', state: 'idle', mirror: 'none', ok: false,
+  })), true);
+  assert.equal(recordFailed(record({
+    v: 1, session: 's1', seq: 2, kind: 'response', state: 'idle', mirror: 'none', ok: true,
+  })), false);
+  assert.equal(recordFailed(record({
+    v: 1, session: 's1', seq: 3, kind: 'compile_error', state: 'idle', mirror: 'clean',
+  })), true);
 });
 
 test('stale state stays visible through unknown records and the terminal error', () => {

@@ -11,8 +11,8 @@ language forms.
   `frothy session --records`.
 - **Run Form**, **Run File**, and **Rerun** commands. Run Form accepts one
   selected form or finds the form around the cursor.
-- Full-form diagnostics for host compile errors without pretending the device
-  reported an exact character offset.
+- Full-form diagnostics for device-reported errors without pretending the
+  device reported an exact character offset.
 - **Browse Words** and **Inspect Word**, both backed by the connected device's
   live vocabulary.
 - A native port picker when CLI discovery finds more than one serial device.

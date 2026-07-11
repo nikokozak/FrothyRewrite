@@ -3,6 +3,7 @@ import * as proc from './connect';
 import { clearDiagnostics, reportCompileError } from './diagnostics';
 import { FROTHY_EXAMPLES } from './examples.generated';
 import { formAt, SourceForm, splitForms } from './forms';
+import { recordFailed } from './session-records';
 import { appendLine, show } from './output';
 
 // Frothy identifiers may contain `.`, `?`, `_`, `-`, and `$name` constants
@@ -215,7 +216,7 @@ async function submitForm(
   try {
     await proc.request(source);
   } catch (err) {
-    if (err instanceof proc.SessionRecordError && err.record.kind === 'compile_error' && submitted) {
+    if (err instanceof proc.SessionRecordError && recordFailed(err.record) && submitted) {
       reportCompileError(submitted.document, submitted.range, submitted.version, err.record);
     } else {
       vscode.window.showWarningMessage(`Frothy: ${(err as Error).message}`);

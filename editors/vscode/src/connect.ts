@@ -4,6 +4,7 @@ import { appendChunk, appendLine, appendSent, appendText, flushPartial, show } f
 import {
   emptySessionSnapshot,
   parseSessionRecord,
+  recordFailed,
   reduceSessionRecord,
   SessionRecord,
   SessionSnapshot,
@@ -260,6 +261,10 @@ function settleRequest(record: SessionRecord): void {
         pending.resolve();
         break;
       }
+      case 'compile_error':
+      case 'response':
+        if (recordFailed(record)) rejectPending(new SessionRecordError(record));
+        break;
       case 'session_error':
         rejectPending(new SessionRecordError(record));
         break;
@@ -272,6 +277,10 @@ function settleRequest(record: SessionRecord): void {
   if (!pendingRequest) return;
   switch (record.kind) {
     case 'response': {
+      if (recordFailed(record)) {
+        rejectPending(new SessionRecordError(record));
+        break;
+      }
       const pending = pendingRequest;
       pendingRequest = undefined;
       pending.resolve(recordString(record, 'text') ?? '');
