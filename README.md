@@ -14,8 +14,8 @@ read end to end, and the language is small enough to keep in your head.
 Have an ESP32 DevKit V1 plugged in over USB and a recent Chrome or Edge
 on a desktop? You can be running Frothy without installing anything.
 
-1. **Flash** the firmware: [frothy flasher](https://nikokozak.github.io/FrothyRewrite/web/flash/).
-2. **Edit and run** code: [frothy editor](https://nikokozak.github.io/FrothyRewrite/web/editor/).
+1. **Flash** the firmware: [frothy flasher](https://frothy.dev/flash/).
+2. **Edit and run** code: [frothy editor](https://frothy.dev/editor/).
 
 Both pages talk to the board over WebSerial. No Frothy install on your
 machine, no toolchain to set up.
@@ -61,8 +61,7 @@ port, ESP-IDF not installed) show up there before anything else does.
 ## Write your first Frothy program
 
 ```sh
-frothy init my-sketch
-cd my-sketch
+mkdir my-sketch && cd my-sketch && frothy init
 # Edit main.fr in your favorite editor.
 frothy send main.fr --port /dev/cu.usbserial-0001
 ```
@@ -91,8 +90,8 @@ teaching the chip one word at a time.
 | Where you edit | How |
 |---|---|
 | **Any text editor** | Write a `.fr` file. Send it with `frothy send file.fr --port …` or watch it on the device with `frothy connect`. |
-| **VS Code** | Build the extension with `make vsix`; it produces the versioned `.vsix`. Or install it from the editor once published. Adds Frothy syntax + a "Connect" command. |
-| **In the browser** | Open the [frothy editor](https://nikokozak.github.io/FrothyRewrite/web/editor/). WebSerial talks to the chip directly; sketches save to localStorage. |
+| **VS Code** | Build the 0.4.0 extension with `make vsix`, then install `editors/vscode/frothy-0.4.0.vsix`. Adds syntax, Run Form/File, live words, diagnostics, and serial session controls. |
+| **In the browser** | Open the [frothy editor](https://frothy.dev/editor/). WebSerial talks to the chip directly; sketches autosave locally. |
 
 ## How Frothy is put together
 
@@ -105,8 +104,8 @@ Frothy's runtime stays small enough to read end to end:
 - `cmd/frothy-session/`: the `frothy` CLI (Go).
 - `libs/frothy-repl/`, `libs/frothy-editor/`: ESM libraries that wrap
   the wire protocol for browser and Node consumers.
-- `web/flash/`, `web/editor/`: static demo pages that vendor the
-  libraries above.
+- `tools/build-editor-bundle.sh`, `tools/build-flasher-bundle.sh`: build the
+  browser artifacts vendored into FrothySite.
 - `test/`: core C tests, Unity tests, transcript replays, and library e2e fixtures.
 
 The first interface is a human serial session — `cat`, `screen`,
