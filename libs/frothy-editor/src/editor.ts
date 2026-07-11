@@ -95,6 +95,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const sendLineBtn = mkBtn(doc, "Send line", "frothy-btn");
   const sendBufBtn = mkBtn(doc, "Send buffer", "frothy-btn");
   const interruptBtn = mkBtn(doc, "Interrupt", "frothy-btn");
+  const clearOutputBtn = mkBtn(doc, "Clear output", "frothy-btn");
   const downloadBtn = mkBtn(doc, "Download .fr", "frothy-btn");
   const saveStatus = doc.createElement("span");
   saveStatus.className = "frothy-save-status";
@@ -108,7 +109,15 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     suppressEcho = echoBox.checked;
   });
   echoToggle.append(echoBox, doc.createTextNode(" Hide echo"));
-  commandBar.append(sendLineBtn, sendBufBtn, interruptBtn, downloadBtn, saveStatus, echoToggle);
+  commandBar.append(
+    sendLineBtn,
+    sendBufBtn,
+    interruptBtn,
+    clearOutputBtn,
+    downloadBtn,
+    saveStatus,
+    echoToggle,
+  );
 
   const transcriptHost = doc.createElement("div");
   transcriptHost.className = "frothy-transcript-host";
@@ -366,6 +375,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   sendLineBtn.addEventListener("click", () => void sendLine());
   sendBufBtn.addEventListener("click", () => void sendBuffer());
   interruptBtn.addEventListener("click", () => void interrupt());
+  clearOutputBtn.addEventListener("click", () => transcript.clear());
   downloadBtn.addEventListener("click", () => download());
   examplesSelect.addEventListener("change", () => {
     const example = FROTHY_EXAMPLES.find((entry) => entry.name === examplesSelect.value);

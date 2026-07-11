@@ -83,3 +83,22 @@ test("transcript: a system note ends a diagnostic group and renders plainly", ()
     "transcript-line",
   ]);
 });
+
+test("transcript is a bounded live log that can be cleared", () => {
+  const dom = new JSDOM("<!doctype html><div id=\"host\"></div>");
+  const host = dom.window.document.querySelector("#host")!;
+  const transcript = mountTranscript(host as HTMLElement);
+
+  for (let index = 0; index < 1_000; index += 1) {
+    transcript.appendDevice(`line-${index}`);
+  }
+
+  assert.equal(transcript.element.getAttribute("role"), "log");
+  assert.equal(transcript.element.getAttribute("aria-live"), "polite");
+  assert.equal(transcript.element.children.length, 800);
+  assert.equal(transcript.element.firstElementChild?.textContent, "line-200");
+  assert.equal(transcript.element.lastElementChild?.textContent, "line-999");
+
+  transcript.clear();
+  assert.equal(transcript.element.children.length, 0);
+});

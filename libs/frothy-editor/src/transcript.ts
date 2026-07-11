@@ -3,6 +3,7 @@
 // accordingly. No framework, no virtual DOM.
 
 const HOST_PREFIX = "> ";
+const MAX_TRANSCRIPT_ROWS = 800;
 
 export interface Transcript {
   element: HTMLElement;
@@ -24,11 +25,16 @@ function classifyDevice(line: string): string {
 export function mountTranscript(host: HTMLElement): Transcript {
   const root = host.ownerDocument.createElement("div");
   root.className = "frothy-transcript";
+  root.setAttribute("role", "log");
+  root.setAttribute("aria-live", "polite");
   host.appendChild(root);
   let inDiagnostic = false;
 
   function append(html: HTMLElement): void {
     root.appendChild(html);
+    while (root.children.length > MAX_TRANSCRIPT_ROWS) {
+      root.firstElementChild?.remove();
+    }
     root.scrollTop = root.scrollHeight;
   }
 
