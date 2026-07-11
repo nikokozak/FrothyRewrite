@@ -99,6 +99,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const runFormBtn = mkBtn(doc, "Run Form", "frothy-btn");
   const runFileBtn = mkBtn(doc, "Run File", "frothy-btn");
   const interruptBtn = mkBtn(doc, "Interrupt", "frothy-btn");
+  const browseWordsBtn = mkBtn(doc, "Browse Words", "frothy-btn");
   const clearOutputBtn = mkBtn(doc, "Clear output", "frothy-btn");
   const openBtn = mkBtn(doc, "Open .fr", "frothy-btn");
   const downloadBtn = mkBtn(doc, "Download .fr", "frothy-btn");
@@ -124,6 +125,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     runFormBtn,
     runFileBtn,
     interruptBtn,
+    browseWordsBtn,
     clearOutputBtn,
     openBtn,
     downloadBtn,
@@ -146,6 +148,23 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   body.className = "frothy-editor-body";
   body.append(editorMain, transcriptHost);
 
+  const wordsDialog = doc.createElement("dialog");
+  wordsDialog.className = "frothy-word-dialog";
+  wordsDialog.setAttribute("aria-label", "Live Frothy words");
+  const wordsTitle = doc.createElement("h2");
+  wordsTitle.textContent = "Live words";
+  const wordsSearchLabel = doc.createElement("label");
+  wordsSearchLabel.textContent = "Search ";
+  const wordsSearch = doc.createElement("input");
+  wordsSearch.type = "search";
+  wordsSearch.autocapitalize = "none";
+  wordsSearch.spellcheck = false;
+  wordsSearchLabel.append(wordsSearch);
+  const wordsList = doc.createElement("div");
+  wordsList.className = "frothy-word-list";
+  const closeWordsBtn = mkBtn(doc, "Close", "frothy-btn");
+  wordsDialog.append(wordsTitle, wordsSearchLabel, wordsList, closeWordsBtn);
+
   let layout = loadLayout();
   function applyLayout(): void {
     const horizontal = layout === "horizontal";
@@ -162,7 +181,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   });
   applyLayout();
 
-  root.append(header, body);
+  root.append(header, body, wordsDialog);
   opts.mount.appendChild(root);
 
   const view = new EditorView({
@@ -215,6 +234,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     runFileBtn.disabled = next !== "idle";
     interruptBtn.disabled = next !== "running";
     interruptBtn.classList.toggle("frothy-btn-primary", next === "running");
+    browseWordsBtn.hidden = !connected;
+    browseWordsBtn.disabled = next !== "idle";
+    if (!connected && wordsDialog.open) wordsDialog.close();
   }
 
   function reportError(err: unknown) {
@@ -391,6 +413,62 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     }
   }
 
+  function showWords(words: string[]): void {
+    function render(): void {
+      const query = wordsSearch.value.toLowerCase();
+      const matches = words.filter((word) => word.toLowerCase().includes(query));
+      wordsList.replaceChildren();
+      if (matches.length === 0) {
+        const empty = doc.createElement("p");
+        empty.textContent = "No matching words";
+        wordsList.append(empty);
+        return;
+      }
+      for (const word of matches) {
+        const button = mkBtn(doc, word, "frothy-btn");
+        button.addEventListener("click", () => void inspectWord(word));
+        wordsList.append(button);
+      }
+    }
+
+    wordsSearch.value = "";
+    render();
+    wordsDialog.showModal();
+    wordsSearch.focus();
+    wordsSearch.oninput = render;
+  }
+
+  async function browseWords(): Promise<void> {
+    if (!repl || sessionState !== "idle") return;
+    const runningRepl = repl;
+    setSessionState("running");
+    try {
+      const response = await sendForm("words");
+      if (response?.kind !== "value") return;
+      const lines = response.lines[0] === "words" ? response.lines.slice(1) : response.lines;
+      const words = [...new Set(
+        lines
+          .flatMap((line) => line.split(/\s+/))
+          .filter((word) => word && word !== "ok"),
+      )];
+      showWords(words);
+    } finally {
+      if (repl === runningRepl) setSessionState("idle");
+    }
+  }
+
+  async function inspectWord(word: string): Promise<void> {
+    wordsDialog.close();
+    if (!repl || sessionState !== "idle") return;
+    const runningRepl = repl;
+    setSessionState("running");
+    try {
+      await sendForm(`see ${word}`);
+    } finally {
+      if (repl === runningRepl) setSessionState("idle");
+    }
+  }
+
   function clearSaveTimer(): void {
     if (saveTimer === null) return;
     timerTarget.clearTimeout(saveTimer);
@@ -441,6 +519,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   runFormBtn.addEventListener("click", () => void runForm());
   runFileBtn.addEventListener("click", () => void runFile());
   interruptBtn.addEventListener("click", () => void interrupt());
+  browseWordsBtn.addEventListener("click", () => void browseWords());
+  closeWordsBtn.addEventListener("click", () => wordsDialog.close());
   clearOutputBtn.addEventListener("click", () => transcript.clear());
   openBtn.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => void openSelectedFile());
