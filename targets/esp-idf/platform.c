@@ -13,7 +13,12 @@
 #if FR_FEATURE_PWM
 #include "driver/ledc.h"
 #endif
+#if defined(FR_BOARD_CONSOLE_UART) || FR_FEATURE_UART
 #include "driver/uart.h"
+#endif
+#if defined(FR_BOARD_CONSOLE_USB_SERIAL_JTAG)
+#include "driver/usb_serial_jtag.h"
+#endif
 #include "esp_adc/adc_oneshot.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -34,9 +39,17 @@
 #include <stddef.h>
 #include <string.h>
 
+#if defined(FR_BOARD_CONSOLE_UART) &&                                    \
+    defined(FR_BOARD_CONSOLE_USB_SERIAL_JTAG)
+#error "board must select exactly one Frothy console"
+#elif !defined(FR_BOARD_CONSOLE_UART) &&                                 \
+    !defined(FR_BOARD_CONSOLE_USB_SERIAL_JTAG)
+#error "board must select a Frothy console"
+#endif
+
 enum {
-  FR_ESP_UART_RX_BYTES = 256,
-  FR_ESP_UART_TX_BYTES = 256,
+  FR_ESP_CONSOLE_RX_BYTES = 256,
+  FR_ESP_CONSOLE_TX_BYTES = 256,
 #if FR_FEATURE_UART
   FR_ESP_APP_UART_RX_BYTES = 256,
   FR_ESP_APP_UART_TX_BYTES = 256,
@@ -213,7 +226,10 @@ static fr_err_t fr_esp_err(esp_err_t err) {
   }
 }
 
-static fr_err_t fr_esp_uart_init(void) {
+/* FR_ESP_CONSOLE_IMPL_BEGIN
+ * Board-selected human console. Application UART stays outside this block. */
+static fr_err_t fr_esp_console_init(void) {
+#if defined(FR_BOARD_CONSOLE_UART)
   const uart_config_t config = {
       .baud_rate = FR_BOARD_UART_BAUD,
       .data_bits = UART_DATA_8_BITS,
@@ -222,8 +238,9 @@ static fr_err_t fr_esp_uart_init(void) {
       .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
       .source_clk = UART_SCLK_DEFAULT,
   };
-  esp_err_t err = uart_driver_install(FR_BOARD_UART_PORT, FR_ESP_UART_RX_BYTES,
-                                      FR_ESP_UART_TX_BYTES, 0, NULL, 0);
+  esp_err_t err = uart_driver_install(FR_BOARD_UART_PORT,
+                                      FR_ESP_CONSOLE_RX_BYTES,
+                                      FR_ESP_CONSOLE_TX_BYTES, 0, NULL, 0);
 
   if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
     return fr_esp_err(err);
@@ -235,7 +252,84 @@ static fr_err_t fr_esp_uart_init(void) {
   FR_TRY(fr_esp_err(uart_set_mode(FR_BOARD_UART_PORT, UART_MODE_UART)));
   FR_TRY(fr_esp_err(uart_flush_input(FR_BOARD_UART_PORT)));
   return FR_OK;
+#elif defined(FR_BOARD_CONSOLE_USB_SERIAL_JTAG)
+#if !SOC_USB_SERIAL_JTAG_SUPPORTED
+#error "board selects USB Serial/JTAG on an unsupported ESP target"
+#endif
+  usb_serial_jtag_driver_config_t config = {
+      .tx_buffer_size = FR_ESP_CONSOLE_TX_BYTES,
+      .rx_buffer_size = FR_ESP_CONSOLE_RX_BYTES,
+  };
+
+  if (usb_serial_jtag_is_driver_installed()) {
+    return FR_OK;
+  }
+  return fr_esp_err(usb_serial_jtag_driver_install(&config));
+#endif
 }
+
+static fr_err_t fr_esp_console_driver_read(uint8_t *out_byte,
+                                           TickType_t timeout) {
+  int read = 0;
+
+#if defined(FR_BOARD_CONSOLE_UART)
+  read = uart_read_bytes(FR_BOARD_UART_PORT, out_byte, 1, timeout);
+#elif defined(FR_BOARD_CONSOLE_USB_SERIAL_JTAG)
+  read = usb_serial_jtag_read_bytes(out_byte, 1, timeout);
+#endif
+  if (read < 0) {
+    return FR_ERR_IO;
+  }
+  return read == 1 ? FR_OK : FR_ERR_NOT_FOUND;
+}
+
+static fr_err_t fr_esp_console_write(const void *bytes, uint16_t length) {
+  int written = 0;
+
+  if (length == 0) {
+    return FR_OK;
+  }
+#if defined(FR_BOARD_CONSOLE_UART)
+  written = uart_write_bytes(FR_BOARD_UART_PORT, bytes, length);
+#elif defined(FR_BOARD_CONSOLE_USB_SERIAL_JTAG)
+  written = usb_serial_jtag_write_bytes(bytes, length, portMAX_DELAY);
+#endif
+  return written == length ? FR_OK : FR_ERR_IO;
+}
+
+static void fr_esp_save_pending_byte(uint8_t byte) {
+  /* One-byte typeahead: safe-point polling must never grow memory. */
+  fr_esp_pending_byte = byte;
+  fr_esp_pending_byte_valid = true;
+}
+
+static fr_err_t fr_esp_console_read_byte(uint8_t *out_byte,
+                                         TickType_t timeout) {
+  if (out_byte == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_esp_pending_byte_valid) {
+    *out_byte = fr_esp_pending_byte;
+    fr_esp_pending_byte_valid = false;
+    return FR_OK;
+  }
+
+  return fr_esp_console_driver_read(out_byte, timeout);
+}
+
+static bool fr_esp_console_key_ready(void) {
+  uint8_t byte = 0;
+
+  if (fr_esp_pending_byte_valid) {
+    return true;
+  }
+  if (fr_esp_console_driver_read(&byte, 0) != FR_OK) {
+    return false;
+  }
+  fr_esp_save_pending_byte(byte);
+  return true;
+}
+/* FR_ESP_CONSOLE_IMPL_END */
 
 #if FR_FEATURE_NET
 static fr_err_t fr_esp_nvs_init(void) {
@@ -279,50 +373,13 @@ fr_err_t fr_esp_platform_init(void) {
     return FR_OK;
   }
 
-  FR_TRY(fr_esp_uart_init());
+  FR_TRY(fr_esp_console_init());
   FR_TRY(fr_esp_boot_button_init());
 #if FR_FEATURE_NET
   FR_TRY(fr_esp_nvs_init());
 #endif
   fr_esp_initialized = true;
   return FR_OK;
-}
-
-static bool fr_esp_console_key_ready(void) {
-  size_t len = 0;
-
-  if (fr_esp_pending_byte_valid) {
-    return true;
-  }
-  if (uart_get_buffered_data_len(FR_BOARD_UART_PORT, &len) != ESP_OK) {
-    return false;
-  }
-  return len > 0;
-}
-
-static fr_err_t fr_esp_read_byte(uint8_t *out_byte, TickType_t timeout) {
-  int read = 0;
-
-  if (out_byte == NULL) {
-    return FR_ERR_INVALID;
-  }
-  if (fr_esp_pending_byte_valid) {
-    *out_byte = fr_esp_pending_byte;
-    fr_esp_pending_byte_valid = false;
-    return FR_OK;
-  }
-
-  read = uart_read_bytes(FR_BOARD_UART_PORT, out_byte, 1, timeout);
-  if (read < 0) {
-    return FR_ERR_IO;
-  }
-  return read == 1 ? FR_OK : FR_ERR_NOT_FOUND;
-}
-
-static void fr_esp_save_pending_byte(uint8_t byte) {
-  /* One-byte typeahead: safe-point polling must never grow memory. */
-  fr_esp_pending_byte = byte;
-  fr_esp_pending_byte_valid = true;
 }
 
 fr_err_t fr_platform_delay_ms(uint16_t ms) {
@@ -430,8 +487,14 @@ static fr_err_t fr_esp_app_uart_entry(uint16_t platform_index,
  * does not set pins (the ESP-IDF driver uses per-port defaults), so it does
  * not participate in the conflict list. */
 static bool fr_esp_app_uart_console_conflict(uint16_t tx, uint16_t rx) {
+#if defined(FR_BOARD_CONSOLE_UART)
   return tx == FR_BOARD_UART_TX || tx == FR_BOARD_UART_RX ||
          rx == FR_BOARD_UART_TX || rx == FR_BOARD_UART_RX;
+#else
+  (void)tx;
+  (void)rx;
+  return false;
+#endif
 }
 
 static bool fr_esp_app_uart_pin_conflict(uint16_t tx, uint16_t rx) {
@@ -578,7 +641,7 @@ fr_err_t fr_platform_poll_interrupt(fr_runtime_t *runtime) {
     return FR_OK;
   }
 
-  err = fr_esp_read_byte(&byte, 0);
+  err = fr_esp_console_read_byte(&byte, 0);
   if (err == FR_ERR_NOT_FOUND) {
     return FR_OK;
   }
@@ -844,7 +907,7 @@ fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
   line[0] = '\0';
   for (;;) {
     uint8_t byte = 0;
-    fr_err_t err = fr_esp_read_byte(&byte, pdMS_TO_TICKS(20));
+    fr_err_t err = fr_esp_console_read_byte(&byte, pdMS_TO_TICKS(20));
 
     if (err == FR_ERR_NOT_FOUND) {
       /* No byte this tick: service timer/interrupt events so they fire at the
@@ -885,7 +948,7 @@ fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
     line[used] = (char)byte;
     used += 1;
     line[used] = '\0';
-    (void)uart_write_bytes(FR_BOARD_UART_PORT, &byte, 1);
+    (void)fr_esp_console_write(&byte, 1);
   }
 }
 
@@ -897,13 +960,9 @@ fr_err_t fr_platform_write_text(const char *text) {
   while (*text != '\0') {
     if (*text == '\n') {
       const char cr = '\r';
-      if (uart_write_bytes(FR_BOARD_UART_PORT, &cr, 1) < 0) {
-        return FR_ERR_IO;
-      }
+      FR_TRY(fr_esp_console_write(&cr, 1));
     }
-    if (uart_write_bytes(FR_BOARD_UART_PORT, text, 1) < 0) {
-      return FR_ERR_IO;
-    }
+    FR_TRY(fr_esp_console_write(text, 1));
     text += 1;
   }
   return FR_OK;
@@ -915,11 +974,7 @@ fr_err_t fr_platform_write_bytes(const uint8_t *bytes, uint16_t length) {
   if (bytes == NULL && length > 0) {
     return FR_ERR_INVALID;
   }
-  if (length > 0 &&
-      uart_write_bytes(FR_BOARD_UART_PORT, bytes, length) != length) {
-    return FR_ERR_IO;
-  }
-  return FR_OK;
+  return fr_esp_console_write(bytes, length);
 }
 #endif
 

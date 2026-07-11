@@ -303,6 +303,15 @@ TARGET_FLASH_CHECK ?= @:
 test: $(TEST_BINARY) ## Run the core C test binary.
 	./$(TEST_BINARY)
 
+test-esp-idf-console-boundary: ## Check that common ESP-IDF I/O uses the selected console.
+	@awk '\
+		/FR_ESP_CONSOLE_IMPL_BEGIN/ { begin_count += 1; in_console = 1; next } \
+		/FR_ESP_CONSOLE_IMPL_END/ { end_count += 1; in_console = 0; next } \
+		!in_console && /FR_BOARD_UART_(PORT|BAUD)/ { print "console UART escaped implementation at line " NR; bad = 1 } \
+		!in_console && /usb_serial_jtag_(driver_install|is_driver_installed|read_bytes|write_bytes)[(]/ { print "USB Serial\/JTAG escaped implementation at line " NR; bad = 1 } \
+		END { if (begin_count != 1 || end_count != 1 || in_console) { print "console implementation markers are invalid"; bad = 1 } exit bad }' \
+		targets/esp-idf/platform.c
+
 test-unity: $(UNITY_TEST_BINARY) $(UNITY_I2C_TEST_BINARY) $(UNITY_LIB_NATIVES_TEST_BINARY) $(UNITY_PERSIST_TIER_TEST_BINARY) $(UNITY_T12_SERVO_TEST_BINARY) $(UNITY_T21_MEM_TEST_BINARY) $(UNITY_T15_NET_TEST_BINARY) $(UNITY_T15B_TCP_TEST_BINARY) $(UNITY_T14_POWER_TEST_BINARY) $(UNITY_T16_BYTES_TEST_BINARY) ## Run all Unity host binaries.
 	./$(UNITY_TEST_BINARY)
 	./$(UNITY_I2C_TEST_BINARY)
@@ -772,4 +781,4 @@ vsix: ## Build the VS Code extension package.
 clean: ## Remove generated build outputs.
 	rm -rf build frothy test/test test/test-host-normal test/fixtures/projects/*/.frothy
 
-.PHONY: test test-unity help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript frothy-host-command cli install-host test-install-host print-config vsix clean
+.PHONY: test test-esp-idf-console-boundary test-unity help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript frothy-host-command cli install-host test-install-host print-config vsix clean
