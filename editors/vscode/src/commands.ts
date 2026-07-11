@@ -108,7 +108,13 @@ export async function runFile(): Promise<void> {
   clearDiagnostics(doc);
   show();
   appendLine(`> [run file: ${basename} · ${lineCount} lines]`);
-  if (!proc.writeSourceBlock(text, path)) notConnectedHint();
+  try {
+    await proc.requestSourceBlock(text, path);
+  } catch (err) {
+    if (!(err instanceof proc.SessionRecordError)) {
+      vscode.window.showWarningMessage(`Frothy: ${(err as Error).message}`);
+    }
+  }
 }
 
 export async function openExample(): Promise<void> {
@@ -133,7 +139,7 @@ export async function browseWords(): Promise<void> {
     notConnectedHint();
     return;
   }
-  const response = await inspectRequest('words');
+  const response = await deviceRequest('words');
   if (!response) return;
 
   const lines = response.trim().split(/\r?\n/);
@@ -162,20 +168,20 @@ export async function inspectWord(): Promise<void> {
   await inspectNamedWord(word);
 }
 
-export function status(): void {
-  if (!proc.writeLine('status')) notConnectedHint();
+export async function status(): Promise<void> {
+  await deviceRequest('status');
 }
 
-export function mem(): void {
-  if (!proc.writeLine('mem')) notConnectedHint();
+export async function mem(): Promise<void> {
+  await deviceRequest('mem');
 }
 
-export function save(): void {
-  if (!proc.writeLine('save')) notConnectedHint();
+export async function save(): Promise<void> {
+  await deviceRequest('save');
 }
 
-export function restore(): void {
-  if (!proc.writeLine('restore')) notConnectedHint();
+export async function restore(): Promise<void> {
+  await deviceRequest('restore');
 }
 
 // SIGINT to the `frothy session` child. The session turns that into a device
@@ -211,7 +217,7 @@ async function submitForm(
   } catch (err) {
     if (err instanceof proc.SessionRecordError && err.record.kind === 'compile_error' && submitted) {
       reportCompileError(submitted.document, submitted.range, submitted.version, err.record);
-    } else if (!(err instanceof proc.SessionRecordError)) {
+    } else {
       vscode.window.showWarningMessage(`Frothy: ${(err as Error).message}`);
     }
   }
@@ -246,7 +252,7 @@ async function inspectNamedWord(word: string): Promise<void> {
     notConnectedHint();
     return;
   }
-  await inspectRequest(`see ${word}`);
+  await deviceRequest(`see ${word}`);
 }
 
 async function connectWithPortChoice(): Promise<void> {
@@ -279,7 +285,7 @@ async function connectWithPortChoice(): Promise<void> {
   }
 }
 
-async function inspectRequest(source: string): Promise<string | undefined> {
+async function deviceRequest(source: string): Promise<string | undefined> {
   try {
     const response = await proc.request(source);
     const error = terminalError(response);

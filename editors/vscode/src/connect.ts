@@ -14,10 +14,16 @@ interface PendingRequest {
   reject: (error: Error) => void;
 }
 
+interface PendingSourceBlock {
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
 let child: ChildProcess | undefined;
 let snapshot = emptySessionSnapshot();
 let editorReady = false;
 let pendingRequest: PendingRequest | undefined;
+let pendingSourceBlock: PendingSourceBlock | undefined;
 let onConnectionChanged: (() => void) | undefined;
 let intentionalExit = false;
 // Re-entrancy guard. Edges this prevents:
@@ -34,6 +40,11 @@ export function isConnected(): boolean {
 
 export function sessionSnapshot(): Readonly<SessionSnapshot> {
   return snapshot;
+}
+
+export function isBusy(): boolean {
+  return pendingRequest !== undefined || pendingSourceBlock !== undefined ||
+    snapshot.state === 'waiting' || snapshot.state === 'interrupting';
 }
 
 export function setOnConnectionChanged(cb: () => void): void {
@@ -105,7 +116,7 @@ async function doConnect(portOverride?: string): Promise<void> {
     };
 
     c.stdout?.on('data', (data: Buffer) => {
-      if (recordFailed) return;
+      if (recordFailed || child !== c) return;
       stdoutBuffer += data.toString('utf8');
       for (;;) {
         const newline = stdoutBuffer.indexOf('\n');
@@ -194,13 +205,15 @@ export class SessionRecordError extends Error {
 
 export function request(source: string): Promise<string> {
   if (!isConnected()) return Promise.reject(new Error('Frothy is not connected'));
-  if (pendingRequest) return Promise.reject(new Error('another Frothy request is still running'));
+  if (isBusy()) return Promise.reject(new Error('another Frothy request is still running'));
 
   return new Promise<string>((resolve, reject) => {
     pendingRequest = { resolve, reject };
+    fireConnectionChanged();
     const input = source.endsWith('\n') ? source : source + '\n';
     if (!writeInput(input)) {
       pendingRequest = undefined;
+      fireConnectionChanged();
       reject(new Error('Frothy session closed before the request was sent'));
     }
   });
@@ -229,6 +242,9 @@ function renderRecord(record: SessionRecord): void {
       if (text) appendText(text);
       break;
     }
+    case 'source_end':
+      appendLine('file: complete');
+      break;
     case 'session_error':
       appendLine(`session: ${recordString(record, 'code') ?? 'error'}: ${recordString(record, 'message') ?? 'session failed'}`);
       break;
@@ -236,6 +252,23 @@ function renderRecord(record: SessionRecord): void {
 }
 
 function settleRequest(record: SessionRecord): void {
+  if (pendingSourceBlock) {
+    switch (record.kind) {
+      case 'source_end': {
+        const pending = pendingSourceBlock;
+        pendingSourceBlock = undefined;
+        pending.resolve();
+        break;
+      }
+      case 'session_error':
+        rejectPending(new SessionRecordError(record));
+        break;
+      case 'session_end':
+        rejectPending(new Error('Frothy session ended before the file completed'));
+        break;
+    }
+    return;
+  }
   if (!pendingRequest) return;
   switch (record.kind) {
     case 'response': {
@@ -256,27 +289,32 @@ function settleRequest(record: SessionRecord): void {
 }
 
 function rejectPending(error: Error): void {
-  const pending = pendingRequest;
+  const request = pendingRequest;
+  const sourceBlock = pendingSourceBlock;
   pendingRequest = undefined;
-  pending?.reject(error);
+  pendingSourceBlock = undefined;
+  request?.reject(error);
+  sourceBlock?.reject(error);
 }
 
 function recordString(record: SessionRecord, key: string): string | undefined {
   return typeof record[key] === 'string' ? record[key] : undefined;
 }
 
-// Catch EPIPE / "write after end" / destroyed-stream errors that fire
-// when the child dies between isConnected() and write(). The caller
-// gets `false` so it can surface a "not connected" warning, same as a
-// genuine disconnect.
-//
-export function writeLine(text: string): boolean {
-  return writeInput(text + '\n');
-}
+export function requestSourceBlock(text: string, path?: string): Promise<void> {
+  if (!isConnected()) return Promise.reject(new Error('Frothy is not connected'));
+  if (isBusy()) return Promise.reject(new Error('another Frothy request is still running'));
 
-export function writeSourceBlock(text: string, path?: string): boolean {
-  const header = path ? `.source ${path}` : '.source';
-  return writeInput(`${header}\n${text}\n.end-source\n`);
+  return new Promise<void>((resolve, reject) => {
+    pendingSourceBlock = { resolve, reject };
+    fireConnectionChanged();
+    const header = path ? `.source ${path}` : '.source';
+    if (!writeInput(`${header}\n${text}\n.end-source\n`)) {
+      pendingSourceBlock = undefined;
+      fireConnectionChanged();
+      reject(new Error('Frothy session closed before the file was sent'));
+    }
+  });
 }
 
 function writeInput(text: string): boolean {
