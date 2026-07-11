@@ -712,6 +712,18 @@ test-install-host:
 		printf '%s\n' "$$out"; \
 		exit 1; \
 	fi; \
+	tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	cp -R "$(abspath $(INSTALL_TEST_ROOT))/usr" "$$tmp/usr"; \
+	doctor_out=$$(cd "$$tmp" && env -i PATH=/usr/bin:/bin "$$tmp/usr/local/bin/frothy" doctor 2>&1 || true); \
+	if ! printf '%s\n' "$$doctor_out" | grep -q 'ok    compiler: .*libexec/frothy/frothy-compile-overlay'; then \
+		printf '%s\nmissing installed compiler check\n' "$$doctor_out"; \
+		exit 1; \
+	fi; \
+	if printf '%s\n' "$$doctor_out" | grep -Eq '  (make|esp-idf-installed):'; then \
+		printf '%s\nunexpected firmware check outside source checkout\n' "$$doctor_out"; \
+		exit 1; \
+	fi; \
 	printf 'install host dry-run ok\n'
 
 $(TEST_BINARY): $(TEST_DEPS)
