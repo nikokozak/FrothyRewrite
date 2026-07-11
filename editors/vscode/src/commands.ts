@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as proc from './connect';
-import { clearDiagnostics, reportCompileError } from './diagnostics';
+import { clearDiagnostics, reportFormError } from './diagnostics';
 import { FROTHY_EXAMPLES } from './examples.generated';
 import { formAt, SourceForm, splitForms } from './forms';
 import { recordFailed } from './session-records';
@@ -217,7 +217,7 @@ async function submitForm(
     await proc.request(source);
   } catch (err) {
     if (err instanceof proc.SessionRecordError && recordFailed(err.record) && submitted) {
-      reportCompileError(submitted.document, submitted.range, submitted.version, err.record);
+      reportFormError(submitted.document, submitted.range, submitted.version, err.record);
     } else {
       vscode.window.showWarningMessage(`Frothy: ${(err as Error).message}`);
     }

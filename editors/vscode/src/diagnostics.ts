@@ -12,7 +12,7 @@ export function clearDiagnostics(document: vscode.TextDocument): void {
   collection?.delete(document.uri);
 }
 
-export function reportCompileError(
+export function reportFormError(
   document: vscode.TextDocument,
   range: vscode.Range,
   submittedVersion: number,
@@ -27,7 +27,7 @@ export function reportCompileError(
 function recordMessage(record: SessionRecord): string {
   const status = stringField(record, 'status');
   const text = stringField(record, 'text')?.trim();
-  if (!status) return text || 'Frothy could not compile this form.';
+  if (!status) return text || 'Frothy rejected this form.';
   if (!text || text === status || text.startsWith(status)) return text || status;
   return `${status}\n${text}`;
 }
