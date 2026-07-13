@@ -158,6 +158,17 @@ static fr_err_t test_persist_apply_user_overlay(
 #define FR_TEST_BYTES_SLOT_COUNT 0
 #endif
 
+#if FR_FEATURE_TRACE
+#define FR_TEST_TRACE_WORDS                                                  \
+  " trace.open trace.watch trace.arm trace.wait trace.stop trace.count "     \
+  "trace.channel trace.level trace.delta-ns trace.complete? trace.dump "     \
+  "trace.close"
+#define FR_TEST_TRACE_SLOT_COUNT 12
+#else
+#define FR_TEST_TRACE_WORDS ""
+#define FR_TEST_TRACE_SLOT_COUNT 0
+#endif
+
 enum {
   FR_TEST_PERSIST_RECORD_CODE = 1,
   FR_TEST_PERSIST_RECORD_BIND = 2,
@@ -183,7 +194,7 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
@@ -192,7 +203,7 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
@@ -201,7 +212,7 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (15 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
@@ -209,7 +220,8 @@ enum {
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
-   FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT)
+   FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
+   FR_TEST_TRACE_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -217,7 +229,7 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -225,7 +237,7 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -233,7 +245,7 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_EVENT_TEST_WORDS                                          \
+              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (12 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
@@ -241,7 +253,8 @@ enum {
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
-   FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT)
+   FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
+   FR_TEST_TRACE_SLOT_COUNT)
 #endif
 
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
@@ -406,6 +419,7 @@ static void test_base_def_contract(void) {
       (FR_FEATURE_RANDOM ? 3 : 0) + (FR_FEATURE_PWM ? 3 : 0) +
       (FR_FEATURE_I2C ? 8 : 0) + (FR_FEATURE_NET ? 9 : 0) +
       (FR_FEATURE_POWER ? 4 : 0) + (FR_FEATURE_BYTES ? 8 : 0) +
+      (FR_FEATURE_TRACE ? 12 : 0) +
       (FR_FEATURE_MATH ? 6 : 0) +
       FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT +
       FR_TEST_EVENT_REGISTER_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT;
@@ -436,8 +450,8 @@ static void test_base_def_contract(void) {
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("fire-event slot follows bytes block",
-        FR_SLOT_FIRE_EVENT == FR_SLOT_AFTER_BYTES);
+  CHECK("fire-event slot follows protocol blocks",
+        FR_SLOT_FIRE_EVENT == FR_SLOT_AFTER_PULSE);
   CHECK("board capability slot follows fire-event slot",
         FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_FIRE_EVENT + 1);
   CHECK("board local slot ids follow board capability slots",
@@ -3179,6 +3193,171 @@ static void test_pwm(void) {
             fr_slot_write(&runtime, FR_SLOT_BOOT, fr_tagged_nil()) == FR_OK &&
             fr_persist_save(&runtime) == FR_OK);
 #endif
+}
+#endif
+
+#if FR_FEATURE_TRACE && defined(FR_HOST_TEST_HELPERS)
+static fr_err_t test_trace_platform_index(fr_runtime_t *runtime,
+                                          const char *name,
+                                          uint16_t *out_platform_index) {
+  fr_slot_id_t slot_id = 0;
+  fr_tagged_t tagged = 0;
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || name == NULL || out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_slot_id_for_name(runtime, name, &slot_id));
+  FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
+  FR_TRY(fr_tagged_decode_handle_ref(tagged, &ref));
+  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_TRACE, NULL,
+                          out_platform_index);
+}
+
+static void test_trace(void) {
+  fr_runtime_t runtime;
+  fr_trace_status_t status = {0};
+  fr_trace_event_t event = {0};
+  uint16_t platform_index = 0;
+  bool filled = true;
+  char out[256];
+
+  (void)fr_platform_trace_close(0);
+  CHECK("trace installs base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("trace see open renders signature",
+        fr_repl_eval_line(&runtime, "see trace.open", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "trace.open() -> handle\n"
+                   "open one bounded digital edge capture\n"
+                   "ok\n") == 0);
+  CHECK("trace opens one bounded session",
+        fr_repl_eval_line(&runtime, "t is trace.open:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            test_trace_platform_index(&runtime, "t", &platform_index) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.open:", out, sizeof(out)) ==
+                FR_ERR_CAPACITY);
+  CHECK("trace watches three distinct pins",
+        fr_repl_eval_line(&runtime, "trace.watch: t, 4", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "0\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.watch: t, 5", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.watch: t, 6", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "2\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.watch: t, 4", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "trace.watch: t, 7", out,
+                              sizeof(out)) == FR_ERR_CAPACITY);
+  CHECK("trace arms and hides unfinished events",
+        fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.level: t, 0", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "trace.watch: t, 8", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_host_trace_push_edge(platform_index, 0, 1, 100) ==
+                FR_ERR_DOMAIN);
+  CHECK("trace fixture records quantized edges",
+        fr_host_trace_push_edge(platform_index, 1, 1, 0) == FR_OK &&
+            fr_host_trace_push_edge(platform_index, 0, 1, 0) == FR_OK &&
+            fr_host_trace_push_edge(platform_index, 0, 0, 700) == FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.wait: t, 0", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "false\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.stop: t", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0);
+  CHECK("trace completion sorts ties by channel",
+        fr_platform_trace_status(platform_index, &status) == FR_OK &&
+            status.state == FR_TRACE_COMPLETE && status.channel_count == 3 &&
+            status.event_count == 3 &&
+            fr_platform_trace_event(platform_index, 0, &event) == FR_OK &&
+            event.channel == 0 && event.level == 1 && event.delta_ns == 0 &&
+            fr_platform_trace_event(platform_index, 1, &event) == FR_OK &&
+            event.channel == 1 && event.level == 1 && event.delta_ns == 0 &&
+            fr_platform_trace_event(platform_index, 2, &event) == FR_OK &&
+            event.channel == 0 && event.level == 0 && event.delta_ns == 700 &&
+            fr_platform_trace_event(platform_index, 3, &event) ==
+                FR_ERR_RANGE);
+  CHECK("trace exposes completed edges through Frothy",
+        fr_repl_eval_line(&runtime, "trace.complete?: t", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "true\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.count: t", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "3\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.channel: t, 1", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.level: t, 2", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "0\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.delta-ns: t, 2", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "700\nok\n") == 0);
+#if FR_FEATURE_PERSISTENCE
+  CHECK("trace save rejects live handle", fr_persist_save(&runtime) ==
+                                               FR_ERR_VOLATILE);
+#endif
+  CHECK("trace close invalidates handle",
+        fr_repl_eval_line(&runtime, "trace.close: t", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.count: t", out, sizeof(out)) ==
+                FR_ERR_HANDLE);
+
+  CHECK("trace completes at one-second signal span",
+        fr_repl_eval_line(&runtime, "t2 is trace.open:", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.watch: t2, 4", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.arm: t2", out, sizeof(out)) ==
+                FR_OK &&
+            test_trace_platform_index(&runtime, "t2", &platform_index) ==
+                FR_OK &&
+            fr_host_trace_push_edge(platform_index, 0, 1, 0) == FR_OK &&
+            fr_host_trace_push_edge(platform_index, 0, 0,
+                                    FR_SIGNAL_MAX_SPAN_NS) == FR_OK &&
+            fr_platform_trace_status(platform_index, &status) == FR_OK &&
+            status.state == FR_TRACE_COMPLETE && status.event_count == 2 &&
+            fr_repl_eval_line(&runtime, "trace.close: t2", out, sizeof(out)) ==
+                FR_OK);
+
+  CHECK("trace opens fixture for capacity boundary",
+        fr_repl_eval_line(&runtime, "full is trace.open:", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.watch: full, 4", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.arm: full", out, sizeof(out)) ==
+                FR_OK &&
+            test_trace_platform_index(&runtime, "full", &platform_index) ==
+                FR_OK);
+  for (uint16_t i = 0; i < FR_TRACE_EVENT_CAP; i++) {
+    if (fr_host_trace_push_edge(platform_index, 0, (uint8_t)(i & 1u),
+                                i == 0 ? 0 : FR_SIGNAL_TICK_NS) != FR_OK) {
+      filled = false;
+      break;
+    }
+  }
+  CHECK("trace completes exactly at fixed edge capacity",
+        filled && fr_platform_trace_status(platform_index, &status) == FR_OK &&
+            status.state == FR_TRACE_COMPLETE &&
+            status.event_count == FR_TRACE_EVENT_CAP &&
+            fr_host_trace_push_edge(platform_index, 0, 1,
+                                    FR_SIGNAL_TICK_NS) == FR_OK &&
+            fr_platform_trace_status(platform_index, &status) == FR_OK &&
+            status.event_count == FR_TRACE_EVENT_CAP);
+  CHECK("project clear releases trace platform state",
+        fr_runtime_clear_project(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "fresh is trace.open:", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.close: fresh", out,
+                              sizeof(out)) == FR_OK);
 }
 #endif
 
@@ -14601,6 +14780,9 @@ int main(void) {
 #endif
 #if FR_FEATURE_PWM
   test_pwm();
+#endif
+#if FR_FEATURE_TRACE && defined(FR_HOST_TEST_HELPERS)
+  test_trace();
 #endif
 #if FR_FEATURE_I2C
   test_i2c();

@@ -19,6 +19,68 @@ enum {
 static uint8_t fr_host_gpio_values[FR_HOST_MAX_PIN + 1];
 static uint32_t fr_host_millis;
 
+#if FR_FEATURE_TRACE
+typedef struct fr_host_trace_edge_t {
+  uint32_t tick;
+  uint8_t channel;
+  uint8_t level;
+} fr_host_trace_edge_t;
+
+typedef struct fr_host_trace_t {
+  bool in_use;
+  fr_trace_state_t state;
+  uint16_t pins[FR_TRACE_CHANNEL_CAP];
+  uint8_t channel_count;
+  fr_host_trace_edge_t edges[FR_TRACE_EVENT_CAP];
+  uint16_t event_count;
+  bool has_first_edge;
+  uint32_t first_edge_ms;
+  uint32_t latest_tick;
+} fr_host_trace_t;
+
+static fr_host_trace_t fr_host_trace;
+
+static fr_err_t fr_host_trace_entry(uint16_t platform_index,
+                                    fr_host_trace_t **out_trace) {
+  if (out_trace == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (platform_index != 0 || !fr_host_trace.in_use) {
+    return FR_ERR_HANDLE;
+  }
+
+  *out_trace = &fr_host_trace;
+  return FR_OK;
+}
+
+static bool fr_host_trace_edge_after(const fr_host_trace_edge_t *a,
+                                     const fr_host_trace_edge_t *b) {
+  return a->tick > b->tick ||
+         (a->tick == b->tick && a->channel > b->channel);
+}
+
+static void fr_host_trace_sort(fr_host_trace_t *trace) {
+  for (uint16_t i = 1; i < trace->event_count; i++) {
+    fr_host_trace_edge_t edge = trace->edges[i];
+    uint16_t at = i;
+
+    while (at > 0 && fr_host_trace_edge_after(&trace->edges[at - 1], &edge)) {
+      trace->edges[at] = trace->edges[at - 1];
+      at -= 1u;
+    }
+    trace->edges[at] = edge;
+  }
+}
+
+static void fr_host_trace_finish(fr_host_trace_t *trace) {
+  if (trace->state == FR_TRACE_COMPLETE) {
+    return;
+  }
+  trace->state = FR_TRACE_COMPLETE;
+  fr_host_trace_sort(trace);
+}
+#endif
+
 #if FR_FEATURE_PWM
 enum {
   FR_HOST_PWM_RING_CAP = 8,
@@ -296,6 +358,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
     return fr_platform_i2c_close(platform_index);
   }
 #endif
+#if FR_FEATURE_TRACE
+  if (kind == FR_HANDLE_KIND_TRACE) {
+    return fr_platform_trace_close(platform_index);
+  }
+#endif
 #if FR_FEATURE_NET
   if (kind == FR_HANDLE_KIND_TCP) {
     return fr_platform_tcp_close(platform_index);
@@ -305,6 +372,193 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
   (void)platform_index;
   return FR_OK;
 }
+
+#if FR_FEATURE_TRACE
+fr_err_t fr_platform_trace_open(uint16_t *out_platform_index) {
+  if (out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_host_trace.in_use) {
+    return FR_ERR_CAPACITY;
+  }
+
+  memset(&fr_host_trace, 0, sizeof(fr_host_trace));
+  fr_host_trace.in_use = true;
+  fr_host_trace.state = FR_TRACE_CONFIGURING;
+  *out_platform_index = 0;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_watch(uint16_t platform_index, uint16_t pin,
+                                 uint8_t *out_channel) {
+  fr_host_trace_t *trace = NULL;
+
+  if (out_channel == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_trace_entry(platform_index, &trace));
+  if (trace->state != FR_TRACE_CONFIGURING || pin > FR_HOST_MAX_PIN) {
+    return FR_ERR_DOMAIN;
+  }
+  for (uint8_t i = 0; i < trace->channel_count; i++) {
+    if (trace->pins[i] == pin) {
+      return FR_ERR_DOMAIN;
+    }
+  }
+  if (trace->channel_count >= FR_TRACE_CHANNEL_CAP) {
+    return FR_ERR_CAPACITY;
+  }
+
+  *out_channel = trace->channel_count;
+  trace->pins[trace->channel_count] = pin;
+  trace->channel_count += 1u;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_arm(uint16_t platform_index) {
+  fr_host_trace_t *trace = NULL;
+
+  FR_TRY(fr_host_trace_entry(platform_index, &trace));
+  if (trace->state != FR_TRACE_CONFIGURING || trace->channel_count == 0) {
+    return FR_ERR_DOMAIN;
+  }
+
+  trace->event_count = 0;
+  trace->has_first_edge = false;
+  trace->first_edge_ms = 0;
+  trace->latest_tick = 0;
+  trace->state = FR_TRACE_ARMED;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_stop(uint16_t platform_index) {
+  fr_host_trace_t *trace = NULL;
+
+  FR_TRY(fr_host_trace_entry(platform_index, &trace));
+  if (trace->state == FR_TRACE_CONFIGURING) {
+    return FR_ERR_DOMAIN;
+  }
+  fr_host_trace_finish(trace);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_status(uint16_t platform_index,
+                                  fr_trace_status_t *out_status) {
+  fr_host_trace_t *trace = NULL;
+
+  if (out_status == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_trace_entry(platform_index, &trace));
+  if (trace->state == FR_TRACE_ARMED && trace->has_first_edge &&
+      (uint32_t)(fr_host_millis - trace->first_edge_ms) >= 1000u) {
+    fr_host_trace_finish(trace);
+  }
+
+  *out_status = (fr_trace_status_t){
+      .state = trace->state,
+      .channel_count = trace->channel_count,
+      .event_count = trace->event_count,
+  };
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_event(uint16_t platform_index,
+                                 uint16_t event_index,
+                                 fr_trace_event_t *out_event) {
+  fr_host_trace_t *trace = NULL;
+
+  if (out_event == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_trace_entry(platform_index, &trace));
+  if (trace->state != FR_TRACE_COMPLETE) {
+    return FR_ERR_DOMAIN;
+  }
+  if (event_index >= trace->event_count) {
+    return FR_ERR_RANGE;
+  }
+
+  *out_event = (fr_trace_event_t){
+      .channel = trace->edges[event_index].channel,
+      .level = trace->edges[event_index].level,
+      .delta_ns = event_index == 0
+                      ? 0
+                      : (trace->edges[event_index].tick -
+                         trace->edges[event_index - 1].tick) *
+                            FR_SIGNAL_TICK_NS,
+  };
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_pin(uint16_t platform_index, uint8_t channel,
+                               uint16_t *out_pin) {
+  fr_host_trace_t *trace = NULL;
+
+  if (out_pin == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_trace_entry(platform_index, &trace));
+  if (channel >= trace->channel_count) {
+    return FR_ERR_RANGE;
+  }
+
+  *out_pin = trace->pins[channel];
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_close(uint16_t platform_index) {
+  if (platform_index == 0) {
+    memset(&fr_host_trace, 0, sizeof(fr_host_trace));
+  }
+  return FR_OK;
+}
+
+#ifdef FR_HOST_TEST_HELPERS
+fr_err_t fr_host_trace_push_edge(uint16_t platform_index, uint8_t channel,
+                                 uint8_t level, uint32_t delta_ns) {
+  fr_host_trace_t *trace = NULL;
+  uint32_t delta_ticks = 0;
+
+  FR_TRY(fr_host_trace_entry(platform_index, &trace));
+  if (trace->state == FR_TRACE_COMPLETE) {
+    return FR_OK;
+  }
+  if (trace->state != FR_TRACE_ARMED || channel >= trace->channel_count ||
+      level > 1 || delta_ns % FR_SIGNAL_TICK_NS != 0) {
+    return FR_ERR_DOMAIN;
+  }
+  if (!trace->has_first_edge && delta_ns != 0) {
+    return FR_ERR_DOMAIN;
+  }
+
+  delta_ticks = delta_ns / FR_SIGNAL_TICK_NS;
+  if (trace->has_first_edge &&
+      delta_ticks > FR_SIGNAL_MAX_TICKS - trace->latest_tick) {
+    fr_host_trace_finish(trace);
+    return FR_OK;
+  }
+  if (!trace->has_first_edge) {
+    trace->has_first_edge = true;
+    trace->first_edge_ms = fr_host_millis;
+  } else {
+    trace->latest_tick += delta_ticks;
+  }
+
+  trace->edges[trace->event_count] = (fr_host_trace_edge_t){
+      .tick = trace->latest_tick,
+      .channel = channel,
+      .level = level,
+  };
+  trace->event_count += 1u;
+  if (trace->event_count == FR_TRACE_EVENT_CAP ||
+      trace->latest_tick == FR_SIGNAL_MAX_TICKS) {
+    fr_host_trace_finish(trace);
+  }
+  return FR_OK;
+}
+#endif
+#endif
 
 #if FR_FEATURE_UART
 fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
