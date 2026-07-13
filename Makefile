@@ -585,7 +585,34 @@ test-host-normal-event-transcript: host-normal-events ## Replay the host_normal 
 	fi; \
 	printf 'host_normal event transcript ok\n'
 
-test-host-normal-profile: test-host-normal test-host-normal-transcript test-host-normal-event-transcript
+test-host-normal-trace-transcript: host-normal ## Replay the bounded trace transcript.
+	@out=$$(printf '%s\n' \
+		'see trace.open' \
+		't is trace.open:' \
+		'trace.watch: t, 4' \
+		'trace.watch: t, 5' \
+		'trace.arm: t' \
+		'trace.stop: t' \
+		'trace.count: t' \
+		'trace.complete?: t' \
+		'trace.dump: t' \
+		'trace.close: t' \
+		| build/host/frothy-host-normal); \
+	for expected in \
+		'trace.open() -> handle' \
+		'open one bounded digital edge capture' \
+		'trace state=complete channels=2 events=0 tick_ns=100' \
+		'trace.channel 0 pin=4' \
+		'trace.channel 1 pin=5' \
+		'> true'; do \
+		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
+			printf '%s\nmissing trace transcript text: %s\n' "$$out" "$$expected"; \
+			exit 1; \
+		fi; \
+	done; \
+	printf 'host_normal trace transcript ok\n'
+
+test-host-normal-profile: test-host-normal test-host-normal-transcript test-host-normal-event-transcript test-host-normal-trace-transcript
 
 test-lib-e2e: frothy-host-command ## Build and run the library extension e2e fixture.
 	BUILD_DIR="$(abspath $(LIB_E2E_BUILD_DIR))" "$(abspath $(FROTHY_HOST_COMMAND_BINARY))" build --project "$(abspath $(LIB_E2E_PROJECT))"
@@ -812,4 +839,4 @@ vsix: ## Build the VS Code extension package.
 clean: ## Remove generated build outputs.
 	rm -rf build frothy test/test test/test-host-normal test/fixtures/projects/*/.frothy
 
-.PHONY: test test-esp-idf-console-boundary test-unity help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript seeed-xiao-host test-seeed-xiao-host-transcript frothy-host-command cli install-host test-install-host print-config vsix clean
+.PHONY: test test-esp-idf-console-boundary test-unity help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-trace-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript seeed-xiao-host test-seeed-xiao-host-transcript frothy-host-command cli install-host test-install-host print-config vsix clean
