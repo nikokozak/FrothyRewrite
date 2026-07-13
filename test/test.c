@@ -14160,6 +14160,29 @@ static void test_repl_pump(void) {
   test_repl_io_state = NULL;
 }
 
+#if FR_FEATURE_COMPILER && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+static void test_repl_interrupt_terminates_response(void) {
+  fr_runtime_t runtime;
+  fr_native_id_t native_id = 0;
+  fr_tagged_t tagged = 0;
+  char out[128] = {0};
+  const char *lines[] = {"forever [ stop: ]", "1"};
+
+  CHECK("repl interrupt response returns to prompt",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_native_install(&runtime, test_native_interrupt, 0, NULL,
+                              &native_id) == FR_OK &&
+            fr_tagged_encode_native_id(native_id, &tagged) == FR_OK &&
+            fr_slot_write(&runtime, fr_slot_first_project_id(), tagged) ==
+                FR_OK &&
+            fr_slot_bind_project_name(&runtime, "stop",
+                                      fr_slot_first_project_id()) == FR_OK &&
+            test_repl_run_lines(&runtime, lines, 2, out,
+                                (uint16_t)sizeof(out)) &&
+            strcmp(out, "> interrupted\nok\n> 1\nok\n> ") == 0);
+}
+#endif
+
 static void test_repl_transcript(void) {
   fr_runtime_t runtime;
   char out[2048];
@@ -14528,6 +14551,9 @@ int main(void) {
 #endif
 #endif
   test_repl_pump();
+#if FR_FEATURE_COMPILER && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  test_repl_interrupt_terminates_response();
+#endif
   test_repl_transcript();
 #if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS
   test_repl_zero_arg_call_result();

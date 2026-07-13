@@ -6,6 +6,14 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Interrupting a running program returns the editor to idle immediately.**
+  The friendly `ok — interrupted` line did not end with the wire protocol's
+  required bare `ok`, so browser and CLI requests remained pending until a
+  second Ctrl-C. Interrupts now report `interrupted`, terminate with `ok`, and
+  return the normal prompt in one response.
+
 ## [0.1.2] - 2026-07-10
 
 ### Changed
