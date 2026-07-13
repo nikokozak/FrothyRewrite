@@ -1628,15 +1628,16 @@ func availableVerbs() []verb {
 				"--baud.",
 			examples: "  frothy send blink.fr --port /dev/cu.usbserial-0001\n" +
 				"      send blink.fr through the compiler on the board on that port"},
-		{name: "flash", group: "Project", summary: "build the board firmware and flash it over serial", run: runFlashMain,
-			longDesc: "Flash builds the board firmware from source and writes it to a connected " +
+		{name: "flash", group: "Project", summary: "flash Frothy firmware to a board over serial", run: runFlashMain,
+			longDesc: "Flash writes Frothy firmware to a connected " +
 				"device over serial, replacing whatever was on the chip. Use it once per board " +
 				"to install Frothy itself, before send or connect can talk to a running device. " +
-				"It takes the board name as its only argument and drives the build through make. " +
+				"A packaged install uses the release firmware included by Homebrew; from a Frothy " +
+				"source checkout it builds that checkout first. " +
 				"The serial port is discovered automatically when one device is attached, or " +
 				"named explicitly with --port when several are.",
 			examples: "  frothy flash esp32_devkit_v1 --port /dev/cu.usbserial-0001\n" +
-				"      build the firmware and flash it to the board on that port"},
+				"      flash Frothy to the board on that port"},
 		{name: "wipe", group: "Recover", summary: "erase Frothy persistence on a wedged board", run: runWipeMain,
 			longDesc: "Wipe erases the persisted device state on a board wedged by a bad save, " +
 				"leaving the firmware and other partitions in place. It erases the dedicated " +
@@ -1657,7 +1658,7 @@ func availableVerbs() []verb {
 			longDesc: "Doctor checks serial discovery and the connected device. When a " +
 				"Frothy source checkout is available, it also checks the Make and ESP-IDF tools " +
 				"used for firmware development. A package installation does not need those " +
-				"firmware checks for connect, send, or editor use. It does not modify anything.",
+				"source-build checks for flash, connect, send, or editor use. It does not modify anything.",
 			examples: "  frothy doctor\n" +
 				"      run every check and print the results"},
 		{name: "connect", group: "Work", summary: "open the human REPL over serial", run: runConnectMain,
@@ -1703,7 +1704,7 @@ func availableVerbs() []verb {
 			examples: "  frothy install --port /dev/cu.usbserial-0001\n" +
 				"      send the project's library source to the board on that port"},
 		{name: "bootstrap", group: "Start", summary: "fetch and install the ESP-IDF SDK under ~/.froth/sdk/", run: runBootstrapMain,
-			longDesc: "Bootstrap fetches and installs the ESP-IDF SDK that flash, build, and " +
+			longDesc: "Bootstrap fetches and installs the ESP-IDF SDK that source-checkout flash, build, and " +
 				"firmware bundle generation depend on, placing it under ~/.froth/sdk/esp-idf/ (or under $FROTH_HOME " +
 				"if set). It uses no sudo, never writes outside that tree, and is idempotent: a " +
 				"successful install drops a marker file, and a re-run exits 0 with \"already " +
@@ -1828,19 +1829,17 @@ func defaultCommandRunner(name string, args []string) error {
 func runFlashMain() int {
 	args := os.Args[1:]
 	root := ""
+	firmwareRoot := ""
 	if !helpRequested(args) {
-		var err error
-		root, err = resolveFrothySourceRoot(".")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "flash: %v\n", err)
-			return 2
-		}
+		root, _ = resolveFrothySourceRoot(".")
+		executable, _ := os.Executable()
+		firmwareRoot = packagedFirmwareRoot(executable)
 	}
-	return runFlashCommand(args, root, os.Stdout, os.Stderr,
+	return runFlashCommand(args, root, firmwareRoot, os.Stdout, os.Stderr,
 		defaultPortLister, defaultCommandRunner)
 }
 
-func runFlashCommand(args []string, sourceRoot string, stdout io.Writer,
+func runFlashCommand(args []string, sourceRoot, firmwareRoot string, stdout io.Writer,
 	stderr io.Writer, list portLister, run commandRunner) int {
 	fs := flag.NewFlagSet("frothy flash", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -1873,13 +1872,23 @@ func runFlashCommand(args []string, sourceRoot string, stdout io.Writer,
 	}
 	board := positional[0]
 
-	if sourceRoot == "" {
-		fmt.Fprintf(stderr, "flash: cannot find Frothy source root; set %s\n", frothySourceRootEnv)
-		return 2
-	}
-	if !flashableBoard(filepath.Join(sourceRoot, "boards"), board) {
-		fmt.Fprintf(stderr, "flash: unknown board %q\n", board)
-		return 2
+	var packaged firmwareBundleRow
+	if sourceRoot != "" {
+		if !flashableBoard(filepath.Join(sourceRoot, "boards"), board) {
+			fmt.Fprintf(stderr, "flash: unknown board %q\n", board)
+			return 2
+		}
+	} else {
+		if firmwareRoot == "" {
+			fmt.Fprintln(stderr, "flash: no packaged firmware is installed; reinstall Frothy with Homebrew or run from a Frothy source checkout")
+			return 2
+		}
+		var err error
+		packaged, err = loadPackagedFirmware(firmwareRoot, board)
+		if err != nil {
+			fmt.Fprintf(stderr, "flash: %v\n", err)
+			return 2
+		}
 	}
 
 	chosen, err := pickPort(*port, list)
@@ -1888,7 +1897,20 @@ func runFlashCommand(args []string, sourceRoot string, stdout io.Writer,
 		return 2
 	}
 
-	if err := run("make", []string{"-C", sourceRoot, "flash", "BOARD=" + board, "BOARD_PORT=" + chosen}); err != nil {
+	command := "make"
+	commandArgs := []string{"-C", sourceRoot, "flash", "BOARD=" + board, "BOARD_PORT=" + chosen}
+	if sourceRoot == "" {
+		command = "esptool"
+		commandArgs = []string{"--chip", packaged.Chip, "--port", chosen, "--baud", "460800",
+			"--before", "default-reset", "--after", "hard-reset", "write-flash",
+			"--flash-mode", "keep", "--flash-freq", "keep", "--flash-size", "keep"}
+		for _, segment := range packaged.Segments {
+			commandArgs = append(commandArgs, fmt.Sprintf("0x%x", segment.Address),
+				filepath.Join(firmwareRoot, segment.File))
+		}
+	}
+
+	if err := run(command, commandArgs); err != nil {
 		fmt.Fprintf(stderr, "flash: %v\n", err)
 		if strings.Contains(strings.ToLower(commandErrorText(err)), "busy") {
 			fmt.Fprintln(stderr, "flash: port is busy; try: frothy stop")

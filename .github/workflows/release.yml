@@ -45,6 +45,9 @@ jobs:
           test "$segment_count" = 6
           test "$vsix_count" = 1
           test -f dist-release/manifest.json
+          firmware_files=(dist-release/*-*-0x*.bin)
+          tar -czf "dist-release/frothy-firmware-${GITHUB_REF_NAME}.tar.gz" \
+            -C dist-release manifest.json "${firmware_files[@]#dist-release/}"
           ls -l dist-release
 
       - name: Create GitHub release

@@ -1,6 +1,6 @@
 frothy doctor — check the installed CLI, device, and available firmware tools
 
-Doctor checks serial discovery and the connected device. When a Frothy source checkout is available, it also checks the Make and ESP-IDF tools used for firmware development. A package installation does not need those firmware checks for connect, send, or editor use. It does not modify anything.
+Doctor checks serial discovery and the connected device. When a Frothy source checkout is available, it also checks the Make and ESP-IDF tools used for firmware development. A package installation does not need those source-build checks for flash, connect, send, or editor use. It does not modify anything.
 
 Examples:
   frothy doctor

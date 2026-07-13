@@ -103,19 +103,26 @@ Render the proven formula template with the real release values:
 ```sh
 version=X.Y.Z
 url="https://github.com/nikokozak/FrothyRewrite/archive/refs/tags/v${version}.tar.gz"
+firmware_url="https://github.com/nikokozak/FrothyRewrite/releases/download/v${version}/frothy-firmware-v${version}.tar.gz"
 curl -fL "$url" -o "/tmp/frothy-${version}.tar.gz"
+curl -fL "$firmware_url" -o "/tmp/frothy-firmware-${version}.tar.gz"
 sha256="$(shasum -a 256 "/tmp/frothy-${version}.tar.gz" | cut -d ' ' -f 1)"
+firmware_sha256="$(shasum -a 256 "/tmp/frothy-firmware-${version}.tar.gz" | cut -d ' ' -f 1)"
 sed -e "s|@VERSION@|${version}|g" \
     -e "s|@URL@|${url}|g" \
     -e "s|@SHA256@|${sha256}|g" \
+    -e "s|@FIRMWARE_URL@|${firmware_url}|g" \
+    -e "s|@FIRMWARE_SHA256@|${firmware_sha256}|g" \
     packaging/homebrew/frothy.rb.in > /tmp/frothy.rb
 brew style /tmp/frothy.rb
 ```
 
 Review `/tmp/frothy.rb`, then commit it as `Formula/frothy.rb` in the dedicated
-tap. The Homebrew package installs only `bin/frothy`; firmware development and
-ESP-IDF remain source-checkout workflows. Publishing the tap is a separate
-authorized release action, never part of an ordinary code push.
+tap. The package installs `frothy`, `esptool`, and the release firmware, so
+`frothy flash BOARD` works without a source checkout. Firmware development and
+custom firmware builds still require the Frothy source and ESP-IDF. Publishing
+the tap is a separate authorized release action, never part of an ordinary code
+push.
 
 ## Where To Talk
 

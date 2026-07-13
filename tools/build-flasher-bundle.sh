@@ -46,6 +46,9 @@ for (const entry of fs.readdirSync(boardsDir, { withFileTypes: true })
   if (typeof board.profile !== "string" || !board.profile) {
     throw new Error(`${boardId}: board profile missing`);
   }
+  if (typeof board.chip !== "string" || !/^[a-z0-9]+$/.test(board.chip)) {
+    throw new Error(`${boardId}: board chip missing or invalid`);
+  }
   if (!bundleIdPattern.test(board.profile)) {
     throw new Error(`${boardId}: invalid board profile ${board.profile}`);
   }
@@ -108,6 +111,7 @@ if (builds.length === 0) throw new Error("no official ESP-IDF boards found");
 
 const manifest = builds.map(({ boardId, board, segments }) => ({
   board: boardId,
+  chip: board.chip,
   profile: board.profile,
   label: board.name,
   version,

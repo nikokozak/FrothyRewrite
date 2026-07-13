@@ -1,10 +1,10 @@
-frothy flash — build the board firmware and flash it over serial
+frothy flash — flash Frothy firmware to a board over serial
 
-Flash builds the board firmware from source and writes it to a connected device over serial, replacing whatever was on the chip. Use it once per board to install Frothy itself, before send or connect can talk to a running device. It takes the board name as its only argument and drives the build through make. The serial port is discovered automatically when one device is attached, or named explicitly with --port when several are.
+Flash writes Frothy firmware to a connected device over serial, replacing whatever was on the chip. Use it once per board to install Frothy itself, before send or connect can talk to a running device. A packaged install uses the release firmware included by Homebrew; from a Frothy source checkout it builds that checkout first. The serial port is discovered automatically when one device is attached, or named explicitly with --port when several are.
 
 Examples:
   frothy flash esp32_devkit_v1 --port /dev/cu.usbserial-0001
-      build the firmware and flash it to the board on that port
+      flash Frothy to the board on that port
 
 Flags:
   -port string
