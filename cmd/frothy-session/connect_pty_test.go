@@ -631,7 +631,7 @@ func TestConnectResetDetectionRendersNotices(t *testing.T) {
 }
 
 // A bracket-balanced form typed across three lines feeds through
-// sourceFormState: the device receives one joined form, and the user
+// sourceFormState: the device receives one escaped source-form request, and the user
 // sees a continuation prompt for each interior line.
 func TestConnectMultiLineContinuationSubmitsOneForm(t *testing.T) {
 	master, slave, _, err := testpty.Open()
@@ -683,7 +683,7 @@ func TestConnectMultiLineContinuationSubmitsOneForm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []byte("to foo with x [ gpio.high: x ]\n")
+	want := []byte("source-form to foo with x [\\ngpio.high: x\\n]\n")
 	got := make([]byte, 0, len(want))
 	deadline := time.After(2 * time.Second)
 	for len(got) < len(want) {

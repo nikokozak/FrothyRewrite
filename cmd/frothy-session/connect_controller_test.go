@@ -182,6 +182,28 @@ func TestConnectControllerSubmitRecordsHistory(t *testing.T) {
 	}
 }
 
+func TestConnectControllerSendsMultilineFormWithoutFlatteningHistory(t *testing.T) {
+	var sent [][]byte
+	c := newConnectController(io.Discard, func(line []byte) error {
+		sent = append(sent, append([]byte(nil), line...))
+		return nil
+	})
+	c.historyOn = true
+	c.writePrompt()
+
+	for _, line := range []string{"to foo [", "  one", "]"} {
+		c.onInput(inputPrintable{Bytes: []byte(line)})
+		c.onInput(inputSubmit{})
+	}
+
+	if len(sent) != 1 || string(sent[0]) != "source-form to foo [\\n  one\\n]\n" {
+		t.Fatalf("sent = %q, want one encoded source-form", sent)
+	}
+	if len(c.history) != 0 {
+		t.Fatalf("multiline form entered one-line history: %q", c.history)
+	}
+}
+
 func TestConnectControllerInsertMidLine(t *testing.T) {
 	var out bytes.Buffer
 	c := newConnectController(&out, func([]byte) error { return nil })

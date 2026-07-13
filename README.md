@@ -82,6 +82,9 @@ greet:
 blink: $led_builtin, 5, 200
 ```
 
+Inside `[...]`, put each expression on its own line and no ending punctuation
+is needed. Use `;` only when you want several expressions on the same line.
+
 Words you define stick around on the board, so you build a program by
 teaching the chip one word at a time.
 

@@ -67,7 +67,52 @@ static uint8_t fr_repl_wire_bytes[FR_REPL_APPLY_BYTES];
 static fr_overlay_update_decoded_t fr_repl_apply_decoded;
 #endif
 
-static bool fr_repl_is_space(char ch) { return ch == ' ' || ch == '\t'; }
+/* Decoded source-form requests can contain line breaks; command and bare-word
+ * scans treat them as the same source whitespace the parser does. */
+static bool fr_repl_is_space(char ch) {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+}
+
+/* Tooling keeps the serial protocol one request per physical line. A
+ * source-form request carries real source newlines as `\n` and protects a
+ * literal backslash as `\\`; decode it over the prefix in the REPL's existing
+ * line buffer before normal parsing. */
+static fr_err_t fr_repl_decode_source_form_request(char *line) {
+  static const char prefix[] = "source-form ";
+  const size_t prefix_length = sizeof(prefix) - 1u;
+  const char *read = NULL;
+  char *write = line;
+
+  if (line == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (strncmp(line, prefix, prefix_length) != 0) {
+    return FR_OK;
+  }
+
+  read = line + prefix_length;
+  if (*read == '\0') {
+    return FR_ERR_INVALID;
+  }
+  while (*read != '\0') {
+    if (*read != '\\') {
+      *write++ = *read++;
+      continue;
+    }
+
+    read += 1;
+    if (*read == '\\') {
+      *write++ = '\\';
+    } else if (*read == 'n') {
+      *write++ = '\n';
+    } else {
+      return FR_ERR_INVALID;
+    }
+    read += 1;
+  }
+  *write = '\0';
+  return FR_OK;
+}
 
 static bool fr_repl_is_digit(char ch) { return ch >= '0' && ch <= '9'; }
 
@@ -863,16 +908,18 @@ static fr_err_t fr_repl_append_span(char *out, uint16_t out_cap,
   return FR_OK;
 }
 
-static bool fr_repl_diagnostic_span_column(const char *line,
-                                           const fr_diagnostic_t *diag,
-                                           uint16_t *out_column) {
+static bool fr_repl_diagnostic_source_line(
+    const char *line, const fr_diagnostic_t *diag, const char **out_start,
+    uint16_t *out_length, uint16_t *out_column) {
   size_t line_len = 0;
   fr_addr_t line_start = 0;
   fr_addr_t line_end = 0;
   fr_addr_t span_start = 0;
+  const char *source_start = line;
+  const char *source_end = NULL;
 
   if (line == NULL || diag == NULL || diag->span_start == NULL ||
-      out_column == NULL) {
+      out_start == NULL || out_length == NULL || out_column == NULL) {
     return false;
   }
   line_len = strlen(line);
@@ -891,7 +938,24 @@ static bool fr_repl_diagnostic_span_column(const char *line,
   if (span_start < line_end && diag->span_length == 0) {
     return false;
   }
-  *out_column = (uint16_t)(span_start - line_start);
+
+  for (const char *scan = line; scan < diag->span_start; scan++) {
+    if (*scan == '\n' || *scan == '\r') {
+      source_start = scan + 1;
+    }
+  }
+  source_end = source_start;
+  while (*source_end != '\0' && *source_end != '\n' &&
+         *source_end != '\r') {
+    source_end += 1;
+  }
+  if ((uint32_t)(source_end - source_start) > UINT16_MAX ||
+      (uint32_t)(diag->span_start - source_start) > UINT16_MAX) {
+    return false;
+  }
+  *out_start = source_start;
+  *out_length = (uint16_t)(source_end - source_start);
+  *out_column = (uint16_t)(diag->span_start - source_start);
   return true;
 }
 
@@ -1146,11 +1210,15 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
   if (line != NULL) {
     uint16_t detail_used = used;
     uint16_t source_used = used;
+    const char *source_start = line;
+    uint16_t source_length = (uint16_t)strlen(line);
     uint16_t column = 0;
     uint16_t caret_length = diag->span_length;
-    bool has_caret = fr_repl_diagnostic_span_column(line, diag, &column);
+    bool has_caret = fr_repl_diagnostic_source_line(
+        line, diag, &source_start, &source_length, &column);
 
-    if (fr_repl_append(out, out_cap, &used, line) != FR_OK ||
+    if (fr_repl_append_span(out, out_cap, &used, source_start, source_length) !=
+            FR_OK ||
         fr_repl_append_char(out, out_cap, &used, '\n') != FR_OK) {
       fr_repl_truncate(out, &used, detail_used);
       return FR_OK;
@@ -1159,6 +1227,10 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
     source_used = used;
     if (caret_length == 0) {
       caret_length = 1;
+    }
+    if (has_caret && column < source_length &&
+        caret_length > (uint16_t)(source_length - column)) {
+      caret_length = (uint16_t)(source_length - column);
     }
     if (has_caret &&
         fr_repl_append_caret_line(out, out_cap, &used, column, caret_length) !=
@@ -2323,7 +2395,10 @@ fr_err_t fr_repl_run(fr_runtime_t *runtime, const fr_repl_io_t *io) {
     }
 
     fr_diagnostic_t diag = {0};
-    fr_err_t err = fr_repl_eval_line_to_writer(runtime, line, &writer, &diag);
+    fr_err_t err = fr_repl_decode_source_form_request(line);
+    if (err == FR_OK) {
+      err = fr_repl_eval_line_to_writer(runtime, line, &writer, &diag);
+    }
     if (err == FR_ERR_INTERRUPTED) {
       FR_TRY(io->write_text("interrupted\nok\n"));
     } else if (err != FR_OK) {

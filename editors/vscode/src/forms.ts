@@ -155,7 +155,7 @@ function commentCanStart(line: string, index: number): boolean {
 
 function formFrom(state: FormState, complete: boolean): SourceForm {
   return {
-    source: state.lines.filter(Boolean).join(' '),
+    source: state.lines.filter(Boolean).join('\n'),
     startOffset: state.startOffset,
     endOffset: state.endOffset,
     startLine: state.startLine,

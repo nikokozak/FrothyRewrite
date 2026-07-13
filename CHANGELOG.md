@@ -6,6 +6,14 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+### Added
+
+- **Newlines can separate expressions inside blocks.** Multiline `[...]`
+  forms no longer need a semicolon at the end of each line; semicolons remain
+  available when several expressions share one line. The CLI, browser editor,
+  and VS Code now preserve those newlines when they send a form, and multiline
+  errors point to the physical line that failed.
+
 ### Fixed
 
 - **Interrupting a running program returns the editor to idle immediately.**

@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { FROTHY_EXAMPLES } from "../src/examples.generated.js";
 import { formAt, splitForms } from "../src/forms.js";
 
-test("forms: groups the CLI multiline fixture into one sendable line", () => {
+test("forms: preserves newlines in the CLI multiline fixture", () => {
   const forms = splitForms("boot is fn [\n  one\n]\nwords\n");
-  assert.deepEqual(forms.map((form) => form.source), ["boot is fn [ one ]", "words"]);
+  assert.deepEqual(forms.map((form) => form.source), ["boot is fn [\none\n]", "words"]);
   assert.deepEqual(forms.map((form) => [form.startLine, form.endLine, form.complete]), [
     [0, 2, true],
     [3, 3, true],
@@ -24,13 +24,13 @@ test("forms: removes comments without treating string or name dashes as comments
     "]",
   ].join("\n"));
   assert.equal(forms.length, 1);
-  assert.equal(forms[0].source, 'boot is fn [ print: "-- still text ]" name--part ]');
+  assert.equal(forms[0].source, 'boot is fn [\nprint: "-- still text ]"\nname--part\n]');
 });
 
 test("forms: matches every explicit CLI continuation ending", () => {
   for (const ending of [",", "->", "else", "fn", "forever", "if", "is", "repeat", "set", "to", "with"]) {
     const forms = splitForms(`first ${ending}\n  second\nthird\n`);
-    assert.deepEqual(forms.map((form) => form.source), [`first ${ending} second`, "third"], ending);
+    assert.deepEqual(forms.map((form) => form.source), [`first ${ending}\nsecond`, "third"], ending);
   }
 });
 

@@ -25,6 +25,8 @@ export type Unsubscribe = () => void;
 
 export interface ReplConnector {
   sendLine(line: string): Promise<Response>;
+  /** Send one source form, preserving its physical newlines over the line wire. */
+  sendForm(source: string): Promise<Response>;
   /** Send a raw Ctrl-C (0x03) out-of-band to interrupt a running command.
    *  Bypasses the send queue; does not wait for a response. */
   interrupt(): Promise<void>;

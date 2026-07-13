@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -347,10 +348,10 @@ func (c *connectController) onInput(ev inputEvent) (exit bool, code int) {
 		c.savedLine = c.savedLine[:0]
 		c.savedCur = 0
 		if source, complete := c.form.appendLine(line); complete {
-			if c.historyOn {
+			if c.historyOn && !strings.ContainsAny(source, "\r\n") {
 				c.history = appendHistory(c.history, source)
 			}
-			sent := []byte(source + "\n")
+			sent := []byte(wireRequest(source) + "\n")
 			if err := c.sendLine(sent); err == nil {
 				c.recordExpectedEcho(sent)
 				c.awaitingPrompt = true

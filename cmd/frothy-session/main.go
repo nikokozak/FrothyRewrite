@@ -173,10 +173,33 @@ func (d *serialDevice) readUntilPrompt(timeout time.Duration, requireStatus bool
 }
 
 func (d *serialDevice) sendLine(line string, timeout time.Duration, promptSeen func()) (string, error) {
-	if err := d.writeBytes([]byte(line + "\n")); err != nil {
+	if err := d.writeBytes([]byte(wireRequest(line) + "\n")); err != nil {
 		return "", err
 	}
 	return d.readUntilPrompt(timeout, true, promptSeen)
+}
+
+func wireRequest(source string) string {
+	normalized := strings.ReplaceAll(source, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	if !strings.Contains(normalized, "\n") {
+		return normalized
+	}
+
+	var request strings.Builder
+	request.Grow(len(normalized) + len("source-form "))
+	request.WriteString("source-form ")
+	for i := 0; i < len(normalized); i++ {
+		switch normalized[i] {
+		case '\\':
+			request.WriteString("\\\\")
+		case '\n':
+			request.WriteString("\\n")
+		default:
+			request.WriteByte(normalized[i])
+		}
+	}
+	return request.String()
 }
 
 func (d *serialDevice) writeBytes(bytes []byte) error {
@@ -487,14 +510,13 @@ func (s *sourceFormState) reset() {
 }
 
 func (s *sourceFormState) appendLine(line string) (string, bool) {
-	trimmed := strings.TrimSpace(line)
 	code := s.scan(line)
 	codeTrimmed := strings.TrimSpace(code)
 	if !s.hasPending() && codeTrimmed == "" {
 		return "", false
 	}
 
-	s.lines = append(s.lines, trimmed)
+	s.lines = append(s.lines, line)
 	s.codeLines = append(s.codeLines, codeTrimmed)
 
 	source := s.source()
@@ -508,13 +530,7 @@ func (s *sourceFormState) appendLine(line string) (string, bool) {
 }
 
 func (s *sourceFormState) source() string {
-	parts := make([]string, 0, len(s.lines))
-	for _, line := range s.lines {
-		if line != "" {
-			parts = append(parts, line)
-		}
-	}
-	return strings.Join(parts, " ")
+	return strings.TrimSpace(strings.Join(s.lines, "\n"))
 }
 
 func (s *sourceFormState) codeSource() string {

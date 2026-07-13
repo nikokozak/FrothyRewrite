@@ -119,7 +119,7 @@ function commentCanStart(line: string, index: number): boolean {
 
 function formFrom(state: FormState, complete: boolean): SourceForm {
   return {
-    source: state.codeLines.filter(Boolean).join(" "),
+    source: state.codeLines.filter(Boolean).join("\n"),
     startLine: state.startLine,
     endLine: state.endLine,
     complete,

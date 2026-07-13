@@ -37,6 +37,7 @@ typedef struct fr_token_t {
   fr_parse_span_t span;
   fr_int_t int_value;
   bool leading_space;
+  bool leading_newline;
   bool text_has_escapes;
 } fr_token_t;
 
@@ -140,12 +141,17 @@ bool fr_parse_span_equals(fr_parse_span_t span, const char *text) {
 
 static fr_err_t fr_parse_skip_space_and_comments(fr_parser_t *parser,
                                                  fr_token_kind_t prev_kind,
-                                                 bool *out_skipped) {
+                                                 bool *out_skipped,
+                                                 bool *out_crossed_newline) {
   bool skipped = false;
+  bool crossed_newline = false;
 
   for (;;) {
     while (fr_parse_is_space(*parser->cursor)) {
       skipped = true;
+      if (*parser->cursor == '\n' || *parser->cursor == '\r') {
+        crossed_newline = true;
+      }
       parser->cursor += 1;
     }
 
@@ -168,6 +174,9 @@ static fr_err_t fr_parse_skip_space_and_comments(fr_parser_t *parser,
       parser->cursor += 2;
       while (parser->cursor[0] != '\0' &&
              !(parser->cursor[0] == '*' && parser->cursor[1] == '-')) {
+        if (*parser->cursor == '\n' || *parser->cursor == '\r') {
+          crossed_newline = true;
+        }
         parser->cursor += 1;
       }
       if (parser->cursor[0] == '\0') {
@@ -183,6 +192,7 @@ static fr_err_t fr_parse_skip_space_and_comments(fr_parser_t *parser,
     break;
   }
   *out_skipped = skipped;
+  *out_crossed_newline = crossed_newline;
   return FR_OK;
 }
 
@@ -289,24 +299,30 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
   fr_parse_span_t span = {0};
   char c = '\0';
   bool leading_space = false;
+  bool leading_newline = false;
   fr_token_kind_t prev_kind = parser->token.kind;
 
   parser->token.text_has_escapes = false;
-  FR_TRY(fr_parse_skip_space_and_comments(parser, prev_kind, &leading_space));
+  FR_TRY(fr_parse_skip_space_and_comments(parser, prev_kind, &leading_space,
+                                          &leading_newline));
   c = *parser->cursor;
   span.start = parser->cursor;
 
   if (c == '\0') {
-    parser->token = (fr_token_t){
-        .kind = FR_TOKEN_EOF, .span = span, .leading_space = leading_space};
+    parser->token = (fr_token_t){.kind = FR_TOKEN_EOF,
+                                .span = span,
+                                .leading_space = leading_space,
+                                .leading_newline = leading_newline};
     return FR_OK;
   }
 
   if (fr_parse_is_arrow_start(parser->cursor)) {
     parser->cursor += 2;
     span.length = 2;
-    parser->token = (fr_token_t){
-        .kind = FR_TOKEN_ARROW, .span = span, .leading_space = leading_space};
+    parser->token = (fr_token_t){.kind = FR_TOKEN_ARROW,
+                                .span = span,
+                                .leading_space = leading_space,
+                                .leading_newline = leading_newline};
     return FR_OK;
   }
 
@@ -385,6 +401,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
         .kind = FR_TOKEN_TEXT,
         .span = span,
         .leading_space = leading_space,
+        .leading_newline = leading_newline,
         .text_has_escapes = has_escape};
     return FR_OK;
 #endif
@@ -396,6 +413,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     parser->token.span = span;
     parser->token.int_value = 0;
     parser->token.leading_space = leading_space;
+    parser->token.leading_newline = leading_newline;
     if (c == '<' && *parser->cursor == '=') {
       parser->cursor += 1;
       parser->token.span.length = 2;
@@ -426,6 +444,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     parser->token.span = span;
     parser->token.int_value = 0;
     parser->token.leading_space = leading_space;
+    parser->token.leading_newline = leading_newline;
     parser->token.kind = FR_TOKEN_PLUS;
     return FR_OK;
   }
@@ -439,6 +458,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     parser->token.span = span;
     parser->token.int_value = 0;
     parser->token.leading_space = leading_space;
+    parser->token.leading_newline = leading_newline;
     parser->token.kind = (c == '*')   ? FR_TOKEN_STAR
                          : (c == '/') ? FR_TOKEN_SLASH
                          : (c == '%') ? FR_TOKEN_PERCENT
@@ -452,6 +472,7 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     parser->token.span = span;
     parser->token.int_value = 0;
     parser->token.leading_space = leading_space;
+    parser->token.leading_newline = leading_newline;
     if (c == '[') {
       parser->token.kind = FR_TOKEN_LBRACKET;
     } else if (c == ']') {
@@ -492,8 +513,10 @@ static fr_err_t fr_parse_read_token(fr_parser_t *parser) {
     parser->cursor += 1;
   }
 
-  parser->token = (fr_token_t){
-      .kind = FR_TOKEN_NAME, .span = span, .leading_space = leading_space};
+  parser->token = (fr_token_t){.kind = FR_TOKEN_NAME,
+                              .span = span,
+                              .leading_space = leading_space,
+                              .leading_newline = leading_newline};
   if (fr_parse_span_looks_int(span)) {
     fr_err_t err = fr_parse_token_int(span, &parser->token.int_value);
     if (err == FR_OK) {
@@ -741,7 +764,8 @@ static fr_err_t fr_parse_field_postfix(fr_parser_t *parser,
                                        fr_parse_expr_id_t *out_id) {
   fr_parse_span_t field = {0};
 
-  if (parser->token.kind != FR_TOKEN_ARROW) {
+  if (parser->token.kind != FR_TOKEN_ARROW ||
+      parser->token.leading_newline) {
     *out_id = base_id;
     return FR_OK;
   }
@@ -886,7 +910,8 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
     while (parser->token.kind != FR_TOKEN_EOF &&
            parser->token.kind != FR_TOKEN_RBRACKET &&
            parser->token.kind != FR_TOKEN_LBRACKET &&
-           parser->token.kind != FR_TOKEN_SEMICOLON) {
+           parser->token.kind != FR_TOKEN_SEMICOLON &&
+           !(call.child_count == 0 && parser->token.leading_newline)) {
       if (parser->stop_before_repeat_as &&
           fr_parse_span_equals(parser->token.span, "as")) {
         break;
@@ -928,7 +953,7 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
     return fr_parse_field_postfix(parser, base_id, out_id);
   }
 
-  if (parser->token.leading_space &&
+  if (parser->token.leading_space && !parser->token.leading_newline &&
       fr_parse_token_starts_word_argument(&parser->token)) {
     return fr_parse_fail_span(
         parser, FR_DIAG_MSG_PARSE_EXPECTED_COLON_BEFORE_ARGUMENT,
@@ -1391,6 +1416,9 @@ static fr_err_t fr_parse_multiplicative(fr_parser_t *parser,
     fr_parse_expr_id_t rhs = 0;
     fr_parse_expr_t binop = {.kind = op_kind, .child_count = 2};
 
+    if (parser->token.leading_newline) {
+      break;
+    }
     FR_TRY(fr_parse_advance(parser));
     FR_TRY(fr_parse_unary(parser, &rhs));
     binop.children[0] = lhs;
@@ -1414,6 +1442,10 @@ static fr_err_t fr_parse_additive(fr_parser_t *parser,
         .kind = parser->token.kind == FR_TOKEN_PLUS ? FR_PARSE_EXPR_ADD
                                                     : FR_PARSE_EXPR_SUB,
         .child_count = 2};
+
+    if (parser->token.leading_newline) {
+      break;
+    }
 
     /* In a call arg, `foo: a + bar: b` leaves the plus outside the first
      * call. The depth check lets parentheses keep that plus inside the arg. */
@@ -1444,6 +1476,9 @@ static fr_err_t fr_parse_comparison(fr_parser_t *parser,
     fr_parse_expr_id_t rhs = 0;
     fr_parse_expr_t binop = {.kind = op_kind, .child_count = 2};
 
+    if (parser->token.leading_newline) {
+      break;
+    }
     FR_TRY(fr_parse_advance(parser));
     FR_TRY(fr_parse_additive(parser, &rhs));
     binop.children[0] = lhs;
@@ -1459,7 +1494,8 @@ static fr_err_t fr_parse_and(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   fr_parse_expr_id_t lhs = 0;
 
   FR_TRY(fr_parse_comparison(parser, &lhs));
-  while (fr_parse_name_token_is(parser, "and")) {
+  while (fr_parse_name_token_is(parser, "and") &&
+         !parser->token.leading_newline) {
     fr_parse_expr_id_t rhs = 0;
     fr_parse_expr_t binop = {.kind = FR_PARSE_EXPR_AND, .child_count = 2};
 
@@ -1478,7 +1514,8 @@ static fr_err_t fr_parse_or(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   fr_parse_expr_id_t lhs = 0;
 
   FR_TRY(fr_parse_and(parser, &lhs));
-  while (fr_parse_name_token_is(parser, "or")) {
+  while (fr_parse_name_token_is(parser, "or") &&
+         !parser->token.leading_newline) {
     fr_parse_expr_id_t rhs = 0;
     fr_parse_expr_t binop = {.kind = FR_PARSE_EXPR_OR, .child_count = 2};
 
@@ -1672,7 +1709,7 @@ static fr_err_t fr_parse_statement_list(fr_parser_t *parser,
         return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
                                    FR_ERR_INVALID);
       }
-    } else {
+    } else if (!parser->token.leading_newline) {
       break;
     }
   }
@@ -1840,7 +1877,7 @@ fr_err_t fr_parse_line_with_diagnostic(const char *source, fr_parse_line_t *out,
   FR_TRY(fr_parse_advance(&parser));
   if (parser.token.kind != FR_TOKEN_NAME ||
       !fr_parse_span_equals(parser.token.span, "is")) {
-    if (parser.token.leading_space &&
+    if (parser.token.leading_space && !parser.token.leading_newline &&
         fr_parse_token_starts_word_argument(&parser.token)) {
       return fr_parse_fail_span(
           &parser, FR_DIAG_MSG_PARSE_EXPECTED_COLON_BEFORE_ARGUMENT,

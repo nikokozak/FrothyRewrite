@@ -15,6 +15,7 @@ const MAX_TRANSCRIPT_LINES = 1_000;
 type Pending = {
   lines: string[];
   terminator: Response | null;
+  hiddenEcho: string | null;
   resolve: (r: Response) => void;
   reject: (e: Error) => void;
 };
@@ -91,6 +92,12 @@ class Connector implements ReplConnector {
   }
 
   private acceptLine(line: string): void {
+    const pending = this.pending;
+    if (pending?.hiddenEcho === line) {
+      pending.hiddenEcho = null;
+      return;
+    }
+
     this.lines.push(line);
     if (this.lines.length > MAX_TRANSCRIPT_LINES) {
       this.lines.splice(0, this.lines.length - MAX_TRANSCRIPT_LINES);
@@ -123,13 +130,13 @@ class Connector implements ReplConnector {
     p.reject(err);
   }
 
-  private send(line: string): Promise<Response> {
+  private send(line: string, hiddenEcho: string | null = null): Promise<Response> {
     const run = (): Promise<Response> => {
       if (this.closed) {
         return Promise.reject(new TransportError("connector is closed"));
       }
       const result = new Promise<Response>((resolve, reject) => {
-        this.pending = { lines: [], terminator: null, resolve, reject };
+        this.pending = { lines: [], terminator: null, hiddenEcho, resolve, reject };
       });
       this.transport.write(this.encoder.encode(line + "\n")).catch((err) => {
         this.failPending(new TransportError("transport write failed", { cause: err }));
@@ -146,6 +153,13 @@ class Connector implements ReplConnector {
       return Promise.reject(new RangeError("line must not contain LF or CR"));
     }
     return this.send(line);
+  }
+
+  sendForm(source: string): Promise<Response> {
+    const normalized = source.replace(/\r\n?/g, "\n");
+    if (!normalized.includes("\n")) return this.send(normalized, normalized);
+    const request = `source-form ${normalized.replaceAll("\\", "\\\\").replaceAll("\n", "\\n")}`;
+    return this.send(request, request);
   }
 
   async interrupt(): Promise<void> {

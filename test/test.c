@@ -7242,6 +7242,107 @@ static void test_parse(void) {
                 FR_PARSE_EXPR_FUNCTION &&
             (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
             body->child_count == 2);
+  CHECK("parse newline statement list",
+        fr_parse_line("boot is fn [\n  one\n  two\n]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 2 &&
+            fr_parse_span_equals(parsed.exprs[body->children[0]].name,
+                                 "one") &&
+            fr_parse_span_equals(parsed.exprs[body->children[1]].name,
+                                 "two"));
+  CHECK("parse mixed semicolon and newline statements",
+        fr_parse_line("boot is fn [\n  one;\n\n  two\n]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 2);
+  CHECK("parse comment newline separates statements",
+        fr_parse_line("boot is fn [ one -- first\n two ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 2);
+  CHECK("parse block comment newline separates statements",
+        fr_parse_line("boot is fn [ one -* across\n lines *- two ]",
+                      &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 2);
+  CHECK("parse newline after operator continues expression",
+        fr_parse_line("boot is fn [ 1 +\n 2 ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_ADD);
+  CHECK("parse newline after comma continues call",
+        fr_parse_line("boot is fn [ pin: 1,\n 2 ]", &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 1 &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_CALL &&
+            value->child_count == 2);
+  CHECK("parse newline ends zero argument call",
+        fr_parse_line("boot is fn [\n  first:\n  second:\n]", &parsed) ==
+                FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 2 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_CALL &&
+            parsed.exprs[body->children[0]].child_count == 0 &&
+            parsed.exprs[body->children[1]].kind == FR_PARSE_EXPR_CALL &&
+            parsed.exprs[body->children[1]].child_count == 0);
+  CHECK("parse parenthesized multiline first call argument",
+        fr_parse_line("boot is fn [ pin: (\n 1 +\n 2\n), 3 ]", &parsed) ==
+                FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            (value = &parsed.exprs[body->children[0]])->kind ==
+                FR_PARSE_EXPR_CALL &&
+            value->child_count == 2 &&
+            parsed.exprs[value->children[0]].kind == FR_PARSE_EXPR_ADD);
+  CHECK("parse nested newline statement lists",
+        fr_parse_line("boot is fn [\n if true [\n  one\n  two\n ]\n three\n]",
+                      &parsed) == FR_OK &&
+            (value = &parsed.exprs[parsed.definition.value])->kind ==
+                FR_PARSE_EXPR_FUNCTION &&
+            (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
+            body->child_count == 2 &&
+            parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_IF);
+  CHECK("parse rejects same-line statements without semicolon",
+        fr_parse_line("boot is fn [ one two ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rejects doubled semicolon",
+        fr_parse_line("boot is fn [ one;; two ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rejects operator beginning newline statement",
+        fr_parse_line("boot is fn [ 1\n + 2 ]", &parsed) == FR_ERR_INVALID &&
+            fr_parse_line("boot is fn [ 1\n - 2 ]", &parsed) ==
+                FR_ERR_INVALID &&
+            fr_parse_line("boot is fn [ 1\n * 2 ]", &parsed) ==
+                FR_ERR_INVALID);
+  CHECK("parse rejects word operator beginning newline statement",
+        fr_parse_line("boot is fn [ true\n and false ]", &parsed) ==
+                FR_ERR_INVALID &&
+            fr_parse_line("boot is fn [ true\n or false ]", &parsed) ==
+                FR_ERR_INVALID);
+  CHECK("parse rejects field arrow beginning newline statement",
+        fr_parse_line("boot is fn [ one\n -> field ]", &parsed) ==
+            FR_ERR_INVALID);
+  CHECK("parse rejects trailing call comma before block end",
+        fr_parse_line("boot is fn [ pin: 1,\n ]", &parsed) ==
+            FR_ERR_INVALID);
+  CHECK("parse rejects comment-only block",
+        fr_parse_line("boot is fn [\n -- empty\n ]", &parsed) ==
+                FR_ERR_INVALID &&
+            fr_parse_line("boot is fn [\n\n ]", &parsed) == FR_ERR_INVALID);
+  CHECK("parse rejects multiple top-level forms in one source",
+        fr_parse_line("one is 1\ntwo is 2", &parsed) == FR_ERR_INVALID);
   CHECK("parse if expression",
         fr_parse_line("boot is fn [ if 1 [ one ] else [ nil ] ]", &parsed) ==
                 FR_OK &&
@@ -7731,6 +7832,9 @@ static void test_compile(void) {
 #endif
   char line[32];
   char cap_line[8192];
+  uint8_t semicolon_instruction_bytes[FR_COMPILE_MAX_INSTRUCTION_BYTES];
+  uint16_t semicolon_instruction_length = 0;
+  bool semicolon_fixture_ready = false;
   const uint16_t push_size = FR_INSTRUCTION_PUSH_INT_SIZE;
 #if FR_PROFILE_MAX_CALL_DEPTH > 10
   const char *fib_check_source = "fib: 10";
@@ -8536,6 +8640,21 @@ static void test_compile(void) {
             update.instruction_bytes[2] == FR_OP_PUSH_INT &&
             update.instruction_bytes[3] == 1 &&
             update.instruction_bytes[2u + push_size] == FR_OP_RETURN);
+  semicolon_fixture_ready =
+      fr_compile_overlay_update("boot is fn [ 1; 2 ]", &update) == FR_OK;
+  if (semicolon_fixture_ready) {
+    semicolon_instruction_length = update.code_object.instructions.length;
+    memcpy(semicolon_instruction_bytes, update.instruction_bytes,
+           semicolon_instruction_length);
+  }
+  CHECK("newline and semicolon blocks compile identically",
+        semicolon_fixture_ready &&
+            fr_compile_overlay_update("boot is fn [\n  1\n  2\n]", &update) ==
+                FR_OK &&
+            update.code_object.instructions.length ==
+                semicolon_instruction_length &&
+            memcmp(update.instruction_bytes, semicolon_instruction_bytes,
+                   semicolon_instruction_length) == 0);
   CHECK("compiled function applies and runs",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ 1 ]", &update) == FR_OK &&
@@ -14160,6 +14279,90 @@ static void test_repl_pump(void) {
   test_repl_io_state = NULL;
 }
 
+#if FR_FEATURE_COMPILER
+static void test_repl_source_form_wire(void) {
+  fr_runtime_t runtime;
+  char out[1024] = {0};
+  const char *multiline_lines[] = {
+      "source-form to last [\\n  1\\n  2\\n]",
+      "last:",
+  };
+  const char *malformed_then_valid_lines[] = {
+      "source-form 1\\q2",
+      "1",
+  };
+  const char *bare_lines[] = {"source-form"};
+  const char *empty_lines[] = {"source-form "};
+  const char *diagnostic_lines[] = {
+      "source-form to bad [\\n  1\\n  missing\\n]",
+  };
+#if FR_FEATURE_TEXT
+  const char *escaped_text_lines[] = {
+      "source-form message is \"a\\\\nb\\\\tc\"",
+      "message",
+  };
+#endif
+
+  CHECK("repl source-form decodes multiline source",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, multiline_lines,
+                (uint8_t)(sizeof(multiline_lines) /
+                          sizeof(multiline_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            strcmp(out, "> ok\n> 2\nok\n> ") == 0);
+
+#if FR_FEATURE_TEXT
+  memset(out, 0, sizeof(out));
+  CHECK("repl source-form preserves source text escapes",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, escaped_text_lines,
+                (uint8_t)(sizeof(escaped_text_lines) /
+                          sizeof(escaped_text_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            strcmp(out, "> ok\n> \"a\\nb\\tc\"\nok\n> ") == 0);
+#endif
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl malformed source-form leaves next request usable",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, malformed_then_valid_lines,
+                (uint8_t)(sizeof(malformed_then_valid_lines) /
+                          sizeof(malformed_then_valid_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)") &&
+            strstr(out, "> 1\nok\n> ") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl bare source-form remains ordinary source",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(&runtime, bare_lines, 1, out,
+                                (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)"));
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl empty source-form request is invalid",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(&runtime, empty_lines, 1, out,
+                                (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad source (8)"));
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl multiline diagnostic shows failing physical source line",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, diagnostic_lines,
+                (uint8_t)(sizeof(diagnostic_lines) /
+                          sizeof(diagnostic_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            strstr(out, "name: missing\n  missing\n  ^^^^^^^\n") != NULL &&
+            strstr(out, "to bad [\n") == NULL);
+}
+#endif
+
 #if FR_FEATURE_COMPILER && FR_PROFILE_MAX_OVERLAY_NAMES > 0
 static void test_repl_interrupt_terminates_response(void) {
   fr_runtime_t runtime;
@@ -14551,6 +14754,9 @@ int main(void) {
 #endif
 #endif
   test_repl_pump();
+#if FR_FEATURE_COMPILER
+  test_repl_source_form_wire();
+#endif
 #if FR_FEATURE_COMPILER && FR_PROFILE_MAX_OVERLAY_NAMES > 0
   test_repl_interrupt_terminates_response();
 #endif

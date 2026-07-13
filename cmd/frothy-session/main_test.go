@@ -109,6 +109,29 @@ func serialDeviceWithReadBytes(text string) *serialDevice {
 	return dev
 }
 
+func TestWireRequestEncodesOnlyMultilineSource(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{name: "single line", source: `print: "a\\nb"`, want: `print: "a\\nb"`},
+		{
+			name:   "newlines and backslashes",
+			source: "to f [\r\n  print: \"a\\nb\"\r]",
+			want:   `source-form to f [\n  print: "a\\nb"\n]`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := wireRequest(test.source); got != test.want {
+				t.Fatalf("wireRequest(%q) = %q, want %q", test.source, got, test.want)
+			}
+		})
+	}
+}
+
 func TestSerialReadUntilPromptRequiresTerminalStatus(t *testing.T) {
 	dev := serialDeviceWithReadBytes("> ok\n> ")
 
@@ -1096,7 +1119,7 @@ func TestSourceFormReaderPromptsAndGroupsMultilineTopForms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || read.source != "boot is fn [ one ]" {
+	if !ok || read.source != "boot is fn [\n  one\n]" {
 		t.Fatalf("first source=%q ok=%v, want grouped boot form", read.source, ok)
 	}
 
@@ -1120,7 +1143,7 @@ func TestSourceFormReaderIgnoresCommentBrackets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || read.source != "boot is fn [ -* ignored [ [ ] *- one ]" {
+	if !ok || read.source != "boot is fn [\n  -* ignored [ [\n  ] *-\n  one\n]" {
 		t.Fatalf("source=%q ok=%v, want grouped form with comments ignored", read.source, ok)
 	}
 	if got, want := out.String(), "frothy> frothy> .. .. .. .. "; got != want {
@@ -1186,7 +1209,7 @@ func TestReadFileLinesMovesMultilineBootDefinitionLast(t *testing.T) {
 	want := []string{
 		"led is $led_builtin",
 		"blink is fn [ one ]",
-		"boot is fn [ blink: ]",
+		"boot is fn [\n  blink:\n]",
 	}
 	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("readFileLines() = %#v, want %#v", lines, want)
@@ -1244,7 +1267,7 @@ func TestSerialSendsMultilineTopFormOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(dev.sent, "\n"), "status\nboot is fn [ one ]"; got != want {
+	if got, want := strings.Join(dev.sent, "\n"), "status\nboot is fn [\n  one\n]"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
 	if got, want := out.String(), "frothy> .. .. ok\nfrothy> "; got != want {
@@ -1269,7 +1292,7 @@ func TestSerialSourceBlockSendsBufferedFormsInSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(dev.sent, "\n"), "status\nled is $led_builtin\nboot is fn [ blink: ]"; got != want {
+	if got, want := strings.Join(dev.sent, "\n"), "status\nled is $led_builtin\nboot is fn [\n  blink:\n]"; got != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
 }
@@ -1934,7 +1957,7 @@ func TestRecordsGroupMultilineTopForm(t *testing.T) {
 		t.Fatalf("record kinds %q, want %q", got, want)
 	}
 	send := recordWithKind(records, "send")
-	if send["source"] != "boot is fn [ one ]" || send["line"] != "boot is fn [ one ]" {
+	if send["source"] != "boot is fn [\n  one\n]" || send["line"] != "boot is fn [\n  one\n]" {
 		t.Fatalf("send record = %#v", send)
 	}
 }

@@ -226,11 +226,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   let currentPort: { close(): Promise<void> } | null = null;
   let unsubscribeLines: (() => void) | null = null;
   let unsubscribeClose: (() => void) | null = null;
-  // The device runs an interactive line editor that echoes each input line
-  // back as the first response line. With "Hide echo" on (default), we swallow
-  // exactly one echoed line per request — set to the line we just sent —
-  // so sketch input isn't shown twice. Matching one line means a genuine value
-  // equal to the input (send `7` → echo `7` → result `7`) still shows.
+  // The device echoes ordinary one-line requests such as status. With
+  // "Hide echo" on (default), swallow exactly one matching line so those
+  // requests are not shown twice. The connector hides source-form's escaped
+  // wire echo itself, so transport framing never appears as sketch output. A
+  // genuine value equal to the input (send `7` → echo `7` → result `7`) still
+  // shows.
   let suppressEcho = true;
   let pendingEcho: string | null = null;
   let sessionState: EditorSessionState = "disconnected";
@@ -455,9 +456,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   async function sendForm(source: string): Promise<Response | null> {
     if (!repl) return null;
     transcript.appendHost(source);
-    pendingEcho = source;
+    pendingEcho = null;
     try {
-      return await repl.sendLine(source);
+      return await repl.sendForm(source);
     } catch (err) {
       reportError(err);
       return null;
