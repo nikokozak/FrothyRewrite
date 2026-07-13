@@ -1222,6 +1222,171 @@ static fr_err_t fr_native_text_pack(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_NATIVE_SIGNATURES
+#if FR_FEATURE_TRACE
+static const fr_native_param_t fr_native_trace_params[] = {
+    {"trace", FR_NATIVE_VALUE_HANDLE},
+};
+static const fr_native_param_t fr_native_trace_watch_params[] = {
+    {"trace", FR_NATIVE_VALUE_HANDLE},
+    {"pin", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_param_t fr_native_trace_wait_params[] = {
+    {"trace", FR_NATIVE_VALUE_HANDLE},
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_param_t fr_native_trace_index_params[] = {
+    {"trace", FR_NATIVE_VALUE_HANDLE},
+    {"index", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_trace_open_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_HANDLE,
+    .help = "open one bounded digital edge capture",
+};
+static const fr_native_signature_t fr_native_trace_watch_signature = {
+    .params = fr_native_trace_watch_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "watch both edges on a pin; returns channel 0..2",
+};
+static const fr_native_signature_t fr_native_trace_arm_signature = {
+    .params = fr_native_trace_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "clear old edges and arm capture",
+};
+static const fr_native_signature_t fr_native_trace_wait_signature = {
+    .params = fr_native_trace_wait_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "wait up to timeout_ms; true when capture completes",
+};
+static const fr_native_signature_t fr_native_trace_stop_signature = {
+    .params = fr_native_trace_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "finish an armed capture now",
+};
+static const fr_native_signature_t fr_native_trace_count_signature = {
+    .params = fr_native_trace_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the number of captured edges",
+};
+static const fr_native_signature_t fr_native_trace_channel_signature = {
+    .params = fr_native_trace_index_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return an edge's watched-channel index",
+};
+static const fr_native_signature_t fr_native_trace_level_signature = {
+    .params = fr_native_trace_index_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the level after an edge",
+};
+static const fr_native_signature_t fr_native_trace_delta_ns_signature = {
+    .params = fr_native_trace_index_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return nanoseconds since the prior captured edge",
+};
+static const fr_native_signature_t fr_native_trace_complete_p_signature = {
+    .params = fr_native_trace_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "true when capture stopped, filled, or reached its span",
+};
+static const fr_native_signature_t fr_native_trace_dump_signature = {
+    .params = fr_native_trace_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "print watched pins and captured edges",
+};
+static const fr_native_signature_t fr_native_trace_close_signature = {
+    .params = fr_native_trace_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "release a trace capture",
+};
+#endif
+
+#if FR_FEATURE_PULSE
+static const fr_native_param_t fr_native_pulse_params[] = {
+    {"pulse", FR_NATIVE_VALUE_HANDLE},
+};
+static const fr_native_param_t fr_native_pulse_open_params[] = {
+    {"pin", FR_NATIVE_VALUE_INT},
+    {"idle", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_param_t fr_native_pulse_add_params[] = {
+    {"pulse", FR_NATIVE_VALUE_HANDLE},
+    {"level", FR_NATIVE_VALUE_INT},
+    {"duration_ns", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_param_t fr_native_pulse_index_params[] = {
+    {"pulse", FR_NATIVE_VALUE_HANDLE},
+    {"index", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_pulse_open_signature = {
+    .params = fr_native_pulse_open_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_HANDLE,
+    .help = "open one timed digital output with idle level 0 or 1",
+};
+static const fr_native_signature_t fr_native_pulse_add_signature = {
+    .params = fr_native_pulse_add_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "append one quantized high or low span",
+};
+static const fr_native_signature_t fr_native_pulse_clear_signature = {
+    .params = fr_native_pulse_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "clear all spans while keeping the output open",
+};
+static const fr_native_signature_t fr_native_pulse_count_signature = {
+    .params = fr_native_pulse_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the number of waveform spans",
+};
+static const fr_native_signature_t fr_native_pulse_level_signature = {
+    .params = fr_native_pulse_index_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return a waveform span's level",
+};
+static const fr_native_signature_t fr_native_pulse_duration_ns_signature = {
+    .params = fr_native_pulse_index_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return a waveform span's actual duration",
+};
+static const fr_native_signature_t fr_native_pulse_dump_signature = {
+    .params = fr_native_pulse_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "print the quantized waveform",
+};
+static const fr_native_signature_t fr_native_pulse_play_signature = {
+    .params = fr_native_pulse_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "transmit the waveform once",
+};
+static const fr_native_signature_t fr_native_pulse_close_signature = {
+    .params = fr_native_pulse_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "release a pulse output",
+};
+#endif
+#endif
+
 #if FR_FEATURE_TEXT && FR_FEATURE_REPL
 /* An event handler runs outside the request/response stream (fired at the idle
  * prompt, or interleaved into a running program at a safe point). Its print
@@ -1838,6 +2003,545 @@ static fr_err_t fr_native_fire_event(fr_runtime_t *runtime,
     }
   }
   return FR_ERR_NOT_FOUND;
+}
+#endif
+
+#if FR_FEATURE_TRACE || FR_FEATURE_PULSE
+static fr_err_t fr_native_write_rendered_line(const char *line, size_t cap,
+                                              int written) {
+  if (line == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (written < 0) {
+    return FR_ERR_IO;
+  }
+  if ((size_t)written >= cap) {
+    return FR_ERR_CAPACITY;
+  }
+  return fr_platform_write_text(line);
+}
+#endif
+
+#if FR_FEATURE_TRACE
+static fr_err_t fr_native_decode_trace_handle(fr_runtime_t *runtime,
+                                              const fr_tagged_t *args,
+                                              uint8_t arg_count,
+                                              uint8_t index,
+                                              uint16_t *out_platform_index) {
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || args == NULL || index >= arg_count ||
+      out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_handle_ref(args[index], &ref));
+  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_TRACE, NULL,
+                          out_platform_index);
+}
+
+static fr_err_t fr_native_trace_open(fr_runtime_t *runtime,
+                                     const fr_tagged_t *args,
+                                     uint8_t arg_count, fr_tagged_t *out) {
+  fr_handle_ref_t ref = {0};
+  fr_tagged_t handle = 0;
+  uint16_t platform_index = 0;
+  fr_err_t err = FR_OK;
+
+  if (runtime == NULL || out == NULL || arg_count != 0 ||
+      (args == NULL && arg_count > 0)) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_TRACE, &ref, &handle));
+  err = fr_platform_trace_open(&platform_index);
+  if (err != FR_OK) {
+    (void)fr_handle_release_reserved(runtime, ref);
+    return err;
+  }
+  err = fr_handle_activate(runtime, ref, platform_index);
+  if (err != FR_OK) {
+    (void)fr_platform_handle_close(FR_HANDLE_KIND_TRACE, platform_index);
+    (void)fr_handle_release_reserved(runtime, ref);
+    return err;
+  }
+
+  *out = handle;
+  return FR_OK;
+}
+
+static fr_err_t fr_native_trace_watch(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  uint16_t pin = 0;
+  uint8_t channel = 0;
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_trace_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &pin));
+  FR_TRY(fr_platform_trace_watch(platform_index, pin, &channel));
+  return fr_tagged_encode_int((int32_t)channel, out);
+}
+
+static fr_err_t fr_native_trace_arm(fr_runtime_t *runtime,
+                                    const fr_tagged_t *args,
+                                    uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_trace_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_platform_trace_arm(platform_index));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_trace_wait(fr_runtime_t *runtime,
+                                     const fr_tagged_t *args,
+                                     uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  fr_int_t timeout_ms = 0;
+  uint32_t start_ms = 0;
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_trace_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 1, &timeout_ms));
+  if (timeout_ms > FR_TRACE_WAIT_MAX_MS) {
+    return FR_ERR_DOMAIN;
+  }
+  FR_TRY(fr_platform_millis(&start_ms));
+
+  for (;;) {
+    fr_trace_status_t status = {0};
+    uint32_t now_ms = 0;
+
+    FR_TRY(fr_platform_trace_status(platform_index, &status));
+    if (status.state == FR_TRACE_CONFIGURING) {
+      return FR_ERR_DOMAIN;
+    }
+    if (status.state == FR_TRACE_COMPLETE) {
+      *out = fr_tagged_true();
+      return FR_OK;
+    }
+    FR_TRY(fr_platform_millis(&now_ms));
+    if ((uint32_t)(now_ms - start_ms) >= (uint32_t)timeout_ms) {
+      *out = fr_tagged_false();
+      return FR_OK;
+    }
+    FR_TRY(fr_platform_poll_interrupt(runtime));
+    if (fr_runtime_is_interrupted(runtime)) {
+      return FR_ERR_INTERRUPTED;
+    }
+    FR_TRY(fr_platform_delay_ms(1));
+  }
+}
+
+static fr_err_t fr_native_trace_stop(fr_runtime_t *runtime,
+                                     const fr_tagged_t *args,
+                                     uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_trace_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_platform_trace_stop(platform_index));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_trace_count(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  fr_trace_status_t status = {0};
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_trace_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_platform_trace_status(platform_index, &status));
+  return fr_tagged_encode_int((int32_t)status.event_count, out);
+}
+
+static fr_err_t fr_native_trace_event_field(fr_runtime_t *runtime,
+                                            const fr_tagged_t *args,
+                                            uint8_t arg_count,
+                                            fr_trace_event_t *out_event) {
+  uint16_t platform_index = 0;
+  uint16_t event_index = 0;
+
+  if (out_event == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_trace_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &event_index));
+  return fr_platform_trace_event(platform_index, event_index, out_event);
+}
+
+static fr_err_t fr_native_trace_channel(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count,
+                                        fr_tagged_t *out) {
+  fr_trace_event_t event = {0};
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_trace_event_field(runtime, args, arg_count, &event));
+  return fr_tagged_encode_int((int32_t)event.channel, out);
+}
+
+static fr_err_t fr_native_trace_level(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  fr_trace_event_t event = {0};
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_trace_event_field(runtime, args, arg_count, &event));
+  return fr_tagged_encode_int((int32_t)event.level, out);
+}
+
+static fr_err_t fr_native_trace_delta_ns(fr_runtime_t *runtime,
+                                         const fr_tagged_t *args,
+                                         uint8_t arg_count,
+                                         fr_tagged_t *out) {
+  fr_trace_event_t event = {0};
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_trace_event_field(runtime, args, arg_count, &event));
+  return fr_tagged_encode_int((int32_t)event.delta_ns, out);
+}
+
+static fr_err_t fr_native_trace_complete_p(fr_runtime_t *runtime,
+                                           const fr_tagged_t *args,
+                                           uint8_t arg_count,
+                                           fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  fr_trace_status_t status = {0};
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_trace_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_platform_trace_status(platform_index, &status));
+  *out = status.state == FR_TRACE_COMPLETE ? fr_tagged_true()
+                                           : fr_tagged_false();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_trace_dump(fr_runtime_t *runtime,
+                                     const fr_tagged_t *args,
+                                     uint8_t arg_count, fr_tagged_t *out) {
+  char line[96];
+  uint16_t platform_index = 0;
+  fr_trace_status_t status = {0};
+  int written = 0;
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_trace_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_platform_trace_status(platform_index, &status));
+  if (status.state != FR_TRACE_COMPLETE) {
+    return FR_ERR_DOMAIN;
+  }
+
+  written = snprintf(line, sizeof(line),
+                     "trace state=complete channels=%u events=%u tick_ns=%u\n",
+                     (unsigned)status.channel_count,
+                     (unsigned)status.event_count, (unsigned)FR_SIGNAL_TICK_NS);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  for (uint8_t channel = 0; channel < status.channel_count; channel++) {
+    uint16_t pin = 0;
+
+    FR_TRY(fr_platform_trace_pin(platform_index, channel, &pin));
+    written = snprintf(line, sizeof(line), "trace.channel %u pin=%u\n",
+                       (unsigned)channel, (unsigned)pin);
+    FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+  }
+  for (uint16_t i = 0; i < status.event_count; i++) {
+    fr_trace_event_t event = {0};
+
+    FR_TRY(fr_platform_trace_event(platform_index, i, &event));
+    written = snprintf(
+        line, sizeof(line),
+        "trace.edge %u channel=%u level=%u delta_ns=%lu\n", (unsigned)i,
+        (unsigned)event.channel, (unsigned)event.level,
+        (unsigned long)event.delta_ns);
+    FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+  }
+
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_trace_close(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || args == NULL || arg_count == 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_handle_ref(args[0], &ref));
+  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_TRACE, NULL, NULL));
+  FR_TRY(fr_handle_close(runtime, ref));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+#endif
+
+#if FR_FEATURE_PULSE
+static fr_err_t fr_native_decode_pulse_handle(fr_runtime_t *runtime,
+                                              const fr_tagged_t *args,
+                                              uint8_t arg_count,
+                                              uint8_t index,
+                                              uint16_t *out_platform_index) {
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || args == NULL || index >= arg_count ||
+      out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_handle_ref(args[index], &ref));
+  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_PULSE, NULL,
+                          out_platform_index);
+}
+
+static fr_err_t fr_native_pulse_open(fr_runtime_t *runtime,
+                                     const fr_tagged_t *args,
+                                     uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t pin = 0;
+  uint16_t idle = 0;
+  fr_handle_ref_t ref = {0};
+  fr_tagged_t handle = 0;
+  uint16_t platform_index = 0;
+  fr_err_t err = FR_OK;
+
+  if (runtime == NULL || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &pin));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &idle));
+  if (idle > 1) {
+    return FR_ERR_DOMAIN;
+  }
+
+  FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_PULSE, &ref, &handle));
+  err = fr_platform_pulse_open(pin, (uint8_t)idle, &platform_index);
+  if (err != FR_OK) {
+    (void)fr_handle_release_reserved(runtime, ref);
+    return err;
+  }
+  err = fr_handle_activate(runtime, ref, platform_index);
+  if (err != FR_OK) {
+    (void)fr_platform_handle_close(FR_HANDLE_KIND_PULSE, platform_index);
+    (void)fr_handle_release_reserved(runtime, ref);
+    return err;
+  }
+
+  *out = handle;
+  return FR_OK;
+}
+
+static fr_err_t fr_native_pulse_add(fr_runtime_t *runtime,
+                                    const fr_tagged_t *args,
+                                    uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  uint16_t level = 0;
+  fr_int_t requested_ns = 0;
+  uint32_t actual_ns = 0;
+  uint16_t segment_index = 0;
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_pulse_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &level));
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 2, &requested_ns));
+  if (level > 1 || requested_ns < FR_SIGNAL_TICK_NS ||
+      requested_ns > FR_SIGNAL_MAX_SPAN_NS) {
+    return FR_ERR_DOMAIN;
+  }
+  actual_ns = (((uint32_t)requested_ns + FR_SIGNAL_TICK_NS / 2u) /
+               FR_SIGNAL_TICK_NS) *
+              FR_SIGNAL_TICK_NS;
+  FR_TRY(fr_platform_pulse_add(platform_index, (uint8_t)level, actual_ns,
+                               &segment_index));
+  return fr_tagged_encode_int((int32_t)segment_index, out);
+}
+
+static fr_err_t fr_native_pulse_clear(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_pulse_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_platform_pulse_clear(platform_index));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_pulse_count(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  uint16_t count = 0;
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_pulse_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_platform_pulse_count(platform_index, &count));
+  return fr_tagged_encode_int((int32_t)count, out);
+}
+
+static fr_err_t fr_native_pulse_segment_field(fr_runtime_t *runtime,
+                                              const fr_tagged_t *args,
+                                              uint8_t arg_count,
+                                              fr_pulse_segment_t *out_segment) {
+  uint16_t platform_index = 0;
+  uint16_t segment_index = 0;
+
+  if (out_segment == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_pulse_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &segment_index));
+  return fr_platform_pulse_segment(platform_index, segment_index, out_segment);
+}
+
+static fr_err_t fr_native_pulse_level(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  fr_pulse_segment_t segment = {0};
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_pulse_segment_field(runtime, args, arg_count, &segment));
+  return fr_tagged_encode_int((int32_t)segment.level, out);
+}
+
+static fr_err_t fr_native_pulse_duration_ns(fr_runtime_t *runtime,
+                                            const fr_tagged_t *args,
+                                            uint8_t arg_count,
+                                            fr_tagged_t *out) {
+  fr_pulse_segment_t segment = {0};
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_pulse_segment_field(runtime, args, arg_count, &segment));
+  return fr_tagged_encode_int((int32_t)segment.duration_ns, out);
+}
+
+static fr_err_t fr_native_pulse_dump(fr_runtime_t *runtime,
+                                     const fr_tagged_t *args,
+                                     uint8_t arg_count, fr_tagged_t *out) {
+  char line[96];
+  uint16_t platform_index = 0;
+  uint16_t pin = 0;
+  uint8_t idle = 0;
+  uint16_t count = 0;
+  uint32_t total_ns = 0;
+  int written = 0;
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_pulse_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_platform_pulse_pin(platform_index, &pin));
+  FR_TRY(fr_platform_pulse_idle(platform_index, &idle));
+  FR_TRY(fr_platform_pulse_count(platform_index, &count));
+  for (uint16_t i = 0; i < count; i++) {
+    fr_pulse_segment_t segment = {0};
+
+    FR_TRY(fr_platform_pulse_segment(platform_index, i, &segment));
+    if (segment.duration_ns > FR_SIGNAL_MAX_SPAN_NS - total_ns) {
+      return FR_ERR_CAPACITY;
+    }
+    total_ns += segment.duration_ns;
+  }
+
+  written = snprintf(
+      line, sizeof(line),
+      "pulse pin=%u idle=%u segments=%u tick_ns=%u total_ns=%lu\n",
+      (unsigned)pin, (unsigned)idle, (unsigned)count,
+      (unsigned)FR_SIGNAL_TICK_NS, (unsigned long)total_ns);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+  for (uint16_t i = 0; i < count; i++) {
+    fr_pulse_segment_t segment = {0};
+
+    FR_TRY(fr_platform_pulse_segment(platform_index, i, &segment));
+    written = snprintf(line, sizeof(line),
+                       "pulse.segment %u level=%u duration_ns=%lu\n",
+                       (unsigned)i, (unsigned)segment.level,
+                       (unsigned long)segment.duration_ns);
+    FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+  }
+
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_pulse_play(fr_runtime_t *runtime,
+                                     const fr_tagged_t *args,
+                                     uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_pulse_handle(runtime, args, arg_count, 0,
+                                       &platform_index));
+  FR_TRY(fr_platform_pulse_play(platform_index));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_pulse_close(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || args == NULL || arg_count == 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_handle_ref(args[0], &ref));
+  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_PULSE, NULL, NULL));
+  FR_TRY(fr_handle_close(runtime, ref));
+  *out = fr_tagged_nil();
+  return FR_OK;
 }
 #endif
 
@@ -3458,6 +4162,262 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_signature = &fr_native_event_cancel_signature,
 #endif
     },
+#if FR_FEATURE_TRACE
+    {
+        .slot_id = FR_SLOT_TRACE_OPEN,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.open",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_open,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_open_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TRACE_WATCH,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.watch",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_watch,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_watch_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TRACE_ARM,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.arm",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_arm,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_arm_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TRACE_WAIT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.wait",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_wait,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_wait_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TRACE_STOP,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.stop",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_stop,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_stop_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TRACE_COUNT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.count",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_count,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_count_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TRACE_CHANNEL,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.channel",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_channel,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_channel_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TRACE_LEVEL,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.level",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_level,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_level_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TRACE_DELTA_NS,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.delta-ns",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_delta_ns,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_delta_ns_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TRACE_COMPLETE_P,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.complete?",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_complete_p,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_complete_p_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TRACE_DUMP,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.dump",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_dump,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_dump_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_TRACE_CLOSE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "trace.close",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_trace_close,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_trace_close_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_PULSE
+    {
+        .slot_id = FR_SLOT_PULSE_OPEN,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pulse.open",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pulse_open,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pulse_open_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_PULSE_ADD,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pulse.add",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pulse_add,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pulse_add_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_PULSE_CLEAR,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pulse.clear",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pulse_clear,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pulse_clear_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_PULSE_COUNT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pulse.count",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pulse_count,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pulse_count_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_PULSE_LEVEL,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pulse.level",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pulse_level,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pulse_level_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_PULSE_DURATION_NS,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pulse.duration-ns",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pulse_duration_ns,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pulse_duration_ns_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_PULSE_DUMP,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pulse.dump",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pulse_dump,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pulse_dump_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_PULSE_PLAY,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pulse.play",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pulse_play,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pulse_play_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_PULSE_CLOSE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "pulse.close",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_pulse_close,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_pulse_close_signature,
+#endif
+    },
+#endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
     {
         .slot_id = FR_SLOT_FIRE_EVENT,

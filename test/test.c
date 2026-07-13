@@ -2475,6 +2475,8 @@ static void test_handles(void) {
             strcmp(fr_handle_kind_name(FR_HANDLE_KIND_I2C_DEVICE),
                    "i2c-device") == 0 &&
             strcmp(fr_handle_kind_name(FR_HANDLE_KIND_SPI), "spi") == 0 &&
+            strcmp(fr_handle_kind_name(FR_HANDLE_KIND_TRACE), "trace") == 0 &&
+            strcmp(fr_handle_kind_name(FR_HANDLE_KIND_PULSE), "pulse") == 0 &&
             strcmp(fr_handle_kind_name(FR_HANDLE_KIND_COUNT), "unknown") ==
                 0 &&
             strcmp(fr_handle_kind_name(255), "unknown") == 0);
