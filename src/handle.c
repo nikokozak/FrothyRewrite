@@ -5,7 +5,8 @@
 
 #if FR_FEATURE_HANDLES
 static const char *const fr_handle_kind_names[FR_HANDLE_KIND_COUNT] = {
-    "none", "uart", "pwm", "i2c-bus", "i2c-device", "spi", "tcp",
+    "none", "uart", "pwm", "i2c-bus", "i2c-device",
+    "spi",  "tcp",  "trace", "pulse",
 };
 typedef char
     fr_handle_kind_names_match_count[(sizeof(fr_handle_kind_names) /

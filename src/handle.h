@@ -20,7 +20,9 @@ enum {
   FR_HANDLE_KIND_I2C_DEVICE = 4,
   FR_HANDLE_KIND_SPI = 5,
   FR_HANDLE_KIND_TCP = 6,
-  FR_HANDLE_KIND_COUNT = 7,
+  FR_HANDLE_KIND_TRACE = 7,
+  FR_HANDLE_KIND_PULSE = 8,
+  FR_HANDLE_KIND_COUNT = 9,
 };
 
 typedef struct fr_handle_entry_t {
