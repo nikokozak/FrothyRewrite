@@ -10,6 +10,10 @@ CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="2MB"
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
+# Frothy's interruptible millisecond sleep advances in 1 ms slices. ESP-IDF's
+# 100 Hz default rounds each slice down to zero ticks, starving the idle task.
+CONFIG_FREERTOS_HZ=1000
+
 # 240 MHz (LX6 max) — perf; default IDF is 160
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=n
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
