@@ -236,6 +236,9 @@ typedef struct fr_esp_trace_t {
   uint16_t event_count;
   bool has_first_edge;
   uint32_t first_tick;
+  /* ESP32 capture is fixed at 80 MHz. Keep that finer clock private and
+   * expose every target on Frothy's 10 MHz / 100 ns signal grid. */
+  uint32_t hardware_ticks_per_signal_tick;
   int64_t first_edge_us;
   bool sorted;
 } fr_esp_trace_t;
@@ -753,6 +756,7 @@ static bool IRAM_ATTR fr_esp_trace_capture(
     mcpwm_cap_channel_handle_t channel_handle,
     const mcpwm_capture_event_data_t *event, void *user_ctx) {
   fr_esp_trace_channel_t *channel = user_ctx;
+  uint32_t hardware_delta = 0;
   uint32_t relative_tick = 0;
 
   (void)channel_handle;
@@ -770,7 +774,13 @@ static bool IRAM_ATTR fr_esp_trace_capture(
     fr_esp_trace.first_tick = event->cap_value;
     fr_esp_trace.first_edge_us = esp_timer_get_time();
   }
-  relative_tick = event->cap_value - fr_esp_trace.first_tick;
+  hardware_delta = event->cap_value - fr_esp_trace.first_tick;
+  relative_tick =
+      hardware_delta / fr_esp_trace.hardware_ticks_per_signal_tick;
+  if (hardware_delta % fr_esp_trace.hardware_ticks_per_signal_tick >=
+      (fr_esp_trace.hardware_ticks_per_signal_tick + 1u) / 2u) {
+    relative_tick += 1u;
+  }
   if (relative_tick > FR_SIGNAL_MAX_TICKS ||
       fr_esp_trace.event_count >= FR_TRACE_EVENT_CAP) {
     fr_esp_trace.state = FR_TRACE_COMPLETE;
@@ -847,7 +857,7 @@ fr_err_t fr_platform_trace_open(uint16_t *out_platform_index) {
     const mcpwm_capture_timer_config_t config = {
         .group_id = group_id,
         .clk_src = MCPWM_CAPTURE_CLK_SRC_DEFAULT,
-        .resolution_hz = FR_SIGNAL_CLOCK_HZ,
+        .resolution_hz = 0,
     };
 
     err = mcpwm_new_capture_timer(&config, &timer);
@@ -862,7 +872,8 @@ fr_err_t fr_platform_trace_open(uint16_t *out_platform_index) {
     return FR_ERR_CAPACITY;
   }
   err = mcpwm_capture_timer_get_resolution(timer, &resolution_hz);
-  if (err != ESP_OK || resolution_hz != FR_SIGNAL_CLOCK_HZ) {
+  if (err != ESP_OK || resolution_hz < FR_SIGNAL_CLOCK_HZ ||
+      resolution_hz % FR_SIGNAL_CLOCK_HZ != 0) {
     (void)mcpwm_del_capture_timer(timer);
     return err == ESP_OK ? FR_ERR_UNSUPPORTED : fr_esp_err(err);
   }
@@ -871,6 +882,8 @@ fr_err_t fr_platform_trace_open(uint16_t *out_platform_index) {
   fr_esp_trace.in_use = true;
   fr_esp_trace.state = FR_TRACE_CONFIGURING;
   fr_esp_trace.timer = timer;
+  fr_esp_trace.hardware_ticks_per_signal_tick =
+      resolution_hz / FR_SIGNAL_CLOCK_HZ;
   *out_platform_index = 0;
   return FR_OK;
 }
