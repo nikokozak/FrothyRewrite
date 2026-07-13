@@ -6,7 +6,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 
-import { DEFAULT_INITIAL_SOURCE, shouldConfirmReplace } from "../src/editor.js";
+import {
+  DEFAULT_INITIAL_SOURCE,
+  displayProfileName,
+  shouldConfirmReplace,
+} from "../src/editor.js";
 import { makeStorage } from "../src/storage.js";
 
 function withDOM(): void {
@@ -68,4 +72,9 @@ test("editor shouldConfirmReplace protects real non-default sketches only", () =
   assert.equal(shouldConfirmReplace(DEFAULT_INITIAL_SOURCE, "to greet [ 1 ]"), false);
   assert.equal(shouldConfirmReplace("to greet [ 1 ]\n", "to greet [ 1 ]"), false);
   assert.equal(shouldConfirmReplace("to greet [ 2 ]", "to greet [ 1 ]"), true);
+});
+
+test("editor presents the ESP32 profile as a human-facing name", () => {
+  assert.equal(displayProfileName("esp32_plain"), "ESP32 Default");
+  assert.equal(displayProfileName("host_normal"), "host_normal");
 });

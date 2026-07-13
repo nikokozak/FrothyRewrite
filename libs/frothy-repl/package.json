@@ -13,7 +13,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "test": "tsc --noEmit && node --import tsx --test test/*.test.ts",
-    "build": "tsup src/index.ts --format esm --dts --clean"
+    "build": "tsup"
   },
   "devDependencies": {
     "@types/node": "^22",

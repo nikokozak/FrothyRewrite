@@ -5,7 +5,12 @@
 
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentWithTab,
+} from "@codemirror/commands";
 import { createConnector, WebSerialTransport } from "@frothy/repl";
 import type { ReplConnector, Response, Status } from "@frothy/repl";
 
@@ -44,6 +49,13 @@ export interface EditorHandle {
 }
 
 type EditorSessionState = "disconnected" | "connecting" | "idle" | "running";
+
+const CONNECT_TIMEOUT_MS = 8000;
+
+export function displayProfileName(profile: string): string {
+  if (profile === "esp32_plain") return "ESP32 Default";
+  return profile;
+}
 
 export function mountEditor(opts: EditorOptions): EditorHandle {
   const doc = opts.mount.ownerDocument;
@@ -91,12 +103,18 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   connectBtn.textContent = "Connect";
   header.append(title, examplesLabel, splitBtn, connectBtn);
 
+  const connectionStatus = doc.createElement("div");
+  connectionStatus.className = "frothy-connection-status";
+  connectionStatus.setAttribute("role", "status");
+  connectionStatus.setAttribute("aria-live", "polite");
+
   const editorHost = doc.createElement("div");
   editorHost.className = "frothy-editor-pane";
 
   const commandBar = doc.createElement("div");
   commandBar.className = "frothy-editor-cmdbar";
   const runFormBtn = mkBtn(doc, "Run Form", "frothy-btn");
+  runFormBtn.title = "Run the selection, or the complete form at the cursor";
   const runFileBtn = mkBtn(doc, "Run File", "frothy-btn");
   const interruptBtn = mkBtn(doc, "Interrupt", "frothy-btn");
   const browseWordsBtn = mkBtn(doc, "Browse Words", "frothy-btn");
@@ -181,7 +199,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   });
   applyLayout();
 
-  root.append(header, body, wordsDialog);
+  root.append(header, connectionStatus, body, wordsDialog);
   opts.mount.appendChild(root);
 
   const view = new EditorView({
@@ -195,7 +213,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         EditorView.updateListener.of((update) => {
           if (update.docChanged) scheduleSave();
         }),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
+        keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
       ],
     }),
     parent: editorHost,
@@ -218,7 +236,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   let sessionState: EditorSessionState = "disconnected";
   let connectedProfile = "";
 
-  function setSessionState(next: EditorSessionState, profile?: string): void {
+  function setSessionState(
+    next: EditorSessionState,
+    profile?: string,
+    message?: string,
+  ): void {
     sessionState = next;
     if (profile) connectedProfile = profile;
     if (next === "disconnected") connectedProfile = "";
@@ -227,7 +249,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     root.setAttribute("aria-busy", String(next === "connecting" || next === "running"));
     connectBtn.textContent = next === "connecting"
       ? "Connecting…"
-      : connected ? `connected · ${connectedProfile}` : "Connect";
+      : connected ? `Connected · ${displayProfileName(connectedProfile)}` : "Connect";
     connectBtn.disabled = next === "connecting";
     connectBtn.classList.toggle("frothy-btn-connected", connected);
     runFormBtn.disabled = next !== "idle";
@@ -236,6 +258,19 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     interruptBtn.classList.toggle("frothy-btn-primary", next === "running");
     browseWordsBtn.hidden = !connected;
     browseWordsBtn.disabled = next !== "idle";
+    connectionStatus.textContent = message ?? (
+      next === "connecting"
+        ? "Opening the board and checking for Frothy…"
+        : next === "running"
+          ? "Frothy is running. Use Interrupt to stop a long-running form."
+          : next === "idle"
+            ? `Connected to ${displayProfileName(connectedProfile)}.`
+            : "Not connected."
+    );
+    connectionStatus.classList.toggle(
+      "frothy-connection-status--error",
+      Boolean(message),
+    );
     if (!connected && wordsDialog.open) wordsDialog.close();
   }
 
@@ -310,14 +345,38 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       });
       unsubscribeClose = connectedRepl.onClose(() => handleConnectorClose(connectedRepl));
       pendingEcho = "status";
-      const status = await repl.status();
+      let timeoutId: number | undefined;
+      const status = await Promise.race([
+        repl.status(),
+        new Promise<never>((_, reject) => {
+          timeoutId = timerTarget.setTimeout(
+            () => reject(new Error("Frothy did not answer the status check")),
+            CONNECT_TIMEOUT_MS,
+          );
+        }),
+      ]).finally(() => {
+        if (timeoutId !== undefined) timerTarget.clearTimeout(timeoutId);
+      });
       if (repl !== connectedRepl) return;
       setSessionState("idle", status.profile);
       if (opts.onConnect) opts.onConnect(status);
     } catch (err) {
-      if (repl) await disconnect();
+      if (repl) {
+        await disconnect();
+      } else if (currentPort) {
+        const openPort = currentPort;
+        currentPort = null;
+        await openPort.close().catch(() => undefined);
+      }
+      const cancelled = err instanceof Error && err.name === "NotFoundError";
+      if (cancelled) return;
       reportError(err);
-      setSessionState("disconnected");
+      setSessionState(
+        "disconnected",
+        undefined,
+        "Couldn’t reach Frothy. Close other apps using the board, press EN " +
+          "(or unplug and reconnect it), then try Connect again.",
+      );
     }
   }
 
