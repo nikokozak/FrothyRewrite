@@ -169,6 +169,16 @@ static fr_err_t test_persist_apply_user_overlay(
 #define FR_TEST_TRACE_SLOT_COUNT 0
 #endif
 
+#if FR_FEATURE_PULSE
+#define FR_TEST_PULSE_WORDS                                                  \
+  " pulse.open pulse.add pulse.clear pulse.count pulse.level "              \
+  "pulse.duration-ns pulse.dump pulse.play pulse.close"
+#define FR_TEST_PULSE_SLOT_COUNT 9
+#else
+#define FR_TEST_PULSE_WORDS ""
+#define FR_TEST_PULSE_SLOT_COUNT 0
+#endif
+
 enum {
   FR_TEST_PERSIST_RECORD_CODE = 1,
   FR_TEST_PERSIST_RECORD_BIND = 2,
@@ -194,7 +204,8 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
@@ -203,7 +214,8 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
@@ -212,7 +224,8 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (15 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
@@ -221,7 +234,7 @@ enum {
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
    FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
-   FR_TEST_TRACE_SLOT_COUNT)
+   FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -229,7 +242,8 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -237,7 +251,8 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -245,7 +260,8 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_EVENT_TEST_WORDS                    \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (12 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
@@ -254,7 +270,7 @@ enum {
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
    FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
-   FR_TEST_TRACE_SLOT_COUNT)
+   FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT)
 #endif
 
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
@@ -419,7 +435,7 @@ static void test_base_def_contract(void) {
       (FR_FEATURE_RANDOM ? 3 : 0) + (FR_FEATURE_PWM ? 3 : 0) +
       (FR_FEATURE_I2C ? 8 : 0) + (FR_FEATURE_NET ? 9 : 0) +
       (FR_FEATURE_POWER ? 4 : 0) + (FR_FEATURE_BYTES ? 8 : 0) +
-      (FR_FEATURE_TRACE ? 12 : 0) +
+      (FR_FEATURE_TRACE ? 12 : 0) + (FR_FEATURE_PULSE ? 9 : 0) +
       (FR_FEATURE_MATH ? 6 : 0) +
       FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT +
       FR_TEST_EVENT_REGISTER_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT;
@@ -3357,6 +3373,158 @@ static void test_trace(void) {
             fr_repl_eval_line(&runtime, "fresh is trace.open:", out,
                               sizeof(out)) == FR_OK &&
             fr_repl_eval_line(&runtime, "trace.close: fresh", out,
+                              sizeof(out)) == FR_OK);
+}
+#endif
+
+#if FR_FEATURE_PULSE && defined(FR_HOST_TEST_HELPERS)
+static fr_err_t test_pulse_platform_index(fr_runtime_t *runtime,
+                                          const char *name,
+                                          uint16_t *out_platform_index) {
+  fr_slot_id_t slot_id = 0;
+  fr_tagged_t tagged = 0;
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || name == NULL || out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_slot_id_for_name(runtime, name, &slot_id));
+  FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
+  FR_TRY(fr_tagged_decode_handle_ref(tagged, &ref));
+  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_PULSE, NULL,
+                          out_platform_index);
+}
+
+static void test_pulse(void) {
+  fr_runtime_t runtime;
+  fr_pulse_segment_t segment = {0};
+  uint16_t platform_index = 0;
+  uint16_t returned_index = 0;
+  uint16_t count = 0;
+  bool filled = true;
+  char out[256];
+
+  (void)fr_platform_pulse_close(0);
+  CHECK("pulse installs base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("pulse see open renders signature",
+        fr_repl_eval_line(&runtime, "see pulse.open", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "pulse.open(pin: int, idle: int) -> handle\n"
+                   "open one timed digital output with idle level 0 or 1\n"
+                   "ok\n") == 0);
+  CHECK("pulse see add renders quantized span contract",
+        fr_repl_eval_line(&runtime, "see pulse.add", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "pulse.add(pulse: handle, level: int, duration_ns: int) "
+                   "-> int\n"
+                   "append one quantized high or low span\n"
+                   "ok\n") == 0);
+  CHECK("pulse rejects invalid output settings",
+        fr_platform_pulse_open(40, 0, &platform_index) == FR_ERR_DOMAIN &&
+            fr_platform_pulse_open(4, 2, &platform_index) == FR_ERR_DOMAIN);
+  CHECK("pulse opens one bounded builder",
+        fr_repl_eval_line(&runtime, "p is pulse.open: 4, 0", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            test_pulse_platform_index(&runtime, "p", &platform_index) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "pulse.open: 5, 0", out,
+                              sizeof(out)) == FR_ERR_CAPACITY);
+  CHECK("pulse rejects an empty play",
+        fr_repl_eval_line(&runtime, "pulse.play: p", out, sizeof(out)) ==
+            FR_ERR_DOMAIN);
+  CHECK("pulse adds and quantizes logical spans",
+        fr_repl_eval_line(&runtime, "pulse.add: p, 1, 350", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "0\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "pulse.add: p, 0, 900", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "pulse.count: p", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "2\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "pulse.level: p, 0", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "pulse.duration-ns: p, 0", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "400\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "pulse.duration-ns: p, 1", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "900\nok\n") == 0);
+  CHECK("pulse rejects invalid levels and durations",
+        fr_repl_eval_line(&runtime, "pulse.add: p, 2, 100", out,
+                          sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "pulse.add: p, 1, 99", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "pulse.add: p, 1, -100", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "pulse.add: p, 1, 1000000001", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "pulse.level: p, 2", out,
+                              sizeof(out)) == FR_ERR_RANGE);
+  CHECK("pulse play is repeatable and keeps its waveform",
+        fr_host_pulse_play_count(platform_index) == 0 &&
+            fr_repl_eval_line(&runtime, "pulse.play: p", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "pulse.play: p", out, sizeof(out)) ==
+                FR_OK &&
+            fr_host_pulse_play_count(platform_index) == 2 &&
+            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
+            count == 2 &&
+            fr_platform_pulse_segment(platform_index, 0, &segment) == FR_OK &&
+            segment.level == 1 && segment.duration_ns == 400);
+#if FR_FEATURE_PERSISTENCE
+  CHECK("pulse save rejects live handle",
+        fr_persist_save(&runtime) == FR_ERR_VOLATILE);
+#endif
+  CHECK("pulse close invalidates handle",
+        fr_repl_eval_line(&runtime, "pulse.close: p", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "pulse.count: p", out, sizeof(out)) ==
+                FR_ERR_HANDLE);
+
+  CHECK("pulse accepts exactly one second",
+        fr_repl_eval_line(&runtime, "cap is pulse.open: 4, 1", out,
+                          sizeof(out)) == FR_OK &&
+            test_pulse_platform_index(&runtime, "cap", &platform_index) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "pulse.add: cap, 1, 1000000000", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "pulse.add: cap, 0, 100", out,
+                              sizeof(out)) == FR_ERR_CAPACITY &&
+            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
+            count == 1 &&
+            fr_platform_pulse_clear(platform_index) == FR_OK &&
+            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
+            count == 0);
+  for (uint16_t i = 0; i < FR_PULSE_SEGMENT_CAP; i++) {
+    if (fr_platform_pulse_add(platform_index, (uint8_t)(i & 1u),
+                              FR_SIGNAL_TICK_NS, &returned_index) != FR_OK ||
+        returned_index != i) {
+      filled = false;
+      break;
+    }
+  }
+  CHECK("pulse fills exactly its fixed segment array",
+        filled &&
+            fr_platform_pulse_add(platform_index, 0, FR_SIGNAL_TICK_NS,
+                                  &returned_index) == FR_ERR_CAPACITY &&
+            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
+            count == FR_PULSE_SEGMENT_CAP);
+  CHECK("pulse clear rebuilds without reopening",
+        fr_repl_eval_line(&runtime, "pulse.clear: cap", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "pulse.add: cap, 1, 500", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "0\nok\n") == 0);
+  CHECK("project clear releases pulse platform state",
+        fr_runtime_clear_project(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "fresh is pulse.open: 5, 0", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "pulse.close: fresh", out,
                               sizeof(out)) == FR_OK);
 }
 #endif
@@ -14783,6 +14951,9 @@ int main(void) {
 #endif
 #if FR_FEATURE_TRACE && defined(FR_HOST_TEST_HELPERS)
   test_trace();
+#endif
+#if FR_FEATURE_PULSE && defined(FR_HOST_TEST_HELPERS)
+  test_pulse();
 #endif
 #if FR_FEATURE_I2C
   test_i2c();

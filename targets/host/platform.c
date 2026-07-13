@@ -81,6 +81,33 @@ static void fr_host_trace_finish(fr_host_trace_t *trace) {
 }
 #endif
 
+#if FR_FEATURE_PULSE
+typedef struct fr_host_pulse_t {
+  bool in_use;
+  uint16_t pin;
+  uint8_t idle;
+  fr_pulse_segment_t segments[FR_PULSE_SEGMENT_CAP];
+  uint16_t segment_count;
+  uint32_t total_ticks;
+  uint16_t play_count;
+} fr_host_pulse_t;
+
+static fr_host_pulse_t fr_host_pulse;
+
+static fr_err_t fr_host_pulse_entry(uint16_t platform_index,
+                                    fr_host_pulse_t **out_pulse) {
+  if (out_pulse == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (platform_index != 0 || !fr_host_pulse.in_use) {
+    return FR_ERR_HANDLE;
+  }
+
+  *out_pulse = &fr_host_pulse;
+  return FR_OK;
+}
+#endif
+
 #if FR_FEATURE_PWM
 enum {
   FR_HOST_PWM_RING_CAP = 8,
@@ -363,6 +390,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
     return fr_platform_trace_close(platform_index);
   }
 #endif
+#if FR_FEATURE_PULSE
+  if (kind == FR_HANDLE_KIND_PULSE) {
+    return fr_platform_pulse_close(platform_index);
+  }
+#endif
 #if FR_FEATURE_NET
   if (kind == FR_HANDLE_KIND_TCP) {
     return fr_platform_tcp_close(platform_index);
@@ -556,6 +588,143 @@ fr_err_t fr_host_trace_push_edge(uint16_t platform_index, uint8_t channel,
     fr_host_trace_finish(trace);
   }
   return FR_OK;
+}
+#endif
+#endif
+
+#if FR_FEATURE_PULSE
+fr_err_t fr_platform_pulse_open(uint16_t pin, uint8_t idle,
+                                uint16_t *out_platform_index) {
+  if (out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (pin > FR_HOST_MAX_PIN || idle > 1) {
+    return FR_ERR_DOMAIN;
+  }
+  if (fr_host_pulse.in_use) {
+    return FR_ERR_CAPACITY;
+  }
+
+  memset(&fr_host_pulse, 0, sizeof(fr_host_pulse));
+  fr_host_pulse.in_use = true;
+  fr_host_pulse.pin = pin;
+  fr_host_pulse.idle = idle;
+  *out_platform_index = 0;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_add(uint16_t platform_index, uint8_t level,
+                               uint32_t duration_ns,
+                               uint16_t *out_segment_index) {
+  fr_host_pulse_t *pulse = NULL;
+  uint32_t ticks = 0;
+
+  if (out_segment_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
+  if (level > 1 || duration_ns == 0 ||
+      duration_ns % FR_SIGNAL_TICK_NS != 0) {
+    return FR_ERR_DOMAIN;
+  }
+  ticks = duration_ns / FR_SIGNAL_TICK_NS;
+  if (pulse->segment_count >= FR_PULSE_SEGMENT_CAP ||
+      ticks > FR_SIGNAL_MAX_TICKS - pulse->total_ticks) {
+    return FR_ERR_CAPACITY;
+  }
+
+  *out_segment_index = pulse->segment_count;
+  pulse->segments[pulse->segment_count] = (fr_pulse_segment_t){
+      .level = level,
+      .duration_ns = duration_ns,
+  };
+  pulse->segment_count += 1u;
+  pulse->total_ticks += ticks;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_clear(uint16_t platform_index) {
+  fr_host_pulse_t *pulse = NULL;
+
+  FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
+  pulse->segment_count = 0;
+  pulse->total_ticks = 0;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_count(uint16_t platform_index,
+                                 uint16_t *out_count) {
+  fr_host_pulse_t *pulse = NULL;
+
+  if (out_count == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
+  *out_count = pulse->segment_count;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_segment(uint16_t platform_index,
+                                   uint16_t segment_index,
+                                   fr_pulse_segment_t *out_segment) {
+  fr_host_pulse_t *pulse = NULL;
+
+  if (out_segment == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
+  if (segment_index >= pulse->segment_count) {
+    return FR_ERR_RANGE;
+  }
+  *out_segment = pulse->segments[segment_index];
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_play(uint16_t platform_index) {
+  fr_host_pulse_t *pulse = NULL;
+
+  FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
+  if (pulse->segment_count == 0) {
+    return FR_ERR_DOMAIN;
+  }
+  pulse->play_count += 1u;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_pin(uint16_t platform_index, uint16_t *out_pin) {
+  fr_host_pulse_t *pulse = NULL;
+
+  if (out_pin == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
+  *out_pin = pulse->pin;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_idle(uint16_t platform_index, uint8_t *out_idle) {
+  fr_host_pulse_t *pulse = NULL;
+
+  if (out_idle == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
+  *out_idle = pulse->idle;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_close(uint16_t platform_index) {
+  if (platform_index == 0) {
+    memset(&fr_host_pulse, 0, sizeof(fr_host_pulse));
+  }
+  return FR_OK;
+}
+
+#ifdef FR_HOST_TEST_HELPERS
+uint16_t fr_host_pulse_play_count(uint16_t platform_index) {
+  return platform_index == 0 && fr_host_pulse.in_use
+             ? fr_host_pulse.play_count
+             : 0;
 }
 #endif
 #endif
