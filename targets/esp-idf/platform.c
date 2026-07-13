@@ -10,6 +10,9 @@
 #if FR_FEATURE_I2C
 #include "driver/i2c_master.h"
 #endif
+#if FR_FEATURE_TRACE
+#include "driver/mcpwm_cap.h"
+#endif
 #if FR_FEATURE_PWM
 #include "driver/ledc.h"
 #endif
@@ -199,6 +202,81 @@ static fr_err_t fr_esp_pwm_entry(uint16_t platform_index,
 
   *out_pwm = &fr_esp_pwms[platform_index];
   return FR_OK;
+}
+#endif
+
+#if FR_FEATURE_TRACE
+#if !SOC_MCPWM_SUPPORTED || SOC_MCPWM_CAPTURE_TIMERS_PER_GROUP < 1 ||       \
+    SOC_MCPWM_CAPTURE_CHANNELS_PER_TIMER < FR_TRACE_CHANNEL_CAP
+#error "FR_FEATURE_TRACE requires one MCPWM capture timer with three channels"
+#endif
+
+typedef struct fr_esp_trace_edge_t {
+  uint32_t tick;
+  uint8_t channel;
+  uint8_t level;
+} fr_esp_trace_edge_t;
+
+typedef struct fr_esp_trace_channel_t {
+  mcpwm_cap_channel_handle_t handle;
+  uint16_t pin;
+  uint8_t index;
+  bool enabled;
+} fr_esp_trace_channel_t;
+
+typedef struct fr_esp_trace_t {
+  bool in_use;
+  fr_trace_state_t state;
+  mcpwm_cap_timer_handle_t timer;
+  bool timer_enabled;
+  bool timer_running;
+  fr_esp_trace_channel_t channels[FR_TRACE_CHANNEL_CAP];
+  uint8_t channel_count;
+  fr_esp_trace_edge_t edges[FR_TRACE_EVENT_CAP];
+  uint16_t event_count;
+  bool has_first_edge;
+  uint32_t first_tick;
+  int64_t first_edge_us;
+  bool sorted;
+} fr_esp_trace_t;
+
+static fr_esp_trace_t fr_esp_trace;
+static portMUX_TYPE fr_esp_trace_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static fr_err_t fr_esp_trace_entry(uint16_t platform_index,
+                                   fr_esp_trace_t **out_trace) {
+  if (out_trace == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (platform_index != 0 || !fr_esp_trace.in_use) {
+    return FR_ERR_HANDLE;
+  }
+
+  *out_trace = &fr_esp_trace;
+  return FR_OK;
+}
+
+static bool fr_esp_trace_edge_after(const fr_esp_trace_edge_t *a,
+                                    const fr_esp_trace_edge_t *b) {
+  return a->tick > b->tick ||
+         (a->tick == b->tick && a->channel > b->channel);
+}
+
+static void fr_esp_trace_sort(fr_esp_trace_t *trace) {
+  if (trace->sorted) {
+    return;
+  }
+  for (uint16_t i = 1; i < trace->event_count; i++) {
+    fr_esp_trace_edge_t edge = trace->edges[i];
+    uint16_t at = i;
+
+    while (at > 0 && fr_esp_trace_edge_after(&trace->edges[at - 1], &edge)) {
+      trace->edges[at] = trace->edges[at - 1];
+      at -= 1u;
+    }
+    trace->edges[at] = edge;
+  }
+  trace->sorted = true;
 }
 #endif
 
@@ -670,6 +748,400 @@ fr_err_t fr_platform_heap_largest(uint32_t *out_bytes) {
   return FR_OK;
 }
 
+#if FR_FEATURE_TRACE
+static bool IRAM_ATTR fr_esp_trace_capture(
+    mcpwm_cap_channel_handle_t channel_handle,
+    const mcpwm_capture_event_data_t *event, void *user_ctx) {
+  fr_esp_trace_channel_t *channel = user_ctx;
+  uint32_t relative_tick = 0;
+
+  (void)channel_handle;
+  if (channel == NULL || event == NULL) {
+    return false;
+  }
+
+  portENTER_CRITICAL_ISR(&fr_esp_trace_mux);
+  if (fr_esp_trace.state != FR_TRACE_ARMED) {
+    portEXIT_CRITICAL_ISR(&fr_esp_trace_mux);
+    return false;
+  }
+  if (!fr_esp_trace.has_first_edge) {
+    fr_esp_trace.has_first_edge = true;
+    fr_esp_trace.first_tick = event->cap_value;
+    fr_esp_trace.first_edge_us = esp_timer_get_time();
+  }
+  relative_tick = event->cap_value - fr_esp_trace.first_tick;
+  if (relative_tick > FR_SIGNAL_MAX_TICKS ||
+      fr_esp_trace.event_count >= FR_TRACE_EVENT_CAP) {
+    fr_esp_trace.state = FR_TRACE_COMPLETE;
+    portEXIT_CRITICAL_ISR(&fr_esp_trace_mux);
+    return false;
+  }
+
+  fr_esp_trace.edges[fr_esp_trace.event_count] = (fr_esp_trace_edge_t){
+      .tick = relative_tick,
+      .channel = channel->index,
+      .level = event->cap_edge == MCPWM_CAP_EDGE_POS ? 1 : 0,
+  };
+  fr_esp_trace.event_count += 1u;
+  if (fr_esp_trace.event_count == FR_TRACE_EVENT_CAP ||
+      relative_tick == FR_SIGNAL_MAX_TICKS) {
+    fr_esp_trace.state = FR_TRACE_COMPLETE;
+  }
+  portEXIT_CRITICAL_ISR(&fr_esp_trace_mux);
+  return false;
+}
+
+static fr_err_t fr_esp_trace_quiet(fr_esp_trace_t *trace) {
+  fr_err_t first_error = FR_OK;
+
+  if (trace->timer_running) {
+    fr_err_t err = fr_esp_err(mcpwm_capture_timer_stop(trace->timer));
+
+    if (err == FR_OK) {
+      trace->timer_running = false;
+    } else {
+      first_error = err;
+    }
+  }
+  for (uint8_t i = 0; i < trace->channel_count; i++) {
+    fr_esp_trace_channel_t *channel = &trace->channels[i];
+
+    if (!channel->enabled) {
+      continue;
+    }
+    fr_err_t err = fr_esp_err(mcpwm_capture_channel_disable(channel->handle));
+    if (err == FR_OK) {
+      channel->enabled = false;
+    } else if (first_error == FR_OK) {
+      first_error = err;
+    }
+  }
+  return first_error;
+}
+
+static fr_err_t fr_esp_trace_finish(fr_esp_trace_t *trace) {
+  fr_err_t err = FR_OK;
+
+  portENTER_CRITICAL(&fr_esp_trace_mux);
+  trace->state = FR_TRACE_COMPLETE;
+  portEXIT_CRITICAL(&fr_esp_trace_mux);
+  err = fr_esp_trace_quiet(trace);
+  fr_esp_trace_sort(trace);
+  return err;
+}
+
+fr_err_t fr_platform_trace_open(uint16_t *out_platform_index) {
+  mcpwm_cap_timer_handle_t timer = NULL;
+  uint32_t resolution_hz = 0;
+  esp_err_t err = ESP_ERR_NOT_FOUND;
+
+  if (out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_esp_trace.in_use) {
+    return FR_ERR_CAPACITY;
+  }
+
+  for (int group_id = 0; group_id < SOC_MCPWM_GROUPS; group_id++) {
+    const mcpwm_capture_timer_config_t config = {
+        .group_id = group_id,
+        .clk_src = MCPWM_CAPTURE_CLK_SRC_DEFAULT,
+        .resolution_hz = FR_SIGNAL_CLOCK_HZ,
+    };
+
+    err = mcpwm_new_capture_timer(&config, &timer);
+    if (err == ESP_OK) {
+      break;
+    }
+    if (err != ESP_ERR_NOT_FOUND) {
+      return fr_esp_err(err);
+    }
+  }
+  if (timer == NULL) {
+    return FR_ERR_CAPACITY;
+  }
+  err = mcpwm_capture_timer_get_resolution(timer, &resolution_hz);
+  if (err != ESP_OK || resolution_hz != FR_SIGNAL_CLOCK_HZ) {
+    (void)mcpwm_del_capture_timer(timer);
+    return err == ESP_OK ? FR_ERR_UNSUPPORTED : fr_esp_err(err);
+  }
+
+  memset(&fr_esp_trace, 0, sizeof(fr_esp_trace));
+  fr_esp_trace.in_use = true;
+  fr_esp_trace.state = FR_TRACE_CONFIGURING;
+  fr_esp_trace.timer = timer;
+  *out_platform_index = 0;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_watch(uint16_t platform_index, uint16_t pin,
+                                 uint8_t *out_channel) {
+  fr_esp_trace_t *trace = NULL;
+  fr_esp_trace_channel_t *channel = NULL;
+  mcpwm_cap_channel_handle_t handle = NULL;
+  esp_err_t err = ESP_OK;
+
+  if (out_channel == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_trace_entry(platform_index, &trace));
+  if (trace->state != FR_TRACE_CONFIGURING || !fr_esp_gpio_pin_valid(pin)) {
+    return FR_ERR_DOMAIN;
+  }
+  for (uint8_t i = 0; i < trace->channel_count; i++) {
+    if (trace->channels[i].pin == pin) {
+      return FR_ERR_DOMAIN;
+    }
+  }
+  if (trace->channel_count >= FR_TRACE_CHANNEL_CAP) {
+    return FR_ERR_CAPACITY;
+  }
+
+  const mcpwm_capture_channel_config_t config = {
+      .gpio_num = pin,
+      .prescale = 1,
+      .flags.pos_edge = true,
+      .flags.neg_edge = true,
+  };
+  const mcpwm_capture_event_callbacks_t callbacks = {
+      .on_cap = fr_esp_trace_capture,
+  };
+
+  err = mcpwm_new_capture_channel(trace->timer, &config, &handle);
+  if (err != ESP_OK) {
+    return err == ESP_ERR_NOT_FOUND ? FR_ERR_CAPACITY : fr_esp_err(err);
+  }
+  channel = &trace->channels[trace->channel_count];
+  *channel = (fr_esp_trace_channel_t){
+      .handle = handle,
+      .pin = pin,
+      .index = trace->channel_count,
+  };
+  err = mcpwm_capture_channel_register_event_callbacks(
+      handle, &callbacks, channel);
+  if (err != ESP_OK) {
+    (void)mcpwm_del_capture_channel(handle);
+    memset(channel, 0, sizeof(*channel));
+    return fr_esp_err(err);
+  }
+
+  *out_channel = trace->channel_count;
+  trace->channel_count += 1u;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_arm(uint16_t platform_index) {
+  fr_esp_trace_t *trace = NULL;
+  esp_err_t err = ESP_OK;
+
+  FR_TRY(fr_esp_trace_entry(platform_index, &trace));
+  if (trace->state != FR_TRACE_CONFIGURING || trace->channel_count == 0) {
+    return FR_ERR_DOMAIN;
+  }
+
+  for (uint8_t i = 0; i < trace->channel_count; i++) {
+    err = mcpwm_capture_channel_enable(trace->channels[i].handle);
+    if (err != ESP_OK) {
+      goto arm_failed;
+    }
+    trace->channels[i].enabled = true;
+  }
+  err = mcpwm_capture_timer_enable(trace->timer);
+  if (err != ESP_OK) {
+    goto arm_failed;
+  }
+  trace->timer_enabled = true;
+
+  portENTER_CRITICAL(&fr_esp_trace_mux);
+  trace->event_count = 0;
+  trace->has_first_edge = false;
+  trace->first_tick = 0;
+  trace->first_edge_us = 0;
+  trace->sorted = false;
+  trace->state = FR_TRACE_ARMED;
+  portEXIT_CRITICAL(&fr_esp_trace_mux);
+
+  err = mcpwm_capture_timer_start(trace->timer);
+  if (err == ESP_OK) {
+    trace->timer_running = true;
+    return FR_OK;
+  }
+
+arm_failed:
+  portENTER_CRITICAL(&fr_esp_trace_mux);
+  trace->state = FR_TRACE_CONFIGURING;
+  portEXIT_CRITICAL(&fr_esp_trace_mux);
+  if (trace->timer_enabled) {
+    if (mcpwm_capture_timer_disable(trace->timer) == ESP_OK) {
+      trace->timer_enabled = false;
+    }
+  }
+  for (uint8_t i = 0; i < trace->channel_count; i++) {
+    if (trace->channels[i].enabled) {
+      if (mcpwm_capture_channel_disable(trace->channels[i].handle) == ESP_OK) {
+        trace->channels[i].enabled = false;
+      }
+    }
+  }
+  return fr_esp_err(err);
+}
+
+fr_err_t fr_platform_trace_stop(uint16_t platform_index) {
+  fr_esp_trace_t *trace = NULL;
+  fr_trace_state_t state = FR_TRACE_CONFIGURING;
+
+  FR_TRY(fr_esp_trace_entry(platform_index, &trace));
+  portENTER_CRITICAL(&fr_esp_trace_mux);
+  state = trace->state;
+  portEXIT_CRITICAL(&fr_esp_trace_mux);
+  if (state == FR_TRACE_CONFIGURING) {
+    return FR_ERR_DOMAIN;
+  }
+  return fr_esp_trace_finish(trace);
+}
+
+fr_err_t fr_platform_trace_status(uint16_t platform_index,
+                                  fr_trace_status_t *out_status) {
+  fr_esp_trace_t *trace = NULL;
+  int64_t now_us = esp_timer_get_time();
+  bool complete = false;
+
+  if (out_status == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_trace_entry(platform_index, &trace));
+  portENTER_CRITICAL(&fr_esp_trace_mux);
+  if (trace->state == FR_TRACE_ARMED && trace->has_first_edge &&
+      now_us - trace->first_edge_us >= 1000000) {
+    trace->state = FR_TRACE_COMPLETE;
+  }
+  complete = trace->state == FR_TRACE_COMPLETE;
+  *out_status = (fr_trace_status_t){
+      .state = trace->state,
+      .channel_count = trace->channel_count,
+      .event_count = trace->event_count,
+  };
+  portEXIT_CRITICAL(&fr_esp_trace_mux);
+
+  if (complete) {
+    FR_TRY(fr_esp_trace_quiet(trace));
+    fr_esp_trace_sort(trace);
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_event(uint16_t platform_index,
+                                 uint16_t event_index,
+                                 fr_trace_event_t *out_event) {
+  fr_esp_trace_t *trace = NULL;
+  fr_trace_status_t status = {0};
+
+  if (out_event == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_trace_entry(platform_index, &trace));
+  FR_TRY(fr_platform_trace_status(platform_index, &status));
+  if (status.state != FR_TRACE_COMPLETE) {
+    return FR_ERR_DOMAIN;
+  }
+  if (event_index >= status.event_count) {
+    return FR_ERR_RANGE;
+  }
+
+  *out_event = (fr_trace_event_t){
+      .channel = trace->edges[event_index].channel,
+      .level = trace->edges[event_index].level,
+      .delta_ns = event_index == 0
+                      ? 0
+                      : (trace->edges[event_index].tick -
+                         trace->edges[event_index - 1].tick) *
+                            FR_SIGNAL_TICK_NS,
+  };
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_pin(uint16_t platform_index, uint8_t channel,
+                               uint16_t *out_pin) {
+  fr_esp_trace_t *trace = NULL;
+
+  if (out_pin == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_trace_entry(platform_index, &trace));
+  if (channel >= trace->channel_count) {
+    return FR_ERR_RANGE;
+  }
+
+  *out_pin = trace->channels[channel].pin;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_trace_close(uint16_t platform_index) {
+  fr_esp_trace_t *trace = NULL;
+  fr_err_t first_error = FR_OK;
+
+  FR_TRY(fr_esp_trace_entry(platform_index, &trace));
+  portENTER_CRITICAL(&fr_esp_trace_mux);
+  if (trace->state == FR_TRACE_ARMED) {
+    trace->state = FR_TRACE_COMPLETE;
+  }
+  portEXIT_CRITICAL(&fr_esp_trace_mux);
+
+  first_error = fr_esp_trace_quiet(trace);
+  if (trace->timer_enabled) {
+    fr_err_t err = fr_esp_err(mcpwm_capture_timer_disable(trace->timer));
+    if (err == FR_OK) {
+      trace->timer_enabled = false;
+    } else if (first_error == FR_OK) {
+      first_error = err;
+    }
+  }
+  for (uint8_t i = 0; i < trace->channel_count; i++) {
+    fr_esp_trace_channel_t *channel = &trace->channels[i];
+
+    if (channel->enabled) {
+      fr_err_t err =
+          fr_esp_err(mcpwm_capture_channel_disable(channel->handle));
+      if (err == FR_OK) {
+        channel->enabled = false;
+      } else if (first_error == FR_OK) {
+        first_error = err;
+      }
+    }
+    if (!channel->enabled && channel->handle != NULL) {
+      fr_err_t err = fr_esp_err(mcpwm_del_capture_channel(channel->handle));
+      if (err == FR_OK) {
+        channel->handle = NULL;
+      } else if (first_error == FR_OK) {
+        first_error = err;
+      }
+    }
+  }
+  if (!trace->timer_enabled && trace->timer != NULL) {
+    bool channels_deleted = true;
+
+    for (uint8_t i = 0; i < trace->channel_count; i++) {
+      if (trace->channels[i].handle != NULL) {
+        channels_deleted = false;
+      }
+    }
+    if (channels_deleted) {
+      fr_err_t err = fr_esp_err(mcpwm_del_capture_timer(trace->timer));
+      if (err == FR_OK) {
+        trace->timer = NULL;
+      } else if (first_error == FR_OK) {
+        first_error = err;
+      }
+    }
+  }
+  if (first_error == FR_OK && trace->timer == NULL) {
+    memset(trace, 0, sizeof(*trace));
+  }
+  return first_error;
+}
+#endif
+
 fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
                                   uint16_t platform_index) {
 #if FR_FEATURE_UART
@@ -695,6 +1167,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
 #if FR_FEATURE_I2C
   if (kind == FR_HANDLE_KIND_I2C_BUS) {
     return fr_platform_i2c_close(platform_index);
+  }
+#endif
+#if FR_FEATURE_TRACE
+  if (kind == FR_HANDLE_KIND_TRACE) {
+    return fr_platform_trace_close(platform_index);
   }
 #endif
 #if FR_FEATURE_NET
