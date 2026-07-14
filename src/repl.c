@@ -39,6 +39,10 @@ typedef struct fr_repl_buffer_writer_t {
   uint16_t used;
 } fr_repl_buffer_writer_t;
 
+#if FR_FEATURE_PERSISTENCE && FR_FEATURE_CONSOLE_ROUTING
+enum { FR_REPL_SAFE_BOOT_WINDOW_MS = 750 };
+#endif
+
 typedef enum fr_repl_command_kind_t {
   FR_REPL_COMMAND_NONE,
   FR_REPL_COMMAND_BLANK,
@@ -1273,15 +1277,27 @@ static void fr_repl_write_startup_error(fr_err_t err) {
 #endif
 
 fr_err_t fr_repl_startup_restore_and_boot(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+
 #if FR_FEATURE_PERSISTENCE
   fr_tagged_t out = fr_tagged_nil();
   fr_err_t l1_err = FR_OK;
   fr_err_t l2_err = FR_OK;
   fr_err_t boot_err = FR_OK;
 
-  if (runtime == NULL) {
-    return FR_ERR_INVALID;
+#if FR_FEATURE_CONSOLE_ROUTING
+  bool recovery_requested = false;
+
+  FR_TRY(fr_platform_write_text("boot: Ctrl-C skips saved code\n"));
+  FR_TRY(fr_platform_console_recovery_requested(
+      FR_REPL_SAFE_BOOT_WINDOW_MS, &recovery_requested));
+  if (recovery_requested) {
+    FR_TRY(fr_platform_write_text("^C\nsafe boot\n"));
+    return FR_OK;
   }
+#endif
 
   /* SPEC D6 boot order: L1 records (library tier) before L2 (user tier).
    * Two explicit calls — L1 first writes a freshly-reset runtime with the
@@ -1310,10 +1326,6 @@ fr_err_t fr_repl_startup_restore_and_boot(fr_runtime_t *runtime) {
   }
   if (boot_err != FR_OK) {
     fr_repl_write_startup_error(boot_err);
-  }
-#else
-  if (runtime == NULL) {
-    return FR_ERR_INVALID;
   }
 #endif
   return FR_OK;

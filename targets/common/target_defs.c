@@ -13,6 +13,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#if FR_FEATURE_CONSOLE_ROUTING
+static fr_err_t fr_native_write_rendered_line(const char *line, size_t cap,
+                                              int written);
+#endif
+
 #if FR_FEATURE_TRACE || FR_FEATURE_PULSE
 typedef char fr_signal_nanoseconds_must_fit_tagged_int[
     ((uint64_t)FR_SIGNAL_MAX_TICKS * FR_SIGNAL_TICK_NS <=
@@ -1231,6 +1236,80 @@ static fr_err_t fr_native_text_pack(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_CONSOLE_ROUTING
+static fr_err_t fr_native_console_uart(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t tx = 0;
+  uint16_t rx = 0;
+  fr_int_t baud = 0;
+
+  (void)runtime;
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &tx));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &rx));
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 2, &baud));
+  if (baud == 0) {
+    return FR_ERR_DOMAIN;
+  }
+  FR_TRY(fr_platform_console_set_uart(tx, rx, (uint32_t)baud));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_console_default(fr_runtime_t *runtime,
+                                          const fr_tagged_t *args,
+                                          uint8_t arg_count,
+                                          fr_tagged_t *out) {
+  (void)runtime;
+  (void)args;
+  (void)arg_count;
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_console_restore_default());
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_console_info(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  fr_console_route_t route = {0};
+  char line[80];
+  int written = 0;
+
+  (void)runtime;
+  (void)args;
+  (void)arg_count;
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_console_get_route(&route));
+  switch (route.transport) {
+  case FR_CONSOLE_TRANSPORT_HOST:
+    written = snprintf(line, sizeof(line), "console host\n");
+    break;
+  case FR_CONSOLE_TRANSPORT_UART:
+    written = snprintf(line, sizeof(line),
+                       "console uart tx=%u rx=%u baud=%lu\n",
+                       (unsigned)route.tx, (unsigned)route.rx,
+                       (unsigned long)route.baud);
+    break;
+  case FR_CONSOLE_TRANSPORT_USB:
+    written = snprintf(line, sizeof(line), "console usb\n");
+    break;
+  default:
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+#endif
+
 #if FR_FEATURE_NATIVE_SIGNATURES
 #if FR_FEATURE_TRACE
 static const fr_native_param_t fr_native_trace_params[] = {
@@ -2015,7 +2094,7 @@ static fr_err_t fr_native_fire_event(fr_runtime_t *runtime,
 }
 #endif
 
-#if FR_FEATURE_TRACE || FR_FEATURE_PULSE
+#if FR_FEATURE_TRACE || FR_FEATURE_PULSE || FR_FEATURE_CONSOLE_ROUTING
 static fr_err_t fr_native_write_rendered_line(const char *line, size_t cap,
                                               int written) {
   if (line == NULL) {
@@ -2814,6 +2893,34 @@ static const fr_native_signature_t fr_native_handle_to_nil_signature = {
     .arg_count = 1,
     .result = FR_NATIVE_VALUE_NIL,
     .help = NULL,
+};
+#endif
+
+#if FR_FEATURE_CONSOLE_ROUTING
+static const fr_native_param_t fr_native_console_uart_params[] = {
+    {"tx", FR_NATIVE_VALUE_INT},
+    {"rx", FR_NATIVE_VALUE_INT},
+    {"baud", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_console_uart_signature = {
+    .params = fr_native_console_uart_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "move the active REPL to UART pins at a literal baud rate",
+};
+
+static const fr_native_signature_t fr_native_console_default_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "restore the board's boot and recovery console",
+};
+
+static const fr_native_signature_t fr_native_console_info_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "print the active console route",
 };
 #endif
 
@@ -4433,6 +4540,44 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_pulse_close_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_CONSOLE_ROUTING
+    {
+        .slot_id = FR_SLOT_CONSOLE_UART,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "console.uart",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_console_uart,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_console_uart_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_CONSOLE_DEFAULT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "console.default",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_console_default,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_console_default_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_CONSOLE_INFO,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "console.info",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_console_info,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_console_info_signature,
 #endif
     },
 #endif

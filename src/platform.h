@@ -13,6 +13,21 @@ enum {
   FR_UART_BAUD_115200 = 115200,
 };
 
+#if FR_FEATURE_CONSOLE_ROUTING
+typedef enum fr_console_transport_t {
+  FR_CONSOLE_TRANSPORT_HOST = 0,
+  FR_CONSOLE_TRANSPORT_UART = 1,
+  FR_CONSOLE_TRANSPORT_USB = 2,
+} fr_console_transport_t;
+
+typedef struct fr_console_route_t {
+  fr_console_transport_t transport;
+  uint16_t tx;
+  uint16_t rx;
+  uint32_t baud;
+} fr_console_route_t;
+#endif
+
 enum {
   FR_SIGNAL_TICK_NS = 100,
   FR_SIGNAL_CLOCK_HZ = 10000000,
@@ -123,6 +138,20 @@ fr_err_t fr_platform_uart_read_byte(uint16_t platform_index, uint8_t *out_byte,
                                     bool *out_has_byte);
 fr_err_t fr_platform_uart_available(uint16_t platform_index,
                                     uint16_t *out_count);
+#endif
+
+#if FR_FEATURE_CONSOLE_ROUTING
+fr_err_t fr_platform_console_set_uart(uint16_t tx, uint16_t rx,
+                                      uint32_t baud);
+fr_err_t fr_platform_console_restore_default(void);
+fr_err_t fr_platform_console_get_route(fr_console_route_t *out_route);
+fr_err_t fr_platform_console_recovery_requested(uint16_t window_ms,
+                                                bool *out_requested);
+#ifdef FR_HOST_TEST_HELPERS
+void fr_host_console_reset(void);
+void fr_host_console_request_recovery(void);
+void fr_host_console_fail_next_switch(void);
+#endif
 #endif
 
 #if FR_FEATURE_REPL

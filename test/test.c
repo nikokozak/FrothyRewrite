@@ -180,6 +180,14 @@ static fr_err_t test_persist_apply_user_overlay(
 #define FR_TEST_PULSE_SLOT_COUNT 0
 #endif
 
+#if FR_FEATURE_CONSOLE_ROUTING
+#define FR_TEST_CONSOLE_WORDS " console.uart console.default console.info"
+#define FR_TEST_CONSOLE_SLOT_COUNT 3
+#else
+#define FR_TEST_CONSOLE_WORDS ""
+#define FR_TEST_CONSOLE_SLOT_COUNT 0
+#endif
+
 enum {
   FR_TEST_PERSIST_RECORD_CODE = 1,
   FR_TEST_PERSIST_RECORD_BIND = 2,
@@ -205,7 +213,7 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
@@ -215,7 +223,7 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
@@ -225,7 +233,7 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
@@ -235,7 +243,8 @@ enum {
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
    FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
-   FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT)
+   FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT +                      \
+   FR_TEST_CONSOLE_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -243,7 +252,7 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
@@ -252,7 +261,7 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
@@ -261,7 +270,7 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
@@ -271,7 +280,8 @@ enum {
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
    FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
-   FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT)
+   FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT +                      \
+   FR_TEST_CONSOLE_SLOT_COUNT)
 #endif
 
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
@@ -437,6 +447,7 @@ static void test_base_def_contract(void) {
       (FR_FEATURE_I2C ? 8 : 0) + (FR_FEATURE_NET ? 9 : 0) +
       (FR_FEATURE_POWER ? 4 : 0) + (FR_FEATURE_BYTES ? 8 : 0) +
       (FR_FEATURE_TRACE ? 12 : 0) + (FR_FEATURE_PULSE ? 9 : 0) +
+      (FR_FEATURE_CONSOLE_ROUTING ? 3 : 0) +
       (FR_FEATURE_MATH ? 6 : 0) +
       FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT +
       FR_TEST_EVENT_REGISTER_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT;
@@ -468,7 +479,7 @@ static void test_base_def_contract(void) {
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
   CHECK("fire-event slot follows protocol blocks",
-        FR_SLOT_FIRE_EVENT == FR_SLOT_AFTER_PULSE);
+        FR_SLOT_FIRE_EVENT == FR_SLOT_AFTER_CONSOLE);
   CHECK("board capability slot follows fire-event slot",
         FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_FIRE_EVENT + 1);
   CHECK("board local slot ids follow board capability slots",
@@ -476,8 +487,8 @@ static void test_base_def_contract(void) {
 #else
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("board capability slot follows event cancel slot",
-        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board capability slot follows target capability blocks",
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CONSOLE);
   CHECK("board local slot ids follow board capability slots",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #endif
@@ -486,8 +497,8 @@ static void test_base_def_contract(void) {
         FR_SLOT_EVENT_REGISTER == FR_TEST_PAD_LAST_SLOT + 1);
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("board capability slot follows event cancel slot",
-        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board capability slot follows target capability blocks",
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CONSOLE);
   CHECK("board local slot ids follow board capability slots",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #else
@@ -495,10 +506,16 @@ static void test_base_def_contract(void) {
         FR_SLOT_EVENT_REGISTER == FR_SLOT_AFTER_MATH);
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("board capability slot follows event cancel slot",
-        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board capability slot follows target capability blocks",
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CONSOLE);
   CHECK("board local slot ids follow board capability slots",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
+#endif
+#if FR_FEATURE_CONSOLE_ROUTING
+  CHECK("console slots follow protocol lab capabilities",
+        FR_SLOT_CONSOLE_UART == FR_SLOT_AFTER_PULSE &&
+            FR_SLOT_CONSOLE_DEFAULT == FR_SLOT_CONSOLE_UART + 1 &&
+            FR_SLOT_CONSOLE_INFO == FR_SLOT_CONSOLE_DEFAULT + 1);
 #endif
 
   for (uint16_t layer_index = 0; layer_index < fr_base_def_layer_count();
@@ -3097,6 +3114,146 @@ static void test_uart(void) {
             fr_repl_eval_line(&runtime,
                               "again is uart.open-on: 1, 4, 5, $baud_9600",
                               out, sizeof(out)) == FR_OK);
+}
+#endif
+
+#if FR_FEATURE_CONSOLE_ROUTING && defined(FR_HOST_TEST_HELPERS)
+static fr_err_t test_console_entry(fr_runtime_t *runtime, fr_slot_id_t slot_id,
+                                   const fr_native_entry_t **out_entry) {
+  fr_tagged_t tagged = 0;
+  fr_native_id_t native_id = 0;
+
+  if (runtime == NULL || out_entry == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
+  FR_TRY(fr_tagged_decode_native_id(tagged, &native_id));
+  return fr_native_get(runtime, native_id, out_entry);
+}
+
+static bool test_console_route_equals(const fr_console_route_t *a,
+                                      const fr_console_route_t *b) {
+  return a->transport == b->transport && a->tx == b->tx && a->rx == b->rx &&
+         a->baud == b->baud;
+}
+
+static void test_console_routing(void) {
+  fr_runtime_t runtime;
+  const fr_native_entry_t *uart_entry = NULL;
+  const fr_native_entry_t *default_entry = NULL;
+  const fr_native_entry_t *info_entry = NULL;
+  fr_console_route_t route = {0};
+  fr_console_route_t before = {0};
+  char out[256];
+
+  fr_host_console_reset();
+  CHECK("console installs base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("console installs three native contracts",
+        test_console_entry(&runtime, FR_SLOT_CONSOLE_UART, &uart_entry) ==
+                FR_OK &&
+            uart_entry->arity == 3 &&
+            test_console_entry(&runtime, FR_SLOT_CONSOLE_DEFAULT,
+                               &default_entry) == FR_OK &&
+            default_entry->arity == 0 &&
+            test_console_entry(&runtime, FR_SLOT_CONSOLE_INFO, &info_entry) ==
+                FR_OK &&
+            info_entry->arity == 0);
+  CHECK("console see renders uart contract",
+        fr_repl_eval_line(&runtime, "see console.uart", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "console.uart(tx: int, rx: int, baud: int) -> nil\n"
+                   "move the active REPL to UART pins at a literal baud rate\n"
+                   "ok\n") == 0);
+  CHECK("console see renders default contract",
+        fr_repl_eval_line(&runtime, "see console.default", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "console.default() -> nil\n"
+                   "restore the board's boot and recovery console\n"
+                   "ok\n") == 0);
+  CHECK("console see renders info contract",
+        fr_repl_eval_line(&runtime, "see console.info", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "console.info() -> nil\n"
+                   "print the active console route\n"
+                   "ok\n") == 0);
+  CHECK("console host fixture starts on host",
+        fr_platform_console_get_route(&route) == FR_OK &&
+            route.transport == FR_CONSOLE_TRANSPORT_HOST && route.tx == 0 &&
+            route.rx == 0 && route.baud == 0);
+  CHECK("console moves to literal uart route",
+        fr_repl_eval_line(&runtime, "console.uart: 25, 34, 1200", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            route.transport == FR_CONSOLE_TRANSPORT_UART && route.tx == 25 &&
+            route.rx == 34 && route.baud == 1200);
+  CHECK("console reroutes uart to uart as one complete route",
+        fr_repl_eval_line(&runtime, "console.uart: 26, 35, 9600", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            route.transport == FR_CONSOLE_TRANSPORT_UART && route.tx == 26 &&
+            route.rx == 35 && route.baud == 9600);
+
+  before = route;
+  CHECK("console rejects invalid route without changing current route",
+        fr_repl_eval_line(&runtime, "console.uart: 7, 7, 1200", out,
+                          sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "console.uart: 40, 8, 1200", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "console.uart: 8, 9, 0", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "console.uart: 8, 9, 5000001", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            test_console_route_equals(&route, &before));
+  fr_host_console_fail_next_switch();
+  CHECK("console platform failure preserves current route",
+        fr_repl_eval_line(&runtime, "console.uart: 8, 9, 1200", out,
+                          sizeof(out)) == FR_ERR_IO &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            test_console_route_equals(&route, &before));
+
+#if FR_FEATURE_UART
+  CHECK("console rejects open application uart pins",
+        fr_repl_eval_line(&runtime,
+                          "routeapp is uart.open-on: 0, 4, 5, 9600", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "console.uart: 4, 6, 1200", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            test_console_route_equals(&route, &before));
+  CHECK("console accepts application pins after close",
+        fr_repl_eval_line(&runtime, "uart.close: routeapp", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "routeapp is nil", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "console.uart: 4, 6, 1200", out,
+                              sizeof(out)) == FR_OK);
+  CHECK("application uart rejects active console pins",
+        fr_repl_eval_line(&runtime,
+                          "blocked is uart.open-on: 0, 4, 8, 9600", out,
+                          sizeof(out)) == FR_ERR_DOMAIN);
+  CHECK("application uart accepts disjoint pins",
+        fr_repl_eval_line(&runtime,
+                          "disjoint is uart.open-on: 0, 8, 9, 9600", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "uart.close: disjoint", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "disjoint is nil", out, sizeof(out)) ==
+                FR_OK);
+#endif
+
+  CHECK("console restores host default and zeroes uart fields",
+        fr_repl_eval_line(&runtime, "console.default:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            route.transport == FR_CONSOLE_TRANSPORT_HOST && route.tx == 0 &&
+            route.rx == 0 && route.baud == 0);
 }
 #endif
 
@@ -14956,6 +15113,9 @@ static void test_repl_startup_restore_and_boot(void) {
   fr_code_object_id_t code_id = 0;
 
   fr_platform_persist_clear();
+#if FR_FEATURE_CONSOLE_ROUTING && defined(FR_HOST_TEST_HELPERS)
+  fr_host_console_reset();
+#endif
   CHECK("startup boot installs base image",
         fr_base_image_install(&runtime) == FR_OK);
   CHECK("startup boot tolerates first boot without saved image",
@@ -14975,6 +15135,18 @@ static void test_repl_startup_restore_and_boot(void) {
             fr_platform_gpio_write(13, 0) == FR_OK &&
             fr_platform_gpio_read(13, &gpio_value) == FR_OK &&
             gpio_value == 0);
+#if FR_FEATURE_CONSOLE_ROUTING && defined(FR_HOST_TEST_HELPERS)
+  fr_host_console_request_recovery();
+  CHECK("safe boot skips restore and saved boot without erasing them",
+        fr_repl_startup_restore_and_boot(&runtime) == FR_OK &&
+            fr_platform_gpio_read(13, &gpio_value) == FR_OK &&
+            gpio_value == 0 &&
+            fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged));
+  CHECK("startup boot resets base after safe boot",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_platform_gpio_write(13, 0) == FR_OK);
+#endif
   CHECK("startup boot restores and runs saved boot",
         fr_repl_startup_restore_and_boot(&runtime) == FR_OK &&
             fr_platform_gpio_read(13, &gpio_value) == FR_OK &&
@@ -14996,6 +15168,9 @@ int main(void) {
   test_slots();
 #if FR_FEATURE_HANDLES
   test_handles();
+#endif
+#if FR_FEATURE_CONSOLE_ROUTING && defined(FR_HOST_TEST_HELPERS)
+  test_console_routing();
 #endif
 #if FR_FEATURE_UART
   test_uart();
