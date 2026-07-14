@@ -3,7 +3,7 @@
   "chip": "esp32",
   "target": "esp-idf",
   "profile": "esp32_plain",
-  "peripherals": ["gpio", "adc", "uart", "pwm", "i2c"],
+  "peripherals": ["gpio", "adc", "uart", "pwm", "i2c", "trace", "pulse"],
   "pins": {
     "$led_builtin": 2,
     "$boot_button": 0,
