@@ -687,6 +687,10 @@ esp32-plain-host:
 test-esp32-plain-host-transcript: esp32-plain-host ## Replay the esp32_plain profile on the host target.
 	@out=$$(printf '%s\n' \
 		'status' \
+		'console.uart: 25, 34, 1200' \
+		'console.info:' \
+		'console.default:' \
+		'console.info:' \
 		'words' \
 		'$$led_builtin' \
 		'$$a0' \
@@ -718,7 +722,7 @@ test-esp32-plain-host-transcript: esp32-plain-host ## Replay the esp32_plain pro
 		'see boot' \
 		| build/esp32-plain-host/frothy); \
 	ok_count=$$(printf '%s\n' "$$out" | grep -c 'ok$$'); \
-	if [ "$$ok_count" != 30 ]; then \
+	if [ "$$ok_count" != 34 ]; then \
 		printf '%s\n' "$$out"; \
 		exit 1; \
 	fi; \
@@ -727,6 +731,8 @@ test-esp32-plain-host-transcript: esp32-plain-host ## Replay the esp32_plain pro
 		'compiler=device' \
 		'names=device' \
 		'storage=eeprom' \
+		'console uart tx=25 rx=34 baud=1200' \
+		'console host' \
 		'$$a0' \
 		'$$boot_button' \
 		'2' \
