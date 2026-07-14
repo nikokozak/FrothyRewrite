@@ -26,7 +26,7 @@ static uint32_t fr_host_millis;
 static fr_console_route_t fr_host_console_route = {
     .transport = FR_CONSOLE_TRANSPORT_HOST,
 };
-static bool fr_host_console_recovery_next;
+static bool fr_host_recovery_next;
 static bool fr_host_console_fail_switch_next;
 
 static bool fr_host_console_pin_conflict(uint16_t tx, uint16_t rx) {
@@ -871,14 +871,14 @@ fr_err_t fr_platform_console_get_route(fr_console_route_t *out_route) {
   return FR_OK;
 }
 
-fr_err_t fr_platform_console_recovery_requested(uint16_t window_ms,
-                                                bool *out_requested) {
+fr_err_t fr_platform_recovery_requested(uint16_t window_ms,
+                                        bool *out_requested) {
   (void)window_ms;
   if (out_requested == NULL) {
     return FR_ERR_INVALID;
   }
-  *out_requested = fr_host_console_recovery_next;
-  fr_host_console_recovery_next = false;
+  *out_requested = fr_host_recovery_next;
+  fr_host_recovery_next = false;
   return FR_OK;
 }
 
@@ -887,13 +887,11 @@ void fr_host_console_reset(void) {
   fr_host_console_route = (fr_console_route_t){
       .transport = FR_CONSOLE_TRANSPORT_HOST,
   };
-  fr_host_console_recovery_next = false;
+  fr_host_recovery_next = false;
   fr_host_console_fail_switch_next = false;
 }
 
-void fr_host_console_request_recovery(void) {
-  fr_host_console_recovery_next = true;
-}
+void fr_host_request_recovery(void) { fr_host_recovery_next = true; }
 
 void fr_host_console_fail_next_switch(void) {
   fr_host_console_fail_switch_next = true;

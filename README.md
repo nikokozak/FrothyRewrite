@@ -107,10 +107,12 @@ to boot [
 save
 ```
 
-On every reset the board first starts on its fixed default console and prints
-`boot: Ctrl-C skips saved code`. Send Ctrl-C during that 750 ms window to skip
-the saved project and keep the default console. `console.default:` returns a
-live session to that default. `console.info:` prints the active route.
+On every reset the board first starts on its fixed default console and opens a
+600 ms safe-boot window. Send Ctrl-C or, after resetting normally, tap BOOT
+during that window to skip the saved project and keep the default console. Do
+not hold BOOT through reset: GPIO0 also selects the ESP32 ROM bootloader.
+`console.default:` returns a live session to the board default, and
+`console.info:` prints the active route.
 
 `clear` does not disrupt the live connection. If you then `save` and reboot,
 the cleared project no longer contains the saved `boot` reroute, so the board

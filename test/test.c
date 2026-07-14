@@ -15037,8 +15037,8 @@ static void test_repl_startup_restore_and_boot(void) {
             fr_platform_gpio_read(13, &gpio_value) == FR_OK &&
             gpio_value == 0);
 #if FR_FEATURE_CONSOLE_ROUTING && defined(FR_HOST_TEST_HELPERS)
-  fr_host_console_request_recovery();
-  CHECK("safe boot skips restore and saved boot without erasing them",
+  fr_host_request_recovery();
+  CHECK("physical or serial safe boot skips saved code without erasing it",
         fr_repl_startup_restore_and_boot(&runtime) == FR_OK &&
             fr_platform_gpio_read(13, &gpio_value) == FR_OK &&
             gpio_value == 0 &&

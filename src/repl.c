@@ -40,7 +40,7 @@ typedef struct fr_repl_buffer_writer_t {
 } fr_repl_buffer_writer_t;
 
 #if FR_FEATURE_PERSISTENCE && FR_FEATURE_CONSOLE_ROUTING
-enum { FR_REPL_SAFE_BOOT_WINDOW_MS = 750 };
+enum { FR_REPL_SAFE_BOOT_WINDOW_MS = 600 };
 #endif
 
 typedef enum fr_repl_command_kind_t {
@@ -1290,11 +1290,11 @@ fr_err_t fr_repl_startup_restore_and_boot(fr_runtime_t *runtime) {
 #if FR_FEATURE_CONSOLE_ROUTING
   bool recovery_requested = false;
 
-  FR_TRY(fr_platform_write_text("boot: Ctrl-C skips saved code\n"));
-  FR_TRY(fr_platform_console_recovery_requested(
-      FR_REPL_SAFE_BOOT_WINDOW_MS, &recovery_requested));
+  FR_TRY(fr_platform_write_text("boot: Ctrl-C or BOOT skips saved code\n"));
+  FR_TRY(fr_platform_recovery_requested(FR_REPL_SAFE_BOOT_WINDOW_MS,
+                                        &recovery_requested));
   if (recovery_requested) {
-    FR_TRY(fr_platform_write_text("^C\nsafe boot\n"));
+    FR_TRY(fr_platform_write_text("safe boot\n"));
     return FR_OK;
   }
 #endif

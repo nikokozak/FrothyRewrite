@@ -388,6 +388,7 @@ static bool fr_esp_uart_baud_valid(uint32_t baud) {
 #if FR_FEATURE_UART
 static bool fr_esp_app_uart_pin_conflict(uint16_t tx, uint16_t rx);
 #endif
+static bool fr_esp_boot_button_pressed(void);
 
 /* FR_ESP_CONSOLE_IMPL_BEGIN
  * One active human console. Application UART stays outside this block. */
@@ -682,8 +683,8 @@ fr_err_t fr_platform_console_get_route(fr_console_route_t *out_route) {
   return FR_OK;
 }
 
-fr_err_t fr_platform_console_recovery_requested(uint16_t window_ms,
-                                                bool *out_requested) {
+fr_err_t fr_platform_recovery_requested(uint16_t window_ms,
+                                        bool *out_requested) {
   const int64_t deadline =
       esp_timer_get_time() + (int64_t)window_ms * 1000;
   TickType_t poll_ticks = pdMS_TO_TICKS(10);
@@ -698,8 +699,13 @@ fr_err_t fr_platform_console_recovery_requested(uint16_t window_ms,
 
   while (esp_timer_get_time() < deadline) {
     uint8_t byte = 0;
-    fr_err_t err = fr_esp_console_driver_read(&byte, poll_ticks);
+    fr_err_t err = FR_OK;
 
+    if (fr_esp_boot_button_pressed()) {
+      *out_requested = true;
+      return FR_OK;
+    }
+    err = fr_esp_console_driver_read(&byte, poll_ticks);
     if (err == FR_ERR_NOT_FOUND) {
       continue;
     }

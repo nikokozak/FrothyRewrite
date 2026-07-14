@@ -153,11 +153,14 @@ fr_err_t fr_platform_console_set_uart(uint16_t tx, uint16_t rx,
                                       uint32_t baud);
 fr_err_t fr_platform_console_restore_default(void);
 fr_err_t fr_platform_console_get_route(fr_console_route_t *out_route);
-fr_err_t fr_platform_console_recovery_requested(uint16_t window_ms,
-                                                bool *out_requested);
+/* Wait on the board's fixed recovery inputs before saved code can replace the
+ * default console. Official ESP32 boards accept Ctrl-C or a post-reset BOOT
+ * press; holding GPIO0 through reset remains a ROM-boot gesture. */
+fr_err_t fr_platform_recovery_requested(uint16_t window_ms,
+                                        bool *out_requested);
 #ifdef FR_HOST_TEST_HELPERS
 void fr_host_console_reset(void);
-void fr_host_console_request_recovery(void);
+void fr_host_request_recovery(void);
 void fr_host_console_fail_next_switch(void);
 #endif
 #endif
