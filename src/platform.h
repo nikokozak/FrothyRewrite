@@ -47,6 +47,7 @@ typedef enum fr_trace_state_t {
 
 typedef struct fr_trace_status_t {
   fr_trace_state_t state;
+  uint16_t pins[FR_TRACE_CHANNEL_CAP];
   uint8_t channel_count;
   uint16_t event_count;
 } fr_trace_status_t;
@@ -61,6 +62,13 @@ typedef struct fr_pulse_segment_t {
   uint8_t level;
   uint32_t duration_ns;
 } fr_pulse_segment_t;
+
+typedef struct fr_pulse_status_t {
+  uint16_t pin;
+  uint16_t segment_count;
+  uint32_t total_ns;
+  uint8_t idle;
+} fr_pulse_status_t;
 
 fr_err_t fr_platform_delay_ms(uint16_t ms);
 fr_err_t fr_platform_millis(uint32_t *out_ms);
@@ -224,8 +232,6 @@ fr_err_t fr_platform_trace_status(uint16_t platform_index,
 fr_err_t fr_platform_trace_event(uint16_t platform_index,
                                  uint16_t event_index,
                                  fr_trace_event_t *out_event);
-fr_err_t fr_platform_trace_pin(uint16_t platform_index, uint8_t channel,
-                               uint16_t *out_pin);
 fr_err_t fr_platform_trace_close(uint16_t platform_index);
 #ifdef FR_HOST_TEST_HELPERS
 fr_err_t fr_host_trace_push_edge(uint16_t platform_index, uint8_t channel,
@@ -240,18 +246,13 @@ fr_err_t fr_platform_pulse_add(uint16_t platform_index, uint8_t level,
                                uint32_t duration_ns,
                                uint16_t *out_segment_index);
 fr_err_t fr_platform_pulse_clear(uint16_t platform_index);
-fr_err_t fr_platform_pulse_count(uint16_t platform_index,
-                                 uint16_t *out_count);
+fr_err_t fr_platform_pulse_status(uint16_t platform_index,
+                                  fr_pulse_status_t *out_status);
 fr_err_t fr_platform_pulse_segment(uint16_t platform_index,
                                    uint16_t segment_index,
                                    fr_pulse_segment_t *out_segment);
 fr_err_t fr_platform_pulse_play(uint16_t platform_index);
-fr_err_t fr_platform_pulse_pin(uint16_t platform_index, uint16_t *out_pin);
-fr_err_t fr_platform_pulse_idle(uint16_t platform_index, uint8_t *out_idle);
 fr_err_t fr_platform_pulse_close(uint16_t platform_index);
-#ifdef FR_HOST_TEST_HELPERS
-uint16_t fr_host_pulse_play_count(uint16_t platform_index);
-#endif
 #endif
 
 #if FR_FEATURE_PERSISTENCE

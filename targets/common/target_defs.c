@@ -2360,11 +2360,8 @@ static fr_err_t fr_native_trace_dump(fr_runtime_t *runtime,
   FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
 
   for (uint8_t channel = 0; channel < status.channel_count; channel++) {
-    uint16_t pin = 0;
-
-    FR_TRY(fr_platform_trace_pin(platform_index, channel, &pin));
     written = snprintf(line, sizeof(line), "trace.channel %u pin=%u\n",
-                       (unsigned)channel, (unsigned)pin);
+                       (unsigned)channel, (unsigned)status.pins[channel]);
     FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
   }
   for (uint16_t i = 0; i < status.event_count; i++) {
@@ -2500,15 +2497,15 @@ static fr_err_t fr_native_pulse_count(fr_runtime_t *runtime,
                                       const fr_tagged_t *args,
                                       uint8_t arg_count, fr_tagged_t *out) {
   uint16_t platform_index = 0;
-  uint16_t count = 0;
+  fr_pulse_status_t status = {0};
 
   if (out == NULL) {
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_native_decode_pulse_handle(runtime, args, arg_count, 0,
                                        &platform_index));
-  FR_TRY(fr_platform_pulse_count(platform_index, &count));
-  return fr_tagged_encode_int((int32_t)count, out);
+  FR_TRY(fr_platform_pulse_status(platform_index, &status));
+  return fr_tagged_encode_int((int32_t)status.segment_count, out);
 }
 
 static fr_err_t fr_native_pulse_segment_field(fr_runtime_t *runtime,
@@ -2557,10 +2554,7 @@ static fr_err_t fr_native_pulse_dump(fr_runtime_t *runtime,
                                      uint8_t arg_count, fr_tagged_t *out) {
   char line[96];
   uint16_t platform_index = 0;
-  uint16_t pin = 0;
-  uint8_t idle = 0;
-  uint16_t count = 0;
-  uint32_t total_ns = 0;
+  fr_pulse_status_t status = {0};
   int written = 0;
 
   if (out == NULL) {
@@ -2568,26 +2562,16 @@ static fr_err_t fr_native_pulse_dump(fr_runtime_t *runtime,
   }
   FR_TRY(fr_native_decode_pulse_handle(runtime, args, arg_count, 0,
                                        &platform_index));
-  FR_TRY(fr_platform_pulse_pin(platform_index, &pin));
-  FR_TRY(fr_platform_pulse_idle(platform_index, &idle));
-  FR_TRY(fr_platform_pulse_count(platform_index, &count));
-  for (uint16_t i = 0; i < count; i++) {
-    fr_pulse_segment_t segment = {0};
-
-    FR_TRY(fr_platform_pulse_segment(platform_index, i, &segment));
-    if (segment.duration_ns > FR_SIGNAL_MAX_SPAN_NS - total_ns) {
-      return FR_ERR_CAPACITY;
-    }
-    total_ns += segment.duration_ns;
-  }
+  FR_TRY(fr_platform_pulse_status(platform_index, &status));
 
   written = snprintf(
       line, sizeof(line),
       "pulse pin=%u idle=%u segments=%u tick_ns=%u total_ns=%lu\n",
-      (unsigned)pin, (unsigned)idle, (unsigned)count,
-      (unsigned)FR_SIGNAL_TICK_NS, (unsigned long)total_ns);
+      (unsigned)status.pin, (unsigned)status.idle,
+      (unsigned)status.segment_count, (unsigned)FR_SIGNAL_TICK_NS,
+      (unsigned long)status.total_ns);
   FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
-  for (uint16_t i = 0; i < count; i++) {
+  for (uint16_t i = 0; i < status.segment_count; i++) {
     fr_pulse_segment_t segment = {0};
 
     FR_TRY(fr_platform_pulse_segment(platform_index, i, &segment));

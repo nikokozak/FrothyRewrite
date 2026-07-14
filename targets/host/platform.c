@@ -106,7 +106,6 @@ typedef struct fr_host_pulse_t {
   fr_pulse_segment_t segments[FR_PULSE_SEGMENT_CAP];
   uint16_t segment_count;
   uint32_t total_ticks;
-  uint16_t play_count;
 } fr_host_pulse_t;
 
 static fr_host_pulse_t fr_host_pulse;
@@ -502,6 +501,7 @@ fr_err_t fr_platform_trace_status(uint16_t platform_index,
       .channel_count = trace->channel_count,
       .event_count = trace->event_count,
   };
+  memcpy(out_status->pins, trace->pins, sizeof(out_status->pins));
   return FR_OK;
 }
 
@@ -530,22 +530,6 @@ fr_err_t fr_platform_trace_event(uint16_t platform_index,
                          trace->edges[event_index - 1].tick) *
                             FR_SIGNAL_TICK_NS,
   };
-  return FR_OK;
-}
-
-fr_err_t fr_platform_trace_pin(uint16_t platform_index, uint8_t channel,
-                               uint16_t *out_pin) {
-  fr_host_trace_t *trace = NULL;
-
-  if (out_pin == NULL) {
-    return FR_ERR_INVALID;
-  }
-  FR_TRY(fr_host_trace_entry(platform_index, &trace));
-  if (channel >= trace->channel_count) {
-    return FR_ERR_RANGE;
-  }
-
-  *out_pin = trace->pins[channel];
   return FR_OK;
 }
 
@@ -662,15 +646,20 @@ fr_err_t fr_platform_pulse_clear(uint16_t platform_index) {
   return FR_OK;
 }
 
-fr_err_t fr_platform_pulse_count(uint16_t platform_index,
-                                 uint16_t *out_count) {
+fr_err_t fr_platform_pulse_status(uint16_t platform_index,
+                                  fr_pulse_status_t *out_status) {
   fr_host_pulse_t *pulse = NULL;
 
-  if (out_count == NULL) {
+  if (out_status == NULL) {
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
-  *out_count = pulse->segment_count;
+  *out_status = (fr_pulse_status_t){
+      .pin = pulse->pin,
+      .segment_count = pulse->segment_count,
+      .total_ns = pulse->total_ticks * FR_SIGNAL_TICK_NS,
+      .idle = pulse->idle,
+  };
   return FR_OK;
 }
 
@@ -697,29 +686,6 @@ fr_err_t fr_platform_pulse_play(uint16_t platform_index) {
   if (pulse->segment_count == 0) {
     return FR_ERR_DOMAIN;
   }
-  pulse->play_count += 1u;
-  return FR_OK;
-}
-
-fr_err_t fr_platform_pulse_pin(uint16_t platform_index, uint16_t *out_pin) {
-  fr_host_pulse_t *pulse = NULL;
-
-  if (out_pin == NULL) {
-    return FR_ERR_INVALID;
-  }
-  FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
-  *out_pin = pulse->pin;
-  return FR_OK;
-}
-
-fr_err_t fr_platform_pulse_idle(uint16_t platform_index, uint8_t *out_idle) {
-  fr_host_pulse_t *pulse = NULL;
-
-  if (out_idle == NULL) {
-    return FR_ERR_INVALID;
-  }
-  FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
-  *out_idle = pulse->idle;
   return FR_OK;
 }
 
@@ -730,13 +696,6 @@ fr_err_t fr_platform_pulse_close(uint16_t platform_index) {
   return FR_OK;
 }
 
-#ifdef FR_HOST_TEST_HELPERS
-uint16_t fr_host_pulse_play_count(uint16_t platform_index) {
-  return platform_index == 0 && fr_host_pulse.in_use
-             ? fr_host_pulse.play_count
-             : 0;
-}
-#endif
 #endif
 
 #if FR_FEATURE_UART

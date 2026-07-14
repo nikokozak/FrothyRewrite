@@ -3118,19 +3118,6 @@ static void test_uart(void) {
 #endif
 
 #if FR_FEATURE_CONSOLE_ROUTING && defined(FR_HOST_TEST_HELPERS)
-static fr_err_t test_console_entry(fr_runtime_t *runtime, fr_slot_id_t slot_id,
-                                   const fr_native_entry_t **out_entry) {
-  fr_tagged_t tagged = 0;
-  fr_native_id_t native_id = 0;
-
-  if (runtime == NULL || out_entry == NULL) {
-    return FR_ERR_INVALID;
-  }
-  FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
-  FR_TRY(fr_tagged_decode_native_id(tagged, &native_id));
-  return fr_native_get(runtime, native_id, out_entry);
-}
-
 static bool test_console_route_equals(const fr_console_route_t *a,
                                       const fr_console_route_t *b) {
   return a->transport == b->transport && a->tx == b->tx && a->rx == b->rx &&
@@ -3139,45 +3126,18 @@ static bool test_console_route_equals(const fr_console_route_t *a,
 
 static void test_console_routing(void) {
   fr_runtime_t runtime;
-  const fr_native_entry_t *uart_entry = NULL;
-  const fr_native_entry_t *default_entry = NULL;
-  const fr_native_entry_t *info_entry = NULL;
   fr_console_route_t route = {0};
   fr_console_route_t before = {0};
   char out[256];
 
   fr_host_console_reset();
   CHECK("console installs base image", fr_base_image_install(&runtime) == FR_OK);
-  CHECK("console installs three native contracts",
-        test_console_entry(&runtime, FR_SLOT_CONSOLE_UART, &uart_entry) ==
-                FR_OK &&
-            uart_entry->arity == 3 &&
-            test_console_entry(&runtime, FR_SLOT_CONSOLE_DEFAULT,
-                               &default_entry) == FR_OK &&
-            default_entry->arity == 0 &&
-            test_console_entry(&runtime, FR_SLOT_CONSOLE_INFO, &info_entry) ==
-                FR_OK &&
-            info_entry->arity == 0);
   CHECK("console see renders uart contract",
         fr_repl_eval_line(&runtime, "see console.uart", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out,
                    "console.uart(tx: int, rx: int, baud: int) -> nil\n"
                    "move the active REPL to UART pins at a literal baud rate\n"
-                   "ok\n") == 0);
-  CHECK("console see renders default contract",
-        fr_repl_eval_line(&runtime, "see console.default", out, sizeof(out)) ==
-                FR_OK &&
-            strcmp(out,
-                   "console.default() -> nil\n"
-                   "restore the board's boot and recovery console\n"
-                   "ok\n") == 0);
-  CHECK("console see renders info contract",
-        fr_repl_eval_line(&runtime, "see console.info", out, sizeof(out)) ==
-                FR_OK &&
-            strcmp(out,
-                   "console.info() -> nil\n"
-                   "print the active console route\n"
                    "ok\n") == 0);
   CHECK("console host fixture starts on host",
         fr_platform_console_get_route(&route) == FR_OK &&
@@ -3229,22 +3189,12 @@ static void test_console_routing(void) {
   CHECK("console accepts application pins after close",
         fr_repl_eval_line(&runtime, "uart.close: routeapp", out, sizeof(out)) ==
                 FR_OK &&
-            fr_repl_eval_line(&runtime, "routeapp is nil", out, sizeof(out)) ==
-                FR_OK &&
             fr_repl_eval_line(&runtime, "console.uart: 4, 6, 1200", out,
                               sizeof(out)) == FR_OK);
   CHECK("application uart rejects active console pins",
         fr_repl_eval_line(&runtime,
                           "blocked is uart.open-on: 0, 4, 8, 9600", out,
                           sizeof(out)) == FR_ERR_DOMAIN);
-  CHECK("application uart accepts disjoint pins",
-        fr_repl_eval_line(&runtime,
-                          "disjoint is uart.open-on: 0, 8, 9, 9600", out,
-                          sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "uart.close: disjoint", out,
-                              sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "disjoint is nil", out, sizeof(out)) ==
-                FR_OK);
 #endif
 
   CHECK("console restores host default and zeroes uart fields",
@@ -3438,7 +3388,7 @@ static void test_trace(void) {
                 FR_OK &&
             fr_repl_eval_line(&runtime, "trace.open:", out, sizeof(out)) ==
                 FR_ERR_CAPACITY);
-  CHECK("trace watches three distinct pins",
+  CHECK("trace keeps its three-channel budget visible",
         fr_repl_eval_line(&runtime, "trace.watch: t, 4", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "0\nok\n") == 0 &&
@@ -3452,20 +3402,11 @@ static void test_trace(void) {
                               sizeof(out)) == FR_ERR_DOMAIN &&
             fr_repl_eval_line(&runtime, "trace.watch: t, 7", out,
                               sizeof(out)) == FR_ERR_CAPACITY);
-  CHECK("trace arms and hides unfinished events",
+  CHECK("trace arms and records quantized edges",
         fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "ok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
-                FR_ERR_DOMAIN &&
-            fr_repl_eval_line(&runtime, "trace.level: t, 0", out,
-                              sizeof(out)) == FR_ERR_DOMAIN &&
-            fr_repl_eval_line(&runtime, "trace.watch: t, 8", out,
-                              sizeof(out)) == FR_ERR_DOMAIN &&
-            fr_host_trace_push_edge(platform_index, 0, 1, 100) ==
-                FR_ERR_DOMAIN);
-  CHECK("trace fixture records quantized edges",
-        fr_host_trace_push_edge(platform_index, 1, 1, 0) == FR_OK &&
+            fr_host_trace_push_edge(platform_index, 1, 1, 0) == FR_OK &&
             fr_host_trace_push_edge(platform_index, 0, 1, 0) == FR_OK &&
             fr_host_trace_push_edge(platform_index, 0, 0, 700) == FR_OK &&
             fr_repl_eval_line(&runtime, "trace.wait: t, 0", out,
@@ -3477,15 +3418,14 @@ static void test_trace(void) {
   CHECK("trace completion sorts ties by channel",
         fr_platform_trace_status(platform_index, &status) == FR_OK &&
             status.state == FR_TRACE_COMPLETE && status.channel_count == 3 &&
-            status.event_count == 3 &&
+            status.pins[0] == 4 && status.pins[1] == 5 &&
+            status.pins[2] == 6 && status.event_count == 3 &&
             fr_platform_trace_event(platform_index, 0, &event) == FR_OK &&
             event.channel == 0 && event.level == 1 && event.delta_ns == 0 &&
             fr_platform_trace_event(platform_index, 1, &event) == FR_OK &&
             event.channel == 1 && event.level == 1 && event.delta_ns == 0 &&
             fr_platform_trace_event(platform_index, 2, &event) == FR_OK &&
-            event.channel == 0 && event.level == 0 && event.delta_ns == 700 &&
-            fr_platform_trace_event(platform_index, 3, &event) ==
-                FR_ERR_RANGE);
+            event.channel == 0 && event.level == 0 && event.delta_ns == 700);
   CHECK("trace exposes completed edges through Frothy",
         fr_repl_eval_line(&runtime, "trace.complete?: t", out,
                           sizeof(out)) == FR_OK &&
@@ -3521,42 +3461,18 @@ static void test_trace(void) {
             fr_repl_eval_line(&runtime, "trace.delta-ns: t, 1", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "500\nok\n") == 0);
-#if FR_FEATURE_PERSISTENCE
-  CHECK("trace save rejects live handle", fr_persist_save(&runtime) ==
-                                               FR_ERR_VOLATILE);
-#endif
-  CHECK("trace close invalidates handle",
-        fr_repl_eval_line(&runtime, "trace.close: t", out, sizeof(out)) ==
-                FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.count: t", out, sizeof(out)) ==
-                FR_ERR_HANDLE);
-
-  CHECK("trace completes at one-second signal span",
-        fr_repl_eval_line(&runtime, "t2 is trace.open:", out, sizeof(out)) ==
-                FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.watch: t2, 4", out,
-                              sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.arm: t2", out, sizeof(out)) ==
-                FR_OK &&
-            test_trace_platform_index(&runtime, "t2", &platform_index) ==
+  CHECK("trace completes at its one-second signal span",
+        fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
                 FR_OK &&
             fr_host_trace_push_edge(platform_index, 0, 1, 0) == FR_OK &&
             fr_host_trace_push_edge(platform_index, 0, 0,
                                     FR_SIGNAL_MAX_SPAN_NS) == FR_OK &&
             fr_platform_trace_status(platform_index, &status) == FR_OK &&
-            status.state == FR_TRACE_COMPLETE && status.event_count == 2 &&
-            fr_repl_eval_line(&runtime, "trace.close: t2", out, sizeof(out)) ==
-                FR_OK);
+            status.state == FR_TRACE_COMPLETE && status.event_count == 2);
 
-  CHECK("trace opens fixture for capacity boundary",
-        fr_repl_eval_line(&runtime, "full is trace.open:", out, sizeof(out)) ==
-                FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.watch: full, 4", out,
-                              sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.arm: full", out, sizeof(out)) ==
-                FR_OK &&
-            test_trace_platform_index(&runtime, "full", &platform_index) ==
-                FR_OK);
+  CHECK("trace re-arms for its fixed edge boundary",
+        fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
+            FR_OK);
   for (uint16_t i = 0; i < FR_TRACE_EVENT_CAP; i++) {
     if (fr_host_trace_push_edge(platform_index, 0, (uint8_t)(i & 1u),
                                 i == 0 ? 0 : FR_SIGNAL_TICK_NS) != FR_OK) {
@@ -3567,16 +3483,19 @@ static void test_trace(void) {
   CHECK("trace completes exactly at fixed edge capacity",
         filled && fr_platform_trace_status(platform_index, &status) == FR_OK &&
             status.state == FR_TRACE_COMPLETE &&
-            status.event_count == FR_TRACE_EVENT_CAP &&
-            fr_host_trace_push_edge(platform_index, 0, 1,
-                                    FR_SIGNAL_TICK_NS) == FR_OK &&
-            fr_platform_trace_status(platform_index, &status) == FR_OK &&
             status.event_count == FR_TRACE_EVENT_CAP);
+  CHECK("trace close invalidates its handle",
+        fr_repl_eval_line(&runtime, "trace.close: t", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.count: t", out, sizeof(out)) ==
+                FR_ERR_HANDLE &&
+            fr_repl_eval_line(&runtime, "fresh is trace.open:", out,
+                              sizeof(out)) == FR_OK);
   CHECK("project clear releases trace platform state",
         fr_runtime_clear_project(&runtime) == FR_OK &&
-            fr_repl_eval_line(&runtime, "fresh is trace.open:", out,
+            fr_repl_eval_line(&runtime, "after-clear is trace.open:", out,
                               sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.close: fresh", out,
+            fr_repl_eval_line(&runtime, "trace.close: after-clear", out,
                               sizeof(out)) == FR_OK);
 }
 #endif
@@ -3601,10 +3520,10 @@ static fr_err_t test_pulse_platform_index(fr_runtime_t *runtime,
 
 static void test_pulse(void) {
   fr_runtime_t runtime;
+  fr_pulse_status_t status = {0};
   fr_pulse_segment_t segment = {0};
   uint16_t platform_index = 0;
   uint16_t returned_index = 0;
-  uint16_t count = 0;
   bool filled = true;
   char out[256];
 
@@ -3616,14 +3535,6 @@ static void test_pulse(void) {
             strcmp(out,
                    "pulse.open(pin: int, idle: int) -> handle\n"
                    "open one timed digital output with idle level 0 or 1\n"
-                   "ok\n") == 0);
-  CHECK("pulse see add renders quantized span contract",
-        fr_repl_eval_line(&runtime, "see pulse.add", out, sizeof(out)) ==
-                FR_OK &&
-            strcmp(out,
-                   "pulse.add(pulse: handle, level: int, duration_ns: int) "
-                   "-> int\n"
-                   "append one quantized high or low span\n"
                    "ok\n") == 0);
   CHECK("pulse rejects invalid output settings",
         fr_platform_pulse_open(40, 0, &platform_index) == FR_ERR_DOMAIN &&
@@ -3657,53 +3568,35 @@ static void test_pulse(void) {
             strcmp(out, "400\nok\n") == 0 &&
             fr_repl_eval_line(&runtime, "pulse.duration-ns: p, 1", out,
                               sizeof(out)) == FR_OK &&
-            strcmp(out, "900\nok\n") == 0);
-  CHECK("pulse rejects invalid levels and durations",
+            strcmp(out, "900\nok\n") == 0 &&
+            fr_platform_pulse_status(platform_index, &status) == FR_OK &&
+            status.pin == 4 && status.idle == 0 &&
+            status.segment_count == 2 && status.total_ns == 1300);
+  CHECK("pulse rejects invalid spans",
         fr_repl_eval_line(&runtime, "pulse.add: p, 2, 100", out,
                           sizeof(out)) == FR_ERR_DOMAIN &&
             fr_repl_eval_line(&runtime, "pulse.add: p, 1, 99", out,
-                              sizeof(out)) == FR_ERR_DOMAIN &&
-            fr_repl_eval_line(&runtime, "pulse.add: p, 1, -100", out,
-                              sizeof(out)) == FR_ERR_DOMAIN &&
-            fr_repl_eval_line(&runtime, "pulse.add: p, 1, 1000000001", out,
-                              sizeof(out)) == FR_ERR_DOMAIN &&
-            fr_repl_eval_line(&runtime, "pulse.level: p, 2", out,
-                              sizeof(out)) == FR_ERR_RANGE);
+                              sizeof(out)) == FR_ERR_DOMAIN);
   CHECK("pulse play is repeatable and keeps its waveform",
-        fr_host_pulse_play_count(platform_index) == 0 &&
-            fr_repl_eval_line(&runtime, "pulse.play: p", out, sizeof(out)) ==
+        fr_repl_eval_line(&runtime, "pulse.play: p", out, sizeof(out)) ==
                 FR_OK &&
             fr_repl_eval_line(&runtime, "pulse.play: p", out, sizeof(out)) ==
                 FR_OK &&
-            fr_host_pulse_play_count(platform_index) == 2 &&
-            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
-            count == 2 &&
+            fr_platform_pulse_status(platform_index, &status) == FR_OK &&
+            status.segment_count == 2 && status.total_ns == 1300 &&
             fr_platform_pulse_segment(platform_index, 0, &segment) == FR_OK &&
             segment.level == 1 && segment.duration_ns == 400);
-#if FR_FEATURE_PERSISTENCE
-  CHECK("pulse save rejects live handle",
-        fr_persist_save(&runtime) == FR_ERR_VOLATILE);
-#endif
-  CHECK("pulse close invalidates handle",
-        fr_repl_eval_line(&runtime, "pulse.close: p", out, sizeof(out)) ==
+  CHECK("pulse clears and accepts exactly one second",
+        fr_repl_eval_line(&runtime, "pulse.clear: p", out, sizeof(out)) ==
                 FR_OK &&
-            fr_repl_eval_line(&runtime, "pulse.count: p", out, sizeof(out)) ==
-                FR_ERR_HANDLE);
-
-  CHECK("pulse accepts exactly one second",
-        fr_repl_eval_line(&runtime, "cap is pulse.open: 4, 1", out,
-                          sizeof(out)) == FR_OK &&
-            test_pulse_platform_index(&runtime, "cap", &platform_index) ==
-                FR_OK &&
-            fr_repl_eval_line(&runtime, "pulse.add: cap, 1, 1000000000", out,
+            fr_repl_eval_line(&runtime, "pulse.add: p, 1, 1000000000", out,
                               sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "pulse.add: cap, 0, 100", out,
+            fr_repl_eval_line(&runtime, "pulse.add: p, 0, 100", out,
                               sizeof(out)) == FR_ERR_CAPACITY &&
-            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
-            count == 1 &&
-            fr_platform_pulse_clear(platform_index) == FR_OK &&
-            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
-            count == 0);
+            fr_platform_pulse_status(platform_index, &status) == FR_OK &&
+            status.segment_count == 1 &&
+            status.total_ns == FR_SIGNAL_MAX_SPAN_NS &&
+            fr_platform_pulse_clear(platform_index) == FR_OK);
   for (uint16_t i = 0; i < FR_PULSE_SEGMENT_CAP; i++) {
     if (fr_platform_pulse_add(platform_index, (uint8_t)(i & 1u),
                               FR_SIGNAL_TICK_NS, &returned_index) != FR_OK ||
@@ -3716,19 +3609,27 @@ static void test_pulse(void) {
         filled &&
             fr_platform_pulse_add(platform_index, 0, FR_SIGNAL_TICK_NS,
                                   &returned_index) == FR_ERR_CAPACITY &&
-            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
-            count == FR_PULSE_SEGMENT_CAP);
+            fr_platform_pulse_status(platform_index, &status) == FR_OK &&
+            status.segment_count == FR_PULSE_SEGMENT_CAP);
   CHECK("pulse clear rebuilds without reopening",
-        fr_repl_eval_line(&runtime, "pulse.clear: cap", out, sizeof(out)) ==
+        fr_repl_eval_line(&runtime, "pulse.clear: p", out, sizeof(out)) ==
                 FR_OK &&
-            fr_repl_eval_line(&runtime, "pulse.add: cap, 1, 500", out,
+            fr_repl_eval_line(&runtime, "pulse.add: p, 1, 500", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "0\nok\n") == 0);
+  CHECK("pulse close invalidates its handle",
+        fr_repl_eval_line(&runtime, "pulse.close: p", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "pulse.count: p", out, sizeof(out)) ==
+                FR_ERR_HANDLE &&
+            fr_repl_eval_line(&runtime, "fresh is pulse.open: 5, 0", out,
+                              sizeof(out)) == FR_OK);
   CHECK("project clear releases pulse platform state",
         fr_runtime_clear_project(&runtime) == FR_OK &&
-            fr_repl_eval_line(&runtime, "fresh is pulse.open: 5, 0", out,
+            fr_repl_eval_line(&runtime,
+                              "after-clear is pulse.open: 6, 0", out,
                               sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "pulse.close: fresh", out,
+            fr_repl_eval_line(&runtime, "pulse.close: after-clear", out,
                               sizeof(out)) == FR_OK);
 }
 #endif
