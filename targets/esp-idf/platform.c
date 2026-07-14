@@ -13,6 +13,12 @@
 #if FR_FEATURE_TRACE
 #include "driver/mcpwm_cap.h"
 #endif
+#if FR_FEATURE_PULSE
+#include "driver/rmt_common.h"
+#include "driver/rmt_encoder.h"
+#include "driver/rmt_tx.h"
+#include "hal/rmt_types.h"
+#endif
 #if FR_FEATURE_PWM
 #include "driver/ledc.h"
 #endif
@@ -280,6 +286,47 @@ static void fr_esp_trace_sort(fr_esp_trace_t *trace) {
     trace->edges[at] = edge;
   }
   trace->sorted = true;
+}
+#endif
+
+#if FR_FEATURE_PULSE
+#if !SOC_RMT_SUPPORTED || SOC_RMT_TX_CANDIDATES_PER_GROUP < 1
+#error "FR_FEATURE_PULSE requires one RMT transmit channel"
+#endif
+
+enum {
+  FR_ESP_RMT_DURATION_MAX = 32767,
+  FR_ESP_PULSE_SYMBOL_CAP = 281,
+};
+
+_Static_assert(FR_ESP_PULSE_SYMBOL_CAP * 2 >= 562,
+               "pulse symbol scratch must hold every bounded span split");
+
+typedef struct fr_esp_pulse_t {
+  bool in_use;
+  bool enabled;
+  uint16_t pin;
+  uint8_t idle;
+  rmt_channel_handle_t channel;
+  rmt_encoder_handle_t encoder;
+  fr_pulse_segment_t segments[FR_PULSE_SEGMENT_CAP];
+  uint16_t segment_count;
+  uint32_t total_ticks;
+} fr_esp_pulse_t;
+
+static fr_esp_pulse_t fr_esp_pulse;
+
+static fr_err_t fr_esp_pulse_entry(uint16_t platform_index,
+                                   fr_esp_pulse_t **out_pulse) {
+  if (out_pulse == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (platform_index != 0 || !fr_esp_pulse.in_use) {
+    return FR_ERR_HANDLE;
+  }
+
+  *out_pulse = &fr_esp_pulse;
+  return FR_OK;
 }
 #endif
 
@@ -1155,6 +1202,313 @@ fr_err_t fr_platform_trace_close(uint16_t platform_index) {
 }
 #endif
 
+#if FR_FEATURE_PULSE
+static esp_err_t fr_esp_pulse_set_idle(rmt_channel_handle_t channel,
+                                       rmt_encoder_handle_t encoder,
+                                       uint8_t idle) {
+  const rmt_symbol_word_t symbol = {
+      .duration0 = 1,
+      .level0 = idle,
+      .duration1 = 0,
+      .level1 = idle,
+  };
+  const rmt_transmit_config_t config = {
+      .loop_count = 0,
+      .flags.eot_level = idle,
+      .flags.queue_nonblocking = false,
+  };
+  esp_err_t err = rmt_enable(channel);
+  esp_err_t disable_err = ESP_OK;
+
+  if (err != ESP_OK) {
+    return err;
+  }
+  err = rmt_transmit(channel, encoder, &symbol, sizeof(symbol), &config);
+  if (err == ESP_OK) {
+    err = rmt_tx_wait_all_done(channel, 100);
+  }
+  disable_err = rmt_disable(channel);
+  return err != ESP_OK ? err : disable_err;
+}
+
+static fr_err_t fr_esp_pulse_pack(const fr_esp_pulse_t *pulse,
+                                  rmt_symbol_word_t *symbols,
+                                  uint16_t symbol_cap,
+                                  uint16_t *out_symbol_count) {
+  uint16_t symbol_count = 0;
+  uint16_t half_count = 0;
+
+  if (pulse == NULL || symbols == NULL || out_symbol_count == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  for (uint16_t i = 0; i < pulse->segment_count; i++) {
+    uint32_t ticks = pulse->segments[i].duration_ns / FR_SIGNAL_TICK_NS;
+
+    while (ticks > 0) {
+      uint16_t chunk = ticks > FR_ESP_RMT_DURATION_MAX
+                           ? FR_ESP_RMT_DURATION_MAX
+                           : (uint16_t)ticks;
+
+      if ((half_count & 1u) == 0) {
+        if (symbol_count >= symbol_cap) {
+          return FR_ERR_CAPACITY;
+        }
+        symbols[symbol_count].val = 0;
+        symbols[symbol_count].duration0 = chunk;
+        symbols[symbol_count].level0 = pulse->segments[i].level;
+      } else {
+        symbols[symbol_count].duration1 = chunk;
+        symbols[symbol_count].level1 = pulse->segments[i].level;
+        symbol_count += 1u;
+      }
+      half_count += 1u;
+      ticks -= chunk;
+    }
+  }
+
+  if ((half_count & 1u) != 0) {
+    symbols[symbol_count].duration1 = 0;
+    symbols[symbol_count].level1 = pulse->idle;
+    symbol_count += 1u;
+  }
+  *out_symbol_count = symbol_count;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_open(uint16_t pin, uint8_t idle,
+                                uint16_t *out_platform_index) {
+  const rmt_tx_channel_config_t channel_config = {
+      .gpio_num = pin,
+      .clk_src = RMT_CLK_SRC_DEFAULT,
+      .resolution_hz = FR_SIGNAL_CLOCK_HZ,
+      .mem_block_symbols = 64,
+      .trans_queue_depth = 1,
+      .intr_priority = 0,
+      .flags.invert_out = false,
+      .flags.with_dma = false,
+      .flags.io_loop_back = false,
+      .flags.io_od_mode = false,
+      .flags.allow_pd = false,
+  };
+  const rmt_copy_encoder_config_t encoder_config = {};
+  rmt_channel_handle_t channel = NULL;
+  rmt_encoder_handle_t encoder = NULL;
+  esp_err_t err = ESP_OK;
+
+  if (out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_esp_gpio_output_valid(pin) || idle > 1) {
+    return FR_ERR_DOMAIN;
+  }
+  if (fr_esp_pulse.in_use) {
+    return FR_ERR_CAPACITY;
+  }
+
+  err = rmt_new_tx_channel(&channel_config, &channel);
+  if (err != ESP_OK) {
+    return err == ESP_ERR_NOT_FOUND ? FR_ERR_CAPACITY : fr_esp_err(err);
+  }
+  err = rmt_new_copy_encoder(&encoder_config, &encoder);
+  if (err != ESP_OK) {
+    (void)rmt_del_channel(channel);
+    return fr_esp_err(err);
+  }
+  err = fr_esp_pulse_set_idle(channel, encoder, idle);
+  if (err != ESP_OK) {
+    (void)rmt_del_encoder(encoder);
+    (void)rmt_del_channel(channel);
+    return fr_esp_err(err);
+  }
+
+  memset(&fr_esp_pulse, 0, sizeof(fr_esp_pulse));
+  fr_esp_pulse.in_use = true;
+  fr_esp_pulse.pin = pin;
+  fr_esp_pulse.idle = idle;
+  fr_esp_pulse.channel = channel;
+  fr_esp_pulse.encoder = encoder;
+  *out_platform_index = 0;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_add(uint16_t platform_index, uint8_t level,
+                               uint32_t duration_ns,
+                               uint16_t *out_segment_index) {
+  fr_esp_pulse_t *pulse = NULL;
+  uint32_t ticks = 0;
+
+  if (out_segment_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_pulse_entry(platform_index, &pulse));
+  if (level > 1 || duration_ns == 0 ||
+      duration_ns % FR_SIGNAL_TICK_NS != 0) {
+    return FR_ERR_DOMAIN;
+  }
+  ticks = duration_ns / FR_SIGNAL_TICK_NS;
+  if (pulse->segment_count >= FR_PULSE_SEGMENT_CAP ||
+      ticks > FR_SIGNAL_MAX_TICKS - pulse->total_ticks) {
+    return FR_ERR_CAPACITY;
+  }
+
+  *out_segment_index = pulse->segment_count;
+  pulse->segments[pulse->segment_count] = (fr_pulse_segment_t){
+      .level = level,
+      .duration_ns = duration_ns,
+  };
+  pulse->segment_count += 1u;
+  pulse->total_ticks += ticks;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_clear(uint16_t platform_index) {
+  fr_esp_pulse_t *pulse = NULL;
+
+  FR_TRY(fr_esp_pulse_entry(platform_index, &pulse));
+  pulse->segment_count = 0;
+  pulse->total_ticks = 0;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_count(uint16_t platform_index,
+                                 uint16_t *out_count) {
+  fr_esp_pulse_t *pulse = NULL;
+
+  if (out_count == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_pulse_entry(platform_index, &pulse));
+  *out_count = pulse->segment_count;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_segment(uint16_t platform_index,
+                                   uint16_t segment_index,
+                                   fr_pulse_segment_t *out_segment) {
+  fr_esp_pulse_t *pulse = NULL;
+
+  if (out_segment == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_pulse_entry(platform_index, &pulse));
+  if (segment_index >= pulse->segment_count) {
+    return FR_ERR_RANGE;
+  }
+  *out_segment = pulse->segments[segment_index];
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_play(uint16_t platform_index) {
+  fr_esp_pulse_t *pulse = NULL;
+  rmt_symbol_word_t symbols[FR_ESP_PULSE_SYMBOL_CAP];
+  rmt_transmit_config_t config = {
+      .loop_count = 0,
+      .flags.eot_level = 0,
+      .flags.queue_nonblocking = false,
+  };
+  uint16_t symbol_count = 0;
+  uint32_t total_ns = 0;
+  int wait_ms = 0;
+  esp_err_t err = ESP_OK;
+  fr_err_t first_error = FR_OK;
+
+  FR_TRY(fr_esp_pulse_entry(platform_index, &pulse));
+  if (pulse->segment_count == 0) {
+    return FR_ERR_DOMAIN;
+  }
+  FR_TRY(fr_esp_pulse_pack(pulse, symbols, FR_ESP_PULSE_SYMBOL_CAP,
+                           &symbol_count));
+
+  total_ns = pulse->total_ticks * FR_SIGNAL_TICK_NS;
+  wait_ms = (int)((total_ns + 999999u) / 1000000u) + 100;
+  err = rmt_enable(pulse->channel);
+  if (err != ESP_OK) {
+    return fr_esp_err(err);
+  }
+  pulse->enabled = true;
+
+  config.flags.eot_level = pulse->idle;
+  err = rmt_transmit(pulse->channel, pulse->encoder, symbols,
+                     (size_t)symbol_count * sizeof(symbols[0]), &config);
+  if (err == ESP_OK) {
+    err = rmt_tx_wait_all_done(pulse->channel, wait_ms);
+  }
+  if (err != ESP_OK) {
+    first_error = fr_esp_err(err);
+  }
+
+  err = rmt_disable(pulse->channel);
+  if (err == ESP_OK) {
+    pulse->enabled = false;
+  } else if (first_error == FR_OK) {
+    first_error = fr_esp_err(err);
+  }
+  return first_error;
+}
+
+fr_err_t fr_platform_pulse_pin(uint16_t platform_index, uint16_t *out_pin) {
+  fr_esp_pulse_t *pulse = NULL;
+
+  if (out_pin == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_pulse_entry(platform_index, &pulse));
+  *out_pin = pulse->pin;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_idle(uint16_t platform_index, uint8_t *out_idle) {
+  fr_esp_pulse_t *pulse = NULL;
+
+  if (out_idle == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_esp_pulse_entry(platform_index, &pulse));
+  *out_idle = pulse->idle;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_pulse_close(uint16_t platform_index) {
+  fr_esp_pulse_t *pulse = NULL;
+  fr_err_t first_error = FR_OK;
+
+  FR_TRY(fr_esp_pulse_entry(platform_index, &pulse));
+  if (pulse->enabled) {
+    fr_err_t err = fr_esp_err(rmt_disable(pulse->channel));
+
+    if (err == FR_OK) {
+      pulse->enabled = false;
+    } else {
+      first_error = err;
+    }
+  }
+  if (!pulse->enabled && pulse->encoder != NULL) {
+    fr_err_t err = fr_esp_err(rmt_del_encoder(pulse->encoder));
+
+    if (err == FR_OK) {
+      pulse->encoder = NULL;
+    } else if (first_error == FR_OK) {
+      first_error = err;
+    }
+  }
+  if (!pulse->enabled && pulse->channel != NULL) {
+    fr_err_t err = fr_esp_err(rmt_del_channel(pulse->channel));
+
+    if (err == FR_OK) {
+      pulse->channel = NULL;
+    } else if (first_error == FR_OK) {
+      first_error = err;
+    }
+  }
+  if (first_error == FR_OK && pulse->channel == NULL &&
+      pulse->encoder == NULL) {
+    memset(pulse, 0, sizeof(*pulse));
+  }
+  return first_error;
+}
+#endif
+
 fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
                                   uint16_t platform_index) {
 #if FR_FEATURE_UART
@@ -1185,6 +1539,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
 #if FR_FEATURE_TRACE
   if (kind == FR_HANDLE_KIND_TRACE) {
     return fr_platform_trace_close(platform_index);
+  }
+#endif
+#if FR_FEATURE_PULSE
+  if (kind == FR_HANDLE_KIND_PULSE) {
+    return fr_platform_pulse_close(platform_index);
   }
 #endif
 #if FR_FEATURE_NET
