@@ -6,13 +6,45 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-14
+
 ### Added
+
+- **A physical safe-boot path and a movable live console.** For 600 ms after a
+  normal reset, Ctrl-C or a tap of the active-low BOOT button skips the saved
+  user project and its `boot` word without erasing either one. `console.uart:`,
+  `console.default:`, and `console.info:` can move, restore, and inspect the
+  live REPL while that safe window always begins on the board default console.
+
+- **Seeed Studio XIAO ESP32S3 is an official board.** Board manifests now own
+  the chip, pins, LED polarity, and default console for both XIAO and ESP32
+  DevKit V1. CI and release bundles build and identify both boards.
+
+- **Bounded edge capture and timed pulse output.** The new `trace.*` words can
+  record digital transitions and the new `pulse.*` words can build and play a
+  timed waveform. The shipped examples use them to inspect I2C traffic and
+  drive a WS2812 frame.
 
 - **Newlines can separate expressions inside blocks.** Multiline `[...]`
   forms no longer need a semicolon at the end of each line; semicolons remain
   available when several expressions share one line. The CLI, browser editor,
   and VS Code now preserve those newlines when they send a form, and multiline
   errors point to the physical line that failed.
+
+- **The editors now follow complete language forms and live device state.**
+  The browser editor 0.2.1 and VS Code extension 0.4.0 run multiline forms,
+  browse the connected device's words, surface device diagnostics, and keep
+  connection and run state visible.
+
+### Changed
+
+- **The packaged CLI can flash official release firmware.** Board discovery,
+  reset, wipe, and flash use the same manifests as the firmware build, while
+  source-build commands consistently find the Frothy checkout root.
+
+- **Web-flasher releases are board-complete segmented bundles.** Each release
+  carries the ESP-IDF bootloader, partition table, and application segments at
+  their generated flash addresses instead of one board-specific merged image.
 
 ### Fixed
 
@@ -21,6 +53,10 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
   required bare `ok`, so browser and CLI requests remained pending until a
   second Ctrl-C. Interrupts now report `interrupted`, terminate with `ok`, and
   return the normal prompt in one response.
+
+- **ESP32 board behavior now follows board data.** ADC GPIO mapping, active-low
+  LEDs, USB Serial/JTAG versus UART console selection, and schedulable
+  millisecond waits no longer assume the DevKit V1 wiring everywhere.
 
 ## [0.1.2] - 2026-07-10
 
