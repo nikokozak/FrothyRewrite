@@ -5,12 +5,28 @@
 #include <stdbool.h>
 
 enum {
-  FR_UART_RATE_9600 = 1,
-  FR_UART_RATE_19200 = 2,
-  FR_UART_RATE_38400 = 3,
-  FR_UART_RATE_57600 = 4,
-  FR_UART_RATE_115200 = 5,
+  FR_UART_BAUD_1200 = 1200,
+  FR_UART_BAUD_9600 = 9600,
+  FR_UART_BAUD_19200 = 19200,
+  FR_UART_BAUD_38400 = 38400,
+  FR_UART_BAUD_57600 = 57600,
+  FR_UART_BAUD_115200 = 115200,
 };
+
+#if FR_FEATURE_CONSOLE_ROUTING
+typedef enum fr_console_transport_t {
+  FR_CONSOLE_TRANSPORT_HOST = 0,
+  FR_CONSOLE_TRANSPORT_UART = 1,
+  FR_CONSOLE_TRANSPORT_USB = 2,
+} fr_console_transport_t;
+
+typedef struct fr_console_route_t {
+  fr_console_transport_t transport;
+  uint16_t tx;
+  uint16_t rx;
+  uint32_t baud;
+} fr_console_route_t;
+#endif
 
 enum {
   FR_SIGNAL_TICK_NS = 100,
@@ -31,6 +47,7 @@ typedef enum fr_trace_state_t {
 
 typedef struct fr_trace_status_t {
   fr_trace_state_t state;
+  uint16_t pins[FR_TRACE_CHANNEL_CAP];
   uint8_t channel_count;
   uint16_t event_count;
 } fr_trace_status_t;
@@ -45,6 +62,13 @@ typedef struct fr_pulse_segment_t {
   uint8_t level;
   uint32_t duration_ns;
 } fr_pulse_segment_t;
+
+typedef struct fr_pulse_status_t {
+  uint16_t pin;
+  uint16_t segment_count;
+  uint32_t total_ns;
+  uint8_t idle;
+} fr_pulse_status_t;
 
 fr_err_t fr_platform_delay_ms(uint16_t ms);
 fr_err_t fr_platform_millis(uint32_t *out_ms);
@@ -112,16 +136,33 @@ void fr_host_event_debug_fail_next_timer_install(void);
 #endif
 
 #if FR_FEATURE_UART
-fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
+fr_err_t fr_platform_uart_open(uint16_t port, uint32_t baud,
                                uint16_t *out_platform_index);
 fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
-                                  uint16_t rate_code,
+                                  uint32_t baud,
                                   uint16_t *out_platform_index);
 fr_err_t fr_platform_uart_write_byte(uint16_t platform_index, uint8_t byte);
 fr_err_t fr_platform_uart_read_byte(uint16_t platform_index, uint8_t *out_byte,
                                     bool *out_has_byte);
 fr_err_t fr_platform_uart_available(uint16_t platform_index,
                                     uint16_t *out_count);
+#endif
+
+#if FR_FEATURE_CONSOLE_ROUTING
+fr_err_t fr_platform_console_set_uart(uint16_t tx, uint16_t rx,
+                                      uint32_t baud);
+fr_err_t fr_platform_console_restore_default(void);
+fr_err_t fr_platform_console_get_route(fr_console_route_t *out_route);
+/* Wait on the board's fixed recovery inputs before saved code can replace the
+ * default console. Official ESP32 boards accept Ctrl-C or a post-reset BOOT
+ * press; holding GPIO0 through reset remains a ROM-boot gesture. */
+fr_err_t fr_platform_recovery_requested(uint16_t window_ms,
+                                        bool *out_requested);
+#ifdef FR_HOST_TEST_HELPERS
+void fr_host_console_reset(void);
+void fr_host_request_recovery(void);
+void fr_host_console_fail_next_switch(void);
+#endif
 #endif
 
 #if FR_FEATURE_REPL
@@ -194,8 +235,6 @@ fr_err_t fr_platform_trace_status(uint16_t platform_index,
 fr_err_t fr_platform_trace_event(uint16_t platform_index,
                                  uint16_t event_index,
                                  fr_trace_event_t *out_event);
-fr_err_t fr_platform_trace_pin(uint16_t platform_index, uint8_t channel,
-                               uint16_t *out_pin);
 fr_err_t fr_platform_trace_close(uint16_t platform_index);
 #ifdef FR_HOST_TEST_HELPERS
 fr_err_t fr_host_trace_push_edge(uint16_t platform_index, uint8_t channel,
@@ -210,18 +249,13 @@ fr_err_t fr_platform_pulse_add(uint16_t platform_index, uint8_t level,
                                uint32_t duration_ns,
                                uint16_t *out_segment_index);
 fr_err_t fr_platform_pulse_clear(uint16_t platform_index);
-fr_err_t fr_platform_pulse_count(uint16_t platform_index,
-                                 uint16_t *out_count);
+fr_err_t fr_platform_pulse_status(uint16_t platform_index,
+                                  fr_pulse_status_t *out_status);
 fr_err_t fr_platform_pulse_segment(uint16_t platform_index,
                                    uint16_t segment_index,
                                    fr_pulse_segment_t *out_segment);
 fr_err_t fr_platform_pulse_play(uint16_t platform_index);
-fr_err_t fr_platform_pulse_pin(uint16_t platform_index, uint16_t *out_pin);
-fr_err_t fr_platform_pulse_idle(uint16_t platform_index, uint8_t *out_idle);
 fr_err_t fr_platform_pulse_close(uint16_t platform_index);
-#ifdef FR_HOST_TEST_HELPERS
-uint16_t fr_host_pulse_play_count(uint16_t platform_index);
-#endif
 #endif
 
 #if FR_FEATURE_PERSISTENCE

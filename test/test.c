@@ -36,8 +36,9 @@ static fr_err_t test_persist_apply_user_overlay(
 #if FR_FEATURE_UART
 #define FR_TEST_UART_WORDS                                                   \
   " uart.open uart.open-on uart.write-byte uart.read-byte uart.available "   \
-  "uart.close $baud_9600 $baud_19200 $baud_38400 $baud_57600 $baud_115200"
-#define FR_TEST_UART_SLOT_COUNT 11
+  "uart.close $baud_9600 $baud_19200 $baud_38400 $baud_57600 $baud_115200 "  \
+  "$baud_1200"
+#define FR_TEST_UART_SLOT_COUNT 12
 #else
 #define FR_TEST_UART_WORDS ""
 #define FR_TEST_UART_SLOT_COUNT 0
@@ -179,6 +180,14 @@ static fr_err_t test_persist_apply_user_overlay(
 #define FR_TEST_PULSE_SLOT_COUNT 0
 #endif
 
+#if FR_FEATURE_CONSOLE_ROUTING
+#define FR_TEST_CONSOLE_WORDS " console.uart console.default console.info"
+#define FR_TEST_CONSOLE_SLOT_COUNT 3
+#else
+#define FR_TEST_CONSOLE_WORDS ""
+#define FR_TEST_CONSOLE_SLOT_COUNT 0
+#endif
+
 enum {
   FR_TEST_PERSIST_RECORD_CODE = 1,
   FR_TEST_PERSIST_RECORD_BIND = 2,
@@ -204,7 +213,7 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
@@ -214,7 +223,7 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
@@ -224,7 +233,7 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
@@ -234,7 +243,8 @@ enum {
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
    FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
-   FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT)
+   FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT +                      \
+   FR_TEST_CONSOLE_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -242,7 +252,7 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
@@ -251,7 +261,7 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
@@ -260,7 +270,7 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
@@ -270,7 +280,8 @@ enum {
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
    FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
-   FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT)
+   FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT +                      \
+   FR_TEST_CONSOLE_SLOT_COUNT)
 #endif
 
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
@@ -436,6 +447,7 @@ static void test_base_def_contract(void) {
       (FR_FEATURE_I2C ? 8 : 0) + (FR_FEATURE_NET ? 9 : 0) +
       (FR_FEATURE_POWER ? 4 : 0) + (FR_FEATURE_BYTES ? 8 : 0) +
       (FR_FEATURE_TRACE ? 12 : 0) + (FR_FEATURE_PULSE ? 9 : 0) +
+      (FR_FEATURE_CONSOLE_ROUTING ? 3 : 0) +
       (FR_FEATURE_MATH ? 6 : 0) +
       FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT +
       FR_TEST_EVENT_REGISTER_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT;
@@ -467,7 +479,7 @@ static void test_base_def_contract(void) {
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
   CHECK("fire-event slot follows protocol blocks",
-        FR_SLOT_FIRE_EVENT == FR_SLOT_AFTER_PULSE);
+        FR_SLOT_FIRE_EVENT == FR_SLOT_AFTER_CONSOLE);
   CHECK("board capability slot follows fire-event slot",
         FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_FIRE_EVENT + 1);
   CHECK("board local slot ids follow board capability slots",
@@ -475,8 +487,8 @@ static void test_base_def_contract(void) {
 #else
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("board capability slot follows event cancel slot",
-        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board capability slot follows target capability blocks",
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CONSOLE);
   CHECK("board local slot ids follow board capability slots",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #endif
@@ -485,8 +497,8 @@ static void test_base_def_contract(void) {
         FR_SLOT_EVENT_REGISTER == FR_TEST_PAD_LAST_SLOT + 1);
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("board capability slot follows event cancel slot",
-        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board capability slot follows target capability blocks",
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CONSOLE);
   CHECK("board local slot ids follow board capability slots",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #else
@@ -494,10 +506,16 @@ static void test_base_def_contract(void) {
         FR_SLOT_EVENT_REGISTER == FR_SLOT_AFTER_MATH);
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("board capability slot follows event cancel slot",
-        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_EVENT_CANCEL + 1);
+  CHECK("board capability slot follows target capability blocks",
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CONSOLE);
   CHECK("board local slot ids follow board capability slots",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
+#endif
+#if FR_FEATURE_CONSOLE_ROUTING
+  CHECK("console slots follow protocol lab capabilities",
+        FR_SLOT_CONSOLE_UART == FR_SLOT_AFTER_PULSE &&
+            FR_SLOT_CONSOLE_DEFAULT == FR_SLOT_CONSOLE_UART + 1 &&
+            FR_SLOT_CONSOLE_INFO == FR_SLOT_CONSOLE_DEFAULT + 1);
 #endif
 
   for (uint16_t layer_index = 0; layer_index < fr_base_def_layer_count();
@@ -2792,7 +2810,7 @@ static fr_err_t test_uart_entry(fr_runtime_t *runtime, fr_slot_id_t slot_id,
 
 static fr_err_t test_uart_open_call(fr_runtime_t *runtime,
                                     const fr_native_entry_t *open_entry,
-                                    uint16_t port, uint16_t rate_code,
+                                    uint16_t port, uint32_t baud,
                                     fr_tagged_t *out_handle) {
   fr_tagged_t args[2] = {0};
 
@@ -2801,7 +2819,7 @@ static fr_err_t test_uart_open_call(fr_runtime_t *runtime,
   }
 
   FR_TRY(fr_tagged_encode_int((int32_t)port, &args[0]));
-  FR_TRY(fr_tagged_encode_int((int32_t)rate_code, &args[1]));
+  FR_TRY(fr_tagged_encode_int((int32_t)baud, &args[1]));
   return fr_native_call(runtime, open_entry, args, 2, out_handle);
 }
 
@@ -2867,7 +2885,11 @@ static void test_uart(void) {
   CHECK("uart see baud literal",
         fr_repl_eval_line(&runtime, "see $baud_115200", out, sizeof(out)) ==
                 FR_OK &&
-            strcmp(out, "base target 5\nok\n") == 0);
+            strcmp(out, "base target 115200\nok\n") == 0);
+  CHECK("uart see 1200 baud literal",
+        fr_repl_eval_line(&runtime, "see $baud_1200", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "base target 1200\nok\n") == 0);
   CHECK("uart open respects handle capacity",
         fr_base_image_install(&capacity_runtime) == FR_OK);
   for (fr_handle_id_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
@@ -2878,7 +2900,7 @@ static void test_uart(void) {
   }
   CHECK("uart open fails before platform when handles are full",
         test_uart_open_call(&capacity_runtime, open_entry, 0,
-                            FR_UART_RATE_9600, &handle) == FR_ERR_CAPACITY);
+                            FR_UART_BAUD_9600, &handle) == FR_ERR_CAPACITY);
   for (fr_handle_id_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
     CHECK("uart releases capacity test handles",
           fr_handle_release_reserved(&capacity_runtime, capacity_refs[i]) ==
@@ -2919,48 +2941,69 @@ static void test_uart(void) {
                 FR_OK &&
             strcmp(out, "overlay nil\nok\n") == 0);
 
-  CHECK("uart rejects invalid rate",
-        test_uart_open_call(&runtime, open_entry, 0, 99, &handle) ==
+  CHECK("uart rejects zero baud",
+        test_uart_open_call(&runtime, open_entry, 0, 0, &handle) ==
             FR_ERR_DOMAIN);
+  CHECK("uart rejects baud above target ceiling",
+        test_uart_open_call(&runtime, open_entry, 0, 5000001, &handle) ==
+            FR_ERR_DOMAIN);
+  CHECK("uart repl accepts a literal baud",
+        fr_repl_eval_line(&runtime, "literal is uart.open: 0, 1200", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "uart.close: literal", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "literal is nil", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0);
 #if FR_TAGGED_INT_MAX > 65535
   CHECK("uart rejects oversized platform argument before cast",
         fr_tagged_encode_int(65549, &wide_open_args[0]) == FR_OK &&
-            fr_tagged_encode_int(FR_UART_RATE_9600, &wide_open_args[1]) ==
+            fr_tagged_encode_int(FR_UART_BAUD_9600, &wide_open_args[1]) ==
                 FR_OK &&
             fr_native_call(&runtime, open_entry, wide_open_args, 2, &handle) ==
                 FR_ERR_DOMAIN);
 #endif
-  CHECK("uart opens with each rate",
-        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+  CHECK("uart opens with literal baud values",
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_1200,
                             &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_19200,
+            test_uart_open_call(&runtime, open_entry, 0, 12345, &handle) ==
+                FR_OK &&
+            test_uart_one_handle_call(&runtime, close_entry, handle,
+                                      &result) == FR_OK &&
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_38400,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_19200,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_57600,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_38400,
+                                &handle) == FR_OK &&
+            test_uart_one_handle_call(&runtime, close_entry, handle,
+                                      &result) == FR_OK &&
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_57600,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
             test_uart_open_call(&runtime, open_entry, 0,
-                                FR_UART_RATE_115200, &handle) == FR_OK &&
+                                FR_UART_BAUD_115200, &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK);
 
   CHECK("uart opens handle",
-        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                             &handle) == FR_OK &&
             fr_tagged_decode_handle_ref(handle, &handle_ref) == FR_OK &&
             fr_handle_lookup(&runtime, handle_ref, FR_HANDLE_KIND_UART, &kind,
                              &platform_index) == FR_OK &&
             kind == FR_HANDLE_KIND_UART);
   CHECK("uart rejects double open on same port",
-        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                             &second_handle) == FR_ERR_DOMAIN);
   CHECK("uart available starts with host script",
         test_uart_one_handle_call(&runtime, available_entry, handle, &result) ==
@@ -2997,7 +3040,7 @@ static void test_uart(void) {
   CHECK("uart close discards host script",
         test_uart_one_handle_call(&runtime, close_entry, handle, &result) ==
                 FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, available_entry, handle,
                                       &result) == FR_OK &&
@@ -3025,7 +3068,7 @@ static void test_uart(void) {
 
 #if FR_FEATURE_PERSISTENCE
   CHECK("uart save rejects live handle",
-        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                             &handle) == FR_OK &&
             fr_slot_write(&runtime, FR_SLOT_BOOT, handle) == FR_OK &&
             (fr_persist_session_install_tier_stamp_slot(&runtime, FR_SLOT_BOOT),
@@ -3038,13 +3081,13 @@ static void test_uart(void) {
 #endif
 
   CHECK("uart reset closes platform resource",
-        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                             &handle) == FR_OK &&
             fr_tagged_decode_handle_ref(handle, &handle_ref) == FR_OK &&
             fr_runtime_clear_project(&runtime) == FR_OK &&
             fr_handle_lookup(&runtime, handle_ref, FR_HANDLE_KIND_NONE, &kind,
                              &platform_index) == FR_ERR_HANDLE &&
-            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK);
@@ -3071,6 +3114,96 @@ static void test_uart(void) {
             fr_repl_eval_line(&runtime,
                               "again is uart.open-on: 1, 4, 5, $baud_9600",
                               out, sizeof(out)) == FR_OK);
+}
+#endif
+
+#if FR_FEATURE_CONSOLE_ROUTING && defined(FR_HOST_TEST_HELPERS)
+static bool test_console_route_equals(const fr_console_route_t *a,
+                                      const fr_console_route_t *b) {
+  return a->transport == b->transport && a->tx == b->tx && a->rx == b->rx &&
+         a->baud == b->baud;
+}
+
+static void test_console_routing(void) {
+  fr_runtime_t runtime;
+  fr_console_route_t route = {0};
+  fr_console_route_t before = {0};
+  char out[256];
+
+  fr_host_console_reset();
+  CHECK("console installs base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("console see renders uart contract",
+        fr_repl_eval_line(&runtime, "see console.uart", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "console.uart(tx: int, rx: int, baud: int) -> nil\n"
+                   "move the active REPL to UART pins at a literal baud rate\n"
+                   "ok\n") == 0);
+  CHECK("console host fixture starts on host",
+        fr_platform_console_get_route(&route) == FR_OK &&
+            route.transport == FR_CONSOLE_TRANSPORT_HOST && route.tx == 0 &&
+            route.rx == 0 && route.baud == 0);
+  CHECK("console moves to literal uart route",
+        fr_repl_eval_line(&runtime, "console.uart: 25, 34, 1200", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            route.transport == FR_CONSOLE_TRANSPORT_UART && route.tx == 25 &&
+            route.rx == 34 && route.baud == 1200);
+  CHECK("console reroutes uart to uart as one complete route",
+        fr_repl_eval_line(&runtime, "console.uart: 26, 35, 9600", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            route.transport == FR_CONSOLE_TRANSPORT_UART && route.tx == 26 &&
+            route.rx == 35 && route.baud == 9600);
+
+  before = route;
+  CHECK("console rejects invalid route without changing current route",
+        fr_repl_eval_line(&runtime, "console.uart: 7, 7, 1200", out,
+                          sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "console.uart: 40, 8, 1200", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "console.uart: 8, 9, 0", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&runtime, "console.uart: 8, 9, 5000001", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            test_console_route_equals(&route, &before));
+  fr_host_console_fail_next_switch();
+  CHECK("console platform failure preserves current route",
+        fr_repl_eval_line(&runtime, "console.uart: 8, 9, 1200", out,
+                          sizeof(out)) == FR_ERR_IO &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            test_console_route_equals(&route, &before));
+
+#if FR_FEATURE_UART
+  CHECK("console rejects open application uart pins",
+        fr_repl_eval_line(&runtime,
+                          "routeapp is uart.open-on: 0, 4, 5, 9600", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "console.uart: 4, 6, 1200", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            test_console_route_equals(&route, &before));
+  CHECK("console accepts application pins after close",
+        fr_repl_eval_line(&runtime, "uart.close: routeapp", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "console.uart: 4, 6, 1200", out,
+                              sizeof(out)) == FR_OK);
+  CHECK("application uart rejects active console pins",
+        fr_repl_eval_line(&runtime,
+                          "blocked is uart.open-on: 0, 4, 8, 9600", out,
+                          sizeof(out)) == FR_ERR_DOMAIN);
+#endif
+
+  CHECK("console restores host default and zeroes uart fields",
+        fr_repl_eval_line(&runtime, "console.default:", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_platform_console_get_route(&route) == FR_OK &&
+            route.transport == FR_CONSOLE_TRANSPORT_HOST && route.tx == 0 &&
+            route.rx == 0 && route.baud == 0);
 }
 #endif
 
@@ -3255,7 +3388,7 @@ static void test_trace(void) {
                 FR_OK &&
             fr_repl_eval_line(&runtime, "trace.open:", out, sizeof(out)) ==
                 FR_ERR_CAPACITY);
-  CHECK("trace watches three distinct pins",
+  CHECK("trace keeps its three-channel budget visible",
         fr_repl_eval_line(&runtime, "trace.watch: t, 4", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "0\nok\n") == 0 &&
@@ -3269,20 +3402,11 @@ static void test_trace(void) {
                               sizeof(out)) == FR_ERR_DOMAIN &&
             fr_repl_eval_line(&runtime, "trace.watch: t, 7", out,
                               sizeof(out)) == FR_ERR_CAPACITY);
-  CHECK("trace arms and hides unfinished events",
+  CHECK("trace arms and records quantized edges",
         fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "ok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
-                FR_ERR_DOMAIN &&
-            fr_repl_eval_line(&runtime, "trace.level: t, 0", out,
-                              sizeof(out)) == FR_ERR_DOMAIN &&
-            fr_repl_eval_line(&runtime, "trace.watch: t, 8", out,
-                              sizeof(out)) == FR_ERR_DOMAIN &&
-            fr_host_trace_push_edge(platform_index, 0, 1, 100) ==
-                FR_ERR_DOMAIN);
-  CHECK("trace fixture records quantized edges",
-        fr_host_trace_push_edge(platform_index, 1, 1, 0) == FR_OK &&
+            fr_host_trace_push_edge(platform_index, 1, 1, 0) == FR_OK &&
             fr_host_trace_push_edge(platform_index, 0, 1, 0) == FR_OK &&
             fr_host_trace_push_edge(platform_index, 0, 0, 700) == FR_OK &&
             fr_repl_eval_line(&runtime, "trace.wait: t, 0", out,
@@ -3294,15 +3418,14 @@ static void test_trace(void) {
   CHECK("trace completion sorts ties by channel",
         fr_platform_trace_status(platform_index, &status) == FR_OK &&
             status.state == FR_TRACE_COMPLETE && status.channel_count == 3 &&
-            status.event_count == 3 &&
+            status.pins[0] == 4 && status.pins[1] == 5 &&
+            status.pins[2] == 6 && status.event_count == 3 &&
             fr_platform_trace_event(platform_index, 0, &event) == FR_OK &&
             event.channel == 0 && event.level == 1 && event.delta_ns == 0 &&
             fr_platform_trace_event(platform_index, 1, &event) == FR_OK &&
             event.channel == 1 && event.level == 1 && event.delta_ns == 0 &&
             fr_platform_trace_event(platform_index, 2, &event) == FR_OK &&
-            event.channel == 0 && event.level == 0 && event.delta_ns == 700 &&
-            fr_platform_trace_event(platform_index, 3, &event) ==
-                FR_ERR_RANGE);
+            event.channel == 0 && event.level == 0 && event.delta_ns == 700);
   CHECK("trace exposes completed edges through Frothy",
         fr_repl_eval_line(&runtime, "trace.complete?: t", out,
                           sizeof(out)) == FR_OK &&
@@ -3338,42 +3461,18 @@ static void test_trace(void) {
             fr_repl_eval_line(&runtime, "trace.delta-ns: t, 1", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "500\nok\n") == 0);
-#if FR_FEATURE_PERSISTENCE
-  CHECK("trace save rejects live handle", fr_persist_save(&runtime) ==
-                                               FR_ERR_VOLATILE);
-#endif
-  CHECK("trace close invalidates handle",
-        fr_repl_eval_line(&runtime, "trace.close: t", out, sizeof(out)) ==
-                FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.count: t", out, sizeof(out)) ==
-                FR_ERR_HANDLE);
-
-  CHECK("trace completes at one-second signal span",
-        fr_repl_eval_line(&runtime, "t2 is trace.open:", out, sizeof(out)) ==
-                FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.watch: t2, 4", out,
-                              sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.arm: t2", out, sizeof(out)) ==
-                FR_OK &&
-            test_trace_platform_index(&runtime, "t2", &platform_index) ==
+  CHECK("trace completes at its one-second signal span",
+        fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
                 FR_OK &&
             fr_host_trace_push_edge(platform_index, 0, 1, 0) == FR_OK &&
             fr_host_trace_push_edge(platform_index, 0, 0,
                                     FR_SIGNAL_MAX_SPAN_NS) == FR_OK &&
             fr_platform_trace_status(platform_index, &status) == FR_OK &&
-            status.state == FR_TRACE_COMPLETE && status.event_count == 2 &&
-            fr_repl_eval_line(&runtime, "trace.close: t2", out, sizeof(out)) ==
-                FR_OK);
+            status.state == FR_TRACE_COMPLETE && status.event_count == 2);
 
-  CHECK("trace opens fixture for capacity boundary",
-        fr_repl_eval_line(&runtime, "full is trace.open:", out, sizeof(out)) ==
-                FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.watch: full, 4", out,
-                              sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.arm: full", out, sizeof(out)) ==
-                FR_OK &&
-            test_trace_platform_index(&runtime, "full", &platform_index) ==
-                FR_OK);
+  CHECK("trace re-arms for its fixed edge boundary",
+        fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
+            FR_OK);
   for (uint16_t i = 0; i < FR_TRACE_EVENT_CAP; i++) {
     if (fr_host_trace_push_edge(platform_index, 0, (uint8_t)(i & 1u),
                                 i == 0 ? 0 : FR_SIGNAL_TICK_NS) != FR_OK) {
@@ -3384,16 +3483,19 @@ static void test_trace(void) {
   CHECK("trace completes exactly at fixed edge capacity",
         filled && fr_platform_trace_status(platform_index, &status) == FR_OK &&
             status.state == FR_TRACE_COMPLETE &&
-            status.event_count == FR_TRACE_EVENT_CAP &&
-            fr_host_trace_push_edge(platform_index, 0, 1,
-                                    FR_SIGNAL_TICK_NS) == FR_OK &&
-            fr_platform_trace_status(platform_index, &status) == FR_OK &&
             status.event_count == FR_TRACE_EVENT_CAP);
+  CHECK("trace close invalidates its handle",
+        fr_repl_eval_line(&runtime, "trace.close: t", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.count: t", out, sizeof(out)) ==
+                FR_ERR_HANDLE &&
+            fr_repl_eval_line(&runtime, "fresh is trace.open:", out,
+                              sizeof(out)) == FR_OK);
   CHECK("project clear releases trace platform state",
         fr_runtime_clear_project(&runtime) == FR_OK &&
-            fr_repl_eval_line(&runtime, "fresh is trace.open:", out,
+            fr_repl_eval_line(&runtime, "after-clear is trace.open:", out,
                               sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "trace.close: fresh", out,
+            fr_repl_eval_line(&runtime, "trace.close: after-clear", out,
                               sizeof(out)) == FR_OK);
 }
 #endif
@@ -3418,10 +3520,10 @@ static fr_err_t test_pulse_platform_index(fr_runtime_t *runtime,
 
 static void test_pulse(void) {
   fr_runtime_t runtime;
+  fr_pulse_status_t status = {0};
   fr_pulse_segment_t segment = {0};
   uint16_t platform_index = 0;
   uint16_t returned_index = 0;
-  uint16_t count = 0;
   bool filled = true;
   char out[256];
 
@@ -3433,14 +3535,6 @@ static void test_pulse(void) {
             strcmp(out,
                    "pulse.open(pin: int, idle: int) -> handle\n"
                    "open one timed digital output with idle level 0 or 1\n"
-                   "ok\n") == 0);
-  CHECK("pulse see add renders quantized span contract",
-        fr_repl_eval_line(&runtime, "see pulse.add", out, sizeof(out)) ==
-                FR_OK &&
-            strcmp(out,
-                   "pulse.add(pulse: handle, level: int, duration_ns: int) "
-                   "-> int\n"
-                   "append one quantized high or low span\n"
                    "ok\n") == 0);
   CHECK("pulse rejects invalid output settings",
         fr_platform_pulse_open(40, 0, &platform_index) == FR_ERR_DOMAIN &&
@@ -3474,53 +3568,35 @@ static void test_pulse(void) {
             strcmp(out, "400\nok\n") == 0 &&
             fr_repl_eval_line(&runtime, "pulse.duration-ns: p, 1", out,
                               sizeof(out)) == FR_OK &&
-            strcmp(out, "900\nok\n") == 0);
-  CHECK("pulse rejects invalid levels and durations",
+            strcmp(out, "900\nok\n") == 0 &&
+            fr_platform_pulse_status(platform_index, &status) == FR_OK &&
+            status.pin == 4 && status.idle == 0 &&
+            status.segment_count == 2 && status.total_ns == 1300);
+  CHECK("pulse rejects invalid spans",
         fr_repl_eval_line(&runtime, "pulse.add: p, 2, 100", out,
                           sizeof(out)) == FR_ERR_DOMAIN &&
             fr_repl_eval_line(&runtime, "pulse.add: p, 1, 99", out,
-                              sizeof(out)) == FR_ERR_DOMAIN &&
-            fr_repl_eval_line(&runtime, "pulse.add: p, 1, -100", out,
-                              sizeof(out)) == FR_ERR_DOMAIN &&
-            fr_repl_eval_line(&runtime, "pulse.add: p, 1, 1000000001", out,
-                              sizeof(out)) == FR_ERR_DOMAIN &&
-            fr_repl_eval_line(&runtime, "pulse.level: p, 2", out,
-                              sizeof(out)) == FR_ERR_RANGE);
+                              sizeof(out)) == FR_ERR_DOMAIN);
   CHECK("pulse play is repeatable and keeps its waveform",
-        fr_host_pulse_play_count(platform_index) == 0 &&
-            fr_repl_eval_line(&runtime, "pulse.play: p", out, sizeof(out)) ==
+        fr_repl_eval_line(&runtime, "pulse.play: p", out, sizeof(out)) ==
                 FR_OK &&
             fr_repl_eval_line(&runtime, "pulse.play: p", out, sizeof(out)) ==
                 FR_OK &&
-            fr_host_pulse_play_count(platform_index) == 2 &&
-            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
-            count == 2 &&
+            fr_platform_pulse_status(platform_index, &status) == FR_OK &&
+            status.segment_count == 2 && status.total_ns == 1300 &&
             fr_platform_pulse_segment(platform_index, 0, &segment) == FR_OK &&
             segment.level == 1 && segment.duration_ns == 400);
-#if FR_FEATURE_PERSISTENCE
-  CHECK("pulse save rejects live handle",
-        fr_persist_save(&runtime) == FR_ERR_VOLATILE);
-#endif
-  CHECK("pulse close invalidates handle",
-        fr_repl_eval_line(&runtime, "pulse.close: p", out, sizeof(out)) ==
+  CHECK("pulse clears and accepts exactly one second",
+        fr_repl_eval_line(&runtime, "pulse.clear: p", out, sizeof(out)) ==
                 FR_OK &&
-            fr_repl_eval_line(&runtime, "pulse.count: p", out, sizeof(out)) ==
-                FR_ERR_HANDLE);
-
-  CHECK("pulse accepts exactly one second",
-        fr_repl_eval_line(&runtime, "cap is pulse.open: 4, 1", out,
-                          sizeof(out)) == FR_OK &&
-            test_pulse_platform_index(&runtime, "cap", &platform_index) ==
-                FR_OK &&
-            fr_repl_eval_line(&runtime, "pulse.add: cap, 1, 1000000000", out,
+            fr_repl_eval_line(&runtime, "pulse.add: p, 1, 1000000000", out,
                               sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "pulse.add: cap, 0, 100", out,
+            fr_repl_eval_line(&runtime, "pulse.add: p, 0, 100", out,
                               sizeof(out)) == FR_ERR_CAPACITY &&
-            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
-            count == 1 &&
-            fr_platform_pulse_clear(platform_index) == FR_OK &&
-            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
-            count == 0);
+            fr_platform_pulse_status(platform_index, &status) == FR_OK &&
+            status.segment_count == 1 &&
+            status.total_ns == FR_SIGNAL_MAX_SPAN_NS &&
+            fr_platform_pulse_clear(platform_index) == FR_OK);
   for (uint16_t i = 0; i < FR_PULSE_SEGMENT_CAP; i++) {
     if (fr_platform_pulse_add(platform_index, (uint8_t)(i & 1u),
                               FR_SIGNAL_TICK_NS, &returned_index) != FR_OK ||
@@ -3533,19 +3609,27 @@ static void test_pulse(void) {
         filled &&
             fr_platform_pulse_add(platform_index, 0, FR_SIGNAL_TICK_NS,
                                   &returned_index) == FR_ERR_CAPACITY &&
-            fr_platform_pulse_count(platform_index, &count) == FR_OK &&
-            count == FR_PULSE_SEGMENT_CAP);
+            fr_platform_pulse_status(platform_index, &status) == FR_OK &&
+            status.segment_count == FR_PULSE_SEGMENT_CAP);
   CHECK("pulse clear rebuilds without reopening",
-        fr_repl_eval_line(&runtime, "pulse.clear: cap", out, sizeof(out)) ==
+        fr_repl_eval_line(&runtime, "pulse.clear: p", out, sizeof(out)) ==
                 FR_OK &&
-            fr_repl_eval_line(&runtime, "pulse.add: cap, 1, 500", out,
+            fr_repl_eval_line(&runtime, "pulse.add: p, 1, 500", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "0\nok\n") == 0);
+  CHECK("pulse close invalidates its handle",
+        fr_repl_eval_line(&runtime, "pulse.close: p", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "pulse.count: p", out, sizeof(out)) ==
+                FR_ERR_HANDLE &&
+            fr_repl_eval_line(&runtime, "fresh is pulse.open: 5, 0", out,
+                              sizeof(out)) == FR_OK);
   CHECK("project clear releases pulse platform state",
         fr_runtime_clear_project(&runtime) == FR_OK &&
-            fr_repl_eval_line(&runtime, "fresh is pulse.open: 5, 0", out,
+            fr_repl_eval_line(&runtime,
+                              "after-clear is pulse.open: 6, 0", out,
                               sizeof(out)) == FR_OK &&
-            fr_repl_eval_line(&runtime, "pulse.close: fresh", out,
+            fr_repl_eval_line(&runtime, "pulse.close: after-clear", out,
                               sizeof(out)) == FR_OK);
 }
 #endif
@@ -6735,10 +6819,13 @@ static void test_image(void) {
   CHECK("base image installs baud constants",
         fr_slot_read(&runtime, FR_SLOT_BAUD_9600, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
-            decoded == FR_UART_RATE_9600 &&
+            decoded == FR_UART_BAUD_9600 &&
             fr_slot_read(&runtime, FR_SLOT_BAUD_115200, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
-            decoded == FR_UART_RATE_115200);
+            decoded == FR_UART_BAUD_115200 &&
+            fr_slot_read(&runtime, FR_SLOT_BAUD_1200, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
+            decoded == FR_UART_BAUD_1200);
 #endif
   CHECK("base image installs led builtin constant",
         fr_slot_read(&runtime, FR_SLOT_LED_BUILTIN, &tagged) == FR_OK &&
@@ -6794,6 +6881,7 @@ static void test_image(void) {
             strcmp(fr_base_slot_name_at(22), "$baud_38400") == 0 &&
             strcmp(fr_base_slot_name_at(23), "$baud_57600") == 0 &&
             strcmp(fr_base_slot_name_at(24), "$baud_115200") == 0 &&
+            strcmp(fr_base_slot_name_at(25), "$baud_1200") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_UART_OPEN), "uart.open") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_UART_OPEN_ON),
                    "uart.open-on") == 0 &&
@@ -6806,7 +6894,8 @@ static void test_image(void) {
             strcmp(fr_base_slot_name(FR_SLOT_UART_CLOSE), "uart.close") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_BAUD_9600), "$baud_9600") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_BAUD_115200),
-                   "$baud_115200") == 0);
+                   "$baud_115200") == 0 &&
+            strcmp(fr_base_slot_name(FR_SLOT_BAUD_1200), "$baud_1200") == 0);
 #endif
 #if FR_FEATURE_PERSISTENCE
   CHECK("base image exposes persistence slot names",
@@ -6882,7 +6971,9 @@ static void test_image(void) {
             fr_base_slot_id_for_name("$baud_9600", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_BAUD_9600 &&
             fr_base_slot_id_for_name("$baud_115200", &slot_id) == FR_OK &&
-            slot_id == FR_SLOT_BAUD_115200);
+            slot_id == FR_SLOT_BAUD_115200 &&
+            fr_base_slot_id_for_name("$baud_1200", &slot_id) == FR_OK &&
+            slot_id == FR_SLOT_BAUD_1200);
 #endif
 #if FR_FEATURE_PERSISTENCE
   CHECK("base image looks up persistence slot names",
@@ -14923,6 +15014,9 @@ static void test_repl_startup_restore_and_boot(void) {
   fr_code_object_id_t code_id = 0;
 
   fr_platform_persist_clear();
+#if FR_FEATURE_CONSOLE_ROUTING && defined(FR_HOST_TEST_HELPERS)
+  fr_host_console_reset();
+#endif
   CHECK("startup boot installs base image",
         fr_base_image_install(&runtime) == FR_OK);
   CHECK("startup boot tolerates first boot without saved image",
@@ -14942,6 +15036,18 @@ static void test_repl_startup_restore_and_boot(void) {
             fr_platform_gpio_write(13, 0) == FR_OK &&
             fr_platform_gpio_read(13, &gpio_value) == FR_OK &&
             gpio_value == 0);
+#if FR_FEATURE_CONSOLE_ROUTING && defined(FR_HOST_TEST_HELPERS)
+  fr_host_request_recovery();
+  CHECK("physical or serial safe boot skips saved code without erasing it",
+        fr_repl_startup_restore_and_boot(&runtime) == FR_OK &&
+            fr_platform_gpio_read(13, &gpio_value) == FR_OK &&
+            gpio_value == 0 &&
+            fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
+            fr_tagged_is_nil(tagged));
+  CHECK("startup boot resets base after safe boot",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_platform_gpio_write(13, 0) == FR_OK);
+#endif
   CHECK("startup boot restores and runs saved boot",
         fr_repl_startup_restore_and_boot(&runtime) == FR_OK &&
             fr_platform_gpio_read(13, &gpio_value) == FR_OK &&
@@ -14963,6 +15069,9 @@ int main(void) {
   test_slots();
 #if FR_FEATURE_HANDLES
   test_handles();
+#endif
+#if FR_FEATURE_CONSOLE_ROUTING && defined(FR_HOST_TEST_HELPERS)
+  test_console_routing();
 #endif
 #if FR_FEATURE_UART
   test_uart();

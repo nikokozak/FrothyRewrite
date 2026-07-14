@@ -11,6 +11,9 @@
 enum {
   FR_HOST_MAX_PIN = 39,
   FR_HOST_ADC_MAX_PIN = 39,
+#if FR_FEATURE_UART || FR_FEATURE_CONSOLE_ROUTING
+  FR_HOST_UART_BAUD_MAX = 5000000,
+#endif
 #if FR_FEATURE_UART
   FR_HOST_UART_SCRIPT_LENGTH = 5,
 #endif
@@ -18,6 +21,20 @@ enum {
 
 static uint8_t fr_host_gpio_values[FR_HOST_MAX_PIN + 1];
 static uint32_t fr_host_millis;
+
+#if FR_FEATURE_CONSOLE_ROUTING
+static fr_console_route_t fr_host_console_route = {
+    .transport = FR_CONSOLE_TRANSPORT_HOST,
+};
+static bool fr_host_recovery_next;
+static bool fr_host_console_fail_switch_next;
+
+static bool fr_host_console_pin_conflict(uint16_t tx, uint16_t rx) {
+  return fr_host_console_route.transport == FR_CONSOLE_TRANSPORT_UART &&
+         (fr_host_console_route.tx == tx || fr_host_console_route.tx == rx ||
+          fr_host_console_route.rx == tx || fr_host_console_route.rx == rx);
+}
+#endif
 
 #if FR_FEATURE_TRACE
 typedef struct fr_host_trace_edge_t {
@@ -89,7 +106,6 @@ typedef struct fr_host_pulse_t {
   fr_pulse_segment_t segments[FR_PULSE_SEGMENT_CAP];
   uint16_t segment_count;
   uint32_t total_ticks;
-  uint16_t play_count;
 } fr_host_pulse_t;
 
 static fr_host_pulse_t fr_host_pulse;
@@ -224,7 +240,7 @@ typedef struct fr_host_uart_t {
   uint16_t port;
   uint16_t tx;
   uint16_t rx;
-  uint16_t rate_code;
+  uint32_t baud;
   uint8_t read_index;
   uint8_t last_written;
   uint16_t write_count;
@@ -235,17 +251,8 @@ static const uint8_t fr_host_uart_script[FR_HOST_UART_SCRIPT_LENGTH] = {
     'f', 'r', 'o', 't', 'h',
 };
 
-static bool fr_host_uart_rate_valid(uint16_t rate_code) {
-  switch (rate_code) {
-  case FR_UART_RATE_9600:
-  case FR_UART_RATE_19200:
-  case FR_UART_RATE_38400:
-  case FR_UART_RATE_57600:
-  case FR_UART_RATE_115200:
-    return true;
-  default:
-    return false;
-  }
+static bool fr_host_uart_baud_valid(uint32_t baud) {
+  return baud > 0 && baud <= FR_HOST_UART_BAUD_MAX;
 }
 
 static bool fr_host_uart_port_in_use(uint16_t port) {
@@ -494,6 +501,7 @@ fr_err_t fr_platform_trace_status(uint16_t platform_index,
       .channel_count = trace->channel_count,
       .event_count = trace->event_count,
   };
+  memcpy(out_status->pins, trace->pins, sizeof(out_status->pins));
   return FR_OK;
 }
 
@@ -522,22 +530,6 @@ fr_err_t fr_platform_trace_event(uint16_t platform_index,
                          trace->edges[event_index - 1].tick) *
                             FR_SIGNAL_TICK_NS,
   };
-  return FR_OK;
-}
-
-fr_err_t fr_platform_trace_pin(uint16_t platform_index, uint8_t channel,
-                               uint16_t *out_pin) {
-  fr_host_trace_t *trace = NULL;
-
-  if (out_pin == NULL) {
-    return FR_ERR_INVALID;
-  }
-  FR_TRY(fr_host_trace_entry(platform_index, &trace));
-  if (channel >= trace->channel_count) {
-    return FR_ERR_RANGE;
-  }
-
-  *out_pin = trace->pins[channel];
   return FR_OK;
 }
 
@@ -654,15 +646,20 @@ fr_err_t fr_platform_pulse_clear(uint16_t platform_index) {
   return FR_OK;
 }
 
-fr_err_t fr_platform_pulse_count(uint16_t platform_index,
-                                 uint16_t *out_count) {
+fr_err_t fr_platform_pulse_status(uint16_t platform_index,
+                                  fr_pulse_status_t *out_status) {
   fr_host_pulse_t *pulse = NULL;
 
-  if (out_count == NULL) {
+  if (out_status == NULL) {
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
-  *out_count = pulse->segment_count;
+  *out_status = (fr_pulse_status_t){
+      .pin = pulse->pin,
+      .segment_count = pulse->segment_count,
+      .total_ns = pulse->total_ticks * FR_SIGNAL_TICK_NS,
+      .idle = pulse->idle,
+  };
   return FR_OK;
 }
 
@@ -689,29 +686,6 @@ fr_err_t fr_platform_pulse_play(uint16_t platform_index) {
   if (pulse->segment_count == 0) {
     return FR_ERR_DOMAIN;
   }
-  pulse->play_count += 1u;
-  return FR_OK;
-}
-
-fr_err_t fr_platform_pulse_pin(uint16_t platform_index, uint16_t *out_pin) {
-  fr_host_pulse_t *pulse = NULL;
-
-  if (out_pin == NULL) {
-    return FR_ERR_INVALID;
-  }
-  FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
-  *out_pin = pulse->pin;
-  return FR_OK;
-}
-
-fr_err_t fr_platform_pulse_idle(uint16_t platform_index, uint8_t *out_idle) {
-  fr_host_pulse_t *pulse = NULL;
-
-  if (out_idle == NULL) {
-    return FR_ERR_INVALID;
-  }
-  FR_TRY(fr_host_pulse_entry(platform_index, &pulse));
-  *out_idle = pulse->idle;
   return FR_OK;
 }
 
@@ -722,22 +696,15 @@ fr_err_t fr_platform_pulse_close(uint16_t platform_index) {
   return FR_OK;
 }
 
-#ifdef FR_HOST_TEST_HELPERS
-uint16_t fr_host_pulse_play_count(uint16_t platform_index) {
-  return platform_index == 0 && fr_host_pulse.in_use
-             ? fr_host_pulse.play_count
-             : 0;
-}
-#endif
 #endif
 
 #if FR_FEATURE_UART
-fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
+fr_err_t fr_platform_uart_open(uint16_t port, uint32_t baud,
                                uint16_t *out_platform_index) {
   if (out_platform_index == NULL) {
     return FR_ERR_INVALID;
   }
-  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_rate_valid(rate_code) ||
+  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_baud_valid(baud) ||
       fr_host_uart_port_in_use(port)) {
     return FR_ERR_DOMAIN;
   }
@@ -752,7 +719,7 @@ fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
     *uart = (fr_host_uart_t){
         .in_use = true,
         .port = port,
-        .rate_code = rate_code,
+        .baud = baud,
     };
     *out_platform_index = i;
     return FR_OK;
@@ -781,16 +748,21 @@ static bool fr_host_uart_pin_conflict(uint16_t tx, uint16_t rx) {
 }
 
 fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
-                                  uint16_t rate_code,
+                                  uint32_t baud,
                                   uint16_t *out_platform_index) {
   if (out_platform_index == NULL) {
     return FR_ERR_INVALID;
   }
-  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_rate_valid(rate_code) ||
+  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_baud_valid(baud) ||
       fr_host_uart_port_in_use(port) || tx == rx ||
       fr_host_uart_pin_conflict(tx, rx)) {
     return FR_ERR_DOMAIN;
   }
+#if FR_FEATURE_CONSOLE_ROUTING
+  if (fr_host_console_pin_conflict(tx, rx)) {
+    return FR_ERR_DOMAIN;
+  }
+#endif
 
   for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
     fr_host_uart_t *uart = &fr_host_uarts[i];
@@ -805,7 +777,7 @@ fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
         .port = port,
         .tx = tx,
         .rx = rx,
-        .rate_code = rate_code,
+        .baud = baud,
     };
     *out_platform_index = i;
     return FR_OK;
@@ -856,6 +828,75 @@ fr_err_t fr_platform_uart_available(uint16_t platform_index,
   *out_count = (uint16_t)(FR_HOST_UART_SCRIPT_LENGTH - uart->read_index);
   return FR_OK;
 }
+#endif
+
+#if FR_FEATURE_CONSOLE_ROUTING
+fr_err_t fr_platform_console_set_uart(uint16_t tx, uint16_t rx,
+                                      uint32_t baud) {
+  if (tx > FR_HOST_MAX_PIN || rx > FR_HOST_MAX_PIN || tx == rx || baud == 0 ||
+      baud > FR_HOST_UART_BAUD_MAX) {
+    return FR_ERR_DOMAIN;
+  }
+#if FR_FEATURE_UART
+  if (fr_host_uart_pin_conflict(tx, rx)) {
+    return FR_ERR_DOMAIN;
+  }
+#endif
+  if (fr_host_console_fail_switch_next) {
+    fr_host_console_fail_switch_next = false;
+    return FR_ERR_IO;
+  }
+
+  fr_host_console_route = (fr_console_route_t){
+      .transport = FR_CONSOLE_TRANSPORT_UART,
+      .tx = tx,
+      .rx = rx,
+      .baud = baud,
+  };
+  return FR_OK;
+}
+
+fr_err_t fr_platform_console_restore_default(void) {
+  fr_host_console_route = (fr_console_route_t){
+      .transport = FR_CONSOLE_TRANSPORT_HOST,
+  };
+  return FR_OK;
+}
+
+fr_err_t fr_platform_console_get_route(fr_console_route_t *out_route) {
+  if (out_route == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_route = fr_host_console_route;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_recovery_requested(uint16_t window_ms,
+                                        bool *out_requested) {
+  (void)window_ms;
+  if (out_requested == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_requested = fr_host_recovery_next;
+  fr_host_recovery_next = false;
+  return FR_OK;
+}
+
+#ifdef FR_HOST_TEST_HELPERS
+void fr_host_console_reset(void) {
+  fr_host_console_route = (fr_console_route_t){
+      .transport = FR_CONSOLE_TRANSPORT_HOST,
+  };
+  fr_host_recovery_next = false;
+  fr_host_console_fail_switch_next = false;
+}
+
+void fr_host_request_recovery(void) { fr_host_recovery_next = true; }
+
+void fr_host_console_fail_next_switch(void) {
+  fr_host_console_fail_switch_next = true;
+}
+#endif
 #endif
 
 #if FR_FEATURE_REPL

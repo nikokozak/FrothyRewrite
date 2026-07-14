@@ -13,6 +13,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#if FR_FEATURE_CONSOLE_ROUTING
+static fr_err_t fr_native_write_rendered_line(const char *line, size_t cap,
+                                              int written);
+#endif
+
 #if FR_FEATURE_TRACE || FR_FEATURE_PULSE
 typedef char fr_signal_nanoseconds_must_fit_tagged_int[
     ((uint64_t)FR_SIGNAL_MAX_TICKS * FR_SIGNAL_TICK_NS <=
@@ -226,7 +231,7 @@ static fr_err_t fr_native_uart_open(fr_runtime_t *runtime,
                                     const fr_tagged_t *args,
                                     uint8_t arg_count, fr_tagged_t *out) {
   uint16_t port = 0;
-  uint16_t rate_code = 0;
+  fr_int_t baud = 0;
   fr_handle_ref_t ref = {0};
   fr_tagged_t handle = 0;
   uint16_t platform_index = 0;
@@ -237,10 +242,10 @@ static fr_err_t fr_native_uart_open(fr_runtime_t *runtime,
   }
 
   FR_TRY(fr_native_decode_u16(args, arg_count, 0, &port));
-  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &rate_code));
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 1, &baud));
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_UART, &ref, &handle));
-  err = fr_platform_uart_open(port, rate_code, &platform_index);
+  err = fr_platform_uart_open(port, (uint32_t)baud, &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
     return err;
@@ -267,7 +272,7 @@ static fr_err_t fr_native_uart_open_on(fr_runtime_t *runtime,
   uint16_t port = 0;
   uint16_t tx = 0;
   uint16_t rx = 0;
-  uint16_t rate_code = 0;
+  fr_int_t baud = 0;
   fr_handle_ref_t ref = {0};
   fr_tagged_t handle = 0;
   uint16_t platform_index = 0;
@@ -280,10 +285,11 @@ static fr_err_t fr_native_uart_open_on(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_u16(args, arg_count, 0, &port));
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &tx));
   FR_TRY(fr_native_decode_u16(args, arg_count, 2, &rx));
-  FR_TRY(fr_native_decode_u16(args, arg_count, 3, &rate_code));
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 3, &baud));
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_UART, &ref, &handle));
-  err = fr_platform_uart_open_on(port, tx, rx, rate_code, &platform_index);
+  err = fr_platform_uart_open_on(port, tx, rx, (uint32_t)baud,
+                                 &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
     return err;
@@ -1230,6 +1236,80 @@ static fr_err_t fr_native_text_pack(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_CONSOLE_ROUTING
+static fr_err_t fr_native_console_uart(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t tx = 0;
+  uint16_t rx = 0;
+  fr_int_t baud = 0;
+
+  (void)runtime;
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &tx));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &rx));
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 2, &baud));
+  if (baud == 0) {
+    return FR_ERR_DOMAIN;
+  }
+  FR_TRY(fr_platform_console_set_uart(tx, rx, (uint32_t)baud));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_console_default(fr_runtime_t *runtime,
+                                          const fr_tagged_t *args,
+                                          uint8_t arg_count,
+                                          fr_tagged_t *out) {
+  (void)runtime;
+  (void)args;
+  (void)arg_count;
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_console_restore_default());
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_console_info(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  fr_console_route_t route = {0};
+  char line[80];
+  int written = 0;
+
+  (void)runtime;
+  (void)args;
+  (void)arg_count;
+  if (out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_console_get_route(&route));
+  switch (route.transport) {
+  case FR_CONSOLE_TRANSPORT_HOST:
+    written = snprintf(line, sizeof(line), "console host\n");
+    break;
+  case FR_CONSOLE_TRANSPORT_UART:
+    written = snprintf(line, sizeof(line),
+                       "console uart tx=%u rx=%u baud=%lu\n",
+                       (unsigned)route.tx, (unsigned)route.rx,
+                       (unsigned long)route.baud);
+    break;
+  case FR_CONSOLE_TRANSPORT_USB:
+    written = snprintf(line, sizeof(line), "console usb\n");
+    break;
+  default:
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+#endif
+
 #if FR_FEATURE_NATIVE_SIGNATURES
 #if FR_FEATURE_TRACE
 static const fr_native_param_t fr_native_trace_params[] = {
@@ -2014,7 +2094,7 @@ static fr_err_t fr_native_fire_event(fr_runtime_t *runtime,
 }
 #endif
 
-#if FR_FEATURE_TRACE || FR_FEATURE_PULSE
+#if FR_FEATURE_TRACE || FR_FEATURE_PULSE || FR_FEATURE_CONSOLE_ROUTING
 static fr_err_t fr_native_write_rendered_line(const char *line, size_t cap,
                                               int written) {
   if (line == NULL) {
@@ -2280,11 +2360,8 @@ static fr_err_t fr_native_trace_dump(fr_runtime_t *runtime,
   FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
 
   for (uint8_t channel = 0; channel < status.channel_count; channel++) {
-    uint16_t pin = 0;
-
-    FR_TRY(fr_platform_trace_pin(platform_index, channel, &pin));
     written = snprintf(line, sizeof(line), "trace.channel %u pin=%u\n",
-                       (unsigned)channel, (unsigned)pin);
+                       (unsigned)channel, (unsigned)status.pins[channel]);
     FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
   }
   for (uint16_t i = 0; i < status.event_count; i++) {
@@ -2420,15 +2497,15 @@ static fr_err_t fr_native_pulse_count(fr_runtime_t *runtime,
                                       const fr_tagged_t *args,
                                       uint8_t arg_count, fr_tagged_t *out) {
   uint16_t platform_index = 0;
-  uint16_t count = 0;
+  fr_pulse_status_t status = {0};
 
   if (out == NULL) {
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_native_decode_pulse_handle(runtime, args, arg_count, 0,
                                        &platform_index));
-  FR_TRY(fr_platform_pulse_count(platform_index, &count));
-  return fr_tagged_encode_int((int32_t)count, out);
+  FR_TRY(fr_platform_pulse_status(platform_index, &status));
+  return fr_tagged_encode_int((int32_t)status.segment_count, out);
 }
 
 static fr_err_t fr_native_pulse_segment_field(fr_runtime_t *runtime,
@@ -2477,10 +2554,7 @@ static fr_err_t fr_native_pulse_dump(fr_runtime_t *runtime,
                                      uint8_t arg_count, fr_tagged_t *out) {
   char line[96];
   uint16_t platform_index = 0;
-  uint16_t pin = 0;
-  uint8_t idle = 0;
-  uint16_t count = 0;
-  uint32_t total_ns = 0;
+  fr_pulse_status_t status = {0};
   int written = 0;
 
   if (out == NULL) {
@@ -2488,26 +2562,16 @@ static fr_err_t fr_native_pulse_dump(fr_runtime_t *runtime,
   }
   FR_TRY(fr_native_decode_pulse_handle(runtime, args, arg_count, 0,
                                        &platform_index));
-  FR_TRY(fr_platform_pulse_pin(platform_index, &pin));
-  FR_TRY(fr_platform_pulse_idle(platform_index, &idle));
-  FR_TRY(fr_platform_pulse_count(platform_index, &count));
-  for (uint16_t i = 0; i < count; i++) {
-    fr_pulse_segment_t segment = {0};
-
-    FR_TRY(fr_platform_pulse_segment(platform_index, i, &segment));
-    if (segment.duration_ns > FR_SIGNAL_MAX_SPAN_NS - total_ns) {
-      return FR_ERR_CAPACITY;
-    }
-    total_ns += segment.duration_ns;
-  }
+  FR_TRY(fr_platform_pulse_status(platform_index, &status));
 
   written = snprintf(
       line, sizeof(line),
       "pulse pin=%u idle=%u segments=%u tick_ns=%u total_ns=%lu\n",
-      (unsigned)pin, (unsigned)idle, (unsigned)count,
-      (unsigned)FR_SIGNAL_TICK_NS, (unsigned long)total_ns);
+      (unsigned)status.pin, (unsigned)status.idle,
+      (unsigned)status.segment_count, (unsigned)FR_SIGNAL_TICK_NS,
+      (unsigned long)status.total_ns);
   FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
-  for (uint16_t i = 0; i < count; i++) {
+  for (uint16_t i = 0; i < status.segment_count; i++) {
     fr_pulse_segment_t segment = {0};
 
     FR_TRY(fr_platform_pulse_segment(platform_index, i, &segment));
@@ -2813,6 +2877,34 @@ static const fr_native_signature_t fr_native_handle_to_nil_signature = {
     .arg_count = 1,
     .result = FR_NATIVE_VALUE_NIL,
     .help = NULL,
+};
+#endif
+
+#if FR_FEATURE_CONSOLE_ROUTING
+static const fr_native_param_t fr_native_console_uart_params[] = {
+    {"tx", FR_NATIVE_VALUE_INT},
+    {"rx", FR_NATIVE_VALUE_INT},
+    {"baud", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_console_uart_signature = {
+    .params = fr_native_console_uart_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "move the active REPL to UART pins at a literal baud rate",
+};
+
+static const fr_native_signature_t fr_native_console_default_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "restore the board's boot and recovery console",
+};
+
+static const fr_native_signature_t fr_native_console_info_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "print the active console route",
 };
 #endif
 
@@ -3268,11 +3360,12 @@ static const fr_native_signature_t fr_native_random_seed_signature = {
 
 #if FR_FEATURE_UART
 enum {
-  FR_TARGET_TAGGED_BAUD_9600 = FR_TAGGED_INT_LITERAL(FR_UART_RATE_9600),
-  FR_TARGET_TAGGED_BAUD_19200 = FR_TAGGED_INT_LITERAL(FR_UART_RATE_19200),
-  FR_TARGET_TAGGED_BAUD_38400 = FR_TAGGED_INT_LITERAL(FR_UART_RATE_38400),
-  FR_TARGET_TAGGED_BAUD_57600 = FR_TAGGED_INT_LITERAL(FR_UART_RATE_57600),
-  FR_TARGET_TAGGED_BAUD_115200 = FR_TAGGED_INT_LITERAL(FR_UART_RATE_115200),
+  FR_TARGET_TAGGED_BAUD_9600 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_9600),
+  FR_TARGET_TAGGED_BAUD_19200 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_19200),
+  FR_TARGET_TAGGED_BAUD_38400 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_38400),
+  FR_TARGET_TAGGED_BAUD_57600 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_57600),
+  FR_TARGET_TAGGED_BAUD_115200 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_115200),
+  FR_TARGET_TAGGED_BAUD_1200 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_1200),
 };
 #endif
 
@@ -3486,6 +3579,14 @@ const fr_base_def_t fr_target_base_defs[] = {
 #endif
         .kind = FR_BASE_DEF_LITERAL,
         .literal_tagged = FR_TARGET_TAGGED_BAUD_115200,
+    },
+    {
+        .slot_id = FR_SLOT_BAUD_1200,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$baud_1200",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BAUD_1200,
     },
 #endif
 #if FR_FEATURE_RANDOM
@@ -4423,6 +4524,44 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_pulse_close_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_CONSOLE_ROUTING
+    {
+        .slot_id = FR_SLOT_CONSOLE_UART,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "console.uart",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_console_uart,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_console_uart_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_CONSOLE_DEFAULT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "console.default",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_console_default,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_console_default_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_CONSOLE_INFO,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "console.info",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_console_info,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_console_info_signature,
 #endif
     },
 #endif

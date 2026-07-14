@@ -31,6 +31,8 @@ test("examples manifest: includes the known examples in filename order", () => {
     "09-sensor",
     "10-events",
     "11-persistence",
+    "12-i2c-trace",
+    "13-ws2812-pulse",
   ]);
 });
 

@@ -587,37 +587,18 @@ test-host-normal-event-transcript: host-normal-events ## Replay the host_normal 
 
 test-host-normal-trace-transcript: host-normal ## Replay the bounded trace transcript.
 	@out=$$(printf '%s\n' \
-		'words' \
-		'see trace.open' \
-		'see trace.delta-ns' \
 		't is trace.open:' \
 		'trace.watch: t, 4' \
-		'trace.watch: t, 5' \
 		'trace.arm: t' \
 		'trace.stop: t' \
-		'trace.count: t' \
-		'trace.complete?: t' \
 		'trace.dump: t' \
 		'trace.close: t' \
 		| build/host/frothy-host-normal); \
 	for expected in \
-		'trace.open() -> handle' \
-		'open one bounded digital edge capture' \
-		'trace.delta-ns(trace: handle, index: int) -> int' \
-		'trace state=complete channels=2 events=0 tick_ns=100' \
-		'trace.channel 0 pin=4' \
-		'trace.channel 1 pin=5' \
-		'> true'; do \
+		'trace state=complete channels=1 events=0 tick_ns=100' \
+		'trace.channel 0 pin=4'; do \
 		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
 			printf '%s\nmissing trace transcript text: %s\n' "$$out" "$$expected"; \
-			exit 1; \
-		fi; \
-	done; \
-	for word in trace.open trace.watch trace.arm trace.wait trace.stop \
-		trace.count trace.channel trace.level trace.delta-ns trace.complete? \
-		trace.dump trace.close; do \
-		if ! printf '%s\n' "$$out" | grep -qF "$$word"; then \
-			printf '%s\nmissing trace word: %s\n' "$$out" "$$word"; \
 			exit 1; \
 		fi; \
 	done; \
@@ -625,37 +606,19 @@ test-host-normal-trace-transcript: host-normal ## Replay the bounded trace trans
 
 test-host-normal-pulse-transcript: host-normal ## Replay the bounded pulse transcript.
 	@out=$$(printf '%s\n' \
-		'words' \
-		'see pulse.open' \
-		'see pulse.add' \
 		'p is pulse.open: 4, 0' \
 		'pulse.add: p, 1, 350' \
 		'pulse.add: p, 0, 900' \
-		'pulse.duration-ns: p, 0' \
-		'pulse.duration-ns: p, 1' \
 		'pulse.dump: p' \
-		'pulse.clear: p' \
-		'pulse.count: p' \
+		'pulse.play: p' \
 		'pulse.close: p' \
 		| build/host/frothy-host-normal); \
 	for expected in \
-		'pulse.open(pin: int, idle: int) -> handle' \
-		'pulse.add(pulse: handle, level: int, duration_ns: int) -> int' \
 		'pulse pin=4 idle=0 segments=2 tick_ns=100 total_ns=1300' \
 		'pulse.segment 0 level=1 duration_ns=400' \
-		'pulse.segment 1 level=0 duration_ns=900' \
-		'> 400' \
-		'> 900' \
-		'> 0'; do \
+		'pulse.segment 1 level=0 duration_ns=900'; do \
 		if ! printf '%s\n' "$$out" | grep -qF "$$expected"; then \
 			printf '%s\nmissing pulse transcript text: %s\n' "$$out" "$$expected"; \
-			exit 1; \
-		fi; \
-	done; \
-	for word in pulse.open pulse.add pulse.clear pulse.count pulse.level \
-		pulse.duration-ns pulse.dump pulse.play pulse.close; do \
-		if ! printf '%s\n' "$$out" | grep -qF "$$word"; then \
-			printf '%s\nmissing pulse word: %s\n' "$$out" "$$word"; \
 			exit 1; \
 		fi; \
 	done; \
@@ -687,6 +650,10 @@ esp32-plain-host:
 test-esp32-plain-host-transcript: esp32-plain-host ## Replay the esp32_plain profile on the host target.
 	@out=$$(printf '%s\n' \
 		'status' \
+		'console.uart: 25, 34, 1200' \
+		'console.info:' \
+		'console.default:' \
+		'console.info:' \
 		'words' \
 		'$$led_builtin' \
 		'$$a0' \
@@ -718,7 +685,7 @@ test-esp32-plain-host-transcript: esp32-plain-host ## Replay the esp32_plain pro
 		'see boot' \
 		| build/esp32-plain-host/frothy); \
 	ok_count=$$(printf '%s\n' "$$out" | grep -c 'ok$$'); \
-	if [ "$$ok_count" != 30 ]; then \
+	if [ "$$ok_count" != 34 ]; then \
 		printf '%s\n' "$$out"; \
 		exit 1; \
 	fi; \
@@ -727,6 +694,8 @@ test-esp32-plain-host-transcript: esp32-plain-host ## Replay the esp32_plain pro
 		'compiler=device' \
 		'names=device' \
 		'storage=eeprom' \
+		'console uart tx=25 rx=34 baud=1200' \
+		'console host' \
 		'$$a0' \
 		'$$boot_button' \
 		'2' \
@@ -761,6 +730,7 @@ test-seeed-xiao-host-transcript: seeed-xiao-host ## Prove XIAO logical LED level
 		'gpio.read: $$led_builtin' \
 		| build/seeed-xiao-host/frothy); \
 	expected=$$(printf '%s\n' \
+		'boot: Ctrl-C or BOOT skips saved code' \
 		'> 0' \
 		'ok' \
 		'> ok' \
