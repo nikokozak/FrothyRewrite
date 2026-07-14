@@ -245,6 +245,7 @@ typedef struct fr_esp_trace_t {
   /* ESP32 capture is fixed at 80 MHz. Keep that finer clock private and
    * expose every target on Frothy's 10 MHz / 100 ns signal grid. */
   uint32_t hardware_ticks_per_signal_tick;
+  uint32_t hardware_max_tick;
   int64_t first_edge_us;
   bool sorted;
 } fr_esp_trace_t;
@@ -284,6 +285,17 @@ static void fr_esp_trace_sort(fr_esp_trace_t *trace) {
       at -= 1u;
     }
     trace->edges[at] = edge;
+  }
+  for (uint16_t i = 0; i < trace->event_count; i++) {
+    uint32_t hardware_tick = trace->edges[i].tick;
+    uint32_t signal_tick =
+        hardware_tick / trace->hardware_ticks_per_signal_tick;
+
+    if (hardware_tick % trace->hardware_ticks_per_signal_tick >=
+        (trace->hardware_ticks_per_signal_tick + 1u) / 2u) {
+      signal_tick += 1u;
+    }
+    trace->edges[i].tick = signal_tick;
   }
   trace->sorted = true;
 }
@@ -804,7 +816,6 @@ static bool IRAM_ATTR fr_esp_trace_capture(
     const mcpwm_capture_event_data_t *event, void *user_ctx) {
   fr_esp_trace_channel_t *channel = user_ctx;
   uint32_t hardware_delta = 0;
-  uint32_t relative_tick = 0;
 
   (void)channel_handle;
   if (channel == NULL || event == NULL) {
@@ -822,13 +833,7 @@ static bool IRAM_ATTR fr_esp_trace_capture(
     fr_esp_trace.first_edge_us = esp_timer_get_time();
   }
   hardware_delta = event->cap_value - fr_esp_trace.first_tick;
-  relative_tick =
-      hardware_delta / fr_esp_trace.hardware_ticks_per_signal_tick;
-  if (hardware_delta % fr_esp_trace.hardware_ticks_per_signal_tick >=
-      (fr_esp_trace.hardware_ticks_per_signal_tick + 1u) / 2u) {
-    relative_tick += 1u;
-  }
-  if (relative_tick > FR_SIGNAL_MAX_TICKS ||
+  if (hardware_delta > fr_esp_trace.hardware_max_tick ||
       fr_esp_trace.event_count >= FR_TRACE_EVENT_CAP) {
     fr_esp_trace.state = FR_TRACE_COMPLETE;
     portEXIT_CRITICAL_ISR(&fr_esp_trace_mux);
@@ -836,13 +841,13 @@ static bool IRAM_ATTR fr_esp_trace_capture(
   }
 
   fr_esp_trace.edges[fr_esp_trace.event_count] = (fr_esp_trace_edge_t){
-      .tick = relative_tick,
+      .tick = hardware_delta,
       .channel = channel->index,
       .level = event->cap_edge == MCPWM_CAP_EDGE_POS ? 1 : 0,
   };
   fr_esp_trace.event_count += 1u;
   if (fr_esp_trace.event_count == FR_TRACE_EVENT_CAP ||
-      relative_tick == FR_SIGNAL_MAX_TICKS) {
+      hardware_delta == fr_esp_trace.hardware_max_tick) {
     fr_esp_trace.state = FR_TRACE_COMPLETE;
   }
   portEXIT_CRITICAL_ISR(&fr_esp_trace_mux);
@@ -931,6 +936,14 @@ fr_err_t fr_platform_trace_open(uint16_t *out_platform_index) {
   fr_esp_trace.timer = timer;
   fr_esp_trace.hardware_ticks_per_signal_tick =
       resolution_hz / FR_SIGNAL_CLOCK_HZ;
+  if (fr_esp_trace.hardware_ticks_per_signal_tick >
+      UINT32_MAX / FR_SIGNAL_MAX_TICKS) {
+    (void)mcpwm_del_capture_timer(timer);
+    memset(&fr_esp_trace, 0, sizeof(fr_esp_trace));
+    return FR_ERR_UNSUPPORTED;
+  }
+  fr_esp_trace.hardware_max_tick =
+      FR_SIGNAL_MAX_TICKS * fr_esp_trace.hardware_ticks_per_signal_tick;
   *out_platform_index = 0;
   return FR_OK;
 }
