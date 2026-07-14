@@ -36,8 +36,9 @@ static fr_err_t test_persist_apply_user_overlay(
 #if FR_FEATURE_UART
 #define FR_TEST_UART_WORDS                                                   \
   " uart.open uart.open-on uart.write-byte uart.read-byte uart.available "   \
-  "uart.close $baud_9600 $baud_19200 $baud_38400 $baud_57600 $baud_115200"
-#define FR_TEST_UART_SLOT_COUNT 11
+  "uart.close $baud_9600 $baud_19200 $baud_38400 $baud_57600 $baud_115200 "  \
+  "$baud_1200"
+#define FR_TEST_UART_SLOT_COUNT 12
 #else
 #define FR_TEST_UART_WORDS ""
 #define FR_TEST_UART_SLOT_COUNT 0
@@ -2792,7 +2793,7 @@ static fr_err_t test_uart_entry(fr_runtime_t *runtime, fr_slot_id_t slot_id,
 
 static fr_err_t test_uart_open_call(fr_runtime_t *runtime,
                                     const fr_native_entry_t *open_entry,
-                                    uint16_t port, uint16_t rate_code,
+                                    uint16_t port, uint32_t baud,
                                     fr_tagged_t *out_handle) {
   fr_tagged_t args[2] = {0};
 
@@ -2801,7 +2802,7 @@ static fr_err_t test_uart_open_call(fr_runtime_t *runtime,
   }
 
   FR_TRY(fr_tagged_encode_int((int32_t)port, &args[0]));
-  FR_TRY(fr_tagged_encode_int((int32_t)rate_code, &args[1]));
+  FR_TRY(fr_tagged_encode_int((int32_t)baud, &args[1]));
   return fr_native_call(runtime, open_entry, args, 2, out_handle);
 }
 
@@ -2867,7 +2868,11 @@ static void test_uart(void) {
   CHECK("uart see baud literal",
         fr_repl_eval_line(&runtime, "see $baud_115200", out, sizeof(out)) ==
                 FR_OK &&
-            strcmp(out, "base target 5\nok\n") == 0);
+            strcmp(out, "base target 115200\nok\n") == 0);
+  CHECK("uart see 1200 baud literal",
+        fr_repl_eval_line(&runtime, "see $baud_1200", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "base target 1200\nok\n") == 0);
   CHECK("uart open respects handle capacity",
         fr_base_image_install(&capacity_runtime) == FR_OK);
   for (fr_handle_id_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
@@ -2878,7 +2883,7 @@ static void test_uart(void) {
   }
   CHECK("uart open fails before platform when handles are full",
         test_uart_open_call(&capacity_runtime, open_entry, 0,
-                            FR_UART_RATE_9600, &handle) == FR_ERR_CAPACITY);
+                            FR_UART_BAUD_9600, &handle) == FR_ERR_CAPACITY);
   for (fr_handle_id_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
     CHECK("uart releases capacity test handles",
           fr_handle_release_reserved(&capacity_runtime, capacity_refs[i]) ==
@@ -2919,48 +2924,69 @@ static void test_uart(void) {
                 FR_OK &&
             strcmp(out, "overlay nil\nok\n") == 0);
 
-  CHECK("uart rejects invalid rate",
-        test_uart_open_call(&runtime, open_entry, 0, 99, &handle) ==
+  CHECK("uart rejects zero baud",
+        test_uart_open_call(&runtime, open_entry, 0, 0, &handle) ==
             FR_ERR_DOMAIN);
+  CHECK("uart rejects baud above target ceiling",
+        test_uart_open_call(&runtime, open_entry, 0, 5000001, &handle) ==
+            FR_ERR_DOMAIN);
+  CHECK("uart repl accepts a literal baud",
+        fr_repl_eval_line(&runtime, "literal is uart.open: 0, 1200", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "uart.close: literal", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "literal is nil", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "ok\n") == 0);
 #if FR_TAGGED_INT_MAX > 65535
   CHECK("uart rejects oversized platform argument before cast",
         fr_tagged_encode_int(65549, &wide_open_args[0]) == FR_OK &&
-            fr_tagged_encode_int(FR_UART_RATE_9600, &wide_open_args[1]) ==
+            fr_tagged_encode_int(FR_UART_BAUD_9600, &wide_open_args[1]) ==
                 FR_OK &&
             fr_native_call(&runtime, open_entry, wide_open_args, 2, &handle) ==
                 FR_ERR_DOMAIN);
 #endif
-  CHECK("uart opens with each rate",
-        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+  CHECK("uart opens with literal baud values",
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_1200,
                             &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_19200,
+            test_uart_open_call(&runtime, open_entry, 0, 12345, &handle) ==
+                FR_OK &&
+            test_uart_one_handle_call(&runtime, close_entry, handle,
+                                      &result) == FR_OK &&
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_38400,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_19200,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_57600,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_38400,
+                                &handle) == FR_OK &&
+            test_uart_one_handle_call(&runtime, close_entry, handle,
+                                      &result) == FR_OK &&
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_57600,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK &&
             test_uart_open_call(&runtime, open_entry, 0,
-                                FR_UART_RATE_115200, &handle) == FR_OK &&
+                                FR_UART_BAUD_115200, &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK);
 
   CHECK("uart opens handle",
-        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                             &handle) == FR_OK &&
             fr_tagged_decode_handle_ref(handle, &handle_ref) == FR_OK &&
             fr_handle_lookup(&runtime, handle_ref, FR_HANDLE_KIND_UART, &kind,
                              &platform_index) == FR_OK &&
             kind == FR_HANDLE_KIND_UART);
   CHECK("uart rejects double open on same port",
-        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                             &second_handle) == FR_ERR_DOMAIN);
   CHECK("uart available starts with host script",
         test_uart_one_handle_call(&runtime, available_entry, handle, &result) ==
@@ -2997,7 +3023,7 @@ static void test_uart(void) {
   CHECK("uart close discards host script",
         test_uart_one_handle_call(&runtime, close_entry, handle, &result) ==
                 FR_OK &&
-            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, available_entry, handle,
                                       &result) == FR_OK &&
@@ -3025,7 +3051,7 @@ static void test_uart(void) {
 
 #if FR_FEATURE_PERSISTENCE
   CHECK("uart save rejects live handle",
-        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                             &handle) == FR_OK &&
             fr_slot_write(&runtime, FR_SLOT_BOOT, handle) == FR_OK &&
             (fr_persist_session_install_tier_stamp_slot(&runtime, FR_SLOT_BOOT),
@@ -3038,13 +3064,13 @@ static void test_uart(void) {
 #endif
 
   CHECK("uart reset closes platform resource",
-        test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+        test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                             &handle) == FR_OK &&
             fr_tagged_decode_handle_ref(handle, &handle_ref) == FR_OK &&
             fr_runtime_clear_project(&runtime) == FR_OK &&
             fr_handle_lookup(&runtime, handle_ref, FR_HANDLE_KIND_NONE, &kind,
                              &platform_index) == FR_ERR_HANDLE &&
-            test_uart_open_call(&runtime, open_entry, 0, FR_UART_RATE_9600,
+            test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
                                 &handle) == FR_OK &&
             test_uart_one_handle_call(&runtime, close_entry, handle,
                                       &result) == FR_OK);
@@ -6735,10 +6761,13 @@ static void test_image(void) {
   CHECK("base image installs baud constants",
         fr_slot_read(&runtime, FR_SLOT_BAUD_9600, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
-            decoded == FR_UART_RATE_9600 &&
+            decoded == FR_UART_BAUD_9600 &&
             fr_slot_read(&runtime, FR_SLOT_BAUD_115200, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
-            decoded == FR_UART_RATE_115200);
+            decoded == FR_UART_BAUD_115200 &&
+            fr_slot_read(&runtime, FR_SLOT_BAUD_1200, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK &&
+            decoded == FR_UART_BAUD_1200);
 #endif
   CHECK("base image installs led builtin constant",
         fr_slot_read(&runtime, FR_SLOT_LED_BUILTIN, &tagged) == FR_OK &&
@@ -6794,6 +6823,7 @@ static void test_image(void) {
             strcmp(fr_base_slot_name_at(22), "$baud_38400") == 0 &&
             strcmp(fr_base_slot_name_at(23), "$baud_57600") == 0 &&
             strcmp(fr_base_slot_name_at(24), "$baud_115200") == 0 &&
+            strcmp(fr_base_slot_name_at(25), "$baud_1200") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_UART_OPEN), "uart.open") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_UART_OPEN_ON),
                    "uart.open-on") == 0 &&
@@ -6806,7 +6836,8 @@ static void test_image(void) {
             strcmp(fr_base_slot_name(FR_SLOT_UART_CLOSE), "uart.close") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_BAUD_9600), "$baud_9600") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_BAUD_115200),
-                   "$baud_115200") == 0);
+                   "$baud_115200") == 0 &&
+            strcmp(fr_base_slot_name(FR_SLOT_BAUD_1200), "$baud_1200") == 0);
 #endif
 #if FR_FEATURE_PERSISTENCE
   CHECK("base image exposes persistence slot names",
@@ -6882,7 +6913,9 @@ static void test_image(void) {
             fr_base_slot_id_for_name("$baud_9600", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_BAUD_9600 &&
             fr_base_slot_id_for_name("$baud_115200", &slot_id) == FR_OK &&
-            slot_id == FR_SLOT_BAUD_115200);
+            slot_id == FR_SLOT_BAUD_115200 &&
+            fr_base_slot_id_for_name("$baud_1200", &slot_id) == FR_OK &&
+            slot_id == FR_SLOT_BAUD_1200);
 #endif
 #if FR_FEATURE_PERSISTENCE
   CHECK("base image looks up persistence slot names",

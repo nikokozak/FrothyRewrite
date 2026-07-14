@@ -5,11 +5,12 @@
 #include <stdbool.h>
 
 enum {
-  FR_UART_RATE_9600 = 1,
-  FR_UART_RATE_19200 = 2,
-  FR_UART_RATE_38400 = 3,
-  FR_UART_RATE_57600 = 4,
-  FR_UART_RATE_115200 = 5,
+  FR_UART_BAUD_1200 = 1200,
+  FR_UART_BAUD_9600 = 9600,
+  FR_UART_BAUD_19200 = 19200,
+  FR_UART_BAUD_38400 = 38400,
+  FR_UART_BAUD_57600 = 57600,
+  FR_UART_BAUD_115200 = 115200,
 };
 
 enum {
@@ -112,10 +113,10 @@ void fr_host_event_debug_fail_next_timer_install(void);
 #endif
 
 #if FR_FEATURE_UART
-fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
+fr_err_t fr_platform_uart_open(uint16_t port, uint32_t baud,
                                uint16_t *out_platform_index);
 fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
-                                  uint16_t rate_code,
+                                  uint32_t baud,
                                   uint16_t *out_platform_index);
 fr_err_t fr_platform_uart_write_byte(uint16_t platform_index, uint8_t byte);
 fr_err_t fr_platform_uart_read_byte(uint16_t platform_index, uint8_t *out_byte,

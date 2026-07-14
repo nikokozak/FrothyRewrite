@@ -93,7 +93,7 @@ typedef struct fr_esp_app_uart_t {
   bool custom_pins; /* true only for uart.open-on; tx/rx hold the chosen pins */
   uint16_t tx;
   uint16_t rx;
-  uint16_t rate_code;
+  uint32_t baud;
 } fr_esp_app_uart_t;
 
 #if SOC_UART_NUM <= 1
@@ -580,30 +580,8 @@ static bool fr_esp_gpio_output_valid(uint16_t pin) {
 }
 
 #if FR_FEATURE_UART
-static fr_err_t fr_esp_uart_baud(uint16_t rate_code, int *out_baud) {
-  if (out_baud == NULL) {
-    return FR_ERR_INVALID;
-  }
-
-  switch (rate_code) {
-  case FR_UART_RATE_9600:
-    *out_baud = 9600;
-    return FR_OK;
-  case FR_UART_RATE_19200:
-    *out_baud = 19200;
-    return FR_OK;
-  case FR_UART_RATE_38400:
-    *out_baud = 38400;
-    return FR_OK;
-  case FR_UART_RATE_57600:
-    *out_baud = 57600;
-    return FR_OK;
-  case FR_UART_RATE_115200:
-    *out_baud = 115200;
-    return FR_OK;
-  default:
-    return FR_ERR_DOMAIN;
-  }
+static bool fr_esp_uart_baud_valid(uint32_t baud) {
+  return baud > 0 && baud <= UART_BITRATE_MAX;
 }
 
 static fr_err_t fr_esp_app_uart_entry(uint16_t platform_index,
@@ -1587,9 +1565,8 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
 }
 
 #if FR_FEATURE_UART
-fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
+fr_err_t fr_platform_uart_open(uint16_t port, uint32_t baud,
                                uint16_t *out_platform_index) {
-  int baud = 0;
   fr_esp_app_uart_t *uart = NULL;
   uart_port_t target_port = UART_NUM_0;
   esp_err_t err = ESP_OK;
@@ -1612,8 +1589,10 @@ fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
   if (uart->in_use) {
     return FR_ERR_DOMAIN;
   }
-  FR_TRY(fr_esp_uart_baud(rate_code, &baud));
-  config.baud_rate = baud;
+  if (!fr_esp_uart_baud_valid(baud)) {
+    return FR_ERR_DOMAIN;
+  }
+  config.baud_rate = (int)baud;
 
   err = uart_driver_install(target_port, FR_ESP_APP_UART_RX_BYTES,
                             FR_ESP_APP_UART_TX_BYTES, 0, NULL, 0);
@@ -1634,7 +1613,7 @@ fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
 
   *uart = (fr_esp_app_uart_t){
       .in_use = true,
-      .rate_code = rate_code,
+      .baud = baud,
   };
   *out_platform_index = port;
   return FR_OK;
@@ -1644,9 +1623,8 @@ fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
  * console UART and any already-open custom-pin UART. Setup mirrors
  * fr_platform_uart_open and adds a uart_set_pin step before flushing input. */
 fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
-                                  uint16_t rate_code,
+                                  uint32_t baud,
                                   uint16_t *out_platform_index) {
-  int baud = 0;
   fr_esp_app_uart_t *uart = NULL;
   uart_port_t target_port = UART_NUM_0;
   esp_err_t err = ESP_OK;
@@ -1678,8 +1656,10 @@ fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
   if (uart->in_use) {
     return FR_ERR_DOMAIN;
   }
-  FR_TRY(fr_esp_uart_baud(rate_code, &baud));
-  config.baud_rate = baud;
+  if (!fr_esp_uart_baud_valid(baud)) {
+    return FR_ERR_DOMAIN;
+  }
+  config.baud_rate = (int)baud;
 
   err = uart_driver_install(target_port, FR_ESP_APP_UART_RX_BYTES,
                             FR_ESP_APP_UART_TX_BYTES, 0, NULL, 0);
@@ -1707,7 +1687,7 @@ fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
       .custom_pins = true,
       .tx = tx,
       .rx = rx,
-      .rate_code = rate_code,
+      .baud = baud,
   };
   *out_platform_index = port;
   return FR_OK;

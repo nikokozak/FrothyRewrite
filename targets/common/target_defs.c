@@ -226,7 +226,7 @@ static fr_err_t fr_native_uart_open(fr_runtime_t *runtime,
                                     const fr_tagged_t *args,
                                     uint8_t arg_count, fr_tagged_t *out) {
   uint16_t port = 0;
-  uint16_t rate_code = 0;
+  fr_int_t baud = 0;
   fr_handle_ref_t ref = {0};
   fr_tagged_t handle = 0;
   uint16_t platform_index = 0;
@@ -237,10 +237,10 @@ static fr_err_t fr_native_uart_open(fr_runtime_t *runtime,
   }
 
   FR_TRY(fr_native_decode_u16(args, arg_count, 0, &port));
-  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &rate_code));
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 1, &baud));
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_UART, &ref, &handle));
-  err = fr_platform_uart_open(port, rate_code, &platform_index);
+  err = fr_platform_uart_open(port, (uint32_t)baud, &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
     return err;
@@ -267,7 +267,7 @@ static fr_err_t fr_native_uart_open_on(fr_runtime_t *runtime,
   uint16_t port = 0;
   uint16_t tx = 0;
   uint16_t rx = 0;
-  uint16_t rate_code = 0;
+  fr_int_t baud = 0;
   fr_handle_ref_t ref = {0};
   fr_tagged_t handle = 0;
   uint16_t platform_index = 0;
@@ -280,10 +280,11 @@ static fr_err_t fr_native_uart_open_on(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_u16(args, arg_count, 0, &port));
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &tx));
   FR_TRY(fr_native_decode_u16(args, arg_count, 2, &rx));
-  FR_TRY(fr_native_decode_u16(args, arg_count, 3, &rate_code));
+  FR_TRY(fr_native_decode_nonnegative_int(args, arg_count, 3, &baud));
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_UART, &ref, &handle));
-  err = fr_platform_uart_open_on(port, tx, rx, rate_code, &platform_index);
+  err = fr_platform_uart_open_on(port, tx, rx, (uint32_t)baud,
+                                 &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
     return err;
@@ -3268,11 +3269,12 @@ static const fr_native_signature_t fr_native_random_seed_signature = {
 
 #if FR_FEATURE_UART
 enum {
-  FR_TARGET_TAGGED_BAUD_9600 = FR_TAGGED_INT_LITERAL(FR_UART_RATE_9600),
-  FR_TARGET_TAGGED_BAUD_19200 = FR_TAGGED_INT_LITERAL(FR_UART_RATE_19200),
-  FR_TARGET_TAGGED_BAUD_38400 = FR_TAGGED_INT_LITERAL(FR_UART_RATE_38400),
-  FR_TARGET_TAGGED_BAUD_57600 = FR_TAGGED_INT_LITERAL(FR_UART_RATE_57600),
-  FR_TARGET_TAGGED_BAUD_115200 = FR_TAGGED_INT_LITERAL(FR_UART_RATE_115200),
+  FR_TARGET_TAGGED_BAUD_9600 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_9600),
+  FR_TARGET_TAGGED_BAUD_19200 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_19200),
+  FR_TARGET_TAGGED_BAUD_38400 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_38400),
+  FR_TARGET_TAGGED_BAUD_57600 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_57600),
+  FR_TARGET_TAGGED_BAUD_115200 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_115200),
+  FR_TARGET_TAGGED_BAUD_1200 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_1200),
 };
 #endif
 
@@ -3486,6 +3488,14 @@ const fr_base_def_t fr_target_base_defs[] = {
 #endif
         .kind = FR_BASE_DEF_LITERAL,
         .literal_tagged = FR_TARGET_TAGGED_BAUD_115200,
+    },
+    {
+        .slot_id = FR_SLOT_BAUD_1200,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$baud_1200",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BAUD_1200,
     },
 #endif
 #if FR_FEATURE_RANDOM

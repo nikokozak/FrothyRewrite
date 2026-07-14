@@ -13,6 +13,7 @@ enum {
   FR_HOST_ADC_MAX_PIN = 39,
 #if FR_FEATURE_UART
   FR_HOST_UART_SCRIPT_LENGTH = 5,
+  FR_HOST_UART_BAUD_MAX = 5000000,
 #endif
 };
 
@@ -224,7 +225,7 @@ typedef struct fr_host_uart_t {
   uint16_t port;
   uint16_t tx;
   uint16_t rx;
-  uint16_t rate_code;
+  uint32_t baud;
   uint8_t read_index;
   uint8_t last_written;
   uint16_t write_count;
@@ -235,17 +236,8 @@ static const uint8_t fr_host_uart_script[FR_HOST_UART_SCRIPT_LENGTH] = {
     'f', 'r', 'o', 't', 'h',
 };
 
-static bool fr_host_uart_rate_valid(uint16_t rate_code) {
-  switch (rate_code) {
-  case FR_UART_RATE_9600:
-  case FR_UART_RATE_19200:
-  case FR_UART_RATE_38400:
-  case FR_UART_RATE_57600:
-  case FR_UART_RATE_115200:
-    return true;
-  default:
-    return false;
-  }
+static bool fr_host_uart_baud_valid(uint32_t baud) {
+  return baud > 0 && baud <= FR_HOST_UART_BAUD_MAX;
 }
 
 static bool fr_host_uart_port_in_use(uint16_t port) {
@@ -732,12 +724,12 @@ uint16_t fr_host_pulse_play_count(uint16_t platform_index) {
 #endif
 
 #if FR_FEATURE_UART
-fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
+fr_err_t fr_platform_uart_open(uint16_t port, uint32_t baud,
                                uint16_t *out_platform_index) {
   if (out_platform_index == NULL) {
     return FR_ERR_INVALID;
   }
-  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_rate_valid(rate_code) ||
+  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_baud_valid(baud) ||
       fr_host_uart_port_in_use(port)) {
     return FR_ERR_DOMAIN;
   }
@@ -752,7 +744,7 @@ fr_err_t fr_platform_uart_open(uint16_t port, uint16_t rate_code,
     *uart = (fr_host_uart_t){
         .in_use = true,
         .port = port,
-        .rate_code = rate_code,
+        .baud = baud,
     };
     *out_platform_index = i;
     return FR_OK;
@@ -781,12 +773,12 @@ static bool fr_host_uart_pin_conflict(uint16_t tx, uint16_t rx) {
 }
 
 fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
-                                  uint16_t rate_code,
+                                  uint32_t baud,
                                   uint16_t *out_platform_index) {
   if (out_platform_index == NULL) {
     return FR_ERR_INVALID;
   }
-  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_rate_valid(rate_code) ||
+  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_baud_valid(baud) ||
       fr_host_uart_port_in_use(port) || tx == rx ||
       fr_host_uart_pin_conflict(tx, rx)) {
     return FR_ERR_DOMAIN;
@@ -805,7 +797,7 @@ fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
         .port = port,
         .tx = tx,
         .rx = rx,
-        .rate_code = rate_code,
+        .baud = baud,
     };
     *out_platform_index = i;
     return FR_OK;
