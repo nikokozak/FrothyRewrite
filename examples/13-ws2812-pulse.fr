@@ -1,0 +1,39 @@
+-- WS2812 Pulse
+-- Builds one adjustable 24-bit GRB frame as ordinary Frothy pulse spans.
+-- GPIO 4 is only an example data pin; connect it through the circuit expected
+-- by your strip, share ground, and change the timing constants if measurement
+-- shows that your LEDs need them tuned.
+-- @tag device hardware
+
+zero-high is 400
+zero-low is 900
+one-high is 800
+one-low is 500
+reset-low is 80000
+
+to ws2812-bit with wave, bit [
+  if bit = 0 [
+    pulse.add: wave, 1, zero-high
+    pulse.add: wave, 0, zero-low
+  ] else [
+    pulse.add: wave, 1, one-high
+    pulse.add: wave, 0, one-low
+  ]
+]
+
+to ws2812-frame with pin, grb [
+  here wave is pulse.open: pin, 0
+  here mask is 8388608
+
+  repeat 24 [
+    here bit is mod: grb / mask, 2
+    ws2812-bit: wave, bit
+    set mask to mask / 2
+  ]
+  pulse.add: wave, 0, reset-low
+  pulse.dump: wave
+  pulse.play: wave
+  pulse.close: wave
+]
+
+ws2812-frame: 4, 0x00ff00

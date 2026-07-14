@@ -108,5 +108,25 @@ export const FROTHY_EXAMPLES: readonly FrothyExample[] = [
       "host"
     ],
     "source": "-- Persistence\n-- Saves cells and words, restores them, and reads the saved values back.\n-- @tag host\n\ntally is cells(1)\nset tally[0] to 7\nto tally-plus with n [ tally[0] + n ]\nsave\nclear\nrestore\ntally[0] -- => 7\ntally-plus: 5 -- => 12\n"
+  },
+  {
+    "name": "12-i2c-trace",
+    "title": "I2C Trace",
+    "blurb": "Captures SCL and SDA edges, then decodes basic 7-bit I2C traffic in Frothy. The caller supplies the line levels from immediately before the first edge. This teaching decoder does not handle arbitration, 10-bit addresses, or interpret clock stretching beyond the edges that were actually captured.",
+    "tags": [
+      "device",
+      "hardware"
+    ],
+    "source": "-- I2C Trace\n-- Captures SCL and SDA edges, then decodes basic 7-bit I2C traffic in Frothy.\n-- The caller supplies the line levels from immediately before the first edge.\n-- This teaching decoder does not handle arbitration, 10-bit addresses, or\n-- interpret clock stretching beyond the edges that were actually captured.\n-- @tag device hardware\n\nto i2c-print-line with value [ print: value; print: bytes.from-byte: 10 ]\n\n-- Decoder state cells: SCL, SDA, active?, bit count, accumulated byte.\ni2c-state is cells(5)\n\nto i2c-sda-edge with level [\n  here prior is i2c-state[1]\n  set i2c-state[1] to level\n  if i2c-state[0] = 1 [\n    if prior = 1 and level = 0 [\n      i2c-print-line: \"START\"\n      set i2c-state[2] to true\n      set i2c-state[3] to 0\n      set i2c-state[4] to 0\n    ]\n    if prior = 0 and level = 1 and i2c-state[2] [\n      i2c-print-line: \"STOP\"\n      set i2c-state[2] to false\n    ]\n  ]\n]\n\nto i2c-scl-edge with level [\n  set i2c-state[0] to level\n  if i2c-state[2] and level = 1 [\n    if i2c-state[3] < 8 [\n      set i2c-state[4] to i2c-state[4] * 2 + i2c-state[1]\n      set i2c-state[3] to i2c-state[3] + 1\n    ] else [\n      i2c-print-line: text.from-int: i2c-state[4]\n      if i2c-state[1] = 0 [ i2c-print-line: \"ACK\" ] else [ i2c-print-line: \"NACK\" ]\n      set i2c-state[3] to 0\n      set i2c-state[4] to 0\n    ]\n  ]\n]\n\nto i2c-edge with capture, index, scl-channel, sda-channel [\n  here channel is trace.channel: capture, index\n  here level is trace.level: capture, index\n  if channel = sda-channel [ i2c-sda-edge: level ]\n  if channel = scl-channel [ i2c-scl-edge: level ]\n]\n\nto decode-i2c with capture, scl-channel, sda-channel, initial-scl, initial-sda [\n  set i2c-state[0] to initial-scl; set i2c-state[1] to initial-sda\n  set i2c-state[2] to false; set i2c-state[3] to 0; set i2c-state[4] to 0\n  here edge-count is trace.count: capture\n  repeat edge-count as i [ i2c-edge: capture, i, scl-channel, sda-channel ]\n]\n\ncapture is trace.open:\nscl-channel is trace.watch: capture, $scl\nsda-channel is trace.watch: capture, $sda\ntrace.arm: capture\ntrace.wait: capture, 1000\ntrace.stop: capture\ntrace.dump: capture\ndecode-i2c: capture, scl-channel, sda-channel, 1, 1\ntrace.close: capture\ncapture is nil\n"
+  },
+  {
+    "name": "13-ws2812-pulse",
+    "title": "WS2812 Pulse",
+    "blurb": "Builds one adjustable 24-bit GRB frame as ordinary Frothy pulse spans. GPIO 4 is only an example data pin; connect it through the circuit expected by your strip, share ground, and change the timing constants if measurement shows that your LEDs need them tuned.",
+    "tags": [
+      "device",
+      "hardware"
+    ],
+    "source": "-- WS2812 Pulse\n-- Builds one adjustable 24-bit GRB frame as ordinary Frothy pulse spans.\n-- GPIO 4 is only an example data pin; connect it through the circuit expected\n-- by your strip, share ground, and change the timing constants if measurement\n-- shows that your LEDs need them tuned.\n-- @tag device hardware\n\nzero-high is 400\nzero-low is 900\none-high is 800\none-low is 500\nreset-low is 80000\n\nto ws2812-bit with wave, bit [\n  if bit = 0 [\n    pulse.add: wave, 1, zero-high\n    pulse.add: wave, 0, zero-low\n  ] else [\n    pulse.add: wave, 1, one-high\n    pulse.add: wave, 0, one-low\n  ]\n]\n\nto ws2812-frame with pin, grb [\n  here wave is pulse.open: pin, 0\n  here mask is 8388608\n\n  repeat 24 [\n    here bit is mod: grb / mask, 2\n    ws2812-bit: wave, bit\n    set mask to mask / 2\n  ]\n  pulse.add: wave, 0, reset-low\n  pulse.dump: wave\n  pulse.play: wave\n  pulse.close: wave\n]\n\nws2812-frame: 4, 0x00ff00\n"
   }
 ];

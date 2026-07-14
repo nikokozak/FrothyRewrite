@@ -1,0 +1,68 @@
+-- I2C Trace
+-- Captures SCL and SDA edges, then decodes basic 7-bit I2C traffic in Frothy.
+-- The caller supplies the line levels from immediately before the first edge.
+-- This teaching decoder does not handle arbitration, 10-bit addresses, or
+-- interpret clock stretching beyond the edges that were actually captured.
+-- @tag device hardware
+
+to i2c-print-line with value [ print: value; print: bytes.from-byte: 10 ]
+
+-- Decoder state cells: SCL, SDA, active?, bit count, accumulated byte.
+i2c-state is cells(5)
+
+to i2c-sda-edge with level [
+  here prior is i2c-state[1]
+  set i2c-state[1] to level
+  if i2c-state[0] = 1 [
+    if prior = 1 and level = 0 [
+      i2c-print-line: "START"
+      set i2c-state[2] to true
+      set i2c-state[3] to 0
+      set i2c-state[4] to 0
+    ]
+    if prior = 0 and level = 1 and i2c-state[2] [
+      i2c-print-line: "STOP"
+      set i2c-state[2] to false
+    ]
+  ]
+]
+
+to i2c-scl-edge with level [
+  set i2c-state[0] to level
+  if i2c-state[2] and level = 1 [
+    if i2c-state[3] < 8 [
+      set i2c-state[4] to i2c-state[4] * 2 + i2c-state[1]
+      set i2c-state[3] to i2c-state[3] + 1
+    ] else [
+      i2c-print-line: text.from-int: i2c-state[4]
+      if i2c-state[1] = 0 [ i2c-print-line: "ACK" ] else [ i2c-print-line: "NACK" ]
+      set i2c-state[3] to 0
+      set i2c-state[4] to 0
+    ]
+  ]
+]
+
+to i2c-edge with capture, index, scl-channel, sda-channel [
+  here channel is trace.channel: capture, index
+  here level is trace.level: capture, index
+  if channel = sda-channel [ i2c-sda-edge: level ]
+  if channel = scl-channel [ i2c-scl-edge: level ]
+]
+
+to decode-i2c with capture, scl-channel, sda-channel, initial-scl, initial-sda [
+  set i2c-state[0] to initial-scl; set i2c-state[1] to initial-sda
+  set i2c-state[2] to false; set i2c-state[3] to 0; set i2c-state[4] to 0
+  here edge-count is trace.count: capture
+  repeat edge-count as i [ i2c-edge: capture, i, scl-channel, sda-channel ]
+]
+
+capture is trace.open:
+scl-channel is trace.watch: capture, $scl
+sda-channel is trace.watch: capture, $sda
+trace.arm: capture
+trace.wait: capture, 1000
+trace.stop: capture
+trace.dump: capture
+decode-i2c: capture, scl-channel, sda-channel, 1, 1
+trace.close: capture
+capture is nil
