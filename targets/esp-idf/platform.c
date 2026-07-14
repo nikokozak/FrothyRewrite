@@ -1006,11 +1006,20 @@ fr_err_t fr_platform_trace_watch(uint16_t platform_index, uint16_t pin,
 
 fr_err_t fr_platform_trace_arm(uint16_t platform_index) {
   fr_esp_trace_t *trace = NULL;
+  fr_trace_state_t prior_state = FR_TRACE_CONFIGURING;
   esp_err_t err = ESP_OK;
 
   FR_TRY(fr_esp_trace_entry(platform_index, &trace));
-  if (trace->state != FR_TRACE_CONFIGURING || trace->channel_count == 0) {
+  portENTER_CRITICAL(&fr_esp_trace_mux);
+  prior_state = trace->state;
+  portEXIT_CRITICAL(&fr_esp_trace_mux);
+  if ((prior_state != FR_TRACE_CONFIGURING &&
+       prior_state != FR_TRACE_COMPLETE) ||
+      trace->channel_count == 0) {
     return FR_ERR_DOMAIN;
+  }
+  if (prior_state == FR_TRACE_COMPLETE) {
+    FR_TRY(fr_esp_trace_quiet(trace));
   }
 
   for (uint8_t i = 0; i < trace->channel_count; i++) {
@@ -1020,12 +1029,22 @@ fr_err_t fr_platform_trace_arm(uint16_t platform_index) {
     }
     trace->channels[i].enabled = true;
   }
-  err = mcpwm_capture_timer_enable(trace->timer);
+  if (!trace->timer_enabled) {
+    err = mcpwm_capture_timer_enable(trace->timer);
+    if (err != ESP_OK) {
+      goto arm_failed;
+    }
+    trace->timer_enabled = true;
+  }
+
+  err = mcpwm_capture_timer_start(trace->timer);
   if (err != ESP_OK) {
     goto arm_failed;
   }
-  trace->timer_enabled = true;
+  trace->timer_running = true;
 
+  /* The callback ignores edges until ARMED. Starting first preserves the old
+   * completed capture if hardware start fails; this transition begins capture. */
   portENTER_CRITICAL(&fr_esp_trace_mux);
   trace->event_count = 0;
   trace->has_first_edge = false;
@@ -1034,16 +1053,11 @@ fr_err_t fr_platform_trace_arm(uint16_t platform_index) {
   trace->sorted = false;
   trace->state = FR_TRACE_ARMED;
   portEXIT_CRITICAL(&fr_esp_trace_mux);
-
-  err = mcpwm_capture_timer_start(trace->timer);
-  if (err == ESP_OK) {
-    trace->timer_running = true;
-    return FR_OK;
-  }
+  return FR_OK;
 
 arm_failed:
   portENTER_CRITICAL(&fr_esp_trace_mux);
-  trace->state = FR_TRACE_CONFIGURING;
+  trace->state = prior_state;
   portEXIT_CRITICAL(&fr_esp_trace_mux);
   if (trace->timer_enabled) {
     if (mcpwm_capture_timer_disable(trace->timer) == ESP_OK) {
@@ -1208,6 +1222,8 @@ fr_err_t fr_platform_trace_close(uint16_t platform_index) {
       }
     }
   }
+  /* Retain a partially closed entry so a later close can retry the driver
+   * cleanup instead of losing the only references to live resources. */
   if (first_error == FR_OK && trace->timer == NULL) {
     memset(trace, 0, sizeof(*trace));
   }
@@ -1514,6 +1530,7 @@ fr_err_t fr_platform_pulse_close(uint16_t platform_index) {
       first_error = err;
     }
   }
+  /* As with trace, keep failed cleanup reachable for a later close retry. */
   if (first_error == FR_OK && pulse->channel == NULL &&
       pulse->encoder == NULL) {
     memset(pulse, 0, sizeof(*pulse));

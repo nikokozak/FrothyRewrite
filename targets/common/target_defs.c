@@ -13,6 +13,14 @@
 #include <stdio.h>
 #include <string.h>
 
+#if FR_FEATURE_TRACE || FR_FEATURE_PULSE
+typedef char fr_signal_nanoseconds_must_fit_tagged_int[
+    ((uint64_t)FR_SIGNAL_MAX_TICKS * FR_SIGNAL_TICK_NS <=
+     FR_TAGGED_INT_MAX)
+        ? 1
+        : -1];
+#endif
+
 static fr_err_t fr_native_decode_nonnegative_int(const fr_tagged_t *args,
                                                  uint8_t arg_count,
                                                  uint8_t index,

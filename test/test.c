@@ -3273,6 +3273,8 @@ static void test_trace(void) {
         fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "ok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
+                FR_ERR_DOMAIN &&
             fr_repl_eval_line(&runtime, "trace.level: t, 0", out,
                               sizeof(out)) == FR_ERR_DOMAIN &&
             fr_repl_eval_line(&runtime, "trace.watch: t, 8", out,
@@ -3317,6 +3319,25 @@ static void test_trace(void) {
             fr_repl_eval_line(&runtime, "trace.delta-ns: t, 2", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "700\nok\n") == 0);
+  CHECK("trace re-arms with the same watched pins",
+        fr_repl_eval_line(&runtime, "trace.arm: t", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.complete?: t", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "false\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.count: t", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "0\nok\n") == 0 &&
+            fr_host_trace_push_edge(platform_index, 2, 1, 0) == FR_OK &&
+            fr_host_trace_push_edge(platform_index, 2, 0, 500) == FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.stop: t", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "trace.count: t", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "2\nok\n") == 0 &&
+            fr_repl_eval_line(&runtime, "trace.delta-ns: t, 1", out,
+                              sizeof(out)) == FR_OK &&
+            strcmp(out, "500\nok\n") == 0);
 #if FR_FEATURE_PERSISTENCE
   CHECK("trace save rejects live handle", fr_persist_save(&runtime) ==
                                                FR_ERR_VOLATILE);

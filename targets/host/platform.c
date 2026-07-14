@@ -451,7 +451,9 @@ fr_err_t fr_platform_trace_arm(uint16_t platform_index) {
   fr_host_trace_t *trace = NULL;
 
   FR_TRY(fr_host_trace_entry(platform_index, &trace));
-  if (trace->state != FR_TRACE_CONFIGURING || trace->channel_count == 0) {
+  if ((trace->state != FR_TRACE_CONFIGURING &&
+       trace->state != FR_TRACE_COMPLETE) ||
+      trace->channel_count == 0) {
     return FR_ERR_DOMAIN;
   }
 
