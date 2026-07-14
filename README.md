@@ -88,6 +88,38 @@ is needed. Use `;` only when you want several expressions on the same line.
 Words you define stick around on the board, so you build a program by
 teaching the chip one word at a time.
 
+### Move the live console to another UART
+
+Frothy's REPL can run over any suitable 3.3 V UART pair, not only the board's
+USB or boot-serial connection. This moves the next reply and all later input
+to TX 25, RX 34 at 1200 baud:
+
+```frothy
+console.uart: 25, 34, 1200
+```
+
+To make that route part of a project, put it in `boot` and save normally:
+
+```frothy
+to boot [
+  console.uart: 25, 34, 1200
+]
+save
+```
+
+On every reset the board first starts on its fixed default console and prints
+`boot: Ctrl-C skips saved code`. Send Ctrl-C during that 750 ms window to skip
+the saved project and keep the default console. `console.default:` returns a
+live session to that default. `console.info:` prints the active route.
+
+`clear` does not disrupt the live connection. If you then `save` and reboot,
+the cleared project no longer contains the saved `boot` reroute, so the board
+stays on its default console.
+
+ESP32 GPIO is 3.3 V logic. A device with true RS-232 voltage levels needs a
+level converter such as a MAX3232; do not connect RS-232 lines directly to the
+board.
+
 ## Edit Frothy code
 
 | Where you edit | How |

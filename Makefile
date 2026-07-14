@@ -761,6 +761,7 @@ test-seeed-xiao-host-transcript: seeed-xiao-host ## Prove XIAO logical LED level
 		'gpio.read: $$led_builtin' \
 		| build/seeed-xiao-host/frothy); \
 	expected=$$(printf '%s\n' \
+		'boot: Ctrl-C skips saved code' \
 		'> 0' \
 		'ok' \
 		'> ok' \
