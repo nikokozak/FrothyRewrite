@@ -31,6 +31,7 @@ export interface EditorOptions {
   mount: HTMLElement;
   initialSource?: string;
   storageKey?: string;
+  storage?: SketchStorage;
   onConnect?: (status: Status) => void;
   onError?: (err: Error) => void;
 }
@@ -67,7 +68,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     Window,
     "setTimeout" | "clearTimeout"
   >;
-  const storage: SketchStorage = makeStorage(opts.storageKey);
+  const storage: SketchStorage = opts.storage ?? makeStorage(opts.storageKey);
   const initial = storage.load() ?? opts.initialSource ?? DEFAULT_INITIAL_SOURCE;
   let saveTimer: ReturnType<Window["setTimeout"]> | null = null;
   let sketchFilename = "sketch.fr";
@@ -547,9 +548,27 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
 
   function save() {
     clearSaveTimer();
-    saveStatus.textContent = storage.save(currentSource())
-      ? "saved locally"
-      : "not saved—download .fr";
+    const source = currentSource();
+    saveStatus.textContent = "saving...";
+
+    const showResult = (saved: boolean) => {
+      if (source !== currentSource() || saveTimer !== null) return;
+      saveStatus.textContent = saved ? "saved locally" : "not saved—download .fr";
+    };
+
+    let result: boolean | Promise<boolean>;
+    try {
+      result = storage.save(source);
+    } catch {
+      showResult(false);
+      return;
+    }
+
+    if (typeof result === "boolean") {
+      showResult(result);
+    } else {
+      void result.then(showResult, () => showResult(false));
+    }
   }
 
   function download() {

@@ -33,12 +33,12 @@ test("storage: load() returns null when key is unset", () => {
   assert.equal(s.load(), null);
 });
 
-test("storage: save then load round-trips the source", () => {
+test("storage: save then load round-trips the source", async () => {
   withDOM();
   const key = "frothy-editor:test-roundtrip";
   const s = makeStorage(key);
   const sketch = `to greet [ "hello, world" ]\ngreet\n`;
-  assert.equal(s.save(sketch), true);
+  assert.equal(await s.save(sketch), true);
   assert.equal(s.load(), sketch);
 
   // A fresh storage handle reads the same key.
@@ -46,15 +46,15 @@ test("storage: save then load round-trips the source", () => {
   assert.equal(s2.load(), sketch);
 });
 
-test("storage: save reports missing localStorage without throwing", () => {
+test("storage: save reports missing localStorage without throwing", async () => {
   // Simulate a non-browser environment by stripping localStorage.
   delete (globalThis as unknown as { localStorage?: Storage }).localStorage;
   const s = makeStorage("frothy-editor:test-no-dom");
-  assert.equal(s.save("hello"), false);
+  assert.equal(await s.save("hello"), false);
   assert.equal(s.load(), null);
 });
 
-test("storage: save reports a localStorage write failure", () => {
+test("storage: save reports a localStorage write failure", async () => {
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
     writable: true,
@@ -64,7 +64,7 @@ test("storage: save reports a localStorage write failure", () => {
     },
   });
   const s = makeStorage("frothy-editor:test-throws");
-  assert.equal(s.save("hello"), false);
+  assert.equal(await s.save("hello"), false);
 });
 
 test("editor shouldConfirmReplace protects real non-default sketches only", () => {

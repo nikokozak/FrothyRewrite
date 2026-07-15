@@ -4,7 +4,7 @@ const DEFAULT_KEY = "frothy-editor:sketch";
 
 export interface SketchStorage {
   load(): string | null;
-  save(source: string): boolean;
+  save(source: string): boolean | Promise<boolean>;
   download(source: string, filename?: string): void;
 }
 
