@@ -30,6 +30,7 @@ greet:
 export interface EditorOptions {
   mount: HTMLElement;
   initialSource?: string;
+  documentId?: string;
   storageKey?: string;
   storage?: SketchStorage;
   onConnect?: (status: Status) => void;
@@ -39,6 +40,10 @@ export interface EditorOptions {
 export interface EditorHandle {
   getSource(): string;
   setSource(src: string): void;
+  openDocument(documentId: string, source: string): void;
+  renameDocument(from: string, to: string): void;
+  forgetDocument(documentId: string): void;
+  resetDocument(documentId: string, source: string): void;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   runForm(): Promise<void>;
@@ -71,7 +76,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const storage: SketchStorage = opts.storage ?? makeStorage(opts.storageKey);
   const initial = storage.load() ?? opts.initialSource ?? DEFAULT_INITIAL_SOURCE;
   let saveTimer: ReturnType<Window["setTimeout"]> | null = null;
-  let sketchFilename = "sketch.fr";
+  let currentDocumentId = opts.documentId ?? "sketch.fr";
+  let sketchFilename = basename(currentDocumentId);
+  const documentStates = new Map<string, EditorState>();
 
   const root = doc.createElement("div");
   root.className = "frothy-editor";
@@ -121,7 +128,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const browseWordsBtn = mkBtn(doc, "Browse Words", "frothy-btn");
   const clearOutputBtn = mkBtn(doc, "Clear output", "frothy-btn");
   const openBtn = mkBtn(doc, "Open .fr", "frothy-btn");
-  const downloadBtn = mkBtn(doc, "Download .fr", "frothy-btn");
+  const downloadBtn = mkBtn(doc, "Download file", "frothy-btn");
   const fileInput = doc.createElement("input");
   fileInput.type = "file";
   fileInput.accept = ".fr,.frothy,text/plain";
@@ -203,9 +210,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   root.append(header, connectionStatus, body, wordsDialog);
   opts.mount.appendChild(root);
 
-  const view = new EditorView({
-    state: EditorState.create({
-      doc: initial,
+  function createEditorState(source: string): EditorState {
+    return EditorState.create({
+      doc: source,
       extensions: [
         lineNumbers(),
         history(),
@@ -216,7 +223,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         }),
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
       ],
-    }),
+    });
+  }
+
+  const view = new EditorView({
+    state: createEditorState(initial),
     parent: editorHost,
   });
 
@@ -254,12 +265,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       : connected ? `Connected · ${displayProfileName(connectedProfile)}` : "Connect";
     connectBtn.disabled = next === "connecting";
     connectBtn.classList.toggle("frothy-btn-connected", connected);
-    runFormBtn.disabled = next !== "idle";
-    runFileBtn.disabled = next !== "idle";
     interruptBtn.disabled = next !== "running";
     interruptBtn.classList.toggle("frothy-btn-primary", next === "running");
     browseWordsBtn.hidden = !connected;
     browseWordsBtn.disabled = next !== "idle";
+    updateDocumentControls();
     connectionStatus.textContent = message ?? (
       next === "connecting"
         ? "Opening the board and checking for Frothy…"
@@ -402,8 +412,62 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     });
   }
 
+  function updateDocumentControls(): void {
+    const runnable = currentDocumentId.endsWith(".fr");
+    runFormBtn.disabled = sessionState !== "idle" || !runnable;
+    runFileBtn.disabled = sessionState !== "idle" || !runnable;
+    examplesSelect.disabled = !runnable;
+    openBtn.disabled = !runnable;
+  }
+
+  function openDocument(documentId: string, source: string): void {
+    if (documentId === currentDocumentId) return;
+    clearSaveTimer();
+    documentStates.set(currentDocumentId, view.state);
+    currentDocumentId = documentId;
+    const state = documentStates.get(documentId) ?? createEditorState(source);
+    documentStates.delete(documentId);
+    view.setState(state);
+    sketchFilename = basename(documentId);
+    saveStatus.textContent = "saved locally";
+    updateDocumentControls();
+    view.focus();
+  }
+
+  function renameDocument(from: string, to: string): void {
+    if (from === to) return;
+    if (currentDocumentId === from) {
+      currentDocumentId = to;
+      sketchFilename = basename(to);
+      updateDocumentControls();
+      return;
+    }
+    const state = documentStates.get(from);
+    if (!state) return;
+    documentStates.delete(from);
+    documentStates.set(to, state);
+  }
+
+  function forgetDocument(documentId: string): void {
+    if (documentId === currentDocumentId) {
+      throw new Error("cannot forget the active document");
+    }
+    documentStates.delete(documentId);
+  }
+
+  function resetDocument(documentId: string, source: string): void {
+    clearSaveTimer();
+    documentStates.clear();
+    currentDocumentId = documentId;
+    sketchFilename = basename(documentId);
+    view.setState(createEditorState(source));
+    saveStatus.textContent = "saved locally";
+    updateDocumentControls();
+    view.focus();
+  }
+
   async function runForm(): Promise<void> {
-    if (!repl || sessionState !== "idle") return;
+    if (!repl || sessionState !== "idle" || !currentDocumentId.endsWith(".fr")) return;
     const selection = view.state.selection.main;
     let source: string | undefined;
     if (!selection.empty) {
@@ -428,7 +492,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   }
 
   async function runFile(): Promise<void> {
-    if (!repl || sessionState !== "idle") return;
+    if (!repl || sessionState !== "idle" || !currentDocumentId.endsWith(".fr")) return;
     const forms = splitForms(currentSource());
     if (forms.length === 0) {
       transcript.note("(empty file)");
@@ -582,7 +646,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     try {
       const source = await file.text();
       replaceSource(source);
-      sketchFilename = basename(file.name);
+      if (!opts.documentId) sketchFilename = basename(file.name);
       view.focus();
     } catch (err) {
       reportError(err);
@@ -619,7 +683,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       return;
     }
     replaceSource(example.source);
-    sketchFilename = `${example.name}.fr`;
+    if (!opts.documentId) sketchFilename = `${example.name}.fr`;
     examplesSelect.value = "";
     view.focus();
   });
@@ -644,6 +708,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     setSource(src: string) {
       replaceSource(src);
     },
+    openDocument,
+    renameDocument,
+    forgetDocument,
+    resetDocument,
     connect,
     disconnect,
     runForm,

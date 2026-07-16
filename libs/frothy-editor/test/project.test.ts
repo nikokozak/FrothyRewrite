@@ -3,12 +3,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  addProjectFile,
   acknowledgeBrowserDraft,
   createBrowserDraft,
   DEFAULT_PROJECT_MANIFEST,
+  deleteProjectFile,
   migrateBrowserDraft,
+  newestBrowserDraft,
   openCloudProjectDraft,
+  renameProjectFile,
   sameProjectDocument,
+  selectProjectFile,
   startNewProjectDraft,
   validateBrowserDraft,
   validateProjectDocument,
@@ -148,12 +153,44 @@ test("project: document comparison ignores JSON object key order", () => {
   assert.equal(sameProjectDocument(left, right), false);
 });
 
-test("project: version-0.3 drafts gain a nullable cloud title", () => {
-  const { cloudProjectTitle: _removed, ...oldDraft } = createBrowserDraft("hello\n");
+test("project: version-0.3 drafts gain multi-file browser state", () => {
+  const {
+    cloudProjectTitle: _cloudTitle,
+    activePath: _activePath,
+    localRevision: _localRevision,
+    ...oldDraft
+  } = createBrowserDraft("hello\n");
 
   const migrated = migrateBrowserDraft(oldDraft) as BrowserDraft;
   assert.equal(migrated.cloudProjectTitle, null);
+  assert.equal(migrated.activePath, "main.fr");
+  assert.equal(migrated.localRevision, 0);
   assert.deepEqual(validateBrowserDraft(migrated), []);
+});
+
+test("project: file actions preserve the whole document and required files", () => {
+  const original = createBrowserDraft("main\n");
+  const created = addProjectFile(original, "src/blink.fr");
+  created.document.files["src/blink.fr"] = "blink\n";
+
+  assert.equal(created.activePath, "src/blink.fr");
+  assert.equal(created.document.files["main.fr"], "main\n");
+
+  const renamed = renameProjectFile(created, "src/blink.fr", "src/led.fr");
+  const selected = selectProjectFile(renamed, "frothy.toml");
+  const deleted = deleteProjectFile(selected, "src/led.fr");
+
+  assert.equal(renamed.document.files["src/led.fr"], "blink\n");
+  assert.equal(renamed.document.files["src/blink.fr"], undefined);
+  assert.equal(selected.activePath, "frothy.toml");
+  assert.equal(deleted.document.files["main.fr"], "main\n");
+  assert.equal(deleted.document.files["frothy.toml"], DEFAULT_PROJECT_MANIFEST);
+  assert.equal(deleted.document.files["src/led.fr"], undefined);
+  assert.ok(deleted.localRevision > original.localRevision);
+  assert.equal(newestBrowserDraft(original, deleted), deleted);
+  assert.equal(newestBrowserDraft(deleted, original), deleted);
+  assert.throws(() => deleteProjectFile(deleted, "main.fr"), /cannot be deleted/);
+  assert.throws(() => renameProjectFile(deleted, "frothy.toml", "project.fr"), /cannot be renamed/);
 });
 
 test("project: version-1 fixtures have the expected errors", () => {
