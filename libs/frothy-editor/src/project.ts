@@ -100,7 +100,9 @@ export function validateProjectDocument(value: unknown): string[] {
   if (!isRecord(value.files)) {
     errors.push("project.files must be an object");
   } else {
-    const files = Object.entries(value.files);
+    // Valid paths are ASCII; keep this ordering independent of browser locale.
+    const files = Object.entries(value.files)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
     if (files.length > PROJECT_LIMITS.files) {
       errors.push(`project.files exceeds ${PROJECT_LIMITS.files} files`);
     }
@@ -299,7 +301,9 @@ function validateProjectPath(path: string): string | null {
   if (byteLength(path) > PROJECT_LIMITS.pathBytes) {
     return `${path} exceeds ${PROJECT_LIMITS.pathBytes} path bytes`;
   }
-  if (!/^[A-Za-z0-9._/-]+$/.test(path)) return `${path} has unsupported path characters`;
+  if (path.length === 0 || /[^A-Za-z0-9._/-]/.test(path)) {
+    return `${path} has unsupported path characters`;
+  }
   const segments = path.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
     return `${path} is not a normalized relative path`;
@@ -366,7 +370,7 @@ function rejectExtraKeys(
   errors: string[],
 ): void {
   const keys = new Set(allowed);
-  for (const key of Object.keys(value)) {
+  for (const key of Object.keys(value).sort()) {
     if (!keys.has(key)) errors.push(`${at}.${key} is not supported`);
   }
 }

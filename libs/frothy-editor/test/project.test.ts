@@ -14,8 +14,11 @@ import type {
 
 interface FixtureCase {
   name: string;
-  add_file?: { path: string; source: string };
+  project_fields?: Record<string, unknown>;
+  add_files?: Record<string, unknown>;
   add_repeated_file?: { path: string; character: string; bytes: number };
+  add_repeated_files?: { count: number; bytes: number };
+  add_plots?: number;
   instruments?: Instrument[];
   expected_errors: string[];
 }
@@ -47,21 +50,40 @@ test("project: version-1 fixtures have the expected errors", () => {
 
   for (const fixture of fixtures.cases) {
     const document = structuredClone(fixtures.base_document);
-    if (fixture.add_file) {
-      document.files[fixture.add_file.path] = fixture.add_file.source;
+    if (fixture.project_fields) {
+      Object.assign(document, fixture.project_fields);
+    }
+    if (fixture.add_files) {
+      Object.assign(document.files, fixture.add_files);
     }
     if (fixture.add_repeated_file) {
       const addition = fixture.add_repeated_file;
       document.files[addition.path] = addition.character.repeat(addition.bytes);
     }
+    if (fixture.add_repeated_files) {
+      for (let index = 0; index < fixture.add_repeated_files.count; index += 1) {
+        document.files[`generated/${index}.fr`] = "x".repeat(fixture.add_repeated_files.bytes);
+      }
+    }
     if (fixture.instruments) {
       document.instruments = fixture.instruments;
     }
+    if (fixture.add_plots) {
+      for (let index = 0; index < fixture.add_plots; index += 1) {
+        document.instruments.push({
+          id: `generated-plot-${index}`,
+          kind: "plot",
+          signal: `generated-signal-${index}`,
+        });
+      }
+    }
 
+    const beforeValidation = structuredClone(document);
     assert.deepEqual(
       validateProjectDocument(document),
       fixture.expected_errors,
       fixture.name,
     );
+    assert.deepEqual(document, beforeValidation, `${fixture.name} mutated the document`);
   }
 });

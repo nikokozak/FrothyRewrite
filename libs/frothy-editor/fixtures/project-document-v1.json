@@ -32,13 +32,110 @@
       "expected_errors": []
     },
     {
+      "name": "project field errors are ordered",
+      "project_fields": {
+        "z": true,
+        "a": true
+      },
+      "expected_errors": [
+        "project.a is not supported",
+        "project.z is not supported"
+      ]
+    },
+    {
+      "name": "schema version",
+      "project_fields": {
+        "schema": 2
+      },
+      "expected_errors": [
+        "project.schema must be 1"
+      ]
+    },
+    {
+      "name": "files must be an object",
+      "project_fields": {
+        "files": []
+      },
+      "expected_errors": [
+        "project.files must be an object"
+      ]
+    },
+    {
+      "name": "instruments must be an array",
+      "project_fields": {
+        "instruments": {}
+      },
+      "expected_errors": [
+        "project.instruments must be an array"
+      ]
+    },
+    {
+      "name": "required files",
+      "project_fields": {
+        "files": {
+          "notes.fr": "notes\n"
+        }
+      },
+      "expected_errors": [
+        "project.files needs frothy.toml",
+        "project.files needs main.fr"
+      ]
+    },
+    {
       "name": "parent path",
-      "add_file": {
-        "path": "../secret.fr",
-        "source": "nope"
+      "add_files": {
+        "../secret.fr": "nope"
       },
       "expected_errors": [
         "../secret.fr is not a normalized relative path"
+      ]
+    },
+    {
+      "name": "empty path",
+      "add_files": {
+        "": "nope"
+      },
+      "expected_errors": [
+        " has unsupported path characters",
+        " is not frothy.toml or a .fr file"
+      ]
+    },
+    {
+      "name": "reserved path",
+      "add_files": {
+        ".frothy/cache.fr": "nope"
+      },
+      "expected_errors": [
+        ".frothy/cache.fr uses the reserved .frothy directory"
+      ]
+    },
+    {
+      "name": "source must be text",
+      "add_files": {
+        "broken.fr": 42
+      },
+      "expected_errors": [
+        "broken.fr source must be text"
+      ]
+    },
+    {
+      "name": "file errors are ordered by path",
+      "add_files": {
+        "z.txt": "z",
+        "a.txt": "a"
+      },
+      "expected_errors": [
+        "a.txt is not frothy.toml or a .fr file",
+        "z.txt is not frothy.toml or a .fr file"
+      ]
+    },
+    {
+      "name": "control character path",
+      "add_files": {
+        "line\n.fr": "nope"
+      },
+      "expected_errors": [
+        "line\n.fr has unsupported path characters"
       ]
     },
     {
@@ -50,6 +147,26 @@
       },
       "expected_errors": [
         "large.fr exceeds 65536 bytes"
+      ]
+    },
+    {
+      "name": "file count",
+      "add_repeated_files": {
+        "count": 30,
+        "bytes": 0
+      },
+      "expected_errors": [
+        "project.files exceeds 32 files"
+      ]
+    },
+    {
+      "name": "total source bytes",
+      "add_repeated_files": {
+        "count": 5,
+        "bytes": 60000
+      },
+      "expected_errors": [
+        "project source exceeds 262144 bytes"
       ]
     },
     {
@@ -78,6 +195,66 @@
         "project.instruments[1].id repeats speed",
         "project.instruments[1].signal must be bounded text",
         "project.instruments[1].scale must be finite"
+      ]
+    },
+    {
+      "name": "instrument field errors are ordered",
+      "instruments": [
+        {
+          "id": "speed",
+          "kind": "control",
+          "binding": "",
+          "value_type": "int",
+          "min": 0,
+          "max": 255,
+          "step": 1,
+          "z": true,
+          "a": true
+        }
+      ],
+      "expected_errors": [
+        "project.instruments[0].a is not supported",
+        "project.instruments[0].z is not supported",
+        "project.instruments[0].binding must be bounded text"
+      ]
+    },
+    {
+      "name": "instrument count",
+      "add_plots": 23,
+      "expected_errors": [
+        "project.instruments exceeds 24 entries"
+      ]
+    },
+    {
+      "name": "integral JSON numbers are control integers",
+      "instruments": [
+        {
+          "id": "speed",
+          "kind": "control",
+          "binding": "speed",
+          "value_type": "int",
+          "min": 0.0,
+          "max": 255.0,
+          "step": 1.0
+        }
+      ],
+      "expected_errors": []
+    },
+    {
+      "name": "unsafe control integer",
+      "instruments": [
+        {
+          "id": "speed",
+          "kind": "control",
+          "binding": "speed",
+          "value_type": "int",
+          "min": 0,
+          "max": 9007199254740992,
+          "step": 1
+        }
+      ],
+      "expected_errors": [
+        "project.instruments[0] bounds must be integers"
       ]
     }
   ]
