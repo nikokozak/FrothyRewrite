@@ -72,6 +72,14 @@ export interface ProjectEditorOptions {
 
 export interface ProjectEditorHandle extends EditorHandle {
   getDraft(): BrowserDraft;
+  hasSameProjectDocument(document: ProjectDocumentV1): boolean;
+  openCloudProject(
+    projectId: string,
+    projectTitle: string,
+    lockVersion: number,
+    document: ProjectDocumentV1,
+  ): Promise<void>;
+  startNewProject(): Promise<void>;
   acknowledgeCloudSave(
     projectId: string,
     projectTitle: string,
@@ -227,10 +235,32 @@ export async function mountProjectEditor(opts: ProjectEditorOptions): Promise<Pr
     if (opts.onError) editorOptions.onError = opts.onError;
     const editor = mountEditor(editorOptions);
 
+    async function installDraft(next: BrowserDraft): Promise<void> {
+      await putDraft(database, next);
+      const source = next.document.files["main.fr"] ?? "";
+      void legacyStorage.save(source);
+      draft = next;
+      if (editor.getSource() !== source) editor.setSource(source);
+    }
+
     return {
       ...editor,
       getDraft() {
         return copyDraft(withMainSource(draft, editor.getSource()));
+      },
+      hasSameProjectDocument(document) {
+        const current = withMainSource(draft, editor.getSource());
+        return sameProjectDocument(current.document, document);
+      },
+      async openCloudProject(projectId, projectTitle, lockVersion, document) {
+        const current = withMainSource(draft, editor.getSource());
+        await installDraft(
+          openCloudProjectDraft(current, projectId, projectTitle, lockVersion, document),
+        );
+      },
+      async startNewProject() {
+        const current = withMainSource(draft, editor.getSource());
+        await installDraft(startNewProjectDraft(current));
       },
       async acknowledgeCloudSave(projectId, projectTitle, lockVersion, savedDocument) {
         const current = withMainSource(draft, editor.getSource());
@@ -269,6 +299,36 @@ function withMainSource(draft: BrowserDraft, source: string): BrowserDraft {
   };
 }
 
+export function openCloudProjectDraft(
+  draft: BrowserDraft,
+  projectId: string,
+  projectTitle: string,
+  lockVersion: number,
+  document: ProjectDocumentV1,
+): BrowserDraft {
+  assertCloudProject(projectId, projectTitle, lockVersion, document);
+
+  return parseBrowserDraft({
+    ...draft,
+    cloudProjectId: projectId,
+    cloudProjectTitle: projectTitle,
+    baseLockVersion: lockVersion,
+    document: copyProjectDocument(document),
+    pendingCloudSave: false,
+  });
+}
+
+export function startNewProjectDraft(draft: BrowserDraft): BrowserDraft {
+  return parseBrowserDraft({
+    ...draft,
+    cloudProjectId: null,
+    cloudProjectTitle: null,
+    baseLockVersion: null,
+    document: copyProjectDocument(draft.document),
+    pendingCloudSave: false,
+  });
+}
+
 export function acknowledgeBrowserDraft(
   draft: BrowserDraft,
   projectId: string,
@@ -276,13 +336,7 @@ export function acknowledgeBrowserDraft(
   lockVersion: number,
   savedDocument: ProjectDocumentV1,
 ): BrowserDraft {
-  if (!boundedText(projectId)) throw new Error("project id must be bounded text");
-  if (!boundedText(projectTitle)) throw new Error("project title must be bounded text");
-  if (!Number.isSafeInteger(lockVersion) || lockVersion < 1) {
-    throw new Error("lock version must be a positive integer");
-  }
-  const documentErrors = validateProjectDocument(savedDocument);
-  if (documentErrors.length > 0) throw new Error(documentErrors[0]);
+  assertCloudProject(projectId, projectTitle, lockVersion, savedDocument);
 
   const next = {
     ...draft,
@@ -296,18 +350,51 @@ export function acknowledgeBrowserDraft(
   return next;
 }
 
-function sameProjectDocument(left: ProjectDocumentV1, right: ProjectDocumentV1): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+export function sameProjectDocument(
+  left: ProjectDocumentV1,
+  right: ProjectDocumentV1,
+): boolean {
+  return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
+}
+
+function assertCloudProject(
+  projectId: string,
+  projectTitle: string,
+  lockVersion: number,
+  document: ProjectDocumentV1,
+): void {
+  if (!boundedText(projectId)) throw new Error("project id must be bounded text");
+  if (!boundedText(projectTitle)) throw new Error("project title must be bounded text");
+  if (!Number.isSafeInteger(lockVersion) || lockVersion < 1) {
+    throw new Error("lock version must be a positive integer");
+  }
+  const documentErrors = validateProjectDocument(document);
+  if (documentErrors.length > 0) throw new Error(documentErrors[0]);
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (!isRecord(value)) return value;
+
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonicalJson(value[key])]),
+  );
 }
 
 function copyDraft(draft: BrowserDraft): BrowserDraft {
   return {
     ...draft,
-    document: {
-      ...draft.document,
-      files: { ...draft.document.files },
-      instruments: draft.document.instruments.map((instrument) => ({ ...instrument })),
-    },
+    document: copyProjectDocument(draft.document),
+  };
+}
+
+function copyProjectDocument(document: ProjectDocumentV1): ProjectDocumentV1 {
+  return {
+    ...document,
+    files: { ...document.files },
+    instruments: document.instruments.map((instrument) => ({ ...instrument })),
   };
 }
 

@@ -5,7 +5,11 @@ import assert from "node:assert/strict";
 import {
   acknowledgeBrowserDraft,
   createBrowserDraft,
+  DEFAULT_PROJECT_MANIFEST,
   migrateBrowserDraft,
+  openCloudProjectDraft,
+  sameProjectDocument,
+  startNewProjectDraft,
   validateBrowserDraft,
   validateProjectDocument,
 } from "../src/project.js";
@@ -74,6 +78,74 @@ test("project: cloud acknowledgement preserves a newer local edit", () => {
   assert.equal(staleAcknowledgement.pendingCloudSave, true);
   assert.equal(staleAcknowledgement.cloudProjectTitle, "Signals");
   assert.equal(staleAcknowledgement.document.files["main.fr"], "second\n");
+});
+
+test("project: cloud open installs a validated independent document", () => {
+  const draft = createBrowserDraft("local\n");
+  const cloudDocument = createBrowserDraft("cloud\n").document;
+
+  const opened = openCloudProjectDraft(
+    draft,
+    "11111111-1111-1111-1111-111111111111",
+    "Cloud signals",
+    3,
+    cloudDocument,
+  );
+
+  cloudDocument.files["main.fr"] = "changed afterward\n";
+  assert.equal(opened.cloudProjectId, "11111111-1111-1111-1111-111111111111");
+  assert.equal(opened.cloudProjectTitle, "Cloud signals");
+  assert.equal(opened.baseLockVersion, 3);
+  assert.equal(opened.document.files["main.fr"], "cloud\n");
+  assert.equal(opened.pendingCloudSave, false);
+});
+
+test("project: new project keeps source and drops the cloud association", () => {
+  const cloudDraft = openCloudProjectDraft(
+    createBrowserDraft("local\n"),
+    "11111111-1111-1111-1111-111111111111",
+    "Signals",
+    2,
+    createBrowserDraft("cloud\n").document,
+  );
+
+  const started = startNewProjectDraft(cloudDraft);
+
+  assert.equal(started.document.files["main.fr"], "cloud\n");
+  assert.equal(started.cloudProjectId, null);
+  assert.equal(started.cloudProjectTitle, null);
+  assert.equal(started.baseLockVersion, null);
+  assert.equal(started.pendingCloudSave, false);
+});
+
+test("project: document comparison ignores JSON object key order", () => {
+  const left = createBrowserDraft("sample\n").document;
+  left.instruments = [{
+    id: "signal",
+    kind: "plot",
+    signal: "adc",
+    unit: "V",
+    scale: 0.001,
+  }];
+
+  const right = {
+    instruments: [{
+      scale: 0.001,
+      unit: "V",
+      signal: "adc",
+      kind: "plot",
+      id: "signal",
+    }],
+    files: {
+      "main.fr": "sample\n",
+      "frothy.toml": DEFAULT_PROJECT_MANIFEST,
+    },
+    schema: 1,
+  } as ProjectDocumentV1;
+
+  assert.equal(sameProjectDocument(left, right), true);
+  right.files["main.fr"] = "different\n";
+  assert.equal(sameProjectDocument(left, right), false);
 });
 
 test("project: version-0.3 drafts gain a nullable cloud title", () => {
