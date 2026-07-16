@@ -5,6 +5,7 @@ import {
 import type {
   EditorHandle,
   EditorOptions,
+  ResolvedSource,
 } from "./editor.js";
 import { makeStorage } from "./storage.js";
 import type { SketchStorage } from "./storage.js";
@@ -69,6 +70,7 @@ export interface BrowserDraft {
 
 export interface ProjectEditorOptions {
   mount: HTMLElement;
+  resolveProject?: (document: ProjectDocumentV1) => Promise<ResolvedSource[]>;
   onConnect?: EditorOptions["onConnect"];
   onError?: EditorOptions["onError"];
 }
@@ -296,6 +298,11 @@ export async function mountProjectEditor(opts: ProjectEditorOptions): Promise<Pr
     };
     if (opts.onConnect) editorOptions.onConnect = opts.onConnect;
     if (opts.onError) editorOptions.onError = opts.onError;
+    if (opts.resolveProject) {
+      editorOptions.resolveProject = (source) => opts.resolveProject!(
+        copyProjectDocument(withFileSource(draft, draft.activePath, source).document),
+      );
+    }
     const editor = mountEditor(editorOptions);
 
     function showFileError(error: unknown): void {

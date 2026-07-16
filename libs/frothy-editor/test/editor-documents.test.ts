@@ -29,7 +29,13 @@ test("editor keeps one CodeMirror state per project file", () => {
       save: () => true,
       download: () => undefined,
     },
+    resolveProject: async () => [],
   });
+
+  const runProject = [...window.document.querySelectorAll("button")]
+    .find((button) => button.textContent === "Run Project");
+  assert.ok(runProject);
+  assert.equal(runProject.disabled, true);
 
   handle.setSource("main changed\n");
   handle.openDocument("src/blink.fr", "blink\n");
