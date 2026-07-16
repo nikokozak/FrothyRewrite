@@ -74,8 +74,8 @@ static fr_err_t test_persist_apply_user_overlay(
 #endif
 
 #if FR_FEATURE_MATH
-#define FR_TEST_MATH_WORDS " abs min max clamp map mod"
-#define FR_TEST_MATH_SLOT_COUNT 6
+#define FR_TEST_MATH_WORDS " abs min max clamp map mod sqrt"
+#define FR_TEST_MATH_SLOT_COUNT 7
 #else
 #define FR_TEST_MATH_WORDS ""
 #define FR_TEST_MATH_SLOT_COUNT 0
@@ -448,7 +448,7 @@ static void test_base_def_contract(void) {
       (FR_FEATURE_POWER ? 4 : 0) + (FR_FEATURE_BYTES ? 8 : 0) +
       (FR_FEATURE_TRACE ? 12 : 0) + (FR_FEATURE_PULSE ? 9 : 0) +
       (FR_FEATURE_CONSOLE_ROUTING ? 3 : 0) +
-      (FR_FEATURE_MATH ? 6 : 0) +
+      (FR_FEATURE_MATH ? 7 : 0) +
       FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT +
       FR_TEST_EVENT_REGISTER_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT;
   uint16_t global_index = 0;
@@ -3989,6 +3989,12 @@ static void test_math(void) {
                    "mod(a: int, b: int) -> int\n"
                    "return a modulo b (C truncating semantics)\n"
                    "ok\n") == 0);
+  CHECK("sqrt renders signature",
+        fr_repl_eval_line(&runtime, "see sqrt", out, sizeof(out)) == FR_OK &&
+            strcmp(out,
+                   "sqrt(x: int) -> int\n"
+                   "return the floor square root of a nonnegative int\n"
+                   "ok\n") == 0);
 
   CHECK("abs of negative flips sign",
         fr_repl_eval_line(&runtime, "abs: -5", out, sizeof(out)) == FR_OK &&
@@ -4010,6 +4016,24 @@ static void test_math(void) {
   CHECK("max picks the larger",
         fr_repl_eval_line(&runtime, "max: 3, 7", out, sizeof(out)) == FR_OK &&
             strcmp(out, "7\nok\n") == 0);
+
+  CHECK("sqrt of zero is zero",
+        fr_repl_eval_line(&runtime, "sqrt: 0", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "0\nok\n") == 0);
+  CHECK("sqrt floors a nonsquare",
+        fr_repl_eval_line(&runtime, "sqrt: 2", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "1\nok\n") == 0);
+  CHECK("sqrt of a perfect square is exact",
+        fr_repl_eval_line(&runtime, "sqrt: 152415787", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "12345\nok\n") == 0);
+  CHECK("sqrt handles the tagged maximum",
+        fr_repl_eval_line(&runtime, "sqrt: 1073741823", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "32767\nok\n") == 0);
+  CHECK("sqrt rejects negative input",
+        fr_repl_eval_line(&runtime, "sqrt: -1", out, sizeof(out)) ==
+            FR_ERR_DOMAIN);
 
   CHECK("clamp inside passes through",
         fr_repl_eval_line(&runtime, "clamp: 5, 0, 10", out, sizeof(out)) ==

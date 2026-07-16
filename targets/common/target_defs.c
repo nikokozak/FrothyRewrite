@@ -1661,6 +1661,40 @@ static fr_err_t fr_native_mod(fr_runtime_t *runtime, const fr_tagged_t *args,
   }
   return fr_tagged_encode_int(a % b, out);
 }
+
+static fr_err_t fr_native_sqrt(fr_runtime_t *runtime, const fr_tagged_t *args,
+                               uint8_t arg_count, fr_tagged_t *out) {
+  fr_int_t x = 0;
+  uint32_t remainder = 0;
+  uint32_t root = 0;
+  uint32_t bit = UINT32_C(1) << 30;
+
+  (void)runtime;
+  if (args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  FR_TRY(fr_tagged_decode_int(args[0], &x));
+  if (x < 0) {
+    return FR_ERR_DOMAIN;
+  }
+
+  remainder = (uint32_t)x;
+  while (bit > remainder) {
+    bit >>= 2;
+  }
+  while (bit != 0) {
+    if (remainder >= root + bit) {
+      remainder -= root + bit;
+      root = (root >> 1) + bit;
+    } else {
+      root >>= 1;
+    }
+    bit >>= 2;
+  }
+
+  return fr_tagged_encode_int((int32_t)root, out);
+}
 #endif
 
 #if FR_FEATURE_RANDOM
@@ -3326,6 +3360,16 @@ static const fr_native_signature_t fr_native_mod_signature = {
     .result = FR_NATIVE_VALUE_INT,
     .help = "return a modulo b (C truncating semantics)",
 };
+
+static const fr_native_param_t fr_native_sqrt_params[] = {
+    {"x", FR_NATIVE_VALUE_INT},
+};
+static const fr_native_signature_t fr_native_sqrt_signature = {
+    .params = fr_native_sqrt_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the floor square root of a nonnegative int",
+};
 #endif
 
 #if FR_FEATURE_RANDOM
@@ -4092,6 +4136,18 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 2,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_mod_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_SQRT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "sqrt",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_sqrt,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_sqrt_signature,
 #endif
     },
 #endif
