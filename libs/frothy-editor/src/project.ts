@@ -58,6 +58,7 @@ export interface ProjectDocumentV1 {
 export interface BrowserDraft {
   draftId: string;
   cloudProjectId: string | null;
+  cloudProjectTitle: string | null;
   baseLockVersion: number | null;
   document: ProjectDocumentV1;
   pendingCloudSave: boolean;
@@ -67,6 +68,16 @@ export interface ProjectEditorOptions {
   mount: HTMLElement;
   onConnect?: EditorOptions["onConnect"];
   onError?: EditorOptions["onError"];
+}
+
+export interface ProjectEditorHandle extends EditorHandle {
+  getDraft(): BrowserDraft;
+  acknowledgeCloudSave(
+    projectId: string,
+    projectTitle: string,
+    lockVersion: number,
+    savedDocument: ProjectDocumentV1,
+  ): Promise<void>;
 }
 
 export function createProjectDocument(source: string): ProjectDocumentV1 {
@@ -84,6 +95,7 @@ export function createBrowserDraft(source: string): BrowserDraft {
   return {
     draftId: LOCAL_DRAFT_ID,
     cloudProjectId: null,
+    cloudProjectTitle: null,
     baseLockVersion: null,
     document: createProjectDocument(source),
     pendingCloudSave: false,
@@ -152,13 +164,23 @@ export function validateBrowserDraft(value: unknown): string[] {
   const errors: string[] = [];
   rejectExtraKeys(
     value,
-    ["draftId", "cloudProjectId", "baseLockVersion", "document", "pendingCloudSave"],
+    [
+      "draftId",
+      "cloudProjectId",
+      "cloudProjectTitle",
+      "baseLockVersion",
+      "document",
+      "pendingCloudSave",
+    ],
     "draft",
     errors,
   );
   if (!boundedText(value.draftId)) errors.push("draft.draftId must be bounded text");
   if (value.cloudProjectId !== null && !boundedText(value.cloudProjectId)) {
     errors.push("draft.cloudProjectId must be null or bounded text");
+  }
+  if (value.cloudProjectTitle !== null && !boundedText(value.cloudProjectTitle)) {
+    errors.push("draft.cloudProjectTitle must be null or bounded text");
   }
   if (
     value.baseLockVersion !== null
@@ -175,7 +197,7 @@ export function validateBrowserDraft(value: unknown): string[] {
   return errors;
 }
 
-export async function mountProjectEditor(opts: ProjectEditorOptions): Promise<EditorHandle> {
+export async function mountProjectEditor(opts: ProjectEditorOptions): Promise<ProjectEditorHandle> {
   const database = await openDraftDatabase();
   const legacyStorage = makeStorage(LEGACY_SKETCH_KEY);
 
@@ -207,6 +229,21 @@ export async function mountProjectEditor(opts: ProjectEditorOptions): Promise<Ed
 
     return {
       ...editor,
+      getDraft() {
+        return copyDraft(withMainSource(draft, editor.getSource()));
+      },
+      async acknowledgeCloudSave(projectId, projectTitle, lockVersion, savedDocument) {
+        const current = withMainSource(draft, editor.getSource());
+        const next = acknowledgeBrowserDraft(
+          current,
+          projectId,
+          projectTitle,
+          lockVersion,
+          savedDocument,
+        );
+        await putDraft(database, next);
+        draft = next;
+      },
       destroy() {
         editor.destroy();
         database.close();
@@ -219,11 +256,57 @@ export async function mountProjectEditor(opts: ProjectEditorOptions): Promise<Ed
 }
 
 function withMainSource(draft: BrowserDraft, source: string): BrowserDraft {
+  const changed = source !== draft.document.files["main.fr"];
+
+  return {
+    ...draft,
+    pendingCloudSave:
+      draft.pendingCloudSave || (changed && draft.cloudProjectId !== null),
+    document: {
+      ...draft.document,
+      files: { ...draft.document.files, "main.fr": source },
+    },
+  };
+}
+
+export function acknowledgeBrowserDraft(
+  draft: BrowserDraft,
+  projectId: string,
+  projectTitle: string,
+  lockVersion: number,
+  savedDocument: ProjectDocumentV1,
+): BrowserDraft {
+  if (!boundedText(projectId)) throw new Error("project id must be bounded text");
+  if (!boundedText(projectTitle)) throw new Error("project title must be bounded text");
+  if (!Number.isSafeInteger(lockVersion) || lockVersion < 1) {
+    throw new Error("lock version must be a positive integer");
+  }
+  const documentErrors = validateProjectDocument(savedDocument);
+  if (documentErrors.length > 0) throw new Error(documentErrors[0]);
+
+  const next = {
+    ...draft,
+    cloudProjectId: projectId,
+    cloudProjectTitle: projectTitle,
+    baseLockVersion: lockVersion,
+    pendingCloudSave: !sameProjectDocument(draft.document, savedDocument),
+  };
+  const draftErrors = validateBrowserDraft(next);
+  if (draftErrors.length > 0) throw new Error(draftErrors[0]);
+  return next;
+}
+
+function sameProjectDocument(left: ProjectDocumentV1, right: ProjectDocumentV1): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function copyDraft(draft: BrowserDraft): BrowserDraft {
   return {
     ...draft,
     document: {
       ...draft.document,
-      files: { ...draft.document.files, "main.fr": source },
+      files: { ...draft.document.files },
+      instruments: draft.document.instruments.map((instrument) => ({ ...instrument })),
     },
   };
 }
@@ -236,7 +319,7 @@ async function loadOrCreateDraft(
   const legacySource = legacyStorage.load();
 
   if (stored !== undefined) {
-    let draft = parseBrowserDraft(stored);
+    let draft = parseBrowserDraft(migrateBrowserDraft(stored));
     if (legacySource !== null && legacySource !== draft.document.files["main.fr"]) {
       draft = withMainSource(draft, legacySource);
       const errors = validateBrowserDraft(draft);
@@ -249,6 +332,13 @@ async function loadOrCreateDraft(
   const draft = createBrowserDraft(legacySource ?? DEFAULT_INITIAL_SOURCE);
   await putDraft(database, draft);
   return draft;
+}
+
+export function migrateBrowserDraft(value: unknown): unknown {
+  if (isRecord(value) && !Object.hasOwn(value, "cloudProjectTitle")) {
+    return { ...value, cloudProjectTitle: null };
+  }
+  return value;
 }
 
 function parseBrowserDraft(value: unknown): BrowserDraft {

@@ -3,11 +3,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  acknowledgeBrowserDraft,
   createBrowserDraft,
+  migrateBrowserDraft,
   validateBrowserDraft,
   validateProjectDocument,
 } from "../src/project.js";
 import type {
+  BrowserDraft,
   Instrument,
   ProjectDocumentV1,
 } from "../src/project.js";
@@ -43,6 +46,42 @@ test("project: legacy source becomes main.fr byte-for-byte", () => {
   assert.equal(draft.document.files["main.fr"], source);
   assert.match(draft.document.files["frothy.toml"] ?? "", /board = "esp32_devkit_v1"/);
   assert.deepEqual(validateBrowserDraft(draft), []);
+});
+
+test("project: cloud acknowledgement preserves a newer local edit", () => {
+  const draft = createBrowserDraft("first\n");
+  const savedDocument = structuredClone(draft.document);
+
+  const acknowledged = acknowledgeBrowserDraft(
+    draft,
+    "11111111-1111-1111-1111-111111111111",
+    "Signals",
+    1,
+    savedDocument,
+  );
+  assert.equal(acknowledged.pendingCloudSave, false);
+
+  const edited = structuredClone(acknowledged);
+  edited.document.files["main.fr"] = "second\n";
+
+  const staleAcknowledgement = acknowledgeBrowserDraft(
+    edited,
+    acknowledged.cloudProjectId!,
+    acknowledged.cloudProjectTitle!,
+    2,
+    savedDocument,
+  );
+  assert.equal(staleAcknowledgement.pendingCloudSave, true);
+  assert.equal(staleAcknowledgement.cloudProjectTitle, "Signals");
+  assert.equal(staleAcknowledgement.document.files["main.fr"], "second\n");
+});
+
+test("project: version-0.3 drafts gain a nullable cloud title", () => {
+  const { cloudProjectTitle: _removed, ...oldDraft } = createBrowserDraft("hello\n");
+
+  const migrated = migrateBrowserDraft(oldDraft) as BrowserDraft;
+  assert.equal(migrated.cloudProjectTitle, null);
+  assert.deepEqual(validateBrowserDraft(migrated), []);
 });
 
 test("project: version-1 fixtures have the expected errors", () => {

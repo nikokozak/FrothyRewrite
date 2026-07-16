@@ -7,6 +7,7 @@ export { FrothyEditorElement, register } from "./web-component.js";
 export { makeStorage } from "./storage.js";
 export type { SketchStorage } from "./storage.js";
 export {
+  acknowledgeBrowserDraft,
   createBrowserDraft,
   createProjectDocument,
   DEFAULT_PROJECT_MANIFEST,
@@ -21,5 +22,6 @@ export type {
   Instrument,
   PlotInstrument,
   ProjectDocumentV1,
+  ProjectEditorHandle,
   ProjectEditorOptions,
 } from "./project.js";
