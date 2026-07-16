@@ -103,6 +103,24 @@ func TestSourcePlanBoundsRepeatedIncludes(t *testing.T) {
 	}
 }
 
+func TestSourcePlanRejectsOneOversizedFile(t *testing.T) {
+	root := t.TempDir()
+	writeSourcePlanFile(t, root, "frothy.toml", "name = \"web\"\nboard = \"esp32_devkit_v1\"\n")
+	writeSourcePlanFile(t, root, "main.fr", strings.Repeat("x", sourcePlanByteLimit+1))
+
+	var stdout bytes.Buffer
+	if code := runSourcePlanCommand([]string{"--project", root}, &stdout, &bytes.Buffer{}); code != 1 {
+		t.Fatalf("source-plan exit = %d, want 1", code)
+	}
+	var result sourcePlanResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Message, "exceeds 262144 source bytes") {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestSourcePlanReportsPinnedDependenciesWithoutFetching(t *testing.T) {
 	root := t.TempDir()
 	writeSourcePlanFile(t, root, "frothy.toml", `name = "web"

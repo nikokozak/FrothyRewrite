@@ -139,6 +139,10 @@ func confinedSourceLoader(projectDir string, byteLimit int) (func(string) (strin
 		if err != nil || !info.Mode().IsRegular() {
 			return "", fmt.Errorf("include %q is not a regular file", clean)
 		}
+		remaining := byteLimit - used
+		if info.Size() > int64(remaining) {
+			return "", fmt.Errorf("resolved project exceeds %d source bytes", byteLimit)
+		}
 		data, err := os.ReadFile(resolved)
 		if err != nil {
 			return "", fmt.Errorf("include %q is unreadable", clean)
