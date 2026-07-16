@@ -17,6 +17,7 @@ npm --prefix "$here/libs/frothy-editor" run build >/dev/null
 dest="$dest_root/vendor/frothy-editor/$version"
 mkdir -p "$dest"
 cp "$here/libs/frothy-editor/dist/browser/index.js" "$dest/index.js"
+cp "$here/libs/frothy-editor/fixtures/project-document-v1.json" "$dest/project-document-v1.json"
 echo "vendored @frothy/editor $version -> $dest/index.js"
 # The import path is version-pinned on purpose (a bump is a conscious act), so
 # point the page at the new bundle and drop the old dir:

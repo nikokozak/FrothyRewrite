@@ -1,12 +1,37 @@
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
   createBrowserDraft,
-  PROJECT_LIMITS,
   validateBrowserDraft,
   validateProjectDocument,
 } from "../src/project.js";
+import type {
+  Instrument,
+  ProjectDocumentV1,
+} from "../src/project.js";
+
+interface FixtureCase {
+  name: string;
+  add_file?: { path: string; source: string };
+  add_repeated_file?: { path: string; character: string; bytes: number };
+  instruments?: Instrument[];
+  expected_errors: string[];
+}
+
+interface FixtureSet {
+  fixture_schema: number;
+  base_document: ProjectDocumentV1;
+  cases: FixtureCase[];
+}
+
+const fixtures = JSON.parse(
+  readFileSync(
+    new URL("../fixtures/project-document-v1.json", import.meta.url),
+    "utf8",
+  ),
+) as FixtureSet;
 
 test("project: legacy source becomes main.fr byte-for-byte", () => {
   const source = `to greet [ "hello" ]\ngreet:\n`;
@@ -17,41 +42,26 @@ test("project: legacy source becomes main.fr byte-for-byte", () => {
   assert.deepEqual(validateBrowserDraft(draft), []);
 });
 
-test("project: rejects unsafe paths and oversized source", () => {
-  const draft = createBrowserDraft("hello\n");
-  draft.document.files["../secret.fr"] = "nope";
-  draft.document.files["large.fr"] = "x".repeat(PROJECT_LIMITS.fileBytes + 1);
+test("project: version-1 fixtures have the expected errors", () => {
+  assert.equal(fixtures.fixture_schema, 1);
 
-  const errors = validateProjectDocument(draft.document);
-  assert(errors.some((error) => error.includes("normalized relative path")));
-  assert(errors.some((error) => error.includes("large.fr exceeds")));
-});
+  for (const fixture of fixtures.cases) {
+    const document = structuredClone(fixtures.base_document);
+    if (fixture.add_file) {
+      document.files[fixture.add_file.path] = fixture.add_file.source;
+    }
+    if (fixture.add_repeated_file) {
+      const addition = fixture.add_repeated_file;
+      document.files[addition.path] = addition.character.repeat(addition.bytes);
+    }
+    if (fixture.instruments) {
+      document.instruments = fixture.instruments;
+    }
 
-test("project: validates control and plot instruments", () => {
-  const draft = createBrowserDraft("hello\n");
-  draft.document.instruments = [
-    {
-      id: "speed-control",
-      kind: "control",
-      binding: "speed",
-      value_type: "int",
-      min: 0,
-      max: 255,
-      step: 1,
-    },
-    {
-      id: "temperature-plot",
-      kind: "plot",
-      signal: "temperature",
-      unit: "C",
-      scale: 0.01,
-    },
-  ];
-
-  assert.deepEqual(validateProjectDocument(draft.document), []);
-  draft.document.instruments[1] = { ...draft.document.instruments[1], id: "speed-control" };
-  assert(
-    validateProjectDocument(draft.document)
-      .some((error) => error.includes("repeats speed-control")),
-  );
+    assert.deepEqual(
+      validateProjectDocument(document),
+      fixture.expected_errors,
+      fixture.name,
+    );
+  }
 });

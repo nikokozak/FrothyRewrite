@@ -1,0 +1,84 @@
+{
+  "fixture_schema": 1,
+  "base_document": {
+    "schema": 1,
+    "files": {
+      "frothy.toml": "name = \"signals\"\nboard = \"esp32_devkit_v1\"\n",
+      "main.fr": "include \"src/sensor.fr\"\n",
+      "src/sensor.fr": "to sample [ 1 ]\n"
+    },
+    "instruments": [
+      {
+        "id": "speed-control",
+        "kind": "control",
+        "binding": "speed",
+        "value_type": "int",
+        "min": 0,
+        "max": 255,
+        "step": 1
+      },
+      {
+        "id": "temperature-plot",
+        "kind": "plot",
+        "signal": "temperature",
+        "unit": "C",
+        "scale": 0.01
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "valid project",
+      "expected_errors": []
+    },
+    {
+      "name": "parent path",
+      "add_file": {
+        "path": "../secret.fr",
+        "source": "nope"
+      },
+      "expected_errors": [
+        "../secret.fr is not a normalized relative path"
+      ]
+    },
+    {
+      "name": "oversize file",
+      "add_repeated_file": {
+        "path": "large.fr",
+        "character": "x",
+        "bytes": 65537
+      },
+      "expected_errors": [
+        "large.fr exceeds 65536 bytes"
+      ]
+    },
+    {
+      "name": "invalid instruments",
+      "instruments": [
+        {
+          "id": "speed",
+          "kind": "control",
+          "binding": "",
+          "value_type": "float",
+          "min": 10,
+          "max": 0,
+          "step": 0
+        },
+        {
+          "id": "speed",
+          "kind": "plot",
+          "signal": "",
+          "scale": "fast"
+        }
+      ],
+      "expected_errors": [
+        "project.instruments[0].binding must be bounded text",
+        "project.instruments[0].value_type must be int",
+        "project.instruments[0] needs min <= max and step > 0",
+        "project.instruments[1].id repeats speed",
+        "project.instruments[1].signal must be bounded text",
+        "project.instruments[1].scale must be finite"
+      ]
+    }
+  ]
+}
