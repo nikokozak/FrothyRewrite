@@ -44,6 +44,12 @@ const char *fr_err_name(fr_err_t err) {
     return "too large";
   case FR_ERR_NET_PROTOCOL:
     return "bad protocol";
+  case FR_ERR_BLE_NOT_READY:
+    return "ble not ready";
+  case FR_ERR_BLE_BUSY:
+    return "ble busy";
+  case FR_ERR_BLE_TIMEOUT:
+    return "ble timed out";
   case FR_OK:
   default:
     return NULL;

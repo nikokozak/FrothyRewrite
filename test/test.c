@@ -14665,7 +14665,14 @@ static void test_err_name(void) {
       {FR_ERR_IO, "i/o failed"},
       {FR_ERR_VOLATILE, "not saved"},
       {FR_ERR_HANDLE, "bad handle"},
+      {FR_ERR_BLE_NOT_READY, "ble not ready"},
+      {FR_ERR_BLE_BUSY, "ble busy"},
+      {FR_ERR_BLE_TIMEOUT, "ble timed out"},
   };
+
+  CHECK("ble errors keep their serial ids",
+        FR_ERR_BLE_NOT_READY == 21 && FR_ERR_BLE_BUSY == 22 &&
+            FR_ERR_BLE_TIMEOUT == 23);
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
     const char *got = fr_err_name(cases[i].err);
     if (cases[i].name == NULL) {
