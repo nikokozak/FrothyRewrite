@@ -22,6 +22,8 @@ enum {
 static uint8_t fr_host_gpio_values[FR_HOST_MAX_PIN + 1];
 static uint32_t fr_host_millis;
 
+fr_err_t fr_platform_restart(void) { return FR_ERR_UNSUPPORTED; }
+
 #if FR_FEATURE_CONSOLE_ROUTING
 static fr_console_route_t fr_host_console_route = {
     .transport = FR_CONSOLE_TRANSPORT_HOST,

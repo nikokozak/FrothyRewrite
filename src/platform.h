@@ -75,6 +75,10 @@ fr_err_t fr_platform_millis(uint32_t *out_ms);
 fr_err_t fr_platform_micros(uint32_t *out_us);
 /* Let the platform scheduler run without changing Frothy program state. */
 void fr_platform_yield(void);
+/* Restart the target after destructive state changes. A supported restart
+ * does not return. Targets without support return FR_ERR_UNSUPPORTED; a
+ * failed restart request returns another error. */
+fr_err_t fr_platform_restart(void);
 fr_err_t fr_platform_gpio_mode(uint16_t pin, uint16_t mode);
 fr_err_t fr_platform_gpio_write(uint16_t pin, uint16_t value);
 fr_err_t fr_platform_gpio_read(uint16_t pin, uint16_t *out_value);

@@ -773,6 +773,11 @@ fr_err_t fr_esp_platform_init(void) {
   return FR_OK;
 }
 
+fr_err_t fr_platform_restart(void) {
+  esp_restart();
+  return FR_ERR_IO;
+}
+
 fr_err_t fr_platform_delay_ms(uint16_t ms) {
   if (ms == 0) {
     return FR_OK;
