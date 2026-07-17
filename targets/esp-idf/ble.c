@@ -12,6 +12,7 @@
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
+#include "nimble/nimble_npl.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "sdkconfig.h"
@@ -106,6 +107,7 @@ typedef struct fr_esp_ble_state_t {
 
 static portMUX_TYPE fr_esp_ble_lock = portMUX_INITIALIZER_UNLOCKED;
 static fr_esp_ble_state_t fr_esp_ble;
+static struct ble_npl_event fr_esp_ble_cleanup_ready_event;
 
 static uint32_t fr_esp_ble_now_ms(void) {
   return (uint32_t)((uint64_t)esp_timer_get_time() / 1000u);
@@ -445,6 +447,9 @@ static void fr_esp_ble_cleanup_task(void *argument) {
     stop_code = nimble_port_stop();
   }
   if (stop_code == 0) {
+    if (fr_esp_ble_cleanup_ready_event.event != NULL) {
+      ble_npl_event_deinit(&fr_esp_ble_cleanup_ready_event);
+    }
     deinit_code = nimble_port_deinit();
   }
 
@@ -468,35 +473,8 @@ static void fr_esp_ble_cleanup_task(void *argument) {
   vTaskDelete(NULL);
 }
 
-static fr_err_t fr_esp_ble_begin_cleanup(void) {
-  uint32_t generation = 0;
+static fr_err_t fr_esp_ble_start_cleanup_task(uint32_t generation) {
   BaseType_t created = pdFAIL;
-
-  portENTER_CRITICAL(&fr_esp_ble_lock);
-  if (fr_esp_ble.radio_state == FR_BLE_RADIO_OFF) {
-    fr_esp_ble_mark_off_locked();
-    portEXIT_CRITICAL(&fr_esp_ble_lock);
-    return FR_OK;
-  }
-  if (fr_esp_ble.shutdown_in_progress) {
-    portEXIT_CRITICAL(&fr_esp_ble_lock);
-    return FR_OK;
-  }
-  if (!fr_esp_ble.host_task_running && !fr_esp_ble.cleanup_required) {
-    fr_esp_ble_mark_off_locked();
-    portEXIT_CRITICAL(&fr_esp_ble_lock);
-    return FR_OK;
-  }
-
-  generation = fr_esp_ble.lifecycle_generation;
-  fr_esp_ble.radio_state = FR_BLE_RADIO_STOPPING;
-  fr_esp_ble.shutdown_in_progress = true;
-  fr_esp_ble.cleanup_required = true;
-  fr_esp_ble.own_address_valid = false;
-#if FR_BLE_ENABLE_OBSERVER
-  fr_esp_ble_abandon_scan_locked();
-#endif
-  portEXIT_CRITICAL(&fr_esp_ble_lock);
 
   created = xTaskCreate(fr_esp_ble_cleanup_task, "frothy_ble_stop",
                         FR_ESP_BLE_CLEANUP_STACK_BYTES,
@@ -516,6 +494,72 @@ static fr_err_t fr_esp_ble_begin_cleanup(void) {
   }
   portEXIT_CRITICAL(&fr_esp_ble_lock);
   return FR_ERR_CAPACITY;
+}
+
+static void fr_esp_ble_cleanup_when_host_ready(struct ble_npl_event *event) {
+  uint32_t generation = 0;
+
+  (void)event;
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble.shutdown_in_progress) {
+    fr_esp_ble.late_callback_count += 1u;
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return;
+  }
+  generation = fr_esp_ble.lifecycle_generation;
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+  /* NimBLE starts its host with queued events. If shutdown is requested while
+   * the startup event is waiting for an HCI reply, calling nimble_port_stop()
+   * concurrently can switch the host off and make it drop that reply. Run
+   * this barrier on the same queue until startup has finished, then let the
+   * separate worker use ESP-IDF's blocking stop API. */
+  if (!ble_hs_is_enabled()) {
+    ble_npl_eventq_put(nimble_port_get_dflt_eventq(),
+                       &fr_esp_ble_cleanup_ready_event);
+    return;
+  }
+
+  (void)fr_esp_ble_start_cleanup_task(generation);
+}
+
+static fr_err_t fr_esp_ble_begin_cleanup(void) {
+  uint32_t generation = 0;
+  bool host_task_running = false;
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (fr_esp_ble.radio_state == FR_BLE_RADIO_OFF) {
+    fr_esp_ble_mark_off_locked();
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_OK;
+  }
+  if (fr_esp_ble.shutdown_in_progress) {
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_OK;
+  }
+  if (!fr_esp_ble.host_task_running && !fr_esp_ble.cleanup_required) {
+    fr_esp_ble_mark_off_locked();
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_OK;
+  }
+
+  generation = fr_esp_ble.lifecycle_generation;
+  host_task_running = fr_esp_ble.host_task_running;
+  fr_esp_ble.radio_state = FR_BLE_RADIO_STOPPING;
+  fr_esp_ble.shutdown_in_progress = true;
+  fr_esp_ble.cleanup_required = true;
+  fr_esp_ble.own_address_valid = false;
+#if FR_BLE_ENABLE_OBSERVER
+  fr_esp_ble_abandon_scan_locked();
+#endif
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+  if (!host_task_running) {
+    return fr_esp_ble_start_cleanup_task(generation);
+  }
+  ble_npl_eventq_put(nimble_port_get_dflt_eventq(),
+                     &fr_esp_ble_cleanup_ready_event);
+  return FR_OK;
 }
 
 static fr_err_t fr_esp_ble_wait_cleanup(fr_runtime_t *runtime) {
@@ -719,6 +763,9 @@ fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
     portEXIT_CRITICAL(&fr_esp_ble_lock);
     return FR_ERR_IO;
   }
+
+  ble_npl_event_init(&fr_esp_ble_cleanup_ready_event,
+                     fr_esp_ble_cleanup_when_host_ready, NULL);
 
   ble_hs_cfg.reset_cb = fr_esp_ble_on_reset;
   ble_hs_cfg.sync_cb = fr_esp_ble_on_sync;
