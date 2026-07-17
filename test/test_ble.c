@@ -14,7 +14,7 @@
 static fr_runtime_t s_runtime;
 
 void setUp(void) {
-  memset(&s_runtime, 0, sizeof(s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_runtime_init(&s_runtime));
   fr_host_ble_reset();
 }
 
@@ -259,6 +259,32 @@ static void test_target_start_failure_owns_new_empty_session(void) {
   TEST_ASSERT_EQUAL_INT32(63, status.last_platform_code);
 }
 
+static void test_runtime_clear_shuts_down_ble_before_reuse(void) {
+  fr_ble_scan_report_t report = report_with(1, -40, 1);
+  fr_ble_status_t status;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_scan_start(100, 50, false, false, -90));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_push_scan_report(&report));
+  TEST_ASSERT_EQUAL_UINT8(1, read_status().queue_count);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_runtime_clear_project(&s_runtime));
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_RADIO_OFF, status.radio_state);
+  TEST_ASSERT_EQUAL(FR_BLE_SCAN_IDLE, status.scan_state);
+  TEST_ASSERT_EQUAL_UINT8(0, status.queue_count);
+  TEST_ASSERT_FALSE(status.current_valid);
+  TEST_ASSERT_EQUAL(FR_BLE_OP_NONE, status.last_operation);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  TEST_ASSERT_EQUAL_UINT32(2, read_status().lifecycle_generation);
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_scan_start(100, 50, false, false, -90));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_push_scan_report(&report));
+  TEST_ASSERT_EQUAL_UINT8(1, read_status().queue_count);
+}
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_radio_lifecycle_and_status);
@@ -266,5 +292,6 @@ int main(void) {
   RUN_TEST(test_queue_conservation_overflow_and_cursor);
   RUN_TEST(test_failures_timeouts_reset_and_clear);
   RUN_TEST(test_target_start_failure_owns_new_empty_session);
+  RUN_TEST(test_runtime_clear_shuts_down_ble_before_reuse);
   return UNITY_END();
 }
