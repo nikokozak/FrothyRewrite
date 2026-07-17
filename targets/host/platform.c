@@ -1422,10 +1422,11 @@ fr_err_t fr_platform_ble_advertise_stop(void) {
 #endif
 
 #if FR_BLE_ENABLE_CENTRAL
-fr_err_t fr_platform_ble_connect(const uint8_t peer[7], uint16_t timeout_ms,
+fr_err_t fr_platform_ble_connect(fr_runtime_t *runtime, const uint8_t peer[7],
+                                 uint16_t timeout_ms,
                                  fr_handle_ref_t runtime_ref,
                                  uint16_t *out_platform_index) {
-  if (peer == NULL || out_platform_index == NULL ||
+  if (runtime == NULL || peer == NULL || out_platform_index == NULL ||
       peer[0] > FR_BLE_ADDRESS_RANDOM_ID) {
     return FR_ERR_INVALID;
   }

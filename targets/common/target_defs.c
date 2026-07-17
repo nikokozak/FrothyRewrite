@@ -1927,7 +1927,7 @@ static fr_err_t fr_native_ble_connect(fr_runtime_t *runtime,
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_BLE_CONNECTION,
                            &handle_ref, &handle));
-  err = fr_platform_ble_connect(peer, (uint16_t)timeout_ms, handle_ref,
+  err = fr_platform_ble_connect(runtime, peer, (uint16_t)timeout_ms, handle_ref,
                                 &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, handle_ref);
