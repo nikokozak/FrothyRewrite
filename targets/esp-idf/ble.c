@@ -1024,7 +1024,8 @@ static int fr_esp_ble_advertise_event(struct ble_gap_event *event,
 
 #if FR_BLE_ENABLE_PERIPHERAL
   if (reject) {
-    (void)ble_gap_terminate(event->connect.conn_handle, BLE_ERR_CONN_LIMIT);
+    (void)ble_gap_terminate(event->connect.conn_handle,
+                            BLE_ERR_RD_CONN_TERM_RESRCS);
     return 0;
   }
   if (connection_generation != 0) {
@@ -1050,7 +1051,8 @@ static int fr_esp_ble_advertise_event(struct ble_gap_event *event,
     portEXIT_CRITICAL(&fr_esp_ble_lock);
 
     if (reject) {
-      (void)ble_gap_terminate(event->connect.conn_handle, BLE_ERR_CONN_LIMIT);
+      (void)ble_gap_terminate(event->connect.conn_handle,
+                              BLE_ERR_RD_CONN_TERM_RESRCS);
     }
   }
 #endif
@@ -2135,7 +2137,7 @@ fr_err_t fr_platform_ble_reject_pending(void) {
   fr_esp_ble.incoming_rejected += 1u;
   portEXIT_CRITICAL(&fr_esp_ble_lock);
 
-  rc = ble_gap_terminate(stack_handle, BLE_ERR_CONN_LIMIT);
+  rc = ble_gap_terminate(stack_handle, BLE_ERR_RD_CONN_TERM_RESRCS);
   portENTER_CRITICAL(&fr_esp_ble_lock);
   if (generation == fr_esp_ble.connection.generation &&
       fr_esp_ble.connection.state == FR_BLE_CONNECTION_CLOSING &&
