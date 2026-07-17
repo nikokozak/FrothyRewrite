@@ -319,6 +319,8 @@ typedef enum fr_ble_operation_t {
   FR_BLE_OP_SCAN_START = 2,
   FR_BLE_OP_SCAN_STOP = 3,
   FR_BLE_OP_SCAN_NEXT = 4,
+  FR_BLE_OP_ADVERTISE_START = 5,
+  FR_BLE_OP_ADVERTISE_STOP = 6,
 } fr_ble_operation_t;
 
 typedef enum fr_ble_scan_state_t {
@@ -327,12 +329,19 @@ typedef enum fr_ble_scan_state_t {
   FR_BLE_SCAN_STOPPING = 2,
 } fr_ble_scan_state_t;
 
+typedef enum fr_ble_advertise_state_t {
+  FR_BLE_ADVERTISE_IDLE = 0,
+  FR_BLE_ADVERTISE_ACTIVE = 1,
+  FR_BLE_ADVERTISE_STOPPING = 2,
+} fr_ble_advertise_state_t;
+
 typedef struct fr_ble_status_t {
   /* One copied snapshot. Mutable queues and target stack types stay behind
    * the platform functions below. The target synchronizes callback state
    * while making this copy. */
   fr_ble_radio_state_t radio_state;
   fr_ble_scan_state_t scan_state;
+  fr_ble_advertise_state_t advertise_state;
   uint8_t roles;
   bool coexistence_enabled; /* BLE may share a radio with another subsystem. */
   uint32_t lifecycle_generation;
@@ -353,6 +362,14 @@ typedef struct fr_ble_status_t {
   int8_t minimum_rssi;
   bool active_scan;
   bool repeats;
+
+  uint16_t advertise_requested_interval_ms;
+  uint32_t advertise_actual_interval_us;
+  bool advertise_connectable;
+  uint8_t advertising_data_length;
+  uint8_t scan_response_data_length;
+  uint32_t advertise_starts;
+  uint32_t advertise_stops;
 
   uint8_t queue_count;
   uint8_t queue_capacity;
@@ -407,6 +424,15 @@ fr_err_t fr_platform_ble_scan_stop(fr_runtime_t *runtime);
  * it. current returns FR_ERR_NOT_FOUND while that cursor is empty. */
 fr_err_t fr_platform_ble_scan_next(bool *out_has_report);
 fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report);
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+/* Copy one pair of framed legacy AD payloads and advertise indefinitely at
+ * 20..10240 ms. Scanning and advertising are mutually exclusive. */
+fr_err_t fr_platform_ble_advertise_start(
+    const uint8_t *advertising_data, uint8_t advertising_data_length,
+    const uint8_t *scan_response_data, uint8_t scan_response_data_length,
+    uint16_t interval_ms, bool connectable);
+fr_err_t fr_platform_ble_advertise_stop(void);
 #endif
 #ifdef FR_HOST_TEST_HELPERS
 void fr_host_ble_reset(void);

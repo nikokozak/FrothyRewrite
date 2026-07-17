@@ -13,8 +13,8 @@
 
 #include <string.h>
 
-#if !FR_FEATURE_BLE || !FR_BLE_ENABLE_OBSERVER
-#error "test_ble requires the BLE observer profile gates"
+#if !FR_FEATURE_BLE || !FR_BLE_ENABLE_OBSERVER || !FR_BLE_ENABLE_BROADCASTER
+#error "test_ble requires the BLE observer and broadcaster profile gates"
 #endif
 
 static fr_runtime_t s_runtime;
@@ -99,8 +99,8 @@ static void test_lifecycle_words_and_status_retention(void) {
   TEST_ASSERT_NOT_NULL(def->native_signature);
   TEST_ASSERT_EQUAL(FR_NATIVE_VALUE_NIL, def->native_signature->result);
   TEST_ASSERT_EQUAL_STRING(
-      "print BLE roles, radio state, scan state, queue pressure, and last raw "
-      "reason",
+      "print BLE roles, radio, scan, advertising, queue pressure, and last "
+      "raw reason",
       def->native_signature->help);
 #endif
 
@@ -304,6 +304,96 @@ static void test_scanner_loop_reuses_eval_bytes(void) {
   TEST_ASSERT_EQUAL_UINT8(7, current.data[0]);
 }
 
+static void test_advertising_words_validate_and_gate_scan(void) {
+  static const uint8_t advertising_data[] = {2, 0x01, 0x06};
+  static const uint8_t scan_response_data[] = {7, 0x09, 'F', 'r',
+                                                'o', 't',  'h', 'y'};
+  static const uint8_t malformed_data[] = {3, 0x09, 'x'};
+  const fr_base_def_t *start = NULL;
+  const fr_base_def_t *stop = NULL;
+  fr_object_id_t advertising_id = 0;
+  fr_object_id_t scan_response_id = 0;
+  fr_object_id_t malformed_id = 0;
+  fr_tagged_t args[4] = {0};
+  fr_tagged_t result = fr_tagged_nil();
+  fr_ble_status_t status;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  read_native_def("ble.advertise.start", FR_SLOT_BLE_ADVERTISE_START, 4,
+                  &start);
+  read_native_def("ble.advertise.stop", FR_SLOT_BLE_ADVERTISE_STOP, 0,
+                  &stop);
+#if FR_FEATURE_NATIVE_SIGNATURES
+  TEST_ASSERT_EQUAL(FR_NATIVE_VALUE_TEXT_OR_BYTES,
+                    start->native_signature->params[0].type);
+  TEST_ASSERT_EQUAL(FR_NATIVE_VALUE_TEXT_OR_BYTES,
+                    start->native_signature->params[1].type);
+  TEST_ASSERT_EQUAL_STRING("start legacy BLE advertising with raw AD payloads",
+                           start->native_signature->help);
+#endif
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_text_install(&s_runtime, advertising_data,
+                                    sizeof(advertising_data), &advertising_id));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_text_install(&s_runtime, scan_response_data,
+                                    sizeof(scan_response_data),
+                                    &scan_response_id));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_text_install(&s_runtime, malformed_data,
+                                    sizeof(malformed_data), &malformed_id));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_encode_object_id(advertising_id, &args[0]));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_encode_object_id(scan_response_id, &args[1]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(100, &args[2]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1, &args[3]));
+
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_NOT_READY,
+                    start->native_fn(&s_runtime, args, 4, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_encode_object_id(malformed_id, &args[0]));
+  TEST_ASSERT_EQUAL(FR_ERR_INVALID,
+                    start->native_fn(&s_runtime, args, 4, &result));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_encode_object_id(advertising_id, &args[0]));
+  TEST_ASSERT_EQUAL(FR_OK, start->native_fn(&s_runtime, args, 4, &result));
+  TEST_ASSERT_TRUE(fr_tagged_is_nil(result));
+
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_ADVERTISE_ACTIVE, status.advertise_state);
+  TEST_ASSERT_EQUAL_UINT16(100, status.advertise_requested_interval_ms);
+  TEST_ASSERT_EQUAL_UINT32(100000, status.advertise_actual_interval_us);
+  TEST_ASSERT_TRUE(status.advertise_connectable);
+  TEST_ASSERT_EQUAL_UINT8(sizeof(advertising_data),
+                          status.advertising_data_length);
+  TEST_ASSERT_EQUAL_UINT8(sizeof(scan_response_data),
+                          status.scan_response_data_length);
+  TEST_ASSERT_EQUAL_UINT32(1, status.advertise_starts);
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_BUSY,
+                    fr_platform_ble_scan_start(100, 50, false, false, -90));
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_BUSY,
+                    start->native_fn(&s_runtime, args, 4, &result));
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    stop->native_fn(&s_runtime, NULL, 0, &result));
+  TEST_ASSERT_EQUAL(FR_BLE_ADVERTISE_IDLE, read_status().advertise_state);
+  TEST_ASSERT_EQUAL_UINT32(1, read_status().advertise_stops);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_scan_start(100, 50, false, false, -90));
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_BUSY,
+                    start->native_fn(&s_runtime, args, 4, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_scan_stop(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_project_clear());
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_ADVERTISE_IDLE, status.advertise_state);
+  TEST_ASSERT_EQUAL_UINT16(0, status.advertise_requested_interval_ms);
+  TEST_ASSERT_EQUAL_UINT32(0, status.advertise_starts);
+  TEST_ASSERT_EQUAL_UINT32(0, status.advertise_stops);
+}
+
 static void test_radio_lifecycle_and_status(void) {
   static const uint8_t own_address[6] = {0xaa, 0xbb, 0xcc,
                                          0xdd, 0xee, 0xff};
@@ -312,7 +402,8 @@ static void test_radio_lifecycle_and_status(void) {
   TEST_ASSERT_EQUAL_STRING("host-fixture", fr_platform_ble_backend_name());
   TEST_ASSERT_EQUAL(FR_BLE_RADIO_OFF, status.radio_state);
   TEST_ASSERT_EQUAL(FR_BLE_SCAN_IDLE, status.scan_state);
-  TEST_ASSERT_EQUAL_UINT8(FR_BLE_ROLE_OBSERVER, status.roles);
+  TEST_ASSERT_EQUAL_UINT8(FR_BLE_ROLE_OBSERVER | FR_BLE_ROLE_BROADCASTER,
+                          status.roles);
   TEST_ASSERT_EQUAL_UINT8(8, status.queue_capacity);
   TEST_ASSERT_FALSE(status.coexistence_enabled);
 
@@ -604,6 +695,7 @@ int main(void) {
   RUN_TEST(test_lifecycle_words_and_status_retention);
   RUN_TEST(test_scanner_words_bridge_tagged_values_and_reports);
   RUN_TEST(test_scanner_loop_reuses_eval_bytes);
+  RUN_TEST(test_advertising_words_validate_and_gate_scan);
   RUN_TEST(test_radio_lifecycle_and_status);
   RUN_TEST(test_scan_parameters_and_state_gates);
   RUN_TEST(test_queue_conservation_overflow_and_cursor);

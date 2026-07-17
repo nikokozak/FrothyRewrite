@@ -147,6 +147,10 @@
 #define FR_BLE_SCAN_DATA_BYTES 0
 #endif
 
+#ifndef FR_BLE_ADVERTISEMENT_DATA_BYTES
+#define FR_BLE_ADVERTISEMENT_DATA_BYTES 0
+#endif
+
 #ifndef FR_BLE_START_TIMEOUT_MS
 #define FR_BLE_START_TIMEOUT_MS 0
 #endif
@@ -635,6 +639,14 @@
 #if !FR_BLE_ENABLE_OBSERVER &&                                             \
     (FR_BLE_SCAN_QUEUE_COUNT != 0 || FR_BLE_SCAN_DATA_BYTES != 0)
 #error "BLE scan limits require the observer role"
+#endif
+
+#if FR_BLE_ENABLE_BROADCASTER && FR_BLE_ADVERTISEMENT_DATA_BYTES != 31
+#error "legacy BLE advertising requires exactly 31 payload bytes"
+#endif
+
+#if !FR_BLE_ENABLE_BROADCASTER && FR_BLE_ADVERTISEMENT_DATA_BYTES != 0
+#error "BLE advertising limits require the broadcaster role"
 #endif
 
 #if FR_FEATURE_BLE &&                                                      \

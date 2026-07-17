@@ -240,6 +240,11 @@
 #define FR_PROFILE_HASH_BLE_SCAN_DATA_BYTES FR_BLE_SCAN_DATA_BYTES
 #endif
 
+#ifndef FR_PROFILE_HASH_BLE_ADVERTISEMENT_DATA_BYTES
+#define FR_PROFILE_HASH_BLE_ADVERTISEMENT_DATA_BYTES                         \
+  FR_BLE_ADVERTISEMENT_DATA_BYTES
+#endif
+
 #ifndef FR_PROFILE_HASH_BLE_START_TIMEOUT_MS
 #define FR_PROFILE_HASH_BLE_START_TIMEOUT_MS FR_BLE_START_TIMEOUT_MS
 #endif
@@ -368,6 +373,7 @@ static uint32_t fr_profile_hash_body(uint16_t word_size,
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_BLE_ENABLE_PERIPHERAL);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_BLE_SCAN_QUEUE_COUNT);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_BLE_SCAN_DATA_BYTES);
+  fr_profile_hash_u16(&crc, FR_PROFILE_HASH_BLE_ADVERTISEMENT_DATA_BYTES);
   fr_profile_hash_u32(&crc, FR_PROFILE_HASH_BLE_START_TIMEOUT_MS);
   fr_profile_hash_u32(&crc, FR_PROFILE_HASH_BLE_STOP_TIMEOUT_MS);
 #endif

@@ -1342,6 +1342,20 @@ static const char *fr_native_ble_scan_state_name(fr_ble_scan_state_t state) {
   }
 }
 
+static const char *fr_native_ble_advertise_state_name(
+    fr_ble_advertise_state_t state) {
+  switch (state) {
+  case FR_BLE_ADVERTISE_IDLE:
+    return "idle";
+  case FR_BLE_ADVERTISE_ACTIVE:
+    return "active";
+  case FR_BLE_ADVERTISE_STOPPING:
+    return "stopping";
+  default:
+    return "unknown";
+  }
+}
+
 static const char *fr_native_ble_address_type_name(
     fr_ble_address_type_t type) {
   switch (type) {
@@ -1370,6 +1384,10 @@ static const char *fr_native_ble_operation_name(fr_ble_operation_t operation) {
     return "scan.stop";
   case FR_BLE_OP_SCAN_NEXT:
     return "scan.next";
+  case FR_BLE_OP_ADVERTISE_START:
+    return "advertise.start";
+  case FR_BLE_OP_ADVERTISE_STOP:
+    return "advertise.stop";
   default:
     return "unknown";
   }
@@ -1518,6 +1536,29 @@ static fr_err_t fr_native_ble_info(fr_runtime_t *runtime,
                        fr_native_ble_scan_state_name(status.scan_state));
   }
   FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+#if FR_BLE_ENABLE_BROADCASTER
+  if (status.advertise_requested_interval_ms > 0) {
+    written = snprintf(
+        line, sizeof(line),
+        "ble advertise=%s requested=%ums actual=%luus connectable=%u data=%u scan-response=%u starts=%lu stops=%lu\n",
+        fr_native_ble_advertise_state_name(status.advertise_state),
+        (unsigned)status.advertise_requested_interval_ms,
+        (unsigned long)status.advertise_actual_interval_us,
+        status.advertise_connectable ? 1u : 0u,
+        (unsigned)status.advertising_data_length,
+        (unsigned)status.scan_response_data_length,
+        (unsigned long)status.advertise_starts,
+        (unsigned long)status.advertise_stops);
+  } else {
+    written = snprintf(
+        line, sizeof(line), "ble advertise=%s parameters=none starts=%lu stops=%lu\n",
+        fr_native_ble_advertise_state_name(status.advertise_state),
+        (unsigned long)status.advertise_starts,
+        (unsigned long)status.advertise_stops);
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+#endif
 
   if (status.current_valid) {
     written = snprintf(
@@ -1683,6 +1724,79 @@ static fr_err_t fr_native_ble_scan_data(fr_runtime_t *runtime,
   }
   FR_TRY(fr_platform_ble_scan_current(&report));
   return fr_bytes_install(runtime, report.data, report.data_length, out);
+}
+#endif
+
+#if FR_BLE_ENABLE_BROADCASTER
+static fr_err_t fr_native_ble_validate_ad_data(const uint8_t *bytes,
+                                               uint16_t length) {
+  uint16_t offset = 0;
+
+  if (length > FR_BLE_ADVERTISEMENT_DATA_BYTES ||
+      (length > 0 && bytes == NULL)) {
+    return FR_ERR_CAPACITY;
+  }
+  while (offset < length) {
+    uint8_t field_length = bytes[offset];
+
+    if (field_length == 0 ||
+        (uint16_t)(offset + 1u + field_length) > length) {
+      return FR_ERR_INVALID;
+    }
+    offset = (uint16_t)(offset + 1u + field_length);
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_advertise_start(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  const uint8_t *advertising_data = NULL;
+  const uint8_t *scan_response_data = NULL;
+  uint16_t advertising_data_length = 0;
+  uint16_t scan_response_data_length = 0;
+  fr_int_t interval_ms = 0;
+  fr_int_t connectable = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_text_or_bytes_view(
+      runtime, args[0], &advertising_data, &advertising_data_length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(
+      runtime, args[1], &scan_response_data, &scan_response_data_length));
+  FR_TRY(fr_native_ble_validate_ad_data(advertising_data,
+                                       advertising_data_length));
+  FR_TRY(fr_native_ble_validate_ad_data(scan_response_data,
+                                       scan_response_data_length));
+  if (fr_tagged_is_bool(args[2]) || fr_tagged_is_bool(args[3])) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_int(args[2], &interval_ms));
+  FR_TRY(fr_tagged_decode_int(args[3], &connectable));
+  if (interval_ms < 20 || interval_ms > 10240 || connectable < 0 ||
+      connectable > 1) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_advertise_start(
+      advertising_data, (uint8_t)advertising_data_length, scan_response_data,
+      (uint8_t)scan_response_data_length, (uint16_t)interval_ms,
+      connectable == 1));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_advertise_stop(fr_runtime_t *runtime,
+                                             const fr_tagged_t *args,
+                                             uint8_t arg_count,
+                                             fr_tagged_t *out) {
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_advertise_stop());
+  *out = fr_tagged_nil();
+  return FR_OK;
 }
 #endif
 #endif
@@ -3298,7 +3412,7 @@ static const fr_native_signature_t fr_native_ble_info_signature = {
     .params = NULL,
     .arg_count = 0,
     .result = FR_NATIVE_VALUE_NIL,
-    .help = "print BLE roles, radio state, scan state, queue pressure, and "
+    .help = "print BLE roles, radio, scan, advertising, queue pressure, and "
             "last raw reason",
 };
 
@@ -3360,6 +3474,29 @@ static const fr_native_signature_t fr_native_ble_scan_data_signature = {
     .arg_count = 0,
     .result = FR_NATIVE_VALUE_ANY,
     .help = "copy the current raw BLE advertisement bytes",
+};
+#endif
+
+#if FR_BLE_ENABLE_BROADCASTER
+static const fr_native_param_t fr_native_ble_advertise_start_params[] = {
+    {"advertising_data", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+    {"scan_response_data", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+    {"interval_ms", FR_NATIVE_VALUE_INT},
+    {"connectable", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_advertise_start_signature = {
+    .params = fr_native_ble_advertise_start_params,
+    .arg_count = 4,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "start legacy BLE advertising with raw AD payloads",
+};
+
+static const fr_native_signature_t fr_native_ble_advertise_stop_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "stop legacy BLE advertising",
 };
 #endif
 #endif
@@ -5129,6 +5266,32 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 0,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_ble_scan_data_signature,
+#endif
+    },
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+    {
+        .slot_id = FR_SLOT_BLE_ADVERTISE_START,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.advertise.start",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_advertise_start,
+        .native_arity = 4,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_advertise_start_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_ADVERTISE_STOP,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.advertise.stop",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_advertise_stop,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_advertise_stop_signature,
 #endif
     },
 #endif

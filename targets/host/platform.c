@@ -719,6 +719,13 @@ enum {
 #endif
 #endif
 
+#if FR_BLE_ENABLE_BROADCASTER
+enum {
+  FR_HOST_BLE_ADVERTISE_INTERVAL_MIN_MS = 20,
+  FR_HOST_BLE_ADVERTISE_INTERVAL_MAX_MS = 10240,
+};
+#endif
+
 typedef struct fr_host_ble_state_t {
   fr_ble_radio_state_t radio_state;
 #if FR_BLE_ENABLE_OBSERVER
@@ -753,6 +760,19 @@ typedef struct fr_host_ble_state_t {
   uint32_t malformed;
   bool current_valid;
   fr_ble_scan_report_t current;
+#endif
+
+#if FR_BLE_ENABLE_BROADCASTER
+  fr_ble_advertise_state_t advertise_state;
+  uint16_t advertise_requested_interval_ms;
+  uint32_t advertise_actual_interval_us;
+  bool advertise_connectable;
+  uint8_t advertising_data_length;
+  uint8_t advertising_data[FR_BLE_ADVERTISEMENT_DATA_BYTES];
+  uint8_t scan_response_data_length;
+  uint8_t scan_response_data[FR_BLE_ADVERTISEMENT_DATA_BYTES];
+  uint32_t advertise_starts;
+  uint32_t advertise_stops;
 #endif
 
   fr_ble_operation_t last_operation;
@@ -904,6 +924,20 @@ fr_err_t fr_platform_ble_project_clear(void) {
     fr_host_ble.scan_generation += 1u;
   }
 #endif
+#if FR_BLE_ENABLE_BROADCASTER
+  fr_host_ble.advertise_state = FR_BLE_ADVERTISE_IDLE;
+  fr_host_ble.advertise_requested_interval_ms = 0;
+  fr_host_ble.advertise_actual_interval_us = 0;
+  fr_host_ble.advertise_connectable = false;
+  fr_host_ble.advertising_data_length = 0;
+  memset(fr_host_ble.advertising_data, 0,
+         sizeof(fr_host_ble.advertising_data));
+  fr_host_ble.scan_response_data_length = 0;
+  memset(fr_host_ble.scan_response_data, 0,
+         sizeof(fr_host_ble.scan_response_data));
+  fr_host_ble.advertise_starts = 0;
+  fr_host_ble.advertise_stops = 0;
+#endif
   fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
 #if FR_BLE_ENABLE_OBSERVER
   fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
@@ -933,6 +967,11 @@ fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status) {
       .scan_state = fr_host_ble.scan_state,
 #else
       .scan_state = FR_BLE_SCAN_IDLE,
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+      .advertise_state = fr_host_ble.advertise_state,
+#else
+      .advertise_state = FR_BLE_ADVERTISE_IDLE,
 #endif
       .roles = fr_host_ble_roles(),
       .coexistence_enabled = false,
@@ -964,6 +1003,16 @@ fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status) {
       .current_rssi = fr_host_ble.current.rssi,
       .current_flags = fr_host_ble.current.flags,
       .current_data_length = fr_host_ble.current.data_length,
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+      .advertise_requested_interval_ms =
+          fr_host_ble.advertise_requested_interval_ms,
+      .advertise_actual_interval_us = fr_host_ble.advertise_actual_interval_us,
+      .advertise_connectable = fr_host_ble.advertise_connectable,
+      .advertising_data_length = fr_host_ble.advertising_data_length,
+      .scan_response_data_length = fr_host_ble.scan_response_data_length,
+      .advertise_starts = fr_host_ble.advertise_starts,
+      .advertise_stops = fr_host_ble.advertise_stops,
 #endif
       .last_operation = fr_host_ble.last_operation,
       .last_result = fr_host_ble.last_result,
@@ -1008,6 +1057,12 @@ fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
     fr_host_ble_record(FR_BLE_OP_SCAN_START, FR_ERR_BLE_BUSY, 0, 0);
     return FR_ERR_BLE_BUSY;
   }
+#if FR_BLE_ENABLE_BROADCASTER
+  if (fr_host_ble.advertise_state != FR_BLE_ADVERTISE_IDLE) {
+    fr_host_ble_record(FR_BLE_OP_SCAN_START, FR_ERR_BLE_BUSY, 0, 0);
+    return FR_ERR_BLE_BUSY;
+  }
+#endif
 
   fr_host_ble_clear_reports();
   fr_host_ble.requested_interval_ms = interval_ms;
@@ -1092,12 +1147,82 @@ fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report) {
 }
 #endif
 
+#if FR_BLE_ENABLE_BROADCASTER
+fr_err_t fr_platform_ble_advertise_start(
+    const uint8_t *advertising_data, uint8_t advertising_data_length,
+    const uint8_t *scan_response_data, uint8_t scan_response_data_length,
+    uint16_t interval_ms, bool connectable) {
+  if ((advertising_data_length > 0 && advertising_data == NULL) ||
+      (scan_response_data_length > 0 && scan_response_data == NULL)) {
+    return FR_ERR_INVALID;
+  }
+  if (advertising_data_length > FR_BLE_ADVERTISEMENT_DATA_BYTES ||
+      scan_response_data_length > FR_BLE_ADVERTISEMENT_DATA_BYTES) {
+    return FR_ERR_CAPACITY;
+  }
+  if (interval_ms < FR_HOST_BLE_ADVERTISE_INTERVAL_MIN_MS ||
+      interval_ms > FR_HOST_BLE_ADVERTISE_INTERVAL_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+  if (fr_host_ble.radio_state != FR_BLE_RADIO_READY) {
+    fr_host_ble_record(FR_BLE_OP_ADVERTISE_START, FR_ERR_BLE_NOT_READY, 0, 0);
+    return FR_ERR_BLE_NOT_READY;
+  }
+#if FR_BLE_ENABLE_OBSERVER
+  if (fr_host_ble.scan_state != FR_BLE_SCAN_IDLE) {
+    fr_host_ble_record(FR_BLE_OP_ADVERTISE_START, FR_ERR_BLE_BUSY, 0, 0);
+    return FR_ERR_BLE_BUSY;
+  }
+#endif
+  if (fr_host_ble.advertise_state != FR_BLE_ADVERTISE_IDLE) {
+    fr_host_ble_record(FR_BLE_OP_ADVERTISE_START, FR_ERR_BLE_BUSY, 0, 0);
+    return FR_ERR_BLE_BUSY;
+  }
+
+  memset(fr_host_ble.advertising_data, 0,
+         sizeof(fr_host_ble.advertising_data));
+  if (advertising_data_length > 0) {
+    memcpy(fr_host_ble.advertising_data, advertising_data,
+           advertising_data_length);
+  }
+  memset(fr_host_ble.scan_response_data, 0,
+         sizeof(fr_host_ble.scan_response_data));
+  if (scan_response_data_length > 0) {
+    memcpy(fr_host_ble.scan_response_data, scan_response_data,
+           scan_response_data_length);
+  }
+  fr_host_ble.advertising_data_length = advertising_data_length;
+  fr_host_ble.scan_response_data_length = scan_response_data_length;
+  fr_host_ble.advertise_requested_interval_ms = interval_ms;
+  fr_host_ble.advertise_actual_interval_us = (uint32_t)interval_ms * 1000u;
+  fr_host_ble.advertise_connectable = connectable;
+  fr_host_ble.advertise_state = FR_BLE_ADVERTISE_ACTIVE;
+  fr_host_ble.advertise_starts += 1u;
+  fr_host_ble_record(FR_BLE_OP_ADVERTISE_START, FR_OK, 0, 0);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_advertise_stop(void) {
+  if (fr_host_ble.advertise_state == FR_BLE_ADVERTISE_IDLE) {
+    fr_host_ble_record(FR_BLE_OP_ADVERTISE_STOP, FR_OK, 0, 0);
+    return FR_OK;
+  }
+  fr_host_ble.advertise_state = FR_BLE_ADVERTISE_IDLE;
+  fr_host_ble.advertise_stops += 1u;
+  fr_host_ble_record(FR_BLE_OP_ADVERTISE_STOP, FR_OK, 0, 0);
+  return FR_OK;
+}
+#endif
+
 #ifdef FR_HOST_TEST_HELPERS
 void fr_host_ble_reset(void) {
   memset(&fr_host_ble, 0, sizeof(fr_host_ble));
   fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
 #if FR_BLE_ENABLE_OBSERVER
   fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+  fr_host_ble.advertise_state = FR_BLE_ADVERTISE_IDLE;
 #endif
   fr_host_ble.last_result = FR_OK;
 }
@@ -1140,7 +1265,6 @@ fr_err_t fr_host_ble_push_scan_report(const fr_ble_scan_report_t *report) {
   return FR_OK;
 }
 #endif
-
 void fr_host_ble_fail_next_on(fr_err_t err, int32_t raw_code) {
   fr_host_ble.fail_next_on = err;
   fr_host_ble.fail_next_on_raw_code = raw_code;
@@ -1182,6 +1306,9 @@ void fr_host_ble_post_reset(int32_t raw_reason) {
   memset(&fr_host_ble.current, 0, sizeof(fr_host_ble.current));
   fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
   fr_host_ble.scan_generation += 1u;
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+  fr_host_ble.advertise_state = FR_BLE_ADVERTISE_IDLE;
 #endif
   if (fr_host_ble.shutdown_in_progress) {
     fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
