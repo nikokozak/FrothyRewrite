@@ -5,8 +5,8 @@ home:
 
 - **Device** — connection state, board profile, and one-click status, memory,
   save, and restore.
-- **Words** — everything defined on the chip *right now*. Click a word to
-  inspect its definition; the list refreshes after every run. The same live
-  vocabulary feeds autocompletion in the editor.
+- **Words** — the device's vocabulary. Hit the view's refresh button to
+  fetch it; click a word to inspect its definition. The same list feeds
+  autocompletion in the editor.
 - **Project** — the full lifecycle: new project, build, flash, install,
   doctor, REPL, and recovery actions.

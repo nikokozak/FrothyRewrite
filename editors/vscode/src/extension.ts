@@ -38,13 +38,12 @@ const HANDLERS: Array<[string, (...args: unknown[]) => unknown]> = [
   ['frothy.stopSessions',  () => terminal.runVerb('stop')],
   ['frothy.openRepl',      () => terminal.runVerb('connect')],
   ['frothy.openMenu',      () => terminal.runVerb('menu')],
-  ['frothy.refreshWords',  () => views.refreshWords(true)],
+  ['frothy.refreshWords',  () => views.refreshWords()],
   ['frothy.runFormAt',     (uri, line) => commands.runFormAt(uri as vscode.Uri, line as number)],
   ['frothy.inspectNamed',  (word) => commands.inspectNamedWord(word as string)],
 ];
 
 let prevConnected = false;
-let prevBusy = false;
 
 export function activate(context: vscode.ExtensionContext): void {
   for (const [id, handler] of HANDLERS) {
@@ -99,15 +98,10 @@ function refreshContext(): void {
   updateStatusBar(snapshot, connected, busy, frothyEditor || snapshot.state !== 'closed', currentPortLabel());
   views.refreshDeviceView();
 
-  // Pull the live word list whenever the session settles: right after a
-  // connect completes and right after a run finishes. The wordsRefreshing
-  // guard keeps the words request's own settle from re-triggering a fetch.
-  if (connected && !busy && (prevBusy || !prevConnected) && !views.wordsRefreshing()) {
-    void views.refreshWords();
-  }
+  // Words are fetched only when the user asks (refresh button, palette,
+  // the empty-state row); a dropped connection just clears the cache.
   if (!connected && prevConnected) views.clearWords();
   prevConnected = connected;
-  prevBusy = busy;
 }
 
 function currentPortLabel(): string {

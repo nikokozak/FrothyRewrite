@@ -42,15 +42,15 @@ Not connected yet? Any run action offers **Connect & Run**.
 - **Frothy sidebar.** The Activity Bar cup icon opens three views:
   - **Device** — connection state, port, board profile and mode, plus
     one-click Status, Memory, Save Overlay, and Restore Overlay.
-  - **Words** — the device's live vocabulary, refreshed after every run.
-    Click a word to inspect it (`see <word>`).
+  - **Words** — the device's vocabulary, fetched when you hit the view's
+    refresh button. Click a word to inspect it (`see <word>`).
   - **Project** — the firmware lifecycle: Getting Started, New Project,
     Build, Flash, Install Library, Open Example, REPL, Doctor, CLI Menu,
     Stop Serial Sessions, Wipe User Definitions.
 - **▷ Run lenses.** Every complete top-level form gets a run lens
   (`frothy.codeLens` turns them off).
-- **Live completion.** Autocomplete offers the words defined on the connected
-  device right now.
+- **Live completion.** Autocomplete offers the device's words from the last
+  Words refresh.
 - **Status bar.** Shows disconnected, connecting, connected, running, stale,
   and error states. Click it to connect, disconnect, or interrupt.
 - **Editor title / context menu.** Run Form, Run File, Rerun, and Inspect

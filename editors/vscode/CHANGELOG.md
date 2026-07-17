@@ -10,8 +10,8 @@ plumbing is unchanged; this release is UI and reach.
 - **Frothy sidebar** (Activity Bar cup icon) with three native tree views:
   - **Device** — connection state, port, profile, mode, plus one-click
     Status, Memory, Save Overlay, and Restore Overlay.
-  - **Words** — the device's live vocabulary as a persistent view, refreshed
-    automatically after connect and after every run; click a word to `see` it.
+  - **Words** — the device's vocabulary as a persistent view, fetched on
+    demand via its refresh button; click a word to `see` it.
   - **Project** — the whole lifecycle: Getting Started, New Project, Build,
     Flash, Install Library, Open Example, REPL, Doctor, CLI Menu, Stop
     Serial Sessions, Wipe User Definitions.
@@ -42,11 +42,12 @@ plumbing is unchanged; this release is UI and reach.
 - Status, Memory, Save, and Restore now give the friendly connect hint when
   disconnected instead of a raw error message.
 - Rerun with no prior form says so instead of doing nothing.
-- **The automatic Words refresh is invisible.** It no longer echoes `> words`
-  and the full vocabulary into the transcript after every run, no longer
-  reveals the output panel, and only fetches while the Words view is
-  visible — hidden, the list is marked stale and fetched when the view
-  opens. The view's refresh button still forces a fetch.
+- **The Words fetch is manual and invisible.** An earlier iteration fetched
+  the vocabulary automatically after every run and rendered it into the
+  transcript (`> words` plus the full word list, every time). Fetching now
+  happens only when explicitly asked — the view's refresh button, the
+  palette command, or the empty-state row — and is silent in the transcript.
+  Completion serves the last fetched list.
 
 ## 0.4.0 — 2026-07-10
 
