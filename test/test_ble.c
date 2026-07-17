@@ -537,10 +537,14 @@ static void test_central_connection_owns_one_inspectable_handle(void) {
   TEST_ASSERT_FALSE(is_ready);
   TEST_ASSERT_EQUAL(FR_ERR_BLE_DISCONNECTED,
                     rssi->native_fn(&s_runtime, one_arg, 1, &result));
+  TEST_ASSERT_EQUAL(FR_BLE_OP_CONNECT, read_status().last_operation);
   TEST_ASSERT_EQUAL(FR_ERR_BLE_DISCONNECTED,
                     params->native_fn(&s_runtime, params_args, 5, &result));
+  TEST_ASSERT_EQUAL(FR_BLE_OP_CONNECTION_PARAMS,
+                    read_status().last_operation);
   TEST_ASSERT_EQUAL(FR_ERR_BLE_DISCONNECTED,
                     mtu->native_fn(&s_runtime, mtu_args, 3, &result));
+  TEST_ASSERT_EQUAL(FR_BLE_OP_CONNECTION_MTU, read_status().last_operation);
   TEST_ASSERT_EQUAL(FR_OK,
                     info->native_fn(&s_runtime, one_arg, 1, &result));
   TEST_ASSERT_EQUAL(FR_OK,

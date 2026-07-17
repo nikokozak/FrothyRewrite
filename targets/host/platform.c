@@ -1559,8 +1559,6 @@ fr_err_t fr_platform_ble_connection_rssi(uint16_t platform_index,
   }
   FR_TRY(fr_host_ble_connection_entry(platform_index, &connection));
   if (!fr_host_ble_connection_is_live(connection)) {
-    fr_host_ble_record(FR_BLE_OP_CONNECTION_PARAMS,
-                       FR_ERR_BLE_DISCONNECTED, 0, 0);
     return FR_ERR_BLE_DISCONNECTED;
   }
   if (!connection->info.rssi_valid) {
@@ -1584,8 +1582,8 @@ fr_err_t fr_platform_ble_connection_params(
 
   FR_TRY(fr_host_ble_connection_entry(platform_index, &connection));
   if (!fr_host_ble_connection_is_live(connection)) {
-    fr_host_ble_record(FR_BLE_OP_CONNECTION_MTU, FR_ERR_BLE_DISCONNECTED, 0,
-                       0);
+    fr_host_ble_record(FR_BLE_OP_CONNECTION_PARAMS,
+                       FR_ERR_BLE_DISCONNECTED, 0, 0);
     return FR_ERR_BLE_DISCONNECTED;
   }
   if (minimum_interval_units < 6u || maximum_interval_units > 3200u ||
@@ -1618,6 +1616,8 @@ fr_err_t fr_platform_ble_connection_mtu(fr_runtime_t *runtime,
   }
   FR_TRY(fr_host_ble_connection_entry(platform_index, &connection));
   if (!fr_host_ble_connection_is_live(connection)) {
+    fr_host_ble_record(FR_BLE_OP_CONNECTION_MTU, FR_ERR_BLE_DISCONNECTED, 0,
+                       0);
     return FR_ERR_BLE_DISCONNECTED;
   }
   if (requested_mtu != FR_HOST_BLE_DEFAULT_MTU || timeout_ms == 0 ||
