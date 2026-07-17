@@ -332,6 +332,12 @@ typedef enum fr_ble_operation_t {
   FR_BLE_OP_GATT_NOTIFY = 15,
   FR_BLE_OP_GATT_INDICATE = 16,
   FR_BLE_OP_GATT_WRITE_NEXT = 17,
+  FR_BLE_OP_GATT_FIND = 18,
+  FR_BLE_OP_GATT_READ = 19,
+  FR_BLE_OP_GATT_WRITE = 20,
+  FR_BLE_OP_GATT_SUBSCRIBE = 21,
+  FR_BLE_OP_GATT_UNSUBSCRIBE = 22,
+  FR_BLE_OP_GATT_NOTIFICATION_NEXT = 23,
 } fr_ble_operation_t;
 
 typedef enum fr_ble_scan_state_t {
@@ -381,7 +387,7 @@ typedef struct fr_ble_connection_info_t {
 } fr_ble_connection_info_t;
 #endif
 
-#if FR_BLE_ENABLE_GATT_SERVER
+#if FR_BLE_ENABLE_GATT_SERVER || FR_BLE_ENABLE_GATT_CLIENT
 typedef enum fr_ble_uuid_kind_t {
   FR_BLE_UUID_16 = 0,
   FR_BLE_UUID_128 = 1,
@@ -395,16 +401,6 @@ typedef struct fr_ble_uuid_t {
 } fr_ble_uuid_t;
 
 enum {
-  FR_BLE_GATT_KIND_SERVICE = 1,
-  FR_BLE_GATT_KIND_CHARACTERISTIC = 2,
-};
-
-enum {
-  FR_BLE_GATT_SERVICE_PRIMARY = 1u << 0,
-  FR_BLE_GATT_SERVICE_SECONDARY = 1u << 1,
-};
-
-enum {
   /* Portable characteristic properties and permissions. Backends map these
    * bits explicitly; they are not target stack flags. */
   FR_BLE_GATT_CHR_READ = 1u << 0,
@@ -416,6 +412,19 @@ enum {
   FR_BLE_GATT_CHR_WRITE_ENCRYPTED = 1u << 6,
   FR_BLE_GATT_CHR_READ_AUTHENTICATED = 1u << 7,
   FR_BLE_GATT_CHR_WRITE_AUTHENTICATED = 1u << 8,
+};
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER
+
+enum {
+  FR_BLE_GATT_KIND_SERVICE = 1,
+  FR_BLE_GATT_KIND_CHARACTERISTIC = 2,
+};
+
+enum {
+  FR_BLE_GATT_SERVICE_PRIMARY = 1u << 0,
+  FR_BLE_GATT_SERVICE_SECONDARY = 1u << 1,
 };
 
 typedef struct fr_ble_gatt_service_row_t {
@@ -485,6 +494,45 @@ typedef struct fr_ble_gatt_status_t {
   int32_t last_att_error;
   int32_t last_platform_code;
 } fr_ble_gatt_status_t;
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT
+typedef enum fr_ble_gatt_subscription_mode_t {
+  FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS = 1,
+  FR_BLE_GATT_SUBSCRIBE_INDICATIONS = 2,
+} fr_ble_gatt_subscription_mode_t;
+
+typedef struct fr_ble_gatt_notification_t {
+  /* Remote ATT handles are protocol integers scoped to one connection. The
+   * existing runtime connection ref is returned separately by next. */
+  uint16_t connection_index;
+  uint32_t connection_generation;
+  uint16_t attribute_handle;
+  uint8_t data_length;
+  uint8_t data[FR_BLE_GATT_CLIENT_DATA_BYTES];
+  uint32_t timestamp_ms;
+  bool indication;
+} fr_ble_gatt_notification_t;
+
+typedef struct fr_ble_gatt_client_status_t {
+  uint8_t cache_count;
+  uint8_t subscription_count;
+  uint8_t notification_queue_count;
+  uint8_t notification_queue_high_water;
+  uint32_t notification_dropped;
+  uint32_t notification_stale;
+  bool current_notification_valid;
+  uint16_t current_notification_attribute_handle;
+  uint8_t current_notification_data_length;
+  bool current_notification_indication;
+  bool procedure_pending;
+  fr_ble_operation_t procedure_operation;
+  uint16_t procedure_attribute_handle;
+  uint16_t service_match_count;
+  uint16_t characteristic_match_count;
+  int32_t last_att_error;
+  int32_t last_platform_code;
+} fr_ble_gatt_client_status_t;
 #endif
 
 typedef struct fr_ble_status_t {
@@ -657,6 +705,38 @@ fr_err_t fr_platform_ble_gatt_write_next(bool *out_has_write,
                                          fr_handle_ref_t *out_runtime_ref);
 fr_err_t fr_platform_ble_gatt_write_current(fr_ble_gatt_write_t *out_write);
 #endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+/* One foreground client procedure may run at a time. Discovery retains only a
+ * bounded connection-scoped characteristic cache; ATT handles remain ints. */
+fr_err_t fr_platform_ble_gatt_client_find(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    const fr_ble_uuid_t *service_uuid,
+    const fr_ble_uuid_t *characteristic_uuid, uint16_t timeout_ms,
+    uint16_t *out_attribute_handle);
+fr_err_t fr_platform_ble_gatt_client_read(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, uint16_t timeout_ms, uint8_t *out_bytes,
+    uint16_t capacity, uint16_t *out_length);
+fr_err_t fr_platform_ble_gatt_client_write(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, const uint8_t *bytes, uint16_t length,
+    bool with_response, uint16_t timeout_ms);
+fr_err_t fr_platform_ble_gatt_client_subscribe(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, fr_ble_gatt_subscription_mode_t mode,
+    uint16_t timeout_ms);
+fr_err_t fr_platform_ble_gatt_client_unsubscribe(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, uint16_t timeout_ms);
+/* next returns only an existing runtime connection ref and drains stale queue
+ * entries. current remains readable until the next cursor move or cleanup. */
+fr_err_t fr_platform_ble_gatt_notification_next(
+    bool *out_has_notification, fr_handle_ref_t *out_runtime_ref);
+fr_err_t fr_platform_ble_gatt_notification_current(
+    fr_ble_gatt_notification_t *out_notification);
+fr_err_t fr_platform_ble_gatt_client_status(
+    fr_ble_gatt_client_status_t *out_status);
+#endif
 #ifdef FR_HOST_TEST_HELPERS
 void fr_host_ble_reset(void);
 #if FR_BLE_ENABLE_OBSERVER
@@ -684,6 +764,11 @@ fr_err_t fr_host_ble_gatt_remote_write(uint16_t attribute_id,
 fr_err_t fr_host_ble_gatt_subscribe(uint16_t attribute_id, bool notify,
                                     bool indicate);
 void fr_host_ble_timeout_next_indication(void);
+#endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+fr_err_t fr_host_ble_gatt_client_notify(uint16_t attribute_handle,
+                                        const uint8_t *bytes, uint16_t length,
+                                        bool indication);
 #endif
 #endif
 #endif

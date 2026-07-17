@@ -143,6 +143,10 @@
 #define FR_BLE_ENABLE_GATT_SERVER 0
 #endif
 
+#ifndef FR_BLE_ENABLE_GATT_CLIENT
+#define FR_BLE_ENABLE_GATT_CLIENT 0
+#endif
+
 #ifndef FR_BLE_SCAN_QUEUE_COUNT
 #define FR_BLE_SCAN_QUEUE_COUNT 0
 #endif
@@ -201,6 +205,22 @@
 
 #ifndef FR_BLE_GATT_CCCD_COUNT
 #define FR_BLE_GATT_CCCD_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_CLIENT_CACHE_COUNT
+#define FR_BLE_GATT_CLIENT_CACHE_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_CLIENT_DATA_BYTES
+#define FR_BLE_GATT_CLIENT_DATA_BYTES 0
+#endif
+
+#ifndef FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT
+#define FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS
+#define FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS 0
 #endif
 
 #define FR_FEATURE_OBJECTS                                                   \
@@ -771,6 +791,33 @@
      FR_BLE_GATT_WRITE_QUEUE_COUNT != 0 ||                                \
      FR_BLE_GATT_WRITE_DATA_BYTES != 0 || FR_BLE_GATT_CCCD_COUNT != 0)
 #error "BLE GATT limits require the GATT server"
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT && (!FR_FEATURE_BLE || !FR_BLE_ENABLE_CENTRAL)
+#error "the BLE GATT client requires the central role"
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT && !FR_FEATURE_TEXT
+#error "the BLE GATT client requires text UUIDs"
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT &&                                          \
+    (FR_BLE_GATT_CLIENT_CACHE_COUNT < 1 ||                                \
+     FR_BLE_GATT_CLIENT_CACHE_COUNT > 255 ||                              \
+     FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT < 1 ||                          \
+     FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT > 255 ||                        \
+     FR_BLE_GATT_CLIENT_DATA_BYTES != 20 ||                               \
+     FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS < 1 ||                             \
+     FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS > 60000)
+#error "the first BLE GATT client requires MTU-23 data and bounded storage"
+#endif
+
+#if !FR_BLE_ENABLE_GATT_CLIENT &&                                         \
+    (FR_BLE_GATT_CLIENT_CACHE_COUNT != 0 ||                               \
+     FR_BLE_GATT_CLIENT_DATA_BYTES != 0 ||                                \
+     FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT != 0 ||                         \
+     FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS != 0)
+#error "BLE GATT client limits require the GATT client"
 #endif
 
 #if FR_FEATURE_PAD && FR_PROFILE_PAD_BYTES == 0
