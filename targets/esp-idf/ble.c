@@ -807,8 +807,8 @@ fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
     if (generation == fr_esp_ble.scan.generation &&
         fr_esp_ble.scan.state == FR_BLE_SCAN_ACTIVE) {
       fr_esp_ble.scan.state = FR_BLE_SCAN_IDLE;
-      fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_ERR_IO, rc);
     }
+    fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_ERR_IO, rc);
     portEXIT_CRITICAL(&fr_esp_ble_lock);
     return FR_ERR_IO;
   }
@@ -819,6 +819,11 @@ fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
             fr_esp_ble.radio_state == FR_BLE_RADIO_READY;
   if (started) {
     fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_OK, 0);
+  } else {
+    /* An immediate completion or reset can win after the target accepted the
+     * start. Preserve its protocol reason, but make the foreground result
+     * visible instead of leaving the prior operation in status. */
+    fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_ERR_IO, 0);
   }
   portEXIT_CRITICAL(&fr_esp_ble_lock);
   if (!started) {
@@ -842,6 +847,7 @@ fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
 fr_err_t fr_platform_ble_scan_stop(fr_runtime_t *runtime) {
 #if FR_BLE_ENABLE_OBSERVER
   uint32_t generation = 0;
+  fr_err_t result = FR_OK;
   int rc = 0;
 
   if (runtime == NULL) {
@@ -869,22 +875,26 @@ fr_err_t fr_platform_ble_scan_stop(fr_runtime_t *runtime) {
   }
   if (rc != 0 && rc != BLE_HS_EALREADY) {
     portENTER_CRITICAL(&fr_esp_ble_lock);
-    if (generation == fr_esp_ble.scan.generation &&
-        fr_esp_ble.scan.state == FR_BLE_SCAN_STOPPING) {
-      fr_esp_ble_record_locked(FR_BLE_OP_SCAN_STOP, FR_ERR_IO, rc);
-    }
+    fr_esp_ble_record_locked(FR_BLE_OP_SCAN_STOP, FR_ERR_IO, rc);
     portEXIT_CRITICAL(&fr_esp_ble_lock);
     return FR_ERR_IO;
   }
 
   portENTER_CRITICAL(&fr_esp_ble_lock);
-  if (generation == fr_esp_ble.scan.generation &&
-      fr_esp_ble.scan.state == FR_BLE_SCAN_STOPPING) {
+  if (generation != fr_esp_ble.scan.generation ||
+      fr_esp_ble.radio_state != FR_BLE_RADIO_READY ||
+      (fr_esp_ble.scan.state != FR_BLE_SCAN_STOPPING &&
+       fr_esp_ble.scan.state != FR_BLE_SCAN_IDLE)) {
+    fr_esp_ble_record_locked(FR_BLE_OP_SCAN_STOP, FR_ERR_IO, 0);
+    result = FR_ERR_IO;
+  } else {
+    /* DISC_COMPLETE may have moved this generation to idle between cancel
+     * and reconciliation. In either state, cancellation is complete. */
     fr_esp_ble.scan.state = FR_BLE_SCAN_IDLE;
     fr_esp_ble_record_locked(FR_BLE_OP_SCAN_STOP, FR_OK, 0);
   }
   portEXIT_CRITICAL(&fr_esp_ble_lock);
-  return FR_OK;
+  return result;
 #else
   if (runtime == NULL) {
     return FR_ERR_INVALID;
