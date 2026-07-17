@@ -93,17 +93,38 @@ class WordsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     return this.inFlight ?? Promise.resolve();
   }
 
+  private view: vscode.TreeView<vscode.TreeItem> | undefined;
+  private stale = true;
+
+  attach(view: vscode.TreeView<vscode.TreeItem>): void {
+    this.view = view;
+  }
+
+  onVisible(): Promise<void> {
+    return this.stale ? this.refresh(true) : Promise.resolve();
+  }
+
   clear(): void {
     this.words = [];
+    this.stale = true;
     this.emitter.fire();
   }
 
-  refresh(): Promise<void> {
+  // Automatic (post-run) refreshes only fetch while the view is visible;
+  // hidden, the list is marked stale and fetched when the view opens. The
+  // fetch itself is quiet: no transcript echo, no giant words dump.
+  // ponytail: completion may serve a stale list while the view is hidden.
+  refresh(force = false): Promise<void> {
     if (this.inFlight) return this.inFlight;
+    if (!force && !this.view?.visible) {
+      this.stale = true;
+      return Promise.resolve();
+    }
     if (!proc.isConnected() || proc.isBusy()) return Promise.resolve();
     this.inFlight = (async () => {
       try {
-        this.words = parseWords(await proc.request('words'));
+        this.words = parseWords(await proc.request('words', { quiet: true }));
+        this.stale = false;
       } catch {
         // Device busy or session gone mid-request; keep the previous list.
       } finally {
@@ -165,9 +186,14 @@ let words: WordsProvider | undefined;
 export function initViews(context: vscode.ExtensionContext): void {
   device = new DeviceProvider();
   words = new WordsProvider();
+  const wordsView = vscode.window.createTreeView('frothyWords', { treeDataProvider: words });
+  words.attach(wordsView);
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('frothyDevice', device),
-    vscode.window.registerTreeDataProvider('frothyWords', words),
+    wordsView,
+    wordsView.onDidChangeVisibility((e) => {
+      if (e.visible) void words?.onVisible();
+    }),
     vscode.window.registerTreeDataProvider('frothyProject', new ProjectProvider()),
   );
 }
@@ -176,8 +202,8 @@ export function refreshDeviceView(): void {
   device?.refresh();
 }
 
-export function refreshWords(): Promise<void> {
-  return words?.refresh() ?? Promise.resolve();
+export function refreshWords(force = false): Promise<void> {
+  return words?.refresh(force) ?? Promise.resolve();
 }
 
 export function wordsRefreshing(): boolean {

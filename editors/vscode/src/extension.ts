@@ -38,7 +38,7 @@ const HANDLERS: Array<[string, (...args: unknown[]) => unknown]> = [
   ['frothy.stopSessions',  () => terminal.runVerb('stop')],
   ['frothy.openRepl',      () => terminal.runVerb('connect')],
   ['frothy.openMenu',      () => terminal.runVerb('menu')],
-  ['frothy.refreshWords',  () => views.refreshWords()],
+  ['frothy.refreshWords',  () => views.refreshWords(true)],
   ['frothy.runFormAt',     (uri, line) => commands.runFormAt(uri as vscode.Uri, line as number)],
   ['frothy.inspectNamed',  (word) => commands.inspectNamedWord(word as string)],
 ];

@@ -13,6 +13,9 @@ import {
 interface PendingRequest {
   resolve: (text: string) => void;
   reject: (error: Error) => void;
+  // Extension-internal request (the Words refresh): no transcript echo, no
+  // reply rendering, no output-panel reveal. Failures still reject normally.
+  quiet?: boolean;
 }
 
 interface PendingSourceBlock {
@@ -204,15 +207,15 @@ export class SessionRecordError extends Error {
   }
 }
 
-export function request(source: string): Promise<string> {
+export function request(source: string, opts?: { quiet?: boolean }): Promise<string> {
   if (!isConnected()) return Promise.reject(new Error('Frothy is not connected'));
   if (isBusy()) return Promise.reject(new Error('another Frothy request is still running'));
 
   return new Promise<string>((resolve, reject) => {
-    pendingRequest = { resolve, reject };
+    pendingRequest = { resolve, reject, quiet: opts?.quiet };
     fireConnectionChanged();
     const input = source.endsWith('\n') ? source : source + '\n';
-    if (!writeInput(input)) {
+    if (!writeInput(input, opts?.quiet)) {
       pendingRequest = undefined;
       fireConnectionChanged();
       reject(new Error('Frothy session closed before the request was sent'));
@@ -221,6 +224,9 @@ export function request(source: string): Promise<string> {
 }
 
 function renderRecord(record: SessionRecord): void {
+  // renderRecord runs before settleRequest, so the pending quiet flag still
+  // covers this request's own echo and reply.
+  if (pendingRequest?.quiet && (record.kind === 'send' || record.kind === 'response')) return;
   switch (record.kind) {
     case 'status':
       appendLine(`session: connected (${snapshot.profile}, ${snapshot.mode})`);
@@ -326,10 +332,10 @@ export function requestSourceBlock(text: string, path?: string): Promise<void> {
   });
 }
 
-function writeInput(text: string): boolean {
+function writeInput(text: string, quiet = false): boolean {
   if (!isConnected() || !child?.stdin || child.stdin.destroyed) return false;
   try {
-    show();
+    if (!quiet) show();
     child.stdin.write(text);
     return true;
   } catch (err) {

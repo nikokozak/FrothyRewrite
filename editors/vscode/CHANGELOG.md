@@ -42,6 +42,11 @@ plumbing is unchanged; this release is UI and reach.
 - Status, Memory, Save, and Restore now give the friendly connect hint when
   disconnected instead of a raw error message.
 - Rerun with no prior form says so instead of doing nothing.
+- **The automatic Words refresh is invisible.** It no longer echoes `> words`
+  and the full vocabulary into the transcript after every run, no longer
+  reveals the output panel, and only fetches while the Words view is
+  visible — hidden, the list is marked stale and fetched when the view
+  opens. The view's refresh button still forces a fetch.
 
 ## 0.4.0 — 2026-07-10
 
