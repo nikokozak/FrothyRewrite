@@ -1562,6 +1562,127 @@ static fr_err_t fr_native_ble_info(fr_runtime_t *runtime,
   *out = fr_tagged_nil();
   return FR_OK;
 }
+
+#if FR_BLE_ENABLE_OBSERVER
+static fr_err_t fr_native_ble_scan_start(fr_runtime_t *runtime,
+                                         const fr_tagged_t *args,
+                                         uint8_t arg_count,
+                                         fr_tagged_t *out) {
+  fr_int_t interval_ms = 0;
+  fr_int_t window_ms = 0;
+  fr_int_t active = 0;
+  fr_int_t repeats = 0;
+  fr_int_t minimum_rssi = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 5 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_int(args[0], &interval_ms));
+  FR_TRY(fr_tagged_decode_int(args[1], &window_ms));
+  if (fr_tagged_is_bool(args[2]) || fr_tagged_is_bool(args[3])) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_int(args[2], &active));
+  FR_TRY(fr_tagged_decode_int(args[3], &repeats));
+  FR_TRY(fr_tagged_decode_int(args[4], &minimum_rssi));
+  if (interval_ms < 0 || interval_ms > UINT16_MAX || window_ms < 0 ||
+      window_ms > UINT16_MAX || active < 0 || active > 1 || repeats < 0 ||
+      repeats > 1 || minimum_rssi < INT8_MIN || minimum_rssi > INT8_MAX) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_scan_start(
+      (uint16_t)interval_ms, (uint16_t)window_ms, active == 1, repeats == 1,
+      (int8_t)minimum_rssi));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_scan_stop(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count,
+                                        fr_tagged_t *out) {
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_stop(runtime));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_scan_next(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count,
+                                        fr_tagged_t *out) {
+  bool has_report = false;
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_next(&has_report));
+  return fr_tagged_encode_bool(has_report, out);
+}
+
+static fr_err_t fr_native_ble_scan_rssi(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count,
+                                        fr_tagged_t *out) {
+  fr_ble_scan_report_t report = {0};
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_current(&report));
+  return fr_tagged_encode_int(report.rssi, out);
+}
+
+static fr_err_t fr_native_ble_scan_peer(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count,
+                                        fr_tagged_t *out) {
+  fr_ble_scan_report_t report = {0};
+  uint8_t peer[7];
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_current(&report));
+  peer[0] = (uint8_t)report.address_type;
+  memcpy(&peer[1], report.address, sizeof(report.address));
+  return fr_bytes_install(runtime, peer, sizeof(peer), out);
+}
+
+static fr_err_t fr_native_ble_scan_flags(fr_runtime_t *runtime,
+                                         const fr_tagged_t *args,
+                                         uint8_t arg_count,
+                                         fr_tagged_t *out) {
+  fr_ble_scan_report_t report = {0};
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_current(&report));
+  return fr_tagged_encode_int(report.flags, out);
+}
+
+static fr_err_t fr_native_ble_scan_data(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count,
+                                        fr_tagged_t *out) {
+  fr_ble_scan_report_t report = {0};
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_current(&report));
+  return fr_bytes_install(runtime, report.data, report.data_length, out);
+}
+#endif
 #endif
 
 #if FR_FEATURE_NATIVE_SIGNATURES
@@ -3178,6 +3299,67 @@ static const fr_native_signature_t fr_native_ble_info_signature = {
     .help = "print BLE roles, radio state, scan state, queue pressure, and "
             "last raw reason",
 };
+
+#if FR_BLE_ENABLE_OBSERVER
+static const fr_native_param_t fr_native_ble_scan_start_params[] = {
+    {"interval_ms", FR_NATIVE_VALUE_INT},
+    {"window_ms", FR_NATIVE_VALUE_INT},
+    {"active", FR_NATIVE_VALUE_INT},
+    {"repeats", FR_NATIVE_VALUE_INT},
+    {"minimum_rssi", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_scan_start_signature = {
+    .params = fr_native_ble_scan_start_params,
+    .arg_count = 5,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "start an indefinite BLE scan with interval/window ms, "
+            "active/repeat flags, and minimum RSSI",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_stop_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "stop the active BLE scan and retain queued reports",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_next_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "move to the next queued BLE report and say whether one was "
+            "available",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_rssi_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the current BLE report RSSI in dBm",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_peer_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "copy the current BLE peer type and canonical address bytes",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_flags_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the current BLE report flags",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_data_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "copy the current raw BLE advertisement bytes",
+};
+#endif
 #endif
 
 #if FR_FEATURE_PWM
@@ -4862,6 +5044,92 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_signature = &fr_native_ble_info_signature,
 #endif
     },
+#if FR_BLE_ENABLE_OBSERVER
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_START,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.start",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_start,
+        .native_arity = 5,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_start_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_STOP,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.stop",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_stop,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_stop_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_NEXT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.next?",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_next,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_next_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_RSSI,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.rssi",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_rssi,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_rssi_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_PEER,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.peer",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_peer,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_peer_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_FLAGS,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.flags",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_flags,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_flags_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_DATA,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.data",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_data,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_data_signature,
+#endif
+    },
+#endif
 #endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
     {
