@@ -2385,6 +2385,13 @@ fr_err_t fr_platform_ble_connection_mtu(fr_runtime_t *runtime,
       fr_esp_ble.connection.state != FR_BLE_CONNECTION_LIVE) {
     err = FR_ERR_BLE_DISCONNECTED;
   }
+  if (err == FR_OK &&
+      fr_esp_ble.connection.role == FR_BLE_CONNECTION_ROLE_PERIPHERAL) {
+    *out_actual_mtu = fr_esp_ble.connection.mtu;
+    fr_esp_ble_record_locked(FR_BLE_OP_CONNECTION_MTU, FR_OK, 0);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_OK;
+  }
   if (err == FR_OK && fr_esp_ble.connection.mtu_pending) {
     err = FR_ERR_BLE_BUSY;
   }
