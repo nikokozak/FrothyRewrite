@@ -5,6 +5,7 @@ import {
 import type {
   EditorHandle,
   EditorOptions,
+  ResolvedSource,
 } from "./editor.js";
 import { makeStorage } from "./storage.js";
 import type { SketchStorage } from "./storage.js";
@@ -27,6 +28,7 @@ const DATABASE_VERSION = 1;
 const DRAFT_STORE = "drafts";
 const LOCAL_DRAFT_ID = "local";
 const LEGACY_SKETCH_KEY = "frothy-editor:sketch";
+const PROJECT_JOURNAL_KEY = "frothy-editor:project-journal";
 const utf8 = new TextEncoder();
 
 export interface ControlInstrument {
@@ -60,18 +62,23 @@ export interface BrowserDraft {
   cloudProjectId: string | null;
   cloudProjectTitle: string | null;
   baseLockVersion: number | null;
+  activePath: string;
+  localRevision: number;
   document: ProjectDocumentV1;
   pendingCloudSave: boolean;
 }
 
 export interface ProjectEditorOptions {
   mount: HTMLElement;
+  resolveProject?: (document: ProjectDocumentV1) => Promise<ResolvedSource[]>;
+  onDraftSaved?: (draft: BrowserDraft) => void;
   onConnect?: EditorOptions["onConnect"];
   onError?: EditorOptions["onError"];
 }
 
 export interface ProjectEditorHandle extends EditorHandle {
   getDraft(): BrowserDraft;
+  setProjectTitle(title: string): Promise<void>;
   hasSameProjectDocument(document: ProjectDocumentV1): boolean;
   openCloudProject(
     projectId: string,
@@ -105,6 +112,8 @@ export function createBrowserDraft(source: string): BrowserDraft {
     cloudProjectId: null,
     cloudProjectTitle: null,
     baseLockVersion: null,
+    activePath: "main.fr",
+    localRevision: 0,
     document: createProjectDocument(source),
     pendingCloudSave: false,
   };
@@ -177,6 +186,8 @@ export function validateBrowserDraft(value: unknown): string[] {
       "cloudProjectId",
       "cloudProjectTitle",
       "baseLockVersion",
+      "activePath",
+      "localRevision",
       "document",
       "pendingCloudSave",
     ],
@@ -196,6 +207,22 @@ export function validateBrowserDraft(value: unknown): string[] {
   ) {
     errors.push("draft.baseLockVersion must be null or a non-negative integer");
   }
+  if (typeof value.activePath !== "string") {
+    errors.push("draft.activePath must be a project path");
+  } else {
+    const pathError = validateProjectPath(value.activePath);
+    if (pathError) errors.push(`draft.activePath: ${pathError}`);
+    if (
+      isRecord(value.document)
+      && isRecord(value.document.files)
+      && !Object.hasOwn(value.document.files, value.activePath)
+    ) {
+      errors.push("draft.activePath must name a project file");
+    }
+  }
+  if (!Number.isSafeInteger(value.localRevision) || (value.localRevision as number) < 0) {
+    errors.push("draft.localRevision must be a non-negative integer");
+  }
   if (typeof value.pendingCloudSave !== "boolean") {
     errors.push("draft.pendingCloudSave must be boolean");
   }
@@ -208,62 +235,241 @@ export function validateBrowserDraft(value: unknown): string[] {
 export async function mountProjectEditor(opts: ProjectEditorOptions): Promise<ProjectEditorHandle> {
   const database = await openDraftDatabase();
   const legacyStorage = makeStorage(LEGACY_SKETCH_KEY);
+  let workspaceRoot: HTMLElement | null = null;
 
   try {
     let draft = await loadOrCreateDraft(database, legacyStorage);
-    const storage: SketchStorage = {
-      load: () => draft.document.files["main.fr"] ?? null,
-      save: async (source) => {
-        // ponytail: main.fr mirrors synchronously while W2 is single-file;
-        // replace with a whole-document journal when W3 adds file-tree edits.
-        void legacyStorage.save(source);
-        const next = withMainSource(draft, source);
-        if (validateBrowserDraft(next).length > 0) return false;
-        try {
-          await putDraft(database, next);
-          draft = next;
-          return true;
-        } catch {
+    const doc = opts.mount.ownerDocument;
+    workspaceRoot = doc.createElement("div");
+    workspaceRoot.className = "frothy-project-workspace";
+
+    const filePanel = doc.createElement("aside");
+    filePanel.className = "frothy-file-panel";
+    filePanel.setAttribute("aria-label", "Project files");
+    const fileHeader = doc.createElement("div");
+    fileHeader.className = "frothy-file-header";
+    const fileTitle = doc.createElement("h2");
+    fileTitle.textContent = "Files";
+    const newFileBtn = doc.createElement("button");
+    newFileBtn.type = "button";
+    newFileBtn.className = "frothy-file-add";
+    newFileBtn.textContent = "+";
+    newFileBtn.title = "New file";
+    newFileBtn.setAttribute("aria-label", "New file");
+    fileHeader.append(fileTitle, newFileBtn);
+    const fileList = doc.createElement("div");
+    fileList.className = "frothy-file-list";
+    const fileStatus = doc.createElement("p");
+    fileStatus.className = "frothy-file-status";
+    fileStatus.setAttribute("role", "status");
+    fileStatus.setAttribute("aria-live", "polite");
+    filePanel.append(fileHeader, fileList, fileStatus);
+
+    const editorMount = doc.createElement("div");
+    editorMount.className = "frothy-project-editor";
+    workspaceRoot.append(filePanel, editorMount);
+    opts.mount.append(workspaceRoot);
+
+    async function persistDraft(next: BrowserDraft): Promise<boolean> {
+      if (validateBrowserDraft(next).length > 0) return false;
+
+      const previous = draft;
+      const journalSaved = writeProjectJournal(next);
+      draft = next;
+      void legacyStorage.save(next.document.files["main.fr"] ?? "");
+      try {
+        await putDraft(database, next);
+      } catch {
+        if (!journalSaved) {
+          if (draft === next) draft = previous;
           return false;
         }
-      },
+      }
+      opts.onDraftSaved?.(copyDraft(next));
+      return true;
+    }
+
+    const storage: SketchStorage = {
+      load: () => draft.document.files[draft.activePath] ?? null,
+      save: (source) => persistDraft(withFileSource(draft, draft.activePath, source)),
       download: (source, filename) => legacyStorage.download(source, filename),
     };
 
-    const editorOptions: EditorOptions = { mount: opts.mount, storage };
+    const editorOptions: EditorOptions = {
+      mount: editorMount,
+      storage,
+      documentId: draft.activePath,
+    };
     if (opts.onConnect) editorOptions.onConnect = opts.onConnect;
     if (opts.onError) editorOptions.onError = opts.onError;
+    if (opts.resolveProject) {
+      editorOptions.resolveProject = (source) => opts.resolveProject!(
+        copyProjectDocument(withFileSource(draft, draft.activePath, source).document),
+      );
+    }
     const editor = mountEditor(editorOptions);
 
-    async function installDraft(next: BrowserDraft): Promise<void> {
-      await putDraft(database, next);
-      const source = next.document.files["main.fr"] ?? "";
-      void legacyStorage.save(source);
-      draft = next;
-      if (editor.getSource() !== source) editor.setSource(source);
+    function showFileError(error: unknown): void {
+      fileStatus.textContent = error instanceof Error ? error.message : String(error);
+      fileStatus.dataset.kind = "error";
     }
+
+    function clearFileStatus(): void {
+      fileStatus.textContent = "";
+      delete fileStatus.dataset.kind;
+    }
+
+    function renderFiles(): void {
+      fileList.replaceChildren();
+      for (const path of projectFilePaths(draft.document)) {
+        const row = doc.createElement("div");
+        row.className = "frothy-file-row";
+        if (path === draft.activePath) row.classList.add("is-active");
+
+        const openBtn = doc.createElement("button");
+        openBtn.type = "button";
+        openBtn.className = "frothy-file-name";
+        openBtn.textContent = path;
+        openBtn.title = path;
+        if (path === draft.activePath) openBtn.setAttribute("aria-current", "page");
+        openBtn.addEventListener("click", () => void selectFile(path));
+        row.append(openBtn);
+
+        if (!isRequiredProjectFile(path)) {
+          const actions = doc.createElement("span");
+          actions.className = "frothy-file-actions";
+          const renameBtn = doc.createElement("button");
+          renameBtn.type = "button";
+          renameBtn.textContent = "✎";
+          renameBtn.title = `Rename ${path}`;
+          renameBtn.setAttribute("aria-label", `Rename ${path}`);
+          renameBtn.addEventListener("click", () => void renameFile(path));
+          const deleteBtn = doc.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.textContent = "×";
+          deleteBtn.title = `Delete ${path}`;
+          deleteBtn.setAttribute("aria-label", `Delete ${path}`);
+          deleteBtn.addEventListener("click", () => void deleteFile(path));
+          actions.append(renameBtn, deleteBtn);
+          row.append(actions);
+        }
+        fileList.append(row);
+      }
+    }
+
+    async function selectFile(path: string): Promise<void> {
+      if (path === draft.activePath) return;
+      clearFileStatus();
+      editor.save();
+      const next = selectProjectFile(draft, path);
+      if (!await persistDraft(next)) {
+        showFileError("Could not save the browser project.");
+        return;
+      }
+      editor.openDocument(path, next.document.files[path] ?? "");
+      renderFiles();
+    }
+
+    async function createFile(): Promise<void> {
+      const path = doc.defaultView?.prompt("New Frothy file path", "src/new.fr");
+      if (path === null || path === undefined) return;
+      clearFileStatus();
+      editor.save();
+      try {
+        const next = addProjectFile(draft, path);
+        if (!await persistDraft(next)) {
+          showFileError("Could not save the new file.");
+          return;
+        }
+        editor.openDocument(path, "");
+        renderFiles();
+      } catch (error) {
+        showFileError(error);
+      }
+    }
+
+    async function renameFile(path: string): Promise<void> {
+      const nextPath = doc.defaultView?.prompt(`Rename ${path}`, path);
+      if (nextPath === null || nextPath === undefined) return;
+      clearFileStatus();
+      editor.save();
+      try {
+        const next = renameProjectFile(draft, path, nextPath);
+        if (!await persistDraft(next)) {
+          showFileError("Could not save the renamed file.");
+          return;
+        }
+        editor.renameDocument(path, nextPath);
+        renderFiles();
+      } catch (error) {
+        showFileError(error);
+      }
+    }
+
+    async function deleteFile(path: string): Promise<void> {
+      if (!(doc.defaultView?.confirm(`Delete "${path}"?`) ?? false)) return;
+      clearFileStatus();
+      editor.save();
+      try {
+        const wasActive = path === draft.activePath;
+        const next = deleteProjectFile(draft, path);
+        if (!await persistDraft(next)) {
+          showFileError("Could not delete the file.");
+          return;
+        }
+        if (wasActive) {
+          editor.openDocument(next.activePath, next.document.files[next.activePath] ?? "");
+        }
+        editor.forgetDocument(path);
+        renderFiles();
+      } catch (error) {
+        showFileError(error);
+      }
+    }
+
+    async function installDraft(next: BrowserDraft, replaceWorkspace = false): Promise<void> {
+      const previousPath = draft.activePath;
+      if (!await persistDraft(next)) throw new Error("could not save the browser project");
+      const source = next.document.files[next.activePath] ?? "";
+      if (replaceWorkspace) {
+        editor.resetDocument(next.activePath, source);
+      } else if (next.activePath !== previousPath) {
+        editor.openDocument(next.activePath, source);
+      }
+      renderFiles();
+    }
+
+    newFileBtn.addEventListener("click", () => void createFile());
+    renderFiles();
 
     return {
       ...editor,
       getDraft() {
-        return copyDraft(withMainSource(draft, editor.getSource()));
+        return copyDraft(withFileSource(draft, draft.activePath, editor.getSource()));
+      },
+      async setProjectTitle(title) {
+        const current = withFileSource(draft, draft.activePath, editor.getSource());
+        if (!await persistDraft(setBrowserDraftTitle(current, title))) {
+          throw new Error("could not save the project title");
+        }
       },
       hasSameProjectDocument(document) {
-        const current = withMainSource(draft, editor.getSource());
+        const current = withFileSource(draft, draft.activePath, editor.getSource());
         return sameProjectDocument(current.document, document);
       },
       async openCloudProject(projectId, projectTitle, lockVersion, document) {
-        const current = withMainSource(draft, editor.getSource());
+        const current = withFileSource(draft, draft.activePath, editor.getSource());
         await installDraft(
           openCloudProjectDraft(current, projectId, projectTitle, lockVersion, document),
+          true,
         );
       },
       async startNewProject() {
-        const current = withMainSource(draft, editor.getSource());
+        const current = withFileSource(draft, draft.activePath, editor.getSource());
         await installDraft(startNewProjectDraft(current));
       },
       async acknowledgeCloudSave(projectId, projectTitle, lockVersion, savedDocument) {
-        const current = withMainSource(draft, editor.getSource());
+        const current = withFileSource(draft, draft.activePath, editor.getSource());
         const next = acknowledgeBrowserDraft(
           current,
           projectId,
@@ -271,32 +477,118 @@ export async function mountProjectEditor(opts: ProjectEditorOptions): Promise<Pr
           lockVersion,
           savedDocument,
         );
-        await putDraft(database, next);
-        draft = next;
+        if (!await persistDraft(next)) throw new Error("could not save cloud acknowledgement");
       },
       destroy() {
         editor.destroy();
         database.close();
+        workspaceRoot?.remove();
       },
     };
   } catch (error) {
+    workspaceRoot?.remove();
     database.close();
     throw error;
   }
 }
 
-function withMainSource(draft: BrowserDraft, source: string): BrowserDraft {
-  const changed = source !== draft.document.files["main.fr"];
+function withFileSource(draft: BrowserDraft, path: string, source: string): BrowserDraft {
+  if (source === draft.document.files[path]) return draft;
+  return withProjectDocument(draft, {
+    ...draft.document,
+    files: { ...draft.document.files, [path]: source },
+  });
+}
 
-  return {
+function withProjectDocument(
+  draft: BrowserDraft,
+  document: ProjectDocumentV1,
+  activePath = draft.activePath,
+): BrowserDraft {
+  return parseBrowserDraft({
     ...draft,
-    pendingCloudSave:
-      draft.pendingCloudSave || (changed && draft.cloudProjectId !== null),
-    document: {
+    activePath,
+    localRevision: draft.localRevision + 1,
+    document,
+    pendingCloudSave: true,
+  });
+}
+
+export function selectProjectFile(draft: BrowserDraft, path: string): BrowserDraft {
+  assertProjectFile(draft.document, path);
+  if (path === draft.activePath) return draft;
+  return parseBrowserDraft({
+    ...draft,
+    activePath: path,
+    localRevision: draft.localRevision + 1,
+  });
+}
+
+export function addProjectFile(draft: BrowserDraft, path: string): BrowserDraft {
+  assertNewFrothyPath(path);
+  if (Object.hasOwn(draft.document.files, path)) throw new Error(`${path} already exists`);
+  return withProjectDocument(
+    draft,
+    {
       ...draft.document,
-      files: { ...draft.document.files, "main.fr": source },
+      files: { ...draft.document.files, [path]: "" },
     },
-  };
+    path,
+  );
+}
+
+export function renameProjectFile(
+  draft: BrowserDraft,
+  from: string,
+  to: string,
+): BrowserDraft {
+  assertProjectFile(draft.document, from);
+  if (from === to) return draft;
+  if (isRequiredProjectFile(from)) throw new Error(`${from} cannot be renamed`);
+  assertNewFrothyPath(to);
+  if (Object.hasOwn(draft.document.files, to)) throw new Error(`${to} already exists`);
+
+  const files = { ...draft.document.files, [to]: draft.document.files[from] ?? "" };
+  delete files[from];
+  return withProjectDocument(
+    draft,
+    { ...draft.document, files },
+    draft.activePath === from ? to : draft.activePath,
+  );
+}
+
+export function deleteProjectFile(draft: BrowserDraft, path: string): BrowserDraft {
+  assertProjectFile(draft.document, path);
+  if (isRequiredProjectFile(path)) throw new Error(`${path} cannot be deleted`);
+
+  const files = { ...draft.document.files };
+  delete files[path];
+  return withProjectDocument(
+    draft,
+    { ...draft.document, files },
+    draft.activePath === path ? "main.fr" : draft.activePath,
+  );
+}
+
+function assertProjectFile(document: ProjectDocumentV1, path: string): void {
+  if (!Object.hasOwn(document.files, path)) throw new Error(`${path} does not exist`);
+}
+
+function assertNewFrothyPath(path: string): void {
+  const pathError = validateProjectPath(path);
+  if (pathError) throw new Error(pathError);
+  if (!path.endsWith(".fr")) throw new Error(`${path} must end in .fr`);
+}
+
+function isRequiredProjectFile(path: string): boolean {
+  return path === "frothy.toml" || path === "main.fr";
+}
+
+function projectFilePaths(document: ProjectDocumentV1): string[] {
+  return Object.keys(document.files).sort((left, right) => {
+    const rank = (path: string) => path === "frothy.toml" ? 0 : path === "main.fr" ? 1 : 2;
+    return rank(left) - rank(right) || (left < right ? -1 : left > right ? 1 : 0);
+  });
 }
 
 export function openCloudProjectDraft(
@@ -313,6 +605,8 @@ export function openCloudProjectDraft(
     cloudProjectId: projectId,
     cloudProjectTitle: projectTitle,
     baseLockVersion: lockVersion,
+    activePath: Object.hasOwn(document.files, draft.activePath) ? draft.activePath : "main.fr",
+    localRevision: draft.localRevision + 1,
     document: copyProjectDocument(document),
     pendingCloudSave: false,
   });
@@ -324,8 +618,22 @@ export function startNewProjectDraft(draft: BrowserDraft): BrowserDraft {
     cloudProjectId: null,
     cloudProjectTitle: null,
     baseLockVersion: null,
-    document: copyProjectDocument(draft.document),
+    activePath: "main.fr",
+    localRevision: draft.localRevision + 1,
+    document: createProjectDocument(DEFAULT_INITIAL_SOURCE),
     pendingCloudSave: false,
+  });
+}
+
+export function setBrowserDraftTitle(draft: BrowserDraft, title: string): BrowserDraft {
+  if (!boundedText(title)) throw new Error("project title must be bounded text");
+  if (draft.cloudProjectTitle === title) return draft;
+
+  return parseBrowserDraft({
+    ...draft,
+    cloudProjectTitle: title,
+    localRevision: draft.localRevision + 1,
+    pendingCloudSave: true,
   });
 }
 
@@ -343,6 +651,7 @@ export function acknowledgeBrowserDraft(
     cloudProjectId: projectId,
     cloudProjectTitle: projectTitle,
     baseLockVersion: lockVersion,
+    localRevision: draft.localRevision + 1,
     pendingCloudSave: !sameProjectDocument(draft.document, savedDocument),
   };
   const draftErrors = validateBrowserDraft(next);
@@ -404,34 +713,90 @@ async function loadOrCreateDraft(
 ): Promise<BrowserDraft> {
   const stored = await getDraft(database, LOCAL_DRAFT_ID);
   const legacySource = legacyStorage.load();
+  const storedDraft = stored === undefined
+    ? null
+    : tryParseBrowserDraft(migrateBrowserDraft(stored));
+  const journalDraft = loadProjectJournal();
 
-  if (stored !== undefined) {
-    let draft = parseBrowserDraft(migrateBrowserDraft(stored));
-    if (legacySource !== null && legacySource !== draft.document.files["main.fr"]) {
-      draft = withMainSource(draft, legacySource);
-      const errors = validateBrowserDraft(draft);
-      if (errors.length > 0) throw new Error(errors[0]);
-      await putDraft(database, draft);
+  if (stored !== undefined && storedDraft === null && journalDraft === null) {
+    return parseBrowserDraft(migrateBrowserDraft(stored));
+  }
+
+  let draft = newestBrowserDraft(storedDraft, journalDraft);
+
+  if (draft !== null) {
+    if (
+      journalDraft === null
+      && legacySource !== null
+      && legacySource !== draft.document.files["main.fr"]
+    ) {
+      draft = withFileSource(draft, "main.fr", legacySource);
     }
+    writeProjectJournal(draft);
+    if (storedDraft !== draft) await putDraft(database, draft);
     return draft;
   }
 
-  const draft = createBrowserDraft(legacySource ?? DEFAULT_INITIAL_SOURCE);
+  draft = createBrowserDraft(legacySource ?? DEFAULT_INITIAL_SOURCE);
+  writeProjectJournal(draft);
   await putDraft(database, draft);
   return draft;
 }
 
 export function migrateBrowserDraft(value: unknown): unknown {
-  if (isRecord(value) && !Object.hasOwn(value, "cloudProjectTitle")) {
-    return { ...value, cloudProjectTitle: null };
-  }
-  return value;
+  if (!isRecord(value)) return value;
+  const next = { ...value };
+  if (!Object.hasOwn(next, "cloudProjectTitle")) next.cloudProjectTitle = null;
+  if (!Object.hasOwn(next, "activePath")) next.activePath = "main.fr";
+  if (!Object.hasOwn(next, "localRevision")) next.localRevision = 0;
+  return next;
+}
+
+export function newestBrowserDraft(
+  storedDraft: BrowserDraft | null,
+  journalDraft: BrowserDraft | null,
+): BrowserDraft | null {
+  if (journalDraft === null) return storedDraft;
+  if (storedDraft === null) return journalDraft;
+  return journalDraft.localRevision >= storedDraft.localRevision
+    ? journalDraft
+    : storedDraft;
 }
 
 function parseBrowserDraft(value: unknown): BrowserDraft {
   const errors = validateBrowserDraft(value);
   if (errors.length > 0) throw new Error(errors[0]);
   return value as BrowserDraft;
+}
+
+function tryParseBrowserDraft(value: unknown): BrowserDraft | null {
+  try {
+    return parseBrowserDraft(value);
+  } catch {
+    return null;
+  }
+}
+
+function loadProjectJournal(): BrowserDraft | null {
+  try {
+    const value = globalThis.localStorage?.getItem(PROJECT_JOURNAL_KEY);
+    return value === null || value === undefined
+      ? null
+      : tryParseBrowserDraft(migrateBrowserDraft(JSON.parse(value)));
+  } catch {
+    return null;
+  }
+}
+
+function writeProjectJournal(draft: BrowserDraft): boolean {
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage) return false;
+    storage.setItem(PROJECT_JOURNAL_KEY, JSON.stringify(draft));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function openDraftDatabase(): Promise<IDBDatabase> {

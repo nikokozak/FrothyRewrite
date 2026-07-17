@@ -2218,6 +2218,10 @@ func runFrothyCommand(args []string, stdout io.Writer, stderr io.Writer, verbs [
 		printFrothyUsage(stderr, verbs)
 		return 2
 	}
+	// source-plan is internal editor plumbing, not a human CLI workflow.
+	if args[1] == "source-plan" {
+		return runSourcePlanCommand(args[2:], stdout, stderr)
+	}
 	switch args[1] {
 	case "--help", "-h":
 		printFrothyUsage(stdout, verbs)

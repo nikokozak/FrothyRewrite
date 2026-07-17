@@ -44,6 +44,9 @@ func preprocessIncludeAt(path string, load func(string) (string, error), stack [
 			b.WriteString(line)
 			continue
 		}
+		if filepath.IsAbs(target) {
+			return "", fmt.Errorf("%s: absolute include path %q is not allowed", path, target)
+		}
 		resolved := filepath.Clean(filepath.Join(dir, target))
 		inner, err := preprocessIncludeAt(resolved, load, stack)
 		if err != nil {

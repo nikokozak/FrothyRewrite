@@ -22,7 +22,7 @@ import type { Transcript } from "./transcript.js";
 import { makeStorage } from "./storage.js";
 import type { SketchStorage } from "./storage.js";
 
-export const DEFAULT_INITIAL_SOURCE = `-- Welcome to Frothy. Edit, then Run File (Cmd/Ctrl+Shift+Enter).
+export const DEFAULT_INITIAL_SOURCE = `-- Welcome to Frothy. Edit, then run the sketch (Cmd/Ctrl+Shift+Enter).
 to greet [ "hello, world" ]
 greet:
 `;
@@ -30,19 +30,31 @@ greet:
 export interface EditorOptions {
   mount: HTMLElement;
   initialSource?: string;
+  documentId?: string;
   storageKey?: string;
   storage?: SketchStorage;
+  resolveProject?: (currentSource: string) => Promise<ResolvedSource[]>;
   onConnect?: (status: Status) => void;
   onError?: (err: Error) => void;
+}
+
+export interface ResolvedSource {
+  path: string;
+  source: string;
 }
 
 export interface EditorHandle {
   getSource(): string;
   setSource(src: string): void;
+  openDocument(documentId: string, source: string): void;
+  renameDocument(from: string, to: string): void;
+  forgetDocument(documentId: string): void;
+  resetDocument(documentId: string, source: string): void;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   runForm(): Promise<void>;
   runFile(): Promise<void>;
+  runProject(): Promise<void>;
   save(): void;
   download(): void;
   transcript(): readonly string[];
@@ -71,7 +83,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const storage: SketchStorage = opts.storage ?? makeStorage(opts.storageKey);
   const initial = storage.load() ?? opts.initialSource ?? DEFAULT_INITIAL_SOURCE;
   let saveTimer: ReturnType<Window["setTimeout"]> | null = null;
-  let sketchFilename = "sketch.fr";
+  let currentDocumentId = opts.documentId ?? "sketch.fr";
+  let sketchFilename = basename(currentDocumentId);
+  const documentStates = new Map<string, EditorState>();
 
   const root = doc.createElement("div");
   root.className = "frothy-editor";
@@ -117,11 +131,14 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const runFormBtn = mkBtn(doc, "Run Form", "frothy-btn");
   runFormBtn.title = "Run the selection, or the complete form at the cursor";
   const runFileBtn = mkBtn(doc, "Run File", "frothy-btn");
+  const runProjectBtn = opts.resolveProject
+    ? mkBtn(doc, "Run Project", "frothy-btn frothy-btn-primary")
+    : null;
   const interruptBtn = mkBtn(doc, "Interrupt", "frothy-btn");
   const browseWordsBtn = mkBtn(doc, "Browse Words", "frothy-btn");
   const clearOutputBtn = mkBtn(doc, "Clear output", "frothy-btn");
   const openBtn = mkBtn(doc, "Open .fr", "frothy-btn");
-  const downloadBtn = mkBtn(doc, "Download .fr", "frothy-btn");
+  const downloadBtn = mkBtn(doc, "Download file", "frothy-btn");
   const fileInput = doc.createElement("input");
   fileInput.type = "file";
   fileInput.accept = ".fr,.frothy,text/plain";
@@ -140,9 +157,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     suppressEcho = echoBox.checked;
   });
   echoToggle.append(echoBox, doc.createTextNode(" Hide echo"));
+  commandBar.append(runFormBtn);
+  commandBar.append(runProjectBtn ?? runFileBtn);
   commandBar.append(
-    runFormBtn,
-    runFileBtn,
     interruptBtn,
     browseWordsBtn,
     clearOutputBtn,
@@ -203,9 +220,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   root.append(header, connectionStatus, body, wordsDialog);
   opts.mount.appendChild(root);
 
-  const view = new EditorView({
-    state: EditorState.create({
-      doc: initial,
+  function createEditorState(source: string): EditorState {
+    return EditorState.create({
+      doc: source,
       extensions: [
         lineNumbers(),
         history(),
@@ -216,7 +233,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         }),
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
       ],
-    }),
+    });
+  }
+
+  const view = new EditorView({
+    state: createEditorState(initial),
     parent: editorHost,
   });
 
@@ -254,12 +275,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       : connected ? `Connected · ${displayProfileName(connectedProfile)}` : "Connect";
     connectBtn.disabled = next === "connecting";
     connectBtn.classList.toggle("frothy-btn-connected", connected);
-    runFormBtn.disabled = next !== "idle";
-    runFileBtn.disabled = next !== "idle";
     interruptBtn.disabled = next !== "running";
     interruptBtn.classList.toggle("frothy-btn-primary", next === "running");
     browseWordsBtn.hidden = !connected;
     browseWordsBtn.disabled = next !== "idle";
+    updateDocumentControls();
     connectionStatus.textContent = message ?? (
       next === "connecting"
         ? "Opening the board and checking for Frothy…"
@@ -402,8 +422,63 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     });
   }
 
+  function updateDocumentControls(): void {
+    const runnable = currentDocumentId.endsWith(".fr");
+    runFormBtn.disabled = sessionState !== "idle" || !runnable;
+    runFileBtn.disabled = sessionState !== "idle" || !runnable;
+    if (runProjectBtn) runProjectBtn.disabled = sessionState !== "idle";
+    examplesSelect.disabled = !runnable;
+    openBtn.disabled = !runnable;
+  }
+
+  function openDocument(documentId: string, source: string): void {
+    if (documentId === currentDocumentId) return;
+    clearSaveTimer();
+    documentStates.set(currentDocumentId, view.state);
+    currentDocumentId = documentId;
+    const state = documentStates.get(documentId) ?? createEditorState(source);
+    documentStates.delete(documentId);
+    view.setState(state);
+    sketchFilename = basename(documentId);
+    saveStatus.textContent = "saved locally";
+    updateDocumentControls();
+    view.focus();
+  }
+
+  function renameDocument(from: string, to: string): void {
+    if (from === to) return;
+    if (currentDocumentId === from) {
+      currentDocumentId = to;
+      sketchFilename = basename(to);
+      updateDocumentControls();
+      return;
+    }
+    const state = documentStates.get(from);
+    if (!state) return;
+    documentStates.delete(from);
+    documentStates.set(to, state);
+  }
+
+  function forgetDocument(documentId: string): void {
+    if (documentId === currentDocumentId) {
+      throw new Error("cannot forget the active document");
+    }
+    documentStates.delete(documentId);
+  }
+
+  function resetDocument(documentId: string, source: string): void {
+    clearSaveTimer();
+    documentStates.clear();
+    currentDocumentId = documentId;
+    sketchFilename = basename(documentId);
+    view.setState(createEditorState(source));
+    saveStatus.textContent = "saved locally";
+    updateDocumentControls();
+    view.focus();
+  }
+
   async function runForm(): Promise<void> {
-    if (!repl || sessionState !== "idle") return;
+    if (!repl || sessionState !== "idle" || !currentDocumentId.endsWith(".fr")) return;
     const selection = view.state.selection.main;
     let source: string | undefined;
     if (!selection.empty) {
@@ -415,20 +490,31 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       if (form?.complete) source = form.source;
     }
     if (!source) {
-      transcript.note("select one complete form or Run File");
+      transcript.note(
+        opts.resolveProject
+          ? "select one complete form or Run Project"
+          : "select one complete form or Run File",
+      );
+      return;
+    }
+    if (opts.resolveProject && /^include(?:\s|$)/.test(source.trimStart())) {
+      transcript.note("include is handled by Run Project and cannot be sent directly to the device");
       return;
     }
     const runningRepl = repl;
     setSessionState("running");
     try {
-      await sendForm(source);
+      const response = await sendForm(source);
+      if (opts.resolveProject && response?.kind === "error" && response.code === 7) {
+        transcript.note("If this word is defined in another file, Run Project first.");
+      }
     } finally {
       if (repl === runningRepl) setSessionState("idle");
     }
   }
 
   async function runFile(): Promise<void> {
-    if (!repl || sessionState !== "idle") return;
+    if (!repl || sessionState !== "idle" || !currentDocumentId.endsWith(".fr")) return;
     const forms = splitForms(currentSource());
     if (forms.length === 0) {
       transcript.note("(empty file)");
@@ -449,6 +535,39 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
           return;
         }
       }
+    } finally {
+      if (repl === runningRepl) setSessionState("idle");
+    }
+  }
+
+  async function runProject(): Promise<void> {
+    if (!repl || sessionState !== "idle" || !opts.resolveProject) return;
+    const runningRepl = repl;
+    setSessionState("running");
+    try {
+      const sources = await opts.resolveProject(currentSource());
+      if (repl !== runningRepl) return;
+      if (sources.length === 0) {
+        transcript.note("(empty project)");
+        return;
+      }
+      for (const source of sources) {
+        const forms = splitForms(source.source);
+        if (forms.some((form) => !form.complete)) {
+          transcript.note(`${source.path}: finish the incomplete form before running the project`);
+          return;
+        }
+        for (let index = 0; index < forms.length; index += 1) {
+          const response = await sendForm(forms[index].source);
+          if (!response) return;
+          if (response.kind === "error") {
+            transcript.note(`stopped: ${source.path} form ${index + 1} errored`);
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      reportError(err);
     } finally {
       if (repl === runningRepl) setSessionState("idle");
     }
@@ -582,7 +701,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     try {
       const source = await file.text();
       replaceSource(source);
-      sketchFilename = basename(file.name);
+      if (!opts.documentId) sketchFilename = basename(file.name);
       view.focus();
     } catch (err) {
       reportError(err);
@@ -598,6 +717,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   });
   runFormBtn.addEventListener("click", () => void runForm());
   runFileBtn.addEventListener("click", () => void runFile());
+  runProjectBtn?.addEventListener("click", () => void runProject());
   interruptBtn.addEventListener("click", () => void interrupt());
   browseWordsBtn.addEventListener("click", () => void browseWords());
   closeWordsBtn.addEventListener("click", () => wordsDialog.close());
@@ -619,18 +739,18 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       return;
     }
     replaceSource(example.source);
-    sketchFilename = `${example.name}.fr`;
+    if (!opts.documentId) sketchFilename = `${example.name}.fr`;
     examplesSelect.value = "";
     view.focus();
   });
 
-  // Keyboard: Cmd/Ctrl+Enter runs one form; add Shift to run the file.
+  // Keyboard: Cmd/Ctrl+Enter runs one form; add Shift to run the project or file.
   editorHost.addEventListener(
     "keydown",
     (ev) => {
       if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
         ev.preventDefault();
-        if (ev.shiftKey) void runFile();
+        if (ev.shiftKey) void (opts.resolveProject ? runProject() : runFile());
         else void runForm();
       }
     },
@@ -644,10 +764,15 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     setSource(src: string) {
       replaceSource(src);
     },
+    openDocument,
+    renameDocument,
+    forgetDocument,
+    resetDocument,
     connect,
     disconnect,
     runForm,
     runFile,
+    runProject,
     save,
     download,
     transcript() {
