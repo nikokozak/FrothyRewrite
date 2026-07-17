@@ -14,6 +14,7 @@ import {
   renameProjectFile,
   sameProjectDocument,
   selectProjectFile,
+  setBrowserDraftTitle,
   startNewProjectDraft,
   validateBrowserDraft,
   validateProjectDocument,
@@ -121,6 +122,21 @@ test("project: new project keeps source and drops the cloud association", () => 
   assert.equal(started.cloudProjectTitle, null);
   assert.equal(started.baseLockVersion, null);
   assert.equal(started.pendingCloudSave, false);
+});
+
+test("project: title changes stay local until a cloud project exists", () => {
+  const local = setBrowserDraftTitle(createBrowserDraft("local\n"), "Local signals");
+  assert.equal(local.cloudProjectTitle, "Local signals");
+  assert.equal(local.pendingCloudSave, false);
+
+  const cloud = openCloudProjectDraft(
+    local,
+    "11111111-1111-1111-1111-111111111111",
+    "Cloud signals",
+    1,
+    local.document,
+  );
+  assert.equal(setBrowserDraftTitle(cloud, "Renamed").pendingCloudSave, true);
 });
 
 test("project: document comparison ignores JSON object key order", () => {

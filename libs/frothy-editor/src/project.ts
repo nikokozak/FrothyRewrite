@@ -71,12 +71,14 @@ export interface BrowserDraft {
 export interface ProjectEditorOptions {
   mount: HTMLElement;
   resolveProject?: (document: ProjectDocumentV1) => Promise<ResolvedSource[]>;
+  onDraftSaved?: (draft: BrowserDraft) => void;
   onConnect?: EditorOptions["onConnect"];
   onError?: EditorOptions["onError"];
 }
 
 export interface ProjectEditorHandle extends EditorHandle {
   getDraft(): BrowserDraft;
+  setProjectTitle(title: string): Promise<void>;
   hasSameProjectDocument(document: ProjectDocumentV1): boolean;
   openCloudProject(
     projectId: string,
@@ -277,12 +279,14 @@ export async function mountProjectEditor(opts: ProjectEditorOptions): Promise<Pr
       void legacyStorage.save(next.document.files["main.fr"] ?? "");
       try {
         await putDraft(database, next);
-        return true;
       } catch {
-        if (journalSaved) return true;
-        if (draft === next) draft = previous;
-        return false;
+        if (!journalSaved) {
+          if (draft === next) draft = previous;
+          return false;
+        }
       }
+      opts.onDraftSaved?.(copyDraft(next));
+      return true;
     }
 
     const storage: SketchStorage = {
@@ -442,6 +446,12 @@ export async function mountProjectEditor(opts: ProjectEditorOptions): Promise<Pr
       ...editor,
       getDraft() {
         return copyDraft(withFileSource(draft, draft.activePath, editor.getSource()));
+      },
+      async setProjectTitle(title) {
+        const current = withFileSource(draft, draft.activePath, editor.getSource());
+        if (!await persistDraft(setBrowserDraftTitle(current, title))) {
+          throw new Error("could not save the project title");
+        }
       },
       hasSameProjectDocument(document) {
         const current = withFileSource(draft, draft.activePath, editor.getSource());
@@ -611,6 +621,18 @@ export function startNewProjectDraft(draft: BrowserDraft): BrowserDraft {
     localRevision: draft.localRevision + 1,
     document: copyProjectDocument(draft.document),
     pendingCloudSave: false,
+  });
+}
+
+export function setBrowserDraftTitle(draft: BrowserDraft, title: string): BrowserDraft {
+  if (!boundedText(title)) throw new Error("project title must be bounded text");
+  if (draft.cloudProjectTitle === title) return draft;
+
+  return parseBrowserDraft({
+    ...draft,
+    cloudProjectTitle: title,
+    localRevision: draft.localRevision + 1,
+    pendingCloudSave: draft.pendingCloudSave || draft.cloudProjectId !== null,
   });
 }
 
