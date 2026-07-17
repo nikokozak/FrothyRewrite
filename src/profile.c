@@ -212,6 +212,42 @@
 #define FR_PROFILE_HASH_FEATURE_PAD FR_FEATURE_PAD
 #endif
 
+#ifndef FR_PROFILE_HASH_FEATURE_BLE
+#define FR_PROFILE_HASH_FEATURE_BLE FR_FEATURE_BLE
+#endif
+
+#ifndef FR_PROFILE_HASH_BLE_ENABLE_OBSERVER
+#define FR_PROFILE_HASH_BLE_ENABLE_OBSERVER FR_BLE_ENABLE_OBSERVER
+#endif
+
+#ifndef FR_PROFILE_HASH_BLE_ENABLE_BROADCASTER
+#define FR_PROFILE_HASH_BLE_ENABLE_BROADCASTER FR_BLE_ENABLE_BROADCASTER
+#endif
+
+#ifndef FR_PROFILE_HASH_BLE_ENABLE_CENTRAL
+#define FR_PROFILE_HASH_BLE_ENABLE_CENTRAL FR_BLE_ENABLE_CENTRAL
+#endif
+
+#ifndef FR_PROFILE_HASH_BLE_ENABLE_PERIPHERAL
+#define FR_PROFILE_HASH_BLE_ENABLE_PERIPHERAL FR_BLE_ENABLE_PERIPHERAL
+#endif
+
+#ifndef FR_PROFILE_HASH_BLE_SCAN_QUEUE_COUNT
+#define FR_PROFILE_HASH_BLE_SCAN_QUEUE_COUNT FR_BLE_SCAN_QUEUE_COUNT
+#endif
+
+#ifndef FR_PROFILE_HASH_BLE_SCAN_DATA_BYTES
+#define FR_PROFILE_HASH_BLE_SCAN_DATA_BYTES FR_BLE_SCAN_DATA_BYTES
+#endif
+
+#ifndef FR_PROFILE_HASH_BLE_START_TIMEOUT_MS
+#define FR_PROFILE_HASH_BLE_START_TIMEOUT_MS FR_BLE_START_TIMEOUT_MS
+#endif
+
+#ifndef FR_PROFILE_HASH_BLE_STOP_TIMEOUT_MS
+#define FR_PROFILE_HASH_BLE_STOP_TIMEOUT_MS FR_BLE_STOP_TIMEOUT_MS
+#endif
+
 static void fr_profile_write_u16(uint8_t *bytes, uint16_t value) {
   bytes[0] = (uint8_t)(value & 0xffu);
   bytes[1] = (uint8_t)(value >> 8);
@@ -322,6 +358,19 @@ static uint32_t fr_profile_hash_body(uint16_t word_size,
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_FEATURE_RECORDS);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_FEATURE_HANDLES);
   fr_profile_hash_u16(&crc, FR_PROFILE_HASH_FEATURE_PAD);
+
+  /* BLE-disabled profiles keep their pre-BLE persisted-image identity. */
+#if FR_PROFILE_HASH_FEATURE_BLE
+  fr_profile_hash_u16(&crc, FR_PROFILE_HASH_FEATURE_BLE);
+  fr_profile_hash_u16(&crc, FR_PROFILE_HASH_BLE_ENABLE_OBSERVER);
+  fr_profile_hash_u16(&crc, FR_PROFILE_HASH_BLE_ENABLE_BROADCASTER);
+  fr_profile_hash_u16(&crc, FR_PROFILE_HASH_BLE_ENABLE_CENTRAL);
+  fr_profile_hash_u16(&crc, FR_PROFILE_HASH_BLE_ENABLE_PERIPHERAL);
+  fr_profile_hash_u16(&crc, FR_PROFILE_HASH_BLE_SCAN_QUEUE_COUNT);
+  fr_profile_hash_u16(&crc, FR_PROFILE_HASH_BLE_SCAN_DATA_BYTES);
+  fr_profile_hash_u32(&crc, FR_PROFILE_HASH_BLE_START_TIMEOUT_MS);
+  fr_profile_hash_u32(&crc, FR_PROFILE_HASH_BLE_STOP_TIMEOUT_MS);
+#endif
 
   fr_profile_hash_u16(&crc, fr_base_def_count());
   for (uint16_t i = 0; i < fr_base_def_count(); i++) {

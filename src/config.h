@@ -119,6 +119,42 @@
 #define FR_FEATURE_BYTES 0
 #endif
 
+#ifndef FR_FEATURE_BLE
+#define FR_FEATURE_BLE 0
+#endif
+
+#ifndef FR_BLE_ENABLE_OBSERVER
+#define FR_BLE_ENABLE_OBSERVER 0
+#endif
+
+#ifndef FR_BLE_ENABLE_BROADCASTER
+#define FR_BLE_ENABLE_BROADCASTER 0
+#endif
+
+#ifndef FR_BLE_ENABLE_CENTRAL
+#define FR_BLE_ENABLE_CENTRAL 0
+#endif
+
+#ifndef FR_BLE_ENABLE_PERIPHERAL
+#define FR_BLE_ENABLE_PERIPHERAL 0
+#endif
+
+#ifndef FR_BLE_SCAN_QUEUE_COUNT
+#define FR_BLE_SCAN_QUEUE_COUNT 0
+#endif
+
+#ifndef FR_BLE_SCAN_DATA_BYTES
+#define FR_BLE_SCAN_DATA_BYTES 0
+#endif
+
+#ifndef FR_BLE_START_TIMEOUT_MS
+#define FR_BLE_START_TIMEOUT_MS 0
+#endif
+
+#ifndef FR_BLE_STOP_TIMEOUT_MS
+#define FR_BLE_STOP_TIMEOUT_MS 0
+#endif
+
 #define FR_FEATURE_OBJECTS                                                   \
   (FR_FEATURE_CELLS || FR_FEATURE_TEXT || FR_FEATURE_RECORDS)
 
@@ -552,6 +588,63 @@
 
 #if FR_FEATURE_PULSE && !FR_FEATURE_REPL
 #error "FR_FEATURE_PULSE requires FR_FEATURE_REPL"
+#endif
+
+#if FR_FEATURE_BLE && !FR_FEATURE_BYTES
+#error "FR_FEATURE_BLE requires FR_FEATURE_BYTES"
+#endif
+
+#if FR_FEATURE_BLE && !FR_FEATURE_REPL
+#error "the first BLE profile requires FR_FEATURE_REPL"
+#endif
+
+#if !FR_FEATURE_BLE &&                                                     \
+    (FR_BLE_ENABLE_OBSERVER || FR_BLE_ENABLE_BROADCASTER ||                \
+     FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL)
+#error "BLE role gates require FR_FEATURE_BLE"
+#endif
+
+#if FR_FEATURE_BLE &&                                                       \
+    !(FR_BLE_ENABLE_OBSERVER || FR_BLE_ENABLE_BROADCASTER ||                \
+      FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL)
+#error "FR_FEATURE_BLE requires at least one BLE role"
+#endif
+
+#if (FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL) &&                 \
+    !FR_FEATURE_HANDLES
+#error "connected BLE roles require FR_FEATURE_HANDLES"
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL && !FR_BLE_ENABLE_OBSERVER
+#error "BLE central requires observer"
+#endif
+
+#if FR_BLE_ENABLE_PERIPHERAL && !FR_BLE_ENABLE_BROADCASTER
+#error "BLE peripheral requires broadcaster"
+#endif
+
+#if FR_BLE_ENABLE_OBSERVER &&                                              \
+    (FR_BLE_SCAN_QUEUE_COUNT < 1 || FR_BLE_SCAN_QUEUE_COUNT > 255)
+#error "BLE scan queue count must fit one byte"
+#endif
+
+#if FR_BLE_ENABLE_OBSERVER && FR_BLE_SCAN_DATA_BYTES != 31
+#error "legacy BLE scan reports require exactly 31 payload bytes"
+#endif
+
+#if !FR_BLE_ENABLE_OBSERVER &&                                             \
+    (FR_BLE_SCAN_QUEUE_COUNT != 0 || FR_BLE_SCAN_DATA_BYTES != 0)
+#error "BLE scan limits require the observer role"
+#endif
+
+#if FR_FEATURE_BLE &&                                                      \
+    (FR_BLE_START_TIMEOUT_MS < 1 || FR_BLE_STOP_TIMEOUT_MS < 1)
+#error "BLE lifecycle timeouts must be positive"
+#endif
+
+#if !FR_FEATURE_BLE &&                                                     \
+    (FR_BLE_START_TIMEOUT_MS != 0 || FR_BLE_STOP_TIMEOUT_MS != 0)
+#error "BLE lifecycle timeouts require FR_FEATURE_BLE"
 #endif
 
 #if FR_FEATURE_PAD && FR_PROFILE_PAD_BYTES == 0
