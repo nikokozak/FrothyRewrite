@@ -562,6 +562,168 @@ static fr_tagged_t install_peer(uint8_t address_type, uint8_t id) {
   return tagged;
 }
 
+static void install_gatt_event_table(void) {
+  const fr_ble_gatt_table_t table = {
+      .row_count = 3,
+      .service_count = 1,
+      .characteristic_count = 2,
+      .value_bytes_used = 2,
+      .services = {{
+          .uuid = {.kind = FR_BLE_UUID_16, .bytes = {0x18, 0x0f}},
+          .attribute_id = 0,
+          .first_characteristic = 0,
+          .characteristic_count = 2,
+      }},
+      .characteristics = {
+          {
+              .uuid = {.kind = FR_BLE_UUID_16, .bytes = {0x2a, 0x19}},
+              .attribute_id = 1,
+              .portable_flags =
+                  FR_BLE_GATT_CHR_WRITE | FR_BLE_GATT_CHR_NOTIFY,
+              .maximum_length = 1,
+              .value_offset = 0,
+          },
+          {
+              .uuid = {.kind = FR_BLE_UUID_16, .bytes = {0x2a, 0x1a}},
+              .attribute_id = 2,
+              .portable_flags =
+                  FR_BLE_GATT_CHR_WRITE | FR_BLE_GATT_CHR_INDICATE,
+              .maximum_length = 1,
+              .value_offset = 1,
+          },
+      },
+  };
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_gatt_install(&table));
+}
+
+static void test_gatt_server_events_keep_connection_ownership_visible(void) {
+  static const uint8_t advertising_data[] = {2, 0x01, 0x06};
+  static const uint8_t peer[] = {FR_BLE_ADDRESS_RANDOM, 1, 2, 3, 4, 5, 6};
+  const fr_base_def_t *accept = NULL;
+  const fr_base_def_t *notify = NULL;
+  const fr_base_def_t *indicate = NULL;
+  const fr_base_def_t *next_write = NULL;
+  const fr_base_def_t *write_attribute = NULL;
+  const fr_base_def_t *write_data = NULL;
+  fr_tagged_t connection = fr_tagged_nil();
+  fr_tagged_t payload = fr_tagged_nil();
+  fr_tagged_t result = fr_tagged_nil();
+  fr_tagged_t notify_args[3] = {0};
+  fr_tagged_t indicate_args[4] = {0};
+  fr_handle_ref_t connection_ref = {0};
+  fr_bytes_ref_t bytes_ref = {0};
+  fr_ble_gatt_status_t status = {0};
+  const uint8_t *bytes = NULL;
+  uint8_t value = 42;
+  uint8_t current = 0;
+  uint16_t length = 0;
+  fr_int_t attribute_id = 0;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  install_gatt_event_table();
+  read_native_def("ble.accept", FR_SLOT_BLE_ACCEPT, 0, &accept);
+  read_native_def("ble.gatt.notify", FR_SLOT_BLE_GATT_NOTIFY, 3, &notify);
+  read_native_def("ble.gatt.indicate", FR_SLOT_BLE_GATT_INDICATE, 4,
+                  &indicate);
+  read_native_def("ble.gatt.next-write", FR_SLOT_BLE_GATT_NEXT_WRITE, 0,
+                  &next_write);
+  read_native_def("ble.gatt.write-attribute",
+                  FR_SLOT_BLE_GATT_WRITE_ATTRIBUTE, 0, &write_attribute);
+  read_native_def("ble.gatt.write-data", FR_SLOT_BLE_GATT_WRITE_DATA, 0,
+                  &write_data);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_advertise_start(
+                        advertising_data, sizeof(advertising_data), NULL, 0,
+                        100, true));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_queue_incoming(peer));
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_NOT_READY,
+                    fr_host_ble_gatt_remote_write(1, &value, 1));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_gatt_get(1, &current, 1, &length));
+  TEST_ASSERT_EQUAL_UINT16(0, length);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    accept->native_fn(&s_runtime, NULL, 0, &connection));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_decode_handle_ref(connection, &connection_ref));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_bytes_install(&s_runtime, &value, 1, &payload));
+  notify_args[0] = connection;
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1, &notify_args[1]));
+  notify_args[2] = payload;
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_NOT_READY,
+                    notify->native_fn(&s_runtime, notify_args, 3, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_gatt_subscribe(1, true, false));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    notify->native_fn(&s_runtime, notify_args, 3, &result));
+
+  indicate_args[0] = connection;
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(2, &indicate_args[1]));
+  indicate_args[2] = payload;
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1000, &indicate_args[3]));
+  TEST_ASSERT_EQUAL(
+      FR_ERR_BLE_NOT_READY,
+      indicate->native_fn(&s_runtime, indicate_args, 4, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_gatt_subscribe(2, false, true));
+  TEST_ASSERT_EQUAL(
+      FR_OK, indicate->native_fn(&s_runtime, indicate_args, 4, &result));
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_gatt_remote_write(1, &value, 1));
+  TEST_ASSERT_EQUAL(
+      FR_OK, next_write->native_fn(&s_runtime, NULL, 0, &result));
+  TEST_ASSERT_EQUAL_HEX32(connection, result);
+  TEST_ASSERT_EQUAL(
+      FR_OK, write_attribute->native_fn(&s_runtime, NULL, 0, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(result, &attribute_id));
+  TEST_ASSERT_EQUAL_INT(1, attribute_id);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    write_data->native_fn(&s_runtime, NULL, 0, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_bytes_ref(result, &bytes_ref));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_bytes_view(&s_runtime, bytes_ref, &bytes, &length));
+  TEST_ASSERT_EQUAL_UINT16(1, length);
+  TEST_ASSERT_EQUAL_UINT8(value, bytes[0]);
+  TEST_ASSERT_EQUAL(
+      FR_OK, next_write->native_fn(&s_runtime, NULL, 0, &result));
+  TEST_ASSERT_TRUE(fr_tagged_is_nil(result));
+  TEST_ASSERT_EQUAL(
+      FR_ERR_NOT_FOUND,
+      write_attribute->native_fn(&s_runtime, NULL, 0, &result));
+
+  for (uint8_t i = 0; i < FR_BLE_GATT_WRITE_QUEUE_COUNT; i++) {
+    value = i;
+    TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_gatt_remote_write(1, &value, 1));
+  }
+  value = 9;
+  TEST_ASSERT_EQUAL(FR_ERR_CAPACITY,
+                    fr_host_ble_gatt_remote_write(1, &value, 1));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_gatt_get(1, &current, 1, &length));
+  TEST_ASSERT_EQUAL_UINT8(FR_BLE_GATT_WRITE_QUEUE_COUNT - 1u, current);
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_gatt_status(&status));
+  TEST_ASSERT_EQUAL_UINT8(FR_BLE_GATT_WRITE_QUEUE_COUNT,
+                          status.write_queue_count);
+  TEST_ASSERT_EQUAL_UINT32(1, status.write_queue_overflow);
+  TEST_ASSERT_EQUAL_UINT32(1, status.preaccept_write_rejected);
+  for (uint8_t i = 0; i < FR_BLE_GATT_WRITE_QUEUE_COUNT; i++) {
+    TEST_ASSERT_EQUAL(
+        FR_OK, next_write->native_fn(&s_runtime, NULL, 0, &result));
+    TEST_ASSERT_EQUAL_HEX32(connection, result);
+  }
+
+  value = 7;
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_gatt_remote_write(1, &value, 1));
+  TEST_ASSERT_EQUAL(FR_OK, fr_handle_close(&s_runtime, connection_ref));
+  TEST_ASSERT_EQUAL(
+      FR_OK, next_write->native_fn(&s_runtime, NULL, 0, &result));
+  TEST_ASSERT_TRUE(fr_tagged_is_nil(result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_gatt_status(&status));
+  TEST_ASSERT_EQUAL_UINT32(1, status.write_queue_stale);
+}
+
 static void test_central_connection_owns_one_inspectable_handle(void) {
   const fr_base_def_t *connect = NULL;
   const fr_base_def_t *ready = NULL;
@@ -1170,6 +1332,7 @@ int main(void) {
   RUN_TEST(test_scanner_words_bridge_tagged_values_and_reports);
   RUN_TEST(test_scanner_loop_reuses_eval_bytes);
   RUN_TEST(test_advertising_words_validate_and_gate_scan);
+  RUN_TEST(test_gatt_server_events_keep_connection_ownership_visible);
   RUN_TEST(test_central_connection_owns_one_inspectable_handle);
   RUN_TEST(test_peripheral_accept_drains_stale_notices_and_ble_off);
   RUN_TEST(test_radio_lifecycle_and_status);
