@@ -928,6 +928,7 @@ static void test_gatt_client_keeps_remote_handles_connection_scoped(void) {
   const uint8_t *bytes = NULL;
   uint8_t written[] = {7, 8};
   uint8_t noticed[] = {9, 10, 11};
+  uint8_t later_notice = 0;
   fr_slot_id_t notifications_slot = 0;
   fr_int_t attribute_handle = 0;
   uint16_t length = 0;
@@ -1034,6 +1035,25 @@ static void test_gatt_client_keeps_remote_handles_connection_scoped(void) {
                     fr_host_ble_gatt_client_notify(
                         (uint16_t)attribute_handle, noticed, sizeof(noticed),
                         false));
+  for (uint8_t queued = 1; queued < FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT;
+       queued++) {
+    later_notice = (uint8_t)(11u + queued);
+    TEST_ASSERT_EQUAL(FR_OK,
+                      fr_host_ble_gatt_client_notify(
+                          (uint16_t)attribute_handle, &later_notice, 1,
+                          false));
+  }
+  later_notice += 1u;
+  TEST_ASSERT_EQUAL(FR_ERR_CAPACITY,
+                    fr_host_ble_gatt_client_notify(
+                        (uint16_t)attribute_handle, &later_notice, 1, false));
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_client_status(&client_status));
+  TEST_ASSERT_EQUAL_UINT8(FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT,
+                          client_status.notification_queue_count);
+  TEST_ASSERT_EQUAL_UINT8(FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT,
+                          client_status.notification_queue_high_water);
+  TEST_ASSERT_EQUAL_UINT32(1, client_status.notification_dropped);
   TEST_ASSERT_EQUAL(FR_OK, next_notification->native_fn(
                                &s_runtime, NULL, 0, &result));
   TEST_ASSERT_EQUAL(FR_OK,
@@ -1052,6 +1072,16 @@ static void test_gatt_client_keeps_remote_handles_connection_scoped(void) {
                     fr_bytes_view(&s_runtime, bytes_ref, &bytes, &length));
   TEST_ASSERT_EQUAL_UINT16(sizeof(noticed), length);
   TEST_ASSERT_EQUAL_UINT8_ARRAY(noticed, bytes, sizeof(noticed));
+  for (uint8_t queued = 1; queued < FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT;
+       queued++) {
+    TEST_ASSERT_EQUAL(FR_OK, next_notification->native_fn(
+                                 &s_runtime, NULL, 0, &result));
+    TEST_ASSERT_EQUAL(FR_OK,
+                      fr_tagged_decode_handle_ref(result, &notification_ref));
+  }
+  TEST_ASSERT_EQUAL(FR_OK, next_notification->native_fn(
+                               &s_runtime, NULL, 0, &result));
+  TEST_ASSERT_TRUE(fr_tagged_is_nil(result));
 
   unsubscribe_args[0] = connection;
   unsubscribe_args[1] = read_args[1];
