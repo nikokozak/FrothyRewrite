@@ -127,7 +127,7 @@ board.
 | Where you edit | How |
 |---|---|
 | **Any text editor** | Write a `.fr` file. Send it with `frothy send file.fr --port …` or watch it on the device with `frothy connect`. |
-| **VS Code** | Build the 0.4.0 extension with `make vsix`, then install `editors/vscode/frothy-0.4.0.vsix`. Adds syntax, Run Form/File, live words, diagnostics, and serial session controls. |
+| **VS Code** | Build the 0.5.1 extension with `make vsix`, then install `editors/vscode/frothy-0.5.1.vsix`. Adds syntax, Run Form/File, live words, diagnostics, and serial session controls. |
 | **In the browser** | Open the [frothy editor](https://frothy.dev/editor/). WebSerial talks to the chip directly; sketches autosave locally. |
 
 ## How Frothy is put together
