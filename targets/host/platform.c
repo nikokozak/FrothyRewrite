@@ -21,6 +21,7 @@ enum {
 
 static uint8_t fr_host_gpio_values[FR_HOST_MAX_PIN + 1];
 static uint32_t fr_host_millis;
+static uint16_t fr_host_micros_remainder;
 
 #if FR_FEATURE_CONSOLE_ROUTING
 static fr_console_route_t fr_host_console_route = {
@@ -286,6 +287,14 @@ fr_err_t fr_platform_delay_ms(uint16_t ms) {
   return FR_OK;
 }
 
+fr_err_t fr_platform_delay_us(uint16_t us) {
+  uint32_t elapsed = (uint32_t)fr_host_micros_remainder + us;
+
+  fr_host_millis += elapsed / 1000u;
+  fr_host_micros_remainder = (uint16_t)(elapsed % 1000u);
+  return FR_OK;
+}
+
 fr_err_t fr_platform_millis(uint32_t *out_ms) {
   if (out_ms == NULL) {
     return FR_ERR_INVALID;
@@ -300,7 +309,7 @@ fr_err_t fr_platform_micros(uint32_t *out_us) {
     return FR_ERR_INVALID;
   }
 
-  *out_us = fr_host_millis * 1000u;
+  *out_us = fr_host_millis * 1000u + fr_host_micros_remainder;
   return FR_OK;
 }
 

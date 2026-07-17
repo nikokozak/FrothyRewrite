@@ -33,6 +33,7 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_partition.h"
+#include "esp_rom_sys.h"
 #if FR_FEATURE_POWER
 #include "esp_sleep.h"
 #include "esp_task_wdt.h"
@@ -779,6 +780,11 @@ fr_err_t fr_platform_delay_ms(uint16_t ms) {
   }
 
   vTaskDelay(pdMS_TO_TICKS(ms));
+  return FR_OK;
+}
+
+fr_err_t fr_platform_delay_us(uint16_t us) {
+  esp_rom_delay_us(us);
   return FR_OK;
 }
 

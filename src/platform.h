@@ -71,6 +71,7 @@ typedef struct fr_pulse_status_t {
 } fr_pulse_status_t;
 
 fr_err_t fr_platform_delay_ms(uint16_t ms);
+fr_err_t fr_platform_delay_us(uint16_t us);
 fr_err_t fr_platform_millis(uint32_t *out_ms);
 fr_err_t fr_platform_micros(uint32_t *out_us);
 /* Let the platform scheduler run without changing Frothy program state. */
