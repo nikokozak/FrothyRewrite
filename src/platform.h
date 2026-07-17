@@ -683,6 +683,7 @@ fr_err_t fr_host_ble_gatt_remote_write(uint16_t attribute_id,
                                        uint16_t length);
 fr_err_t fr_host_ble_gatt_subscribe(uint16_t attribute_id, bool notify,
                                     bool indicate);
+void fr_host_ble_timeout_next_indication(void);
 #endif
 #endif
 #endif

@@ -617,6 +617,7 @@ static void test_gatt_server_events_keep_connection_ownership_visible(void) {
   const uint8_t *bytes = NULL;
   uint8_t value = 42;
   uint8_t current = 0;
+  uint16_t connection_index = FR_HANDLE_PLATFORM_NONE;
   uint16_t length = 0;
   fr_int_t attribute_id = 0;
 
@@ -649,6 +650,11 @@ static void test_gatt_server_events_keep_connection_ownership_visible(void) {
                     accept->native_fn(&s_runtime, NULL, 0, &connection));
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_tagged_decode_handle_ref(connection, &connection_ref));
+  TEST_ASSERT_EQUAL(
+      FR_OK,
+      fr_handle_lookup(&s_runtime, connection_ref,
+                       FR_HANDLE_KIND_BLE_CONNECTION, NULL,
+                       &connection_index));
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_bytes_install(&s_runtime, &value, 1, &payload));
   notify_args[0] = connection;
@@ -716,6 +722,20 @@ static void test_gatt_server_events_keep_connection_ownership_visible(void) {
 
   value = 7;
   TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_gatt_remote_write(1, &value, 1));
+  fr_host_ble_timeout_next_indication();
+  TEST_ASSERT_EQUAL(
+      FR_ERR_BLE_TIMEOUT,
+      indicate->native_fn(&s_runtime, indicate_args, 4, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_gatt_status(&status));
+  TEST_ASSERT_TRUE(status.indication_pending);
+  TEST_ASSERT_EQUAL(
+      FR_ERR_BLE_BUSY,
+      indicate->native_fn(&s_runtime, indicate_args, 4, &result));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_host_ble_disconnect(connection_index, 19));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_gatt_status(&status));
+  TEST_ASSERT_FALSE(status.indication_pending);
+  TEST_ASSERT_EQUAL_UINT8(0, status.subscription_count);
   TEST_ASSERT_EQUAL(FR_OK, fr_handle_close(&s_runtime, connection_ref));
   TEST_ASSERT_EQUAL(
       FR_OK, next_write->native_fn(&s_runtime, NULL, 0, &result));

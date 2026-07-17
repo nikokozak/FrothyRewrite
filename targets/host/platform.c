@@ -862,6 +862,9 @@ typedef struct fr_host_ble_state_t {
 #if FR_BLE_ENABLE_OBSERVER
   bool timeout_next_scan_stop;
 #endif
+#if FR_BLE_ENABLE_GATT_SERVER
+  bool timeout_next_indication;
+#endif
   int32_t fail_next_on_raw_code;
 #if FR_BLE_ENABLE_OBSERVER
   int32_t fail_next_scan_start_raw_code;
@@ -968,6 +971,11 @@ static void fr_host_ble_gatt_clear_subscriptions(void) {
   fr_host_ble.gatt.subscription_count = 0;
 }
 
+static void fr_host_ble_gatt_connection_closed(void) {
+  fr_host_ble_gatt_clear_subscriptions();
+  fr_host_ble.gatt.indication_pending = false;
+}
+
 static void fr_host_ble_gatt_radio_on(void) {
   for (uint16_t i = 0; i < fr_host_ble.gatt.table.characteristic_count; i++) {
     fr_host_ble.gatt.table.characteristics[i].target_value_handle =
@@ -979,7 +987,7 @@ static void fr_host_ble_gatt_radio_off(void) {
   for (uint16_t i = 0; i < fr_host_ble.gatt.table.characteristic_count; i++) {
     fr_host_ble.gatt.table.characteristics[i].target_value_handle = 0;
   }
-  fr_host_ble_gatt_clear_subscriptions();
+  fr_host_ble_gatt_connection_closed();
   fr_host_ble.gatt.write_stale += fr_host_ble.gatt.write_count;
   memset(fr_host_ble.gatt.writes, 0, sizeof(fr_host_ble.gatt.writes));
   fr_host_ble.gatt.write_head = 0;
@@ -987,7 +995,6 @@ static void fr_host_ble_gatt_radio_off(void) {
   fr_host_ble.gatt.current_write_valid = false;
   memset(&fr_host_ble.gatt.current_write, 0,
          sizeof(fr_host_ble.gatt.current_write));
-  fr_host_ble.gatt.indication_pending = false;
 }
 
 static fr_ble_gatt_subscription_t *
@@ -1035,7 +1042,7 @@ static void fr_host_ble_connection_free(void) {
   uint32_t generation = fr_host_ble.connection.generation;
 
 #if FR_BLE_ENABLE_GATT_SERVER
-  fr_host_ble_gatt_clear_subscriptions();
+  fr_host_ble_gatt_connection_closed();
 #endif
   memset(&fr_host_ble.connection, 0, sizeof(fr_host_ble.connection));
   fr_host_ble.connection.generation = generation;
@@ -1064,7 +1071,7 @@ static bool fr_host_ble_connection_is_live(
 #ifdef FR_HOST_TEST_HELPERS
 static void fr_host_ble_connection_mark_disconnected(int32_t reason) {
 #if FR_BLE_ENABLE_GATT_SERVER
-  fr_host_ble_gatt_clear_subscriptions();
+  fr_host_ble_gatt_connection_closed();
 #endif
   fr_host_ble.connection.info.state = FR_BLE_CONNECTION_DISCONNECTED;
   fr_host_ble.connection.info.rssi_valid = false;
@@ -1947,6 +1954,7 @@ fr_err_t fr_platform_ble_gatt_indicate(fr_runtime_t *runtime,
                                        uint16_t attribute_id,
                                        const uint8_t *bytes, uint16_t length,
                                        uint16_t timeout_ms) {
+  bool timeout = false;
   fr_err_t err = FR_OK;
 
   if (runtime == NULL) {
@@ -1965,8 +1973,16 @@ fr_err_t fr_platform_ble_gatt_indicate(fr_runtime_t *runtime,
       connection_index, attribute_id, bytes, length,
       FR_BLE_GATT_CHR_INDICATE, true);
   if (err == FR_OK) {
+#ifdef FR_HOST_TEST_HELPERS
+    timeout = fr_host_ble.timeout_next_indication;
+    fr_host_ble.timeout_next_indication = false;
+#endif
     fr_host_ble.gatt.indication_pending = true;
-    fr_host_ble.gatt.indication_pending = false;
+    if (timeout) {
+      err = FR_ERR_BLE_TIMEOUT;
+    } else {
+      fr_host_ble.gatt.indication_pending = false;
+    }
   }
   fr_host_ble_record(FR_BLE_OP_GATT_INDICATE, err, 0, 0);
   return err;
@@ -2256,6 +2272,10 @@ fr_err_t fr_host_ble_gatt_subscribe(uint16_t attribute_id, bool notify,
       .indicate = indicate,
   };
   return FR_OK;
+}
+
+void fr_host_ble_timeout_next_indication(void) {
+  fr_host_ble.timeout_next_indication = true;
 }
 #endif
 
