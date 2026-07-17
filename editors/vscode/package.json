@@ -11,6 +11,9 @@
     "directory": "editors/vscode"
   },
   "homepage": "https://github.com/nikokozak/FrothyRewrite/tree/main/editors/vscode#readme",
+  "bugs": {
+    "url": "https://github.com/nikokozak/FrothyRewrite/issues"
+  },
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -18,6 +21,18 @@
     "Programming Languages",
     "Other"
   ],
+  "keywords": [
+    "hardware",
+    "embedded",
+    "serial",
+    "repl",
+    "microcontroller"
+  ],
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#2c1a10",
+    "theme": "dark"
+  },
   "main": "./out/extension.js",
   "activationEvents": [
     "onLanguage:frothy",

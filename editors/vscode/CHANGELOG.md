@@ -27,6 +27,8 @@ plumbing is unchanged; this release is UI and reach.
 - **Getting Started walkthrough** — install CLI → flash → connect → run →
   explore, on VS Code's Welcome page.
 - Activation on workspaces containing `frothy.toml`.
+- Marketplace metadata: extension icon, gallery banner, keywords, and bugs
+  URL, ready for the first `vsce publish`.
 
 ### Fixed
 
