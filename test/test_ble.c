@@ -17,8 +17,9 @@
 
 #if !FR_FEATURE_BLE || !FR_BLE_ENABLE_OBSERVER ||                         \
     !FR_BLE_ENABLE_BROADCASTER || !FR_BLE_ENABLE_CENTRAL ||              \
-    !FR_BLE_ENABLE_PERIPHERAL || !FR_BLE_ENABLE_GATT_SERVER
-#error "test_ble requires all four BLE role gates and the GATT server"
+    !FR_BLE_ENABLE_PERIPHERAL || !FR_BLE_ENABLE_GATT_SERVER ||            \
+    !FR_BLE_ENABLE_GATT_CLIENT
+#error "test_ble requires all four BLE roles and both GATT roles"
 #endif
 
 static fr_runtime_t s_runtime;
@@ -900,6 +901,116 @@ static void test_central_connection_owns_one_inspectable_handle(void) {
   TEST_ASSERT_EQUAL(FR_BLE_OP_CONNECTION_CLOSE, status.last_operation);
 }
 
+static void test_gatt_client_keeps_remote_handles_connection_scoped(void) {
+  const fr_ble_uuid_t service_uuid = {
+      .kind = FR_BLE_UUID_16, .bytes = {0x18, 0x0f}};
+  const fr_ble_uuid_t characteristic_uuid = {
+      .kind = FR_BLE_UUID_16, .bytes = {0x2a, 0x19}};
+  const fr_base_def_t *connect = NULL;
+  fr_tagged_t connect_args[2] = {0};
+  fr_tagged_t connection = fr_tagged_nil();
+  fr_handle_ref_t connection_ref = {0};
+  fr_handle_ref_t notification_ref = {0};
+  fr_ble_gatt_notification_t notification = {0};
+  fr_ble_gatt_client_status_t client_status = {0};
+  uint8_t bytes[FR_BLE_GATT_CLIENT_DATA_BYTES] = {0};
+  uint8_t written[] = {7, 8};
+  uint8_t noticed[] = {9, 10, 11};
+  uint16_t platform_index = FR_HANDLE_PLATFORM_NONE;
+  uint16_t attribute_handle = 0;
+  uint16_t length = 0;
+  bool has_notification = false;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  read_native_def("ble.connect", FR_SLOT_BLE_CONNECT, 2, &connect);
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  connect_args[0] = install_peer(FR_BLE_ADDRESS_PUBLIC, 0x61);
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1000, &connect_args[1]));
+  TEST_ASSERT_EQUAL(
+      FR_OK,
+      connect->native_fn(&s_runtime, connect_args, 2, &connection));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_decode_handle_ref(connection, &connection_ref));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_handle_lookup(&s_runtime, connection_ref,
+                                     FR_HANDLE_KIND_BLE_CONNECTION, NULL,
+                                     &platform_index));
+
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_client_find(
+                 &s_runtime, platform_index, &service_uuid,
+                 &characteristic_uuid, 1000, &attribute_handle));
+  TEST_ASSERT_EQUAL_UINT16(3, attribute_handle);
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_client_status(&client_status));
+  TEST_ASSERT_EQUAL_UINT8(1, client_status.cache_count);
+  TEST_ASSERT_EQUAL_UINT16(1, client_status.service_match_count);
+  TEST_ASSERT_EQUAL_UINT16(1, client_status.characteristic_match_count);
+
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_client_read(
+                 &s_runtime, platform_index, attribute_handle, 1000, bytes,
+                 sizeof(bytes), &length));
+  TEST_ASSERT_EQUAL_UINT16(1, length);
+  TEST_ASSERT_EQUAL_UINT8(42, bytes[0]);
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_client_write(
+                 &s_runtime, platform_index, attribute_handle, written,
+                 sizeof(written), true, 1000));
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_client_read(
+                 &s_runtime, platform_index, attribute_handle, 1000, bytes,
+                 sizeof(bytes), &length));
+  TEST_ASSERT_EQUAL_UINT16(sizeof(written), length);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(written, bytes, sizeof(written));
+
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_client_subscribe(
+                 &s_runtime, platform_index, attribute_handle,
+                 FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS, 1000));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_host_ble_gatt_client_notify(
+                        attribute_handle, noticed, sizeof(noticed), false));
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_notification_next(
+                 &has_notification, &notification_ref));
+  TEST_ASSERT_TRUE(has_notification);
+  TEST_ASSERT_EQUAL_UINT8(connection_ref.id, notification_ref.id);
+  TEST_ASSERT_EQUAL_UINT8(connection_ref.generation,
+                          notification_ref.generation);
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_notification_current(&notification));
+  TEST_ASSERT_EQUAL_UINT16(attribute_handle, notification.attribute_handle);
+  TEST_ASSERT_EQUAL_UINT8(sizeof(noticed), notification.data_length);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(noticed, notification.data, sizeof(noticed));
+  TEST_ASSERT_FALSE(notification.indication);
+
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_client_unsubscribe(
+                 &s_runtime, platform_index, attribute_handle, 1000));
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_NOT_READY,
+                    fr_host_ble_gatt_client_notify(
+                        attribute_handle, noticed, sizeof(noticed), false));
+
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_client_subscribe(
+                 &s_runtime, platform_index, attribute_handle,
+                 FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS, 1000));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_host_ble_gatt_client_notify(
+                        attribute_handle, noticed, sizeof(noticed), false));
+  TEST_ASSERT_EQUAL(FR_OK, fr_handle_close(&s_runtime, connection_ref));
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_notification_next(
+                 &has_notification, &notification_ref));
+  TEST_ASSERT_FALSE(has_notification);
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_gatt_client_status(&client_status));
+  TEST_ASSERT_EQUAL_UINT8(0, client_status.cache_count);
+  TEST_ASSERT_EQUAL_UINT8(0, client_status.subscription_count);
+  TEST_ASSERT_EQUAL_UINT32(1, client_status.notification_stale);
+}
+
 static void test_peripheral_accept_drains_stale_notices_and_ble_off(void) {
   static const uint8_t advertising_data[] = {2, 0x01, 0x06};
   const uint8_t peer[7] = {FR_BLE_ADDRESS_RANDOM, 0xA1, 0xA2, 0xA3,
@@ -1382,6 +1493,7 @@ int main(void) {
   RUN_TEST(test_advertising_words_validate_and_gate_scan);
   RUN_TEST(test_gatt_server_events_keep_connection_ownership_visible);
   RUN_TEST(test_central_connection_owns_one_inspectable_handle);
+  RUN_TEST(test_gatt_client_keeps_remote_handles_connection_scoped);
   RUN_TEST(test_peripheral_accept_drains_stale_notices_and_ble_off);
   RUN_TEST(test_radio_lifecycle_and_status);
   RUN_TEST(test_scan_parameters_and_state_gates);
