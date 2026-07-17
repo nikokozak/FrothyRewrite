@@ -339,19 +339,23 @@ fr_err_t fr_persist_restore_user(fr_runtime_t *runtime) {
 }
 
 fr_err_t fr_persist_wipe(fr_runtime_t *runtime) {
+  fr_err_t clear_err;
   fr_err_t restart_err;
 
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
 
-  FR_TRY(fr_runtime_clear_project(runtime));
+  /* A full wipe is recovery. Project clear leaves the runtime consistent even
+   * when platform cleanup fails, and the restart releases platform state. */
+  clear_err = fr_runtime_clear_project(runtime);
   fr_persist_forget_boot_image();
   fr_platform_persist_unmount();
   FR_TRY(fr_platform_persist_clear());
 
   restart_err = fr_platform_restart();
   FR_TRY(fr_base_image_install(runtime));
+  FR_TRY(clear_err);
   return restart_err == FR_ERR_UNSUPPORTED ? FR_OK : restart_err;
 }
 

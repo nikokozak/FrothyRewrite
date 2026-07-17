@@ -1543,21 +1543,16 @@ static fr_err_t fr_native_ble_on(fr_runtime_t *runtime,
 static fr_err_t fr_native_ble_off(fr_runtime_t *runtime,
                                   const fr_tagged_t *args,
                                   uint8_t arg_count, fr_tagged_t *out) {
-  fr_err_t handle_err = FR_OK;
-  fr_err_t off_err = FR_OK;
-
   (void)args;
   if (runtime == NULL || arg_count != 0 || out == NULL) {
     return FR_ERR_INVALID;
   }
 #if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
-  handle_err = fr_handle_close_kind(runtime, FR_HANDLE_KIND_BLE_CONNECTION);
+  /* Turning the radio off owns the final outcome. Closing a handle can report
+   * an in-progress disconnect even though off completes the shutdown. */
+  (void)fr_handle_close_kind(runtime, FR_HANDLE_KIND_BLE_CONNECTION);
 #endif
-  off_err = fr_platform_ble_off(runtime);
-  if (handle_err != FR_OK) {
-    return handle_err;
-  }
-  FR_TRY(off_err);
+  FR_TRY(fr_platform_ble_off(runtime));
   *out = fr_tagged_nil();
   return FR_OK;
 }
