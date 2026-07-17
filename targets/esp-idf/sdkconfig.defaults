@@ -9,6 +9,7 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="2MB"
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_APP_REPRODUCIBLE_BUILD=y
 
 # Frothy's interruptible millisecond sleep advances in 1 ms slices. ESP-IDF's
 # 100 Hz default rounds each slice down to zero ticks, starving the idle task.
