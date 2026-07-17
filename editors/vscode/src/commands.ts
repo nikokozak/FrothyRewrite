@@ -5,6 +5,8 @@ import { FROTHY_EXAMPLES } from './examples.generated';
 import { formAt, SourceForm, splitForms } from './forms';
 import { recordFailed } from './session-records';
 import { appendLine, show } from './output';
+import { wordsSettled } from './views';
+import { parseWords } from './words';
 
 // Frothy identifiers may contain `.`, `?`, `_`, `-`, and `$name` constants
 // start with `$` (parse.c:235-257, 262-364).
@@ -50,7 +52,7 @@ export async function runForm(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
   if (!proc.isConnected()) {
-    notConnectedHint();
+    notConnectedHint(() => runForm());
     return;
   }
 
@@ -75,11 +77,14 @@ export async function runForm(): Promise<void> {
 }
 
 export async function rerun(): Promise<void> {
-  if (!proc.isConnected()) {
-    notConnectedHint();
+  if (!lastForm) {
+    vscode.window.showInformationMessage('Frothy: nothing to rerun yet.');
     return;
   }
-  if (!lastForm) return;
+  if (!proc.isConnected()) {
+    notConnectedHint(() => rerun());
+    return;
+  }
   await submitForm(lastForm, false);
 }
 
@@ -87,7 +92,7 @@ export async function runFile(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
   if (!proc.isConnected()) {
-    notConnectedHint();
+    notConnectedHint(() => runFile());
     return;
   }
   const doc = editor.document;
@@ -110,6 +115,7 @@ export async function runFile(): Promise<void> {
   show();
   appendLine(`> [run file: ${basename} · ${lineCount} lines]`);
   try {
+    await wordsSettled();
     await proc.requestSourceBlock(text, path);
   } catch (err) {
     if (!(err instanceof proc.SessionRecordError)) {
@@ -136,18 +142,10 @@ export async function openExample(): Promise<void> {
 }
 
 export async function browseWords(): Promise<void> {
-  if (!proc.isConnected()) {
-    notConnectedHint();
-    return;
-  }
   const response = await deviceRequest('words');
   if (!response) return;
 
-  const lines = response.trim().split(/\r?\n/);
-  if (lines[0]?.trim() === 'words') lines.shift();
-  const words = lines.join(' ').split(/\s+/);
-  if (words[words.length - 1] === 'ok') words.pop();
-  const liveWords = [...new Set(words.filter(Boolean))];
+  const liveWords = parseWords(response);
   if (liveWords.length === 0) {
     vscode.window.showInformationMessage('Frothy: this device reported no inspectable words.');
     return;
@@ -201,10 +199,18 @@ function wordUnderCursor(editor: vscode.TextEditor): string {
   return range ? editor.document.getText(range) : '';
 }
 
-function notConnectedHint(): void {
-  vscode.window.showWarningMessage(
-    'Frothy: not connected. Click the status bar item or run "Frothy: Connect".',
-  );
+// Offer the connection instead of naming the command that would make it.
+// With a retry, connecting continues straight into the action that hit the wall.
+function notConnectedHint(retry?: () => Promise<void>): void {
+  void (async () => {
+    const choice = await vscode.window.showWarningMessage(
+      'Frothy: not connected.',
+      retry ? 'Connect & Run' : 'Connect',
+    );
+    if (!choice) return;
+    await vscode.commands.executeCommand('frothy.connect');
+    if (proc.isConnected() && retry) await retry();
+  })();
 }
 
 async function submitForm(
@@ -214,6 +220,7 @@ async function submitForm(
 ): Promise<void> {
   if (remember) setLastForm(source);
   try {
+    await wordsSettled();
     await proc.request(source);
   } catch (err) {
     if (err instanceof proc.SessionRecordError && recordFailed(err.record) && submitted) {
@@ -248,12 +255,35 @@ async function oneFormHint(): Promise<void> {
   if (choice === 'Run File') await vscode.commands.executeCommand('frothy.runFile');
 }
 
-async function inspectNamedWord(word: string): Promise<void> {
+export async function inspectNamedWord(word: string): Promise<void> {
+  await deviceRequest(`see ${word}`);
+}
+
+// CodeLens entry point: run the complete form at the given line of a document.
+export async function runFormAt(uri: vscode.Uri, line: number): Promise<void> {
+  const document = vscode.workspace.textDocuments.find(
+    (doc) => doc.uri.toString() === uri.toString(),
+  );
+  if (!document) return;
   if (!proc.isConnected()) {
-    notConnectedHint();
+    notConnectedHint(() => runFormAt(uri, line));
     return;
   }
-  await deviceRequest(`see ${word}`);
+  const form = formAt(document, line);
+  if (!form?.complete) {
+    await oneFormHint();
+    return;
+  }
+  clearDiagnostics(document);
+  await submitForm(form.source, true, {
+    source: form.source,
+    document,
+    range: new vscode.Range(
+      document.positionAt(form.startOffset),
+      document.positionAt(form.endOffset),
+    ),
+    version: document.version,
+  });
 }
 
 async function connectWithPortChoice(): Promise<void> {
@@ -287,7 +317,12 @@ async function connectWithPortChoice(): Promise<void> {
 }
 
 async function deviceRequest(source: string): Promise<string | undefined> {
+  if (!proc.isConnected()) {
+    notConnectedHint();
+    return undefined;
+  }
   try {
+    await wordsSettled();
     const response = await proc.request(source);
     const error = terminalError(response);
     if (error) {

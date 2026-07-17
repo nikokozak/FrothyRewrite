@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.5.0 — 2026-07-16
+
+The extension grows a visible home and the full firmware lifecycle. Session
+plumbing is unchanged; this release is UI and reach.
+
+### Added
+
+- **Frothy sidebar** (Activity Bar cup icon) with three native tree views:
+  - **Device** — connection state, port, profile, mode, plus one-click
+    Status, Memory, Save Overlay, and Restore Overlay.
+  - **Words** — the device's live vocabulary as a persistent view, refreshed
+    automatically after connect and after every run; click a word to `see` it.
+  - **Project** — the whole lifecycle: Getting Started, New Project, Build,
+    Flash, Install Library, Open Example, REPL, Doctor, CLI Menu, Stop
+    Serial Sessions, Wipe User Definitions.
+- **Lifecycle commands** that drive the CLI in a shared `Frothy` terminal:
+  Flash Firmware (with a board picker), Build Firmware, Install Project
+  Library, New Project, Doctor, Open REPL, Open CLI Menu, Stop Serial
+  Sessions, Wipe User Definitions. Verbs that need the serial port tear the
+  session down first; the status bar reconnects afterwards.
+- **▷ Run CodeLens** above every complete top-level form
+  (`frothy.codeLens` setting, default on).
+- **Live-word completion** — autocomplete offers what is defined on the
+  connected device right now.
+- **Getting Started walkthrough** — install CLI → flash → connect → run →
+  explore, on VS Code's Welcome page.
+- Activation on workspaces containing `frothy.toml`.
+
+### Fixed
+
+- **Run shortcuts no longer dead-key while disconnected.** Cmd/Ctrl+Enter
+  and friends now fire in any Frothy editor and offer **Connect & Run**
+  instead of silently doing nothing (their `when` clauses previously
+  required an active connection, which also hid them from the palette at
+  exactly the moment a newcomer searches for them).
+- Run Form appears in the editor title bar whenever a Frothy file is open,
+  not only while connected.
+- Status, Memory, Save, and Restore now give the friendly connect hint when
+  disconnected instead of a raw error message.
+- Rerun with no prior form says so instead of doing nothing.
+
 ## 0.4.0 — 2026-07-10
 
 The editor now follows the structured Frothy session contract and runs whole

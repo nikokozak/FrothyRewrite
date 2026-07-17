@@ -1,14 +1,20 @@
 import * as vscode from 'vscode';
 import * as commands from './commands';
 import * as proc from './connect';
+import { initCodeLens } from './codelens';
+import { initCompletion } from './completion';
 import { clearDiagnostics, initDiagnostics } from './diagnostics';
 import { dispose as disposeOutput, show as showOutput } from './output';
 import { setOnConnectionChanged } from './connect';
 import { initStatusBar, updateStatusBar, disposeStatusBar } from './status-bar';
+import * as terminal from './terminal';
+import * as views from './views';
 
 // Single source of truth for command registration; package.json maps
-// IDs to titles + icons, extension.ts wires them to handlers.
-const HANDLERS: Array<[string, () => unknown]> = [
+// IDs to titles + icons, extension.ts wires them to handlers. Commands
+// reachable only from tree items or lenses (runFormAt, inspectNamed)
+// need no package.json entry.
+const HANDLERS: Array<[string, (...args: unknown[]) => unknown]> = [
   ['frothy.connect',       () => connectWithGuidance()],
   ['frothy.disconnect',    () => commands.disconnect()],
   ['frothy.runForm',       () => commands.runForm()],
@@ -23,7 +29,22 @@ const HANDLERS: Array<[string, () => unknown]> = [
   ['frothy.restore',       () => commands.restore()],
   ['frothy.interrupt',     () => commands.interrupt()],
   ['frothy.showOutput',    () => showOutput()],
+  ['frothy.flash',         () => terminal.flash()],
+  ['frothy.build',         () => terminal.runVerb('build')],
+  ['frothy.install',       () => terminal.runVerb('install')],
+  ['frothy.doctor',        () => terminal.runVerb('doctor')],
+  ['frothy.initProject',   () => terminal.runVerb('init')],
+  ['frothy.wipeUser',      () => terminal.runVerb('wipe-user')],
+  ['frothy.stopSessions',  () => terminal.runVerb('stop')],
+  ['frothy.openRepl',      () => terminal.runVerb('connect')],
+  ['frothy.openMenu',      () => terminal.runVerb('menu')],
+  ['frothy.refreshWords',  () => views.refreshWords()],
+  ['frothy.runFormAt',     (uri, line) => commands.runFormAt(uri as vscode.Uri, line as number)],
+  ['frothy.inspectNamed',  (word) => commands.inspectNamedWord(word as string)],
 ];
+
+let prevConnected = false;
+let prevBusy = false;
 
 export function activate(context: vscode.ExtensionContext): void {
   for (const [id, handler] of HANDLERS) {
@@ -32,6 +53,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   initStatusBar(context);
   initDiagnostics(context);
+  initCodeLens(context);
+  views.initViews(context);
+  initCompletion(context);
+  terminal.initTerminal(context);
   refreshContext();
 
   // Keep both the status bar and the when-clause context in sync with
@@ -72,6 +97,17 @@ function refreshContext(): void {
   void vscode.commands.executeCommand('setContext', 'frothy.isBusy', busy);
   void vscode.commands.executeCommand('setContext', 'frothy.hasLastForm', commands.hasLastForm());
   updateStatusBar(snapshot, connected, busy, frothyEditor || snapshot.state !== 'closed', currentPortLabel());
+  views.refreshDeviceView();
+
+  // Pull the live word list whenever the session settles: right after a
+  // connect completes and right after a run finishes. The wordsRefreshing
+  // guard keeps the words request's own settle from re-triggering a fetch.
+  if (connected && !busy && (prevBusy || !prevConnected) && !views.wordsRefreshing()) {
+    void views.refreshWords();
+  }
+  if (!connected && prevConnected) views.clearWords();
+  prevConnected = connected;
+  prevBusy = busy;
 }
 
 function currentPortLabel(): string {
