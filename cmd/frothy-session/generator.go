@@ -127,8 +127,8 @@ func validateNative(n libraryNative) error {
 
 // D4: native names look like <libname>.<word> — the kernel parser
 // tokenizes them as a single FR_TOKEN_NAME. This is a strict subset of
-// what the parser accepts, chosen to (a) cover every existing native
-// (gpio.read, uart.write-byte, neopixel.show) and (b) shut out anything
+// what the parser accepts, chosen to (a) cover normal native names
+// (gpio.read, uart.write-byte, wifi.ready?) and (b) shut out anything
 // that would distort the generated C string: control bytes, quotes,
 // backslashes, whitespace, parser-terminator punctuation. Leading `-`
 // is refused because parse.c:302-315 consumes it as FR_TOKEN_MINUS, so
@@ -143,6 +143,7 @@ func validNativeName(s string) bool {
 		case r >= 'A' && r <= 'Z':
 		case r == '.' || r == '_':
 		case i > 0 && r == '-':
+		case i > 0 && r == '?':
 		case i > 0 && r >= '0' && r <= '9':
 		default:
 			return false
