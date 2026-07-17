@@ -262,6 +262,147 @@ fr_err_t fr_platform_pulse_play(uint16_t platform_index);
 fr_err_t fr_platform_pulse_close(uint16_t platform_index);
 #endif
 
+#if FR_FEATURE_BLE
+typedef enum fr_ble_radio_state_t {
+  FR_BLE_RADIO_OFF = 0,
+  FR_BLE_RADIO_STARTING = 1,
+  FR_BLE_RADIO_READY = 2,
+  FR_BLE_RADIO_STOPPING = 3,
+  FR_BLE_RADIO_FAILED = 4,
+} fr_ble_radio_state_t;
+
+enum {
+  /* Runtime status bits; FR_BLE_ENABLE_* are compile-time profile gates. */
+  FR_BLE_ROLE_OBSERVER = 1u << 0,
+  FR_BLE_ROLE_BROADCASTER = 1u << 1,
+  FR_BLE_ROLE_CENTRAL = 1u << 2,
+  FR_BLE_ROLE_PERIPHERAL = 1u << 3,
+};
+
+enum {
+  /* Portable advertisement-report flags, never target stack event bits. */
+  FR_BLE_REPORT_CONNECTABLE = 1u << 0,
+  FR_BLE_REPORT_SCANNABLE = 1u << 1,
+  FR_BLE_REPORT_DIRECTED = 1u << 2,
+  FR_BLE_REPORT_SCAN_RESPONSE = 1u << 3,
+  FR_BLE_REPORT_LEGACY = 1u << 4,
+};
+
+typedef enum fr_ble_address_type_t {
+  FR_BLE_ADDRESS_PUBLIC = 0,
+  FR_BLE_ADDRESS_RANDOM = 1,
+  FR_BLE_ADDRESS_PUBLIC_ID = 2,
+  FR_BLE_ADDRESS_RANDOM_ID = 3,
+} fr_ble_address_type_t;
+
+typedef struct fr_ble_scan_report_t {
+  /* Copied at the target callback boundary; address uses display order and
+   * flags use the portable FR_BLE_REPORT_* bits above. Payloads longer than
+   * FR_BLE_SCAN_DATA_BYTES are malformed, never truncated. This is an
+   * in-memory boundary, not a persistence or wire format. */
+  fr_ble_address_type_t address_type;
+  uint8_t address[6];
+  int8_t rssi;
+  uint8_t flags;
+  uint8_t data_length;
+  uint8_t data[FR_BLE_SCAN_DATA_BYTES];
+  uint32_t timestamp_ms; /* Boot-relative platform milliseconds; may wrap. */
+} fr_ble_scan_report_t;
+
+typedef enum fr_ble_operation_t {
+  /* Foreground mutating calls retained by status. Read-only accessors do not
+   * replace the last operation, and project clear resets it. */
+  FR_BLE_OP_NONE = 0,
+  FR_BLE_OP_ON = 1,
+  FR_BLE_OP_SCAN_START = 2,
+  FR_BLE_OP_SCAN_STOP = 3,
+  FR_BLE_OP_SCAN_NEXT = 4,
+} fr_ble_operation_t;
+
+typedef enum fr_ble_scan_state_t {
+  FR_BLE_SCAN_IDLE = 0,
+  FR_BLE_SCAN_ACTIVE = 1,
+  FR_BLE_SCAN_STOPPING = 2,
+} fr_ble_scan_state_t;
+
+typedef struct fr_ble_status_t {
+  /* One copied snapshot. Mutable queues and target stack types stay behind
+   * the platform functions below. The target synchronizes callback state
+   * while making this copy. */
+  fr_ble_radio_state_t radio_state;
+  fr_ble_scan_state_t scan_state;
+  uint8_t roles;
+  bool coexistence_enabled; /* BLE may share a radio with another subsystem. */
+  uint32_t lifecycle_generation;
+  uint32_t scan_generation;
+  bool shutdown_in_progress;
+  bool cleanup_required;
+  uint32_t late_callback_count;
+
+  fr_ble_address_type_t own_address_type;
+  uint8_t own_address[6];
+  bool own_address_valid;
+
+  uint16_t requested_interval_ms;
+  uint16_t requested_window_ms;
+  uint32_t actual_interval_us;
+  uint32_t actual_window_us;
+  /* Valid range is -127..20 dBm; -127 accepts every valid RSSI. */
+  int8_t minimum_rssi;
+  bool active_scan;
+  bool repeats;
+
+  uint8_t queue_count;
+  uint8_t queue_capacity;
+  uint8_t queue_high_water;
+  /* received = accepted + filtered_rssi + malformed;
+   * accepted = queue_count + dequeued + dropped. */
+  uint32_t received;
+  uint32_t accepted;
+  uint32_t filtered_rssi;
+  uint32_t dequeued;
+  uint32_t dropped;
+  uint32_t malformed;
+  bool current_valid;
+  int8_t current_rssi;
+  uint8_t current_flags;
+  uint8_t current_data_length;
+
+  fr_ble_operation_t last_operation;
+  fr_err_t last_result;
+  int32_t last_platform_code;
+  int32_t last_protocol_reason;
+  uint32_t last_operation_ms;
+  uint32_t reset_count;
+} fr_ble_status_t;
+
+const char *fr_platform_ble_backend_name(void);
+/* These calls can wait, so they receive the runtime only to poll its
+ * interrupt path. scan_start returns after the target accepts the start. */
+fr_err_t fr_platform_ble_on(fr_runtime_t *runtime);
+/* Clear the queue and cursor and shut the singleton radio down with its fixed
+ * cleanup timeout. Project teardown is already in progress, so this call does
+ * not poll the runtime interrupt path. */
+fr_err_t fr_platform_ble_project_clear(void);
+/* Return one internally consistent copy of lifecycle and queue state. */
+fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status);
+/* Accept interval 3..10240 ms, window 3..interval, and RSSI -127..20. An
+ * active or stopping scan returns FR_ERR_BLE_BUSY. A successful start clears
+ * the prior queue, cursor, and session counters. A full queue drops its oldest
+ * report before appending the newest. */
+fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
+                                    bool active, bool repeats,
+                                    int8_t minimum_rssi);
+/* Stop is idempotent while idle. A successful stop retains queued reports but
+ * clears the current cursor. */
+fr_err_t fr_platform_ble_scan_stop(fr_runtime_t *runtime);
+/* next moves the target-owned cursor; an empty queue clears it. current may
+ * be copied repeatedly until next, stop, a new scan, or project clear changes
+ * it. current returns FR_ERR_NOT_FOUND while that cursor is empty. */
+fr_err_t fr_platform_ble_scan_next(bool *out_has_report);
+fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report);
+#endif
+
 #if FR_FEATURE_PERSISTENCE
 /* Read a committed persistence image by backend generation order. Index 0 is
  * the newest valid-envelope image; higher indexes walk older valid envelopes.
