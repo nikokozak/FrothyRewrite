@@ -53,6 +53,7 @@ idf_component_register(
         ${FR_LIB_NATIVES_GEN_SOURCES}
         ${FR_LIB_EXT_SOURCES}
         ${FR_REWRITE_ROOT}/targets/common/target_defs.c
+        ${FR_REWRITE_ROOT}/targets/esp-idf/ble.c
         ${FR_REWRITE_ROOT}/targets/esp-idf/platform.c
         ${FR_REWRITE_ROOT}/boards/${FR_REWRITE_BOARD}/board_defs.c
     INCLUDE_DIRS

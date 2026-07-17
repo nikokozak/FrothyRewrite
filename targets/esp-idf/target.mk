@@ -1,5 +1,8 @@
 TARGET_MAIN_SOURCE := targets/esp-idf/main/main.c
-TARGET_SOURCES += targets/common/target_defs.c targets/esp-idf/platform.c
+TARGET_SOURCES += \
+	targets/common/target_defs.c \
+	targets/esp-idf/ble.c \
+	targets/esp-idf/platform.c
 BUILD_DIR ?= build/$(BOARD)
 
 ESP_IDF_PROFILE_STAMP := $(BUILD_DIR)/.frothy-profile-$(PROFILE)
