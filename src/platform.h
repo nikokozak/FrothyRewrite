@@ -295,6 +295,7 @@ typedef enum fr_ble_address_type_t {
   FR_BLE_ADDRESS_RANDOM_ID = 3,
 } fr_ble_address_type_t;
 
+#if FR_BLE_ENABLE_OBSERVER
 typedef struct fr_ble_scan_report_t {
   /* Copied at the target callback boundary; address uses display order and
    * flags use the portable FR_BLE_REPORT_* bits above. Payloads longer than
@@ -308,6 +309,7 @@ typedef struct fr_ble_scan_report_t {
   uint8_t data[FR_BLE_SCAN_DATA_BYTES];
   uint32_t timestamp_ms; /* Boot-relative platform milliseconds; may wrap. */
 } fr_ble_scan_report_t;
+#endif
 
 typedef enum fr_ble_operation_t {
   /* Foreground mutating calls retained by status. Read-only accessors do not
@@ -388,6 +390,7 @@ fr_err_t fr_platform_ble_on(fr_runtime_t *runtime);
 fr_err_t fr_platform_ble_project_clear(void);
 /* Return one internally consistent copy of lifecycle and queue state. */
 fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status);
+#if FR_BLE_ENABLE_OBSERVER
 /* Accept interval 3..10240 ms, window 3..interval, and RSSI -127..20. An
  * active or stopping scan returns FR_ERR_BLE_BUSY. A start that passes those
  * checks clears the prior queue, cursor, and session counters before the
@@ -404,13 +407,20 @@ fr_err_t fr_platform_ble_scan_stop(fr_runtime_t *runtime);
  * it. current returns FR_ERR_NOT_FOUND while that cursor is empty. */
 fr_err_t fr_platform_ble_scan_next(bool *out_has_report);
 fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report);
+#endif
 #ifdef FR_HOST_TEST_HELPERS
 void fr_host_ble_reset(void);
+#if FR_BLE_ENABLE_OBSERVER
 fr_err_t fr_host_ble_push_scan_report(const fr_ble_scan_report_t *report);
+#endif
 void fr_host_ble_fail_next_on(fr_err_t err, int32_t raw_code);
+#if FR_BLE_ENABLE_OBSERVER
 void fr_host_ble_fail_next_scan_start(fr_err_t err, int32_t raw_code);
+#endif
 void fr_host_ble_timeout_next_on(void);
+#if FR_BLE_ENABLE_OBSERVER
 void fr_host_ble_timeout_next_scan_stop(void);
+#endif
 void fr_host_ble_post_reset(int32_t raw_reason);
 #endif
 #endif

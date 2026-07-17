@@ -778,10 +778,10 @@ fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
   return fr_esp_ble_wait_start(runtime, generation);
 }
 
+#if FR_BLE_ENABLE_OBSERVER
 fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
                                     bool active, bool repeats,
                                     int8_t minimum_rssi) {
-#if FR_BLE_ENABLE_OBSERVER
   struct ble_gap_disc_params parameters = {0};
   uint16_t interval_units = 0;
   uint16_t window_units = 0;
@@ -878,21 +878,9 @@ fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
     return FR_ERR_IO;
   }
   return FR_OK;
-#else
-  (void)interval_ms;
-  (void)window_ms;
-  (void)active;
-  (void)repeats;
-  (void)minimum_rssi;
-  portENTER_CRITICAL(&fr_esp_ble_lock);
-  fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_ERR_UNSUPPORTED, 0);
-  portEXIT_CRITICAL(&fr_esp_ble_lock);
-  return FR_ERR_UNSUPPORTED;
-#endif
 }
 
 fr_err_t fr_platform_ble_scan_stop(fr_runtime_t *runtime) {
-#if FR_BLE_ENABLE_OBSERVER
   uint32_t generation = 0;
   fr_err_t result = FR_OK;
   int rc = 0;
@@ -942,16 +930,9 @@ fr_err_t fr_platform_ble_scan_stop(fr_runtime_t *runtime) {
   }
   portEXIT_CRITICAL(&fr_esp_ble_lock);
   return result;
-#else
-  if (runtime == NULL) {
-    return FR_ERR_INVALID;
-  }
-  return FR_OK;
-#endif
 }
 
 fr_err_t fr_platform_ble_scan_next(bool *out_has_report) {
-#if FR_BLE_ENABLE_OBSERVER
   if (out_has_report == NULL) {
     return FR_ERR_INVALID;
   }
@@ -976,17 +957,9 @@ fr_err_t fr_platform_ble_scan_next(bool *out_has_report) {
   *out_has_report = true;
   portEXIT_CRITICAL(&fr_esp_ble_lock);
   return FR_OK;
-#else
-  if (out_has_report == NULL) {
-    return FR_ERR_INVALID;
-  }
-  *out_has_report = false;
-  return FR_OK;
-#endif
 }
 
 fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report) {
-#if FR_BLE_ENABLE_OBSERVER
   if (out_report == NULL) {
     return FR_ERR_INVALID;
   }
@@ -999,13 +972,8 @@ fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report) {
   *out_report = fr_esp_ble.scan.current;
   portEXIT_CRITICAL(&fr_esp_ble_lock);
   return FR_OK;
-#else
-  if (out_report == NULL) {
-    return FR_ERR_INVALID;
-  }
-  return FR_ERR_NOT_FOUND;
-#endif
 }
+#endif
 
 fr_err_t fr_platform_ble_project_clear(void) {
   fr_err_t err = FR_OK;

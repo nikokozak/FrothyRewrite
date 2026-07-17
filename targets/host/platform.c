@@ -701,6 +701,7 @@ fr_err_t fr_platform_pulse_close(uint16_t platform_index) {
 #endif
 
 #if FR_FEATURE_BLE
+#if FR_BLE_ENABLE_OBSERVER
 enum {
   FR_HOST_BLE_INTERVAL_MIN_MS = 3,
   FR_HOST_BLE_INTERVAL_MAX_MS = 10240,
@@ -716,16 +717,22 @@ enum {
       FR_BLE_REPORT_LEGACY,
 };
 #endif
+#endif
 
 typedef struct fr_host_ble_state_t {
   fr_ble_radio_state_t radio_state;
+#if FR_BLE_ENABLE_OBSERVER
   fr_ble_scan_state_t scan_state;
+#endif
   uint32_t lifecycle_generation;
+#if FR_BLE_ENABLE_OBSERVER
   uint32_t scan_generation;
+#endif
   bool shutdown_in_progress;
   bool cleanup_required;
   uint32_t late_callback_count;
 
+#if FR_BLE_ENABLE_OBSERVER
   uint16_t requested_interval_ms;
   uint16_t requested_window_ms;
   uint32_t actual_interval_us;
@@ -746,6 +753,7 @@ typedef struct fr_host_ble_state_t {
   uint32_t malformed;
   bool current_valid;
   fr_ble_scan_report_t current;
+#endif
 
   fr_ble_operation_t last_operation;
   fr_err_t last_result;
@@ -756,11 +764,17 @@ typedef struct fr_host_ble_state_t {
 
 #ifdef FR_HOST_TEST_HELPERS
   fr_err_t fail_next_on;
+#if FR_BLE_ENABLE_OBSERVER
   fr_err_t fail_next_scan_start;
+#endif
   bool timeout_next_on;
+#if FR_BLE_ENABLE_OBSERVER
   bool timeout_next_scan_stop;
+#endif
   int32_t fail_next_on_raw_code;
+#if FR_BLE_ENABLE_OBSERVER
   int32_t fail_next_scan_start_raw_code;
+#endif
 #endif
 } fr_host_ble_state_t;
 
@@ -796,6 +810,7 @@ static void fr_host_ble_record(fr_ble_operation_t operation, fr_err_t result,
   fr_host_ble.last_operation_ms = fr_host_millis;
 }
 
+#if FR_BLE_ENABLE_OBSERVER
 static void fr_host_ble_clear_reports(void) {
   memset(fr_host_ble.queue, 0, sizeof(fr_host_ble.queue));
   fr_host_ble.head = 0;
@@ -830,6 +845,7 @@ static bool fr_host_ble_report_valid(const fr_ble_scan_report_t *report) {
          report->data_length <= FR_BLE_SCAN_DATA_BYTES &&
          (report->flags & (uint8_t)~FR_HOST_BLE_REPORT_FLAGS) == 0;
 }
+#endif
 #endif
 
 const char *fr_platform_ble_backend_name(void) { return "host-fixture"; }
@@ -882,16 +898,22 @@ fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
 }
 
 fr_err_t fr_platform_ble_project_clear(void) {
+#if FR_BLE_ENABLE_OBSERVER
   if (fr_host_ble.scan_state != FR_BLE_SCAN_IDLE || fr_host_ble.count > 0 ||
       fr_host_ble.current_valid) {
     fr_host_ble.scan_generation += 1u;
   }
+#endif
   fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
+#if FR_BLE_ENABLE_OBSERVER
   fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
+#endif
   fr_host_ble.shutdown_in_progress = false;
   fr_host_ble.cleanup_required = false;
+#if FR_BLE_ENABLE_OBSERVER
   fr_host_ble_clear_reports();
   fr_host_ble_clear_parameters();
+#endif
   fr_host_ble.last_operation = FR_BLE_OP_NONE;
   fr_host_ble.last_result = FR_OK;
   fr_host_ble.last_platform_code = 0;
@@ -907,14 +929,21 @@ fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status) {
 
   *out_status = (fr_ble_status_t){
       .radio_state = fr_host_ble.radio_state,
+#if FR_BLE_ENABLE_OBSERVER
       .scan_state = fr_host_ble.scan_state,
+#else
+      .scan_state = FR_BLE_SCAN_IDLE,
+#endif
       .roles = fr_host_ble_roles(),
       .coexistence_enabled = false,
       .lifecycle_generation = fr_host_ble.lifecycle_generation,
+#if FR_BLE_ENABLE_OBSERVER
       .scan_generation = fr_host_ble.scan_generation,
+#endif
       .shutdown_in_progress = fr_host_ble.shutdown_in_progress,
       .cleanup_required = fr_host_ble.cleanup_required,
       .late_callback_count = fr_host_ble.late_callback_count,
+#if FR_BLE_ENABLE_OBSERVER
       .requested_interval_ms = fr_host_ble.requested_interval_ms,
       .requested_window_ms = fr_host_ble.requested_window_ms,
       .actual_interval_us = fr_host_ble.actual_interval_us,
@@ -935,6 +964,7 @@ fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status) {
       .current_rssi = fr_host_ble.current.rssi,
       .current_flags = fr_host_ble.current.flags,
       .current_data_length = fr_host_ble.current.data_length,
+#endif
       .last_operation = fr_host_ble.last_operation,
       .last_result = fr_host_ble.last_result,
       .last_platform_code = fr_host_ble.last_platform_code,
@@ -951,6 +981,7 @@ fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status) {
   return FR_OK;
 }
 
+#if FR_BLE_ENABLE_OBSERVER
 fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
                                     bool active, bool repeats,
                                     int8_t minimum_rssi) {
@@ -964,10 +995,6 @@ fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
       minimum_rssi > FR_HOST_BLE_RSSI_MAX) {
     return FR_ERR_RANGE;
   }
-#if !FR_BLE_ENABLE_OBSERVER
-  fr_host_ble_record(FR_BLE_OP_SCAN_START, FR_ERR_UNSUPPORTED, 0, 0);
-  return FR_ERR_UNSUPPORTED;
-#endif
   if (fr_host_ble.radio_state == FR_BLE_RADIO_STARTING ||
       fr_host_ble.radio_state == FR_BLE_RADIO_STOPPING) {
     fr_host_ble_record(FR_BLE_OP_SCAN_START, FR_ERR_BLE_BUSY, 0, 0);
@@ -1063,15 +1090,19 @@ fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report) {
   *out_report = fr_host_ble.current;
   return FR_OK;
 }
+#endif
 
 #ifdef FR_HOST_TEST_HELPERS
 void fr_host_ble_reset(void) {
   memset(&fr_host_ble, 0, sizeof(fr_host_ble));
   fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
+#if FR_BLE_ENABLE_OBSERVER
   fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
+#endif
   fr_host_ble.last_result = FR_OK;
 }
 
+#if FR_BLE_ENABLE_OBSERVER
 fr_err_t fr_host_ble_push_scan_report(const fr_ble_scan_report_t *report) {
   uint8_t tail = 0;
 
@@ -1108,6 +1139,7 @@ fr_err_t fr_host_ble_push_scan_report(const fr_ble_scan_report_t *report) {
   }
   return FR_OK;
 }
+#endif
 
 void fr_host_ble_fail_next_on(fr_err_t err, int32_t raw_code) {
   fr_host_ble.fail_next_on = err;
@@ -1115,10 +1147,12 @@ void fr_host_ble_fail_next_on(fr_err_t err, int32_t raw_code) {
   fr_host_ble.timeout_next_on = false;
 }
 
+#if FR_BLE_ENABLE_OBSERVER
 void fr_host_ble_fail_next_scan_start(fr_err_t err, int32_t raw_code) {
   fr_host_ble.fail_next_scan_start = err;
   fr_host_ble.fail_next_scan_start_raw_code = raw_code;
 }
+#endif
 
 void fr_host_ble_timeout_next_on(void) {
   fr_host_ble.fail_next_on = FR_OK;
@@ -1126,9 +1160,11 @@ void fr_host_ble_timeout_next_on(void) {
   fr_host_ble.timeout_next_on = true;
 }
 
+#if FR_BLE_ENABLE_OBSERVER
 void fr_host_ble_timeout_next_scan_stop(void) {
   fr_host_ble.timeout_next_scan_stop = true;
 }
+#endif
 
 void fr_host_ble_post_reset(int32_t raw_reason) {
   if (fr_host_ble.radio_state == FR_BLE_RADIO_OFF) {
@@ -1138,6 +1174,7 @@ void fr_host_ble_post_reset(int32_t raw_reason) {
 
   fr_host_ble.reset_count += 1u;
   fr_host_ble.last_protocol_reason = raw_reason;
+#if FR_BLE_ENABLE_OBSERVER
   fr_host_ble.dropped += fr_host_ble.count;
   fr_host_ble.head = 0;
   fr_host_ble.count = 0;
@@ -1145,6 +1182,7 @@ void fr_host_ble_post_reset(int32_t raw_reason) {
   memset(&fr_host_ble.current, 0, sizeof(fr_host_ble.current));
   fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
   fr_host_ble.scan_generation += 1u;
+#endif
   if (fr_host_ble.shutdown_in_progress) {
     fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
     fr_host_ble.shutdown_in_progress = false;
