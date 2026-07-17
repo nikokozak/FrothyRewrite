@@ -804,7 +804,23 @@ fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
   }
   portEXIT_CRITICAL(&fr_esp_ble_lock);
   if (task_created != pdPASS) {
-    (void)fr_esp_ble_begin_cleanup();
+    /* A host-task allocation failure should not require another task
+     * allocation to release a port that has never run. */
+    if (fr_esp_ble_cleanup_ready_event.event != NULL) {
+      ble_npl_event_deinit(&fr_esp_ble_cleanup_ready_event);
+    }
+    init_code = nimble_port_deinit();
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    if (generation == fr_esp_ble.lifecycle_generation) {
+      if (init_code == ESP_OK) {
+        fr_esp_ble_mark_off_locked();
+      } else {
+        fr_esp_ble.radio_state = FR_BLE_RADIO_FAILED;
+        fr_esp_ble.cleanup_required = true;
+        fr_esp_ble.last_platform_code = (int32_t)init_code;
+      }
+    }
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
     return FR_ERR_CAPACITY;
   }
 
