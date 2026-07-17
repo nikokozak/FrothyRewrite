@@ -1284,6 +1284,35 @@ fr_err_t fr_platform_ble_advertise_stop(void) {
 }
 #endif
 
+fr_err_t fr_platform_ble_off(fr_runtime_t *runtime) {
+  fr_err_t err = FR_OK;
+
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+#if FR_BLE_ENABLE_OBSERVER
+  fr_esp_ble_invalidate_scan_locked(true);
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+  fr_esp_ble_abandon_advertise_locked();
+  fr_esp_ble_clear_advertise_locked();
+#endif
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+  err = fr_esp_ble_begin_cleanup();
+  if (err == FR_OK) {
+    err = fr_esp_ble_wait_cleanup(runtime);
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  fr_esp_ble_record_locked(FR_BLE_OP_OFF, err,
+                           fr_esp_ble.last_platform_code);
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return err;
+}
+
 fr_err_t fr_platform_ble_project_clear(void) {
   fr_err_t err = FR_OK;
 

@@ -1356,6 +1356,33 @@ static const char *fr_native_ble_advertise_state_name(
   }
 }
 
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+static const char *fr_native_ble_connection_state_name(
+    fr_ble_connection_state_t state) {
+  switch (state) {
+  case FR_BLE_CONNECTION_FREE:
+    return "free";
+  case FR_BLE_CONNECTION_CONNECTING:
+    return "connecting";
+  case FR_BLE_CONNECTION_PENDING:
+    return "pending";
+  case FR_BLE_CONNECTION_LIVE:
+    return "live";
+  case FR_BLE_CONNECTION_DISCONNECTED:
+    return "disconnected";
+  case FR_BLE_CONNECTION_CLOSING:
+    return "closing";
+  default:
+    return "unknown";
+  }
+}
+
+static const char *fr_native_ble_connection_role_name(
+    fr_ble_connection_role_t role) {
+  return role == FR_BLE_CONNECTION_ROLE_PERIPHERAL ? "peripheral" : "central";
+}
+#endif
+
 static const char *fr_native_ble_address_type_name(
     fr_ble_address_type_t type) {
   switch (type) {
@@ -1388,6 +1415,18 @@ static const char *fr_native_ble_operation_name(fr_ble_operation_t operation) {
     return "advertise.start";
   case FR_BLE_OP_ADVERTISE_STOP:
     return "advertise.stop";
+  case FR_BLE_OP_OFF:
+    return "off";
+  case FR_BLE_OP_CONNECT:
+    return "connect";
+  case FR_BLE_OP_ACCEPT:
+    return "accept";
+  case FR_BLE_OP_CONNECTION_CLOSE:
+    return "connection.close";
+  case FR_BLE_OP_CONNECTION_PARAMS:
+    return "connection.params";
+  case FR_BLE_OP_CONNECTION_MTU:
+    return "connection.mtu";
   default:
     return "unknown";
   }
@@ -1477,6 +1516,28 @@ static fr_err_t fr_native_ble_on(fr_runtime_t *runtime,
   return FR_OK;
 }
 
+static fr_err_t fr_native_ble_off(fr_runtime_t *runtime,
+                                  const fr_tagged_t *args,
+                                  uint8_t arg_count, fr_tagged_t *out) {
+  fr_err_t handle_err = FR_OK;
+  fr_err_t off_err = FR_OK;
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+  handle_err = fr_handle_close_kind(runtime, FR_HANDLE_KIND_BLE_CONNECTION);
+#endif
+  off_err = fr_platform_ble_off(runtime);
+  if (handle_err != FR_OK) {
+    return handle_err;
+  }
+  FR_TRY(off_err);
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
 static fr_err_t fr_native_ble_info(fr_runtime_t *runtime,
                                    const fr_tagged_t *args,
                                    uint8_t arg_count, fr_tagged_t *out) {
@@ -1557,6 +1618,22 @@ static fr_err_t fr_native_ble_info(fr_runtime_t *runtime,
         (unsigned long)status.advertise_starts,
         (unsigned long)status.advertise_stops);
   }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+  written = snprintf(
+      line, sizeof(line),
+      "ble connections=%u/%u pending=%u notices=%u/%u connects=%lu accepts=%lu disconnects=%lu rejected=%lu\n",
+      (unsigned)status.connection_count,
+      (unsigned)status.connection_capacity,
+      (unsigned)status.pending_connection_count,
+      (unsigned)status.connection_notice_count,
+      (unsigned)status.connection_notice_capacity,
+      (unsigned long)status.connection_connects,
+      (unsigned long)status.connection_accepts,
+      (unsigned long)status.connection_disconnects,
+      (unsigned long)status.incoming_rejected);
   FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
 #endif
 
@@ -1797,6 +1874,280 @@ static fr_err_t fr_native_ble_advertise_stop(fr_runtime_t *runtime,
   FR_TRY(fr_platform_ble_advertise_stop());
   *out = fr_tagged_nil();
   return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+static fr_err_t fr_native_ble_connection_handle(
+    fr_runtime_t *runtime, fr_tagged_t tagged, fr_handle_ref_t *out_ref,
+    uint16_t *out_platform_index) {
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_handle_ref(tagged, &ref));
+  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_BLE_CONNECTION, NULL,
+                          out_platform_index));
+  if (out_ref != NULL) {
+    *out_ref = ref;
+  }
+  return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL
+static fr_err_t fr_native_ble_connect(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  fr_bytes_ref_t peer_ref = {0};
+  const uint8_t *peer_bytes = NULL;
+  uint16_t peer_length = 0;
+  uint8_t peer[7];
+  fr_int_t timeout_ms = 0;
+  fr_handle_ref_t handle_ref = {0};
+  fr_tagged_t handle = fr_tagged_nil();
+  uint16_t platform_index = 0;
+  fr_err_t err = FR_OK;
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL ||
+      fr_tagged_is_bool(args[1])) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &peer_ref));
+  FR_TRY(fr_bytes_view(runtime, peer_ref, &peer_bytes, &peer_length));
+  FR_TRY(fr_tagged_decode_int(args[1], &timeout_ms));
+  if (peer_length != sizeof(peer) || peer_bytes[0] > FR_BLE_ADDRESS_RANDOM_ID) {
+    return FR_ERR_INVALID;
+  }
+  if (timeout_ms < 1 || timeout_ms > FR_BLE_CONNECT_TIMEOUT_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+  memcpy(peer, peer_bytes, sizeof(peer));
+
+  FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_BLE_CONNECTION,
+                           &handle_ref, &handle));
+  err = fr_platform_ble_connect(peer, (uint16_t)timeout_ms, handle_ref,
+                                &platform_index);
+  if (err != FR_OK) {
+    (void)fr_handle_release_reserved(runtime, handle_ref);
+    return err;
+  }
+  err = fr_handle_activate(runtime, handle_ref, platform_index);
+  if (err != FR_OK) {
+    (void)fr_platform_ble_connection_close(platform_index);
+    (void)fr_handle_release_reserved(runtime, handle_ref);
+    return err;
+  }
+  *out = handle;
+  return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_PERIPHERAL
+static fr_err_t fr_native_ble_accept(fr_runtime_t *runtime,
+                                     const fr_tagged_t *args,
+                                     uint8_t arg_count, fr_tagged_t *out) {
+  fr_handle_ref_t handle_ref = {0};
+  fr_tagged_t handle = fr_tagged_nil();
+  uint16_t platform_index = 0;
+  bool pending = false;
+  bool accepted = false;
+  fr_err_t err = FR_OK;
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_connection_pending(&pending));
+  if (!pending) {
+    *out = fr_tagged_nil();
+    return FR_OK;
+  }
+
+  err = fr_handle_reserve(runtime, FR_HANDLE_KIND_BLE_CONNECTION,
+                          &handle_ref, &handle);
+  if (err != FR_OK) {
+    (void)fr_platform_ble_reject_pending();
+    return err;
+  }
+  err = fr_platform_ble_accept(handle_ref, &platform_index, &accepted);
+  if (err != FR_OK || !accepted) {
+    (void)fr_handle_release_reserved(runtime, handle_ref);
+    if (err != FR_OK) {
+      return err;
+    }
+    *out = fr_tagged_nil();
+    return FR_OK;
+  }
+  err = fr_handle_activate(runtime, handle_ref, platform_index);
+  if (err != FR_OK) {
+    (void)fr_platform_ble_connection_close(platform_index);
+    (void)fr_handle_release_reserved(runtime, handle_ref);
+    return err;
+  }
+  *out = handle;
+  return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+static fr_err_t fr_native_ble_connection_ready(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  bool ready = false;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &platform_index));
+  FR_TRY(fr_platform_ble_connection_ready(platform_index, &ready));
+  return fr_tagged_encode_bool(ready, out);
+}
+
+static fr_err_t fr_native_ble_connection_close(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  fr_handle_ref_t handle_ref = {0};
+  uint16_t platform_index = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], &handle_ref,
+                                          &platform_index));
+  (void)platform_index;
+  FR_TRY(fr_handle_close(runtime, handle_ref));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_connection_info(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  fr_ble_connection_info_t info = {0};
+  uint16_t platform_index = 0;
+  char line[224];
+  int written = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &platform_index));
+  FR_TRY(fr_platform_ble_connection_info(platform_index, &info));
+
+  written = snprintf(
+      line, sizeof(line),
+      "ble connection=%s role=%s peer=%s:%02X:%02X:%02X:%02X:%02X:%02X interval=%luus latency=%u timeout=%luus mtu=%u\n",
+      fr_native_ble_connection_state_name(info.state),
+      fr_native_ble_connection_role_name(info.role),
+      fr_native_ble_address_type_name(info.peer_address_type),
+      (unsigned)info.peer_address[0], (unsigned)info.peer_address[1],
+      (unsigned)info.peer_address[2], (unsigned)info.peer_address[3],
+      (unsigned)info.peer_address[4], (unsigned)info.peer_address[5],
+      (unsigned long)info.interval_us, (unsigned)info.latency,
+      (unsigned long)info.supervision_timeout_us, (unsigned)info.mtu);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  if (info.rssi_valid) {
+    written = snprintf(
+        line, sizeof(line),
+        "ble security encrypted=%u authenticated=%u bonded=%u rssi=%d connected-at-ms=%lu disconnected-at-ms=%lu reason=%ld\n",
+        info.encrypted ? 1u : 0u, info.authenticated ? 1u : 0u,
+        info.bonded ? 1u : 0u, (int)info.last_rssi,
+        (unsigned long)info.connected_at_ms,
+        (unsigned long)info.disconnected_at_ms, (long)info.last_reason);
+  } else {
+    written = snprintf(
+        line, sizeof(line),
+        "ble security encrypted=%u authenticated=%u bonded=%u rssi=unknown connected-at-ms=%lu disconnected-at-ms=%lu reason=%ld\n",
+        info.encrypted ? 1u : 0u, info.authenticated ? 1u : 0u,
+        info.bonded ? 1u : 0u, (unsigned long)info.connected_at_ms,
+        (unsigned long)info.disconnected_at_ms, (long)info.last_reason);
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_connection_rssi(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  int8_t rssi = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &platform_index));
+  FR_TRY(fr_platform_ble_connection_rssi(platform_index, &rssi));
+  return fr_tagged_encode_int(rssi, out);
+}
+
+static fr_err_t fr_native_ble_connection_params(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  fr_int_t minimum_interval_ms = 0;
+  fr_int_t maximum_interval_ms = 0;
+  fr_int_t latency = 0;
+  fr_int_t supervision_timeout_ms = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 5 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  for (uint8_t i = 1; i < arg_count; i++) {
+    if (fr_tagged_is_bool(args[i])) {
+      return FR_ERR_INVALID;
+    }
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &platform_index));
+  FR_TRY(fr_tagged_decode_int(args[1], &minimum_interval_ms));
+  FR_TRY(fr_tagged_decode_int(args[2], &maximum_interval_ms));
+  FR_TRY(fr_tagged_decode_int(args[3], &latency));
+  FR_TRY(fr_tagged_decode_int(args[4], &supervision_timeout_ms));
+  if (minimum_interval_ms < 8 || maximum_interval_ms < minimum_interval_ms ||
+      maximum_interval_ms > 4000 || latency < 0 || latency > 499 ||
+      supervision_timeout_ms < 100 || supervision_timeout_ms > 32000) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_connection_params(
+      platform_index, (uint16_t)minimum_interval_ms,
+      (uint16_t)maximum_interval_ms, (uint16_t)latency,
+      (uint16_t)supervision_timeout_ms));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_connection_mtu(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  uint16_t actual_mtu = 0;
+  fr_int_t requested_mtu = 0;
+  fr_int_t timeout_ms = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL ||
+      fr_tagged_is_bool(args[1]) || fr_tagged_is_bool(args[2])) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &platform_index));
+  FR_TRY(fr_tagged_decode_int(args[1], &requested_mtu));
+  FR_TRY(fr_tagged_decode_int(args[2], &timeout_ms));
+  if (requested_mtu < 23 || requested_mtu > 517 || timeout_ms < 1 ||
+      timeout_ms > 60000) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_connection_mtu(
+      runtime, platform_index, (uint16_t)requested_mtu,
+      (uint16_t)timeout_ms, &actual_mtu));
+  return fr_tagged_encode_int(actual_mtu, out);
 }
 #endif
 #endif
@@ -3408,12 +3759,19 @@ static const fr_native_signature_t fr_native_ble_on_signature = {
     .help = "initialize the compiled BLE roles and wait for radio readiness",
 };
 
+static const fr_native_signature_t fr_native_ble_off_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "close BLE links and shut down the radio",
+};
+
 static const fr_native_signature_t fr_native_ble_info_signature = {
     .params = NULL,
     .arg_count = 0,
     .result = FR_NATIVE_VALUE_NIL,
-    .help = "print BLE roles, radio, scan, advertising, queue pressure, and "
-            "last raw reason",
+    .help = "print BLE roles, radio, scan, advertising, connections, queue "
+            "pressure, and last raw reason",
 };
 
 #if FR_BLE_ENABLE_OBSERVER
@@ -3497,6 +3855,91 @@ static const fr_native_signature_t fr_native_ble_advertise_stop_signature = {
     .arg_count = 0,
     .result = FR_NATIVE_VALUE_NIL,
     .help = "stop legacy BLE advertising",
+};
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL
+static const fr_native_param_t fr_native_ble_connect_params[] = {
+    {"peer", FR_NATIVE_VALUE_ANY},
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_connect_signature = {
+    .params = fr_native_ble_connect_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_HANDLE,
+    .help = "connect to one scanned BLE peer",
+};
+#endif
+
+#if FR_BLE_ENABLE_PERIPHERAL
+static const fr_native_signature_t fr_native_ble_accept_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "accept one pending BLE connection or return nil",
+};
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+static const fr_native_param_t fr_native_ble_connection_params_one[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+};
+
+static const fr_native_param_t fr_native_ble_connection_update_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"minimum_interval_ms", FR_NATIVE_VALUE_INT},
+    {"maximum_interval_ms", FR_NATIVE_VALUE_INT},
+    {"latency", FR_NATIVE_VALUE_INT},
+    {"supervision_timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_param_t fr_native_ble_connection_mtu_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"requested_mtu", FR_NATIVE_VALUE_INT},
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_connection_ready_signature = {
+    .params = fr_native_ble_connection_params_one,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "say whether a BLE connection is live",
+};
+
+static const fr_native_signature_t fr_native_ble_connection_close_signature = {
+    .params = fr_native_ble_connection_params_one,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "disconnect and release a BLE connection handle",
+};
+
+static const fr_native_signature_t fr_native_ble_connection_info_signature = {
+    .params = fr_native_ble_connection_params_one,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "print peer, link parameters, security state, and raw reason",
+};
+
+static const fr_native_signature_t fr_native_ble_connection_rssi_signature = {
+    .params = fr_native_ble_connection_params_one,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "read the live BLE connection RSSI in dBm",
+};
+
+static const fr_native_signature_t fr_native_ble_connection_params_signature = {
+    .params = fr_native_ble_connection_update_params,
+    .arg_count = 5,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "request bounded BLE connection parameters",
+};
+
+static const fr_native_signature_t fr_native_ble_connection_mtu_signature = {
+    .params = fr_native_ble_connection_mtu_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "exchange and return the actual BLE ATT MTU",
 };
 #endif
 #endif
@@ -5183,6 +5626,18 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_signature = &fr_native_ble_info_signature,
 #endif
     },
+    {
+        .slot_id = FR_SLOT_BLE_OFF,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.off",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_off,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_off_signature,
+#endif
+    },
 #if FR_BLE_ENABLE_OBSERVER
     {
         .slot_id = FR_SLOT_BLE_SCAN_START,
@@ -5292,6 +5747,108 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 0,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_ble_advertise_stop_signature,
+#endif
+    },
+#endif
+#if FR_BLE_ENABLE_CENTRAL
+    {
+        .slot_id = FR_SLOT_BLE_CONNECT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connect",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connect,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connect_signature,
+#endif
+    },
+#endif
+#if FR_BLE_ENABLE_PERIPHERAL
+    {
+        .slot_id = FR_SLOT_BLE_ACCEPT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.accept",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_accept,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_accept_signature,
+#endif
+    },
+#endif
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_READY,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.ready?",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_ready,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_ready_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_CLOSE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.close",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_close,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_close_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_INFO,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.info",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_info,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_info_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_RSSI,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.rssi",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_rssi,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_rssi_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_PARAMS,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.params",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_params,
+        .native_arity = 5,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_params_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_MTU,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.mtu",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_mtu,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_mtu_signature,
 #endif
     },
 #endif
