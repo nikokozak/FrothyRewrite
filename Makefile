@@ -208,6 +208,13 @@ UNITY_T16_BYTES_TEST_SOURCES = \
 	$(PLATFORM_SOURCES) \
 	$(PERSISTENCE_KERNEL_SOURCES)
 
+UNITY_BLE_TEST_SOURCES = \
+	test/test_ble.c \
+	test/unity/unity.c \
+	$(KERNEL_SOURCES) \
+	$(PLATFORM_SOURCES) \
+	$(PERSISTENCE_KERNEL_SOURCES)
+
 FROTHY_SOURCES = \
 	$(TARGET_MAIN_SOURCE) \
 	$(KERNEL_SOURCES) \
@@ -280,6 +287,34 @@ UNITY_T15_NET_TEST_BINARY ?= $(BUILD_DIR)/test-unity-t15-net
 UNITY_T15B_TCP_TEST_BINARY ?= $(BUILD_DIR)/test-unity-t15b-tcp
 UNITY_T14_POWER_TEST_BINARY ?= $(BUILD_DIR)/test-unity-t14-power
 UNITY_T16_BYTES_TEST_BINARY ?= $(BUILD_DIR)/test-unity-t16-bytes
+UNITY_BLE_TEST_BINARY ?= $(BUILD_DIR)/test-unity-ble
+BLE_TEST_CFLAGS = \
+	-DFR_FEATURE_BLE=1 \
+	-DFR_BLE_ENABLE_OBSERVER=1 \
+	-DFR_BLE_ENABLE_BROADCASTER=1 \
+	-DFR_BLE_ENABLE_CENTRAL=1 \
+	-DFR_BLE_ENABLE_PERIPHERAL=1 \
+	-DFR_BLE_ENABLE_GATT_SERVER=1 \
+	-DFR_BLE_ENABLE_GATT_CLIENT=1 \
+	-DFR_BLE_SCAN_QUEUE_COUNT=8 \
+	-DFR_BLE_SCAN_DATA_BYTES=31 \
+	-DFR_BLE_ADVERTISEMENT_DATA_BYTES=31 \
+	-DFR_BLE_CONNECTION_COUNT=1 \
+	-DFR_BLE_PENDING_CONNECTION_COUNT=1 \
+	-DFR_BLE_CONNECTION_NOTICE_COUNT=4 \
+	-DFR_BLE_CONNECT_TIMEOUT_MAX_MS=60000 \
+	-DFR_BLE_START_TIMEOUT_MS=5000 \
+	-DFR_BLE_STOP_TIMEOUT_MS=1000 \
+	-DFR_BLE_GATT_SERVICE_COUNT=2 \
+	-DFR_BLE_GATT_CHARACTERISTIC_COUNT=6 \
+	-DFR_BLE_GATT_VALUE_BYTES=256 \
+	-DFR_BLE_GATT_WRITE_QUEUE_COUNT=4 \
+	-DFR_BLE_GATT_WRITE_DATA_BYTES=64 \
+	-DFR_BLE_GATT_CCCD_COUNT=2 \
+	-DFR_BLE_GATT_CLIENT_CACHE_COUNT=4 \
+	-DFR_BLE_GATT_CLIENT_DATA_BYTES=20 \
+	-DFR_BLE_GATT_NOTIFICATION_QUEUE_COUNT=4 \
+	-DFR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS=60000
 FROTHY_BINARY ?= frothy
 FROTHY_HOST_COMMAND_BINARY ?= build/host/frothy
 LIB_E2E_PROJECT ?= test/fixtures/projects/mixed-demo
@@ -323,6 +358,7 @@ test-unity: $(UNITY_TEST_BINARY) $(UNITY_I2C_TEST_BINARY) $(UNITY_LIB_NATIVES_TE
 	./$(UNITY_T15B_TCP_TEST_BINARY)
 	./$(UNITY_T14_POWER_TEST_BINARY)
 	./$(UNITY_T16_BYTES_TEST_BINARY)
+	$(MAKE) test-ble-host
 	$(MAKE) BOARD=host PROFILE=host_normal \
 		UNITY_TEST_BINARY=build/host/test-unity-host-normal \
 		UNITY_I2C_TEST_BINARY=build/host/test-unity-i2c-host-normal \
@@ -350,6 +386,14 @@ _test-unity-run: $(UNITY_TEST_BINARY) $(UNITY_I2C_TEST_BINARY) $(UNITY_LIB_NATIV
 	./$(UNITY_T15B_TCP_TEST_BINARY)
 	./$(UNITY_T14_POWER_TEST_BINARY)
 	./$(UNITY_T16_BYTES_TEST_BINARY)
+
+test-ble-host: ## Run the deterministic BLE fixture under the host_normal data profile.
+	$(MAKE) BOARD=host PROFILE=host_normal \
+		UNITY_BLE_TEST_BINARY=build/host/test-unity-ble \
+		_test-ble-host-run
+
+_test-ble-host-run: $(UNITY_BLE_TEST_BINARY)
+	./$(UNITY_BLE_TEST_BINARY)
 
 ifneq ($(FROTHY_BINARY),frothy)
 frothy: $(FROTHY_BINARY)
@@ -832,6 +876,10 @@ $(UNITY_T16_BYTES_TEST_BINARY): $(UNITY_T16_BYTES_TEST_SOURCES) $(KERNEL_DEPS) $
 		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
 	$(FR_CC) $(FR_CFLAGS) -DFR_INCLUDE_TEST_NATIVES=1 -DFR_HOST_TEST_HELPERS=1 $(UNITY_T16_BYTES_TEST_SOURCES) $(FR_LDFLAGS) -o $@
 
+$(UNITY_BLE_TEST_BINARY): $(UNITY_BLE_TEST_SOURCES) $(KERNEL_DEPS) $(BUILD_DEPS) \
+		test/unity/unity.h test/unity/unity_internals.h | $(BUILD_DIR)
+	$(FR_CC) $(FR_CFLAGS) $(BLE_TEST_CFLAGS) -DFR_HOST_TEST_HELPERS=1 $(UNITY_BLE_TEST_SOURCES) $(FR_LDFLAGS) -o $@
+
 print-config: ## Print the selected board, target, profile, and build paths.
 	@printf 'BOARD=%s\n' "$(BOARD)"
 	@printf 'BOARD_DIR=%s\n' "$(BOARD_DIR)"
@@ -859,4 +907,4 @@ vsix: ## Build the VS Code extension package.
 clean: ## Remove generated build outputs.
 	rm -rf build frothy test/test test/test-host-normal test/fixtures/projects/*/.frothy
 
-.PHONY: test test-esp-idf-console-boundary test-unity help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-trace-transcript test-host-normal-pulse-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript seeed-xiao-host test-seeed-xiao-host-transcript frothy-host-command cli install-host test-install-host print-config vsix clean
+.PHONY: test test-esp-idf-console-boundary test-unity test-ble-host _test-ble-host-run help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-trace-transcript test-host-normal-pulse-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript seeed-xiao-host test-seeed-xiao-host-transcript frothy-host-command cli install-host test-install-host print-config vsix clean

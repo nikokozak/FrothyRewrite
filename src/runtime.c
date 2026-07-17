@@ -4,6 +4,7 @@
 #include "handle.h"
 #include "object.h"
 #include "pad.h"
+#include "platform.h"
 #include "tagged.h"
 
 #include <string.h>
@@ -59,17 +60,24 @@ fr_err_t fr_runtime_init(fr_runtime_t *runtime) {
 }
 
 fr_err_t fr_runtime_clear_project(fr_runtime_t *runtime) {
-  fr_err_t event_err = FR_OK;
+  fr_err_t clear_err = FR_OK;
+  fr_err_t step_err = FR_OK;
+
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
 
   fr_handle_close_all(runtime);
-  /* Spec §5: unregister platform resources before code/slots clear so a late
-     edge cannot fire against a body that is about to disappear. A failed
-     platform-remove leaks an armed resource, so report it; finish the rest
-     of the clear so the runtime is at least consistent. */
-  event_err = fr_event_clear_table(runtime);
+  /* Spec §5: unregister platform resources before code/slots clear so late
+     callbacks cannot reach a body that is about to disappear. Report the
+     first failed removal, but finish the clear so the runtime is consistent. */
+#if FR_FEATURE_BLE
+  clear_err = fr_platform_ble_project_clear();
+#endif
+  step_err = fr_event_clear_table(runtime);
+  if (clear_err == FR_OK) {
+    clear_err = step_err;
+  }
   for (fr_slot_id_t slot_id = 0; slot_id < FR_PROFILE_MAX_SLOTS; slot_id++) {
     runtime->slots.current[slot_id] = runtime->slots.base[slot_id];
     runtime->slots.overlay[slot_id] = false;
@@ -118,12 +126,15 @@ fr_err_t fr_runtime_clear_project(fr_runtime_t *runtime) {
   fr_bytes_init(runtime);
 #endif
 #if FR_FEATURE_PAD
-  FR_TRY(fr_pad_reset(runtime));
+  step_err = fr_pad_reset(runtime);
+  if (clear_err == FR_OK) {
+    clear_err = step_err;
+  }
 #endif
   runtime->interrupted = false;
   runtime->rescue_error = FR_OK;
   runtime->rescue_error_active = false;
-  return event_err;
+  return clear_err;
 }
 
 fr_err_t fr_runtime_reset(fr_runtime_t *runtime) {

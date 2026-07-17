@@ -283,7 +283,16 @@ fr_err_t fr_persist_save(fr_runtime_t *runtime) {
  * base-image boundary and remounts saved code so code ids do not drift. The
  * no-payload path still skips reset so an empty restore cannot collapse L1. */
 fr_err_t fr_persist_restore(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
   fr_persist_forget_boot_image();
+#if FR_FEATURE_BLE
+  /* Public restore preserves library-tier slots, so it cannot clear the whole
+   * runtime. BLE is still volatile project state and must stop before saved
+   * user code replaces the current user tier. */
+  FR_TRY(fr_platform_ble_project_clear());
+#endif
   return fr_persist_restore_read_and_apply(
       runtime, fr_persist_payload_restore_user_only, false, NULL);
 }
@@ -330,14 +339,20 @@ fr_err_t fr_persist_restore_user(fr_runtime_t *runtime) {
 }
 
 fr_err_t fr_persist_wipe(fr_runtime_t *runtime) {
+  fr_err_t restart_err;
+
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
 
+  FR_TRY(fr_runtime_clear_project(runtime));
   fr_persist_forget_boot_image();
   fr_platform_persist_unmount();
   FR_TRY(fr_platform_persist_clear());
-  return fr_base_image_install(runtime);
+
+  restart_err = fr_platform_restart();
+  FR_TRY(fr_base_image_install(runtime));
+  return restart_err == FR_ERR_UNSUPPORTED ? FR_OK : restart_err;
 }
 
 /* Defined in persist_payload.c. Drops every user-tier overlay binding from

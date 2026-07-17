@@ -13,7 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#if FR_FEATURE_CONSOLE_ROUTING
+#if FR_FEATURE_CONSOLE_ROUTING || FR_FEATURE_BLE
 static fr_err_t fr_native_write_rendered_line(const char *line, size_t cap,
                                               int written);
 #endif
@@ -1310,6 +1310,1684 @@ static fr_err_t fr_native_console_info(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_BLE
+static const char *fr_native_ble_radio_state_name(
+    fr_ble_radio_state_t state) {
+  switch (state) {
+  case FR_BLE_RADIO_OFF:
+    return "off";
+  case FR_BLE_RADIO_STARTING:
+    return "starting";
+  case FR_BLE_RADIO_READY:
+    return "ready";
+  case FR_BLE_RADIO_STOPPING:
+    return "stopping";
+  case FR_BLE_RADIO_FAILED:
+    return "failed";
+  default:
+    return "unknown";
+  }
+}
+
+static const char *fr_native_ble_scan_state_name(fr_ble_scan_state_t state) {
+  switch (state) {
+  case FR_BLE_SCAN_IDLE:
+    return "idle";
+  case FR_BLE_SCAN_ACTIVE:
+    return "active";
+  case FR_BLE_SCAN_STOPPING:
+    return "stopping";
+  default:
+    return "unknown";
+  }
+}
+
+#if FR_BLE_ENABLE_BROADCASTER
+static const char *fr_native_ble_advertise_state_name(
+    fr_ble_advertise_state_t state) {
+  switch (state) {
+  case FR_BLE_ADVERTISE_IDLE:
+    return "idle";
+  case FR_BLE_ADVERTISE_ACTIVE:
+    return "active";
+  case FR_BLE_ADVERTISE_STOPPING:
+    return "stopping";
+  default:
+    return "unknown";
+  }
+}
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+static const char *fr_native_ble_connection_state_name(
+    fr_ble_connection_state_t state) {
+  switch (state) {
+  case FR_BLE_CONNECTION_FREE:
+    return "free";
+  case FR_BLE_CONNECTION_CONNECTING:
+    return "connecting";
+  case FR_BLE_CONNECTION_PENDING:
+    return "pending";
+  case FR_BLE_CONNECTION_LIVE:
+    return "live";
+  case FR_BLE_CONNECTION_DISCONNECTED:
+    return "disconnected";
+  case FR_BLE_CONNECTION_CLOSING:
+    return "closing";
+  default:
+    return "unknown";
+  }
+}
+
+static const char *fr_native_ble_connection_role_name(
+    fr_ble_connection_role_t role) {
+  return role == FR_BLE_CONNECTION_ROLE_PERIPHERAL ? "peripheral" : "central";
+}
+#endif
+
+static const char *fr_native_ble_address_type_name(
+    fr_ble_address_type_t type) {
+  switch (type) {
+  case FR_BLE_ADDRESS_PUBLIC:
+    return "public";
+  case FR_BLE_ADDRESS_RANDOM:
+    return "random";
+  case FR_BLE_ADDRESS_PUBLIC_ID:
+    return "public-id";
+  case FR_BLE_ADDRESS_RANDOM_ID:
+    return "random-id";
+  default:
+    return "unknown";
+  }
+}
+
+static const char *fr_native_ble_operation_name(fr_ble_operation_t operation) {
+  switch (operation) {
+  case FR_BLE_OP_NONE:
+    return "none";
+  case FR_BLE_OP_ON:
+    return "on";
+  case FR_BLE_OP_SCAN_START:
+    return "scan.start";
+  case FR_BLE_OP_SCAN_STOP:
+    return "scan.stop";
+  case FR_BLE_OP_SCAN_NEXT:
+    return "scan.next";
+  case FR_BLE_OP_ADVERTISE_START:
+    return "advertise.start";
+  case FR_BLE_OP_ADVERTISE_STOP:
+    return "advertise.stop";
+  case FR_BLE_OP_OFF:
+    return "off";
+  case FR_BLE_OP_CONNECT:
+    return "connect";
+  case FR_BLE_OP_ACCEPT:
+    return "accept";
+  case FR_BLE_OP_CONNECTION_CLOSE:
+    return "connection.close";
+  case FR_BLE_OP_CONNECTION_PARAMS:
+    return "connection.params";
+  case FR_BLE_OP_CONNECTION_MTU:
+    return "connection.mtu";
+  case FR_BLE_OP_GATT_INSTALL:
+    return "gatt.install";
+  case FR_BLE_OP_GATT_SET:
+    return "gatt.set";
+  case FR_BLE_OP_GATT_NOTIFY:
+    return "gatt.notify";
+  case FR_BLE_OP_GATT_INDICATE:
+    return "gatt.indicate";
+  case FR_BLE_OP_GATT_WRITE_NEXT:
+    return "gatt.next-write";
+  case FR_BLE_OP_GATT_FIND:
+    return "gatt.find";
+  case FR_BLE_OP_GATT_READ:
+    return "gatt.read";
+  case FR_BLE_OP_GATT_WRITE:
+    return "gatt.write";
+  case FR_BLE_OP_GATT_SUBSCRIBE:
+    return "gatt.subscribe";
+  case FR_BLE_OP_GATT_UNSUBSCRIBE:
+    return "gatt.unsubscribe";
+  case FR_BLE_OP_GATT_NOTIFICATION_NEXT:
+    return "gatt.next-notification";
+  default:
+    return "unknown";
+  }
+}
+
+static fr_err_t fr_native_ble_roles_text(uint8_t roles, char *out,
+                                         size_t cap) {
+  static const struct {
+    uint8_t bit;
+    const char *name;
+  } labels[] = {
+      {FR_BLE_ROLE_OBSERVER, "observer"},
+      {FR_BLE_ROLE_BROADCASTER, "broadcaster"},
+      {FR_BLE_ROLE_CENTRAL, "central"},
+      {FR_BLE_ROLE_PERIPHERAL, "peripheral"},
+  };
+  size_t used = 0;
+
+  if (out == NULL || cap == 0) {
+    return FR_ERR_INVALID;
+  }
+  out[0] = '\0';
+  for (size_t i = 0; i < sizeof(labels) / sizeof(labels[0]); i++) {
+    int written = 0;
+
+    if ((roles & labels[i].bit) == 0) {
+      continue;
+    }
+    written = snprintf(out + used, cap - used, "%s%s", used > 0 ? "," : "",
+                       labels[i].name);
+    if (written < 0) {
+      return FR_ERR_IO;
+    }
+    if ((size_t)written >= cap - used) {
+      return FR_ERR_CAPACITY;
+    }
+    used += (size_t)written;
+  }
+  if (used == 0) {
+    int written = snprintf(out, cap, "none");
+
+    if (written < 0) {
+      return FR_ERR_IO;
+    }
+    if ((size_t)written >= cap) {
+      return FR_ERR_CAPACITY;
+    }
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_result_text(fr_err_t result, char *out,
+                                          size_t cap) {
+  const char *name = result == FR_OK ? "ok" : fr_err_name(result);
+  int written = 0;
+
+  if (out == NULL || cap == 0) {
+    return FR_ERR_INVALID;
+  }
+  if (name == NULL) {
+    name = "unknown";
+  }
+  written = snprintf(out, cap, "%s", name);
+  if (written < 0) {
+    return FR_ERR_IO;
+  }
+  if ((size_t)written >= cap) {
+    return FR_ERR_CAPACITY;
+  }
+  for (int i = 0; i < written; i++) {
+    if (out[i] == ' ') {
+      out[i] = '-';
+    }
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_on(fr_runtime_t *runtime,
+                                 const fr_tagged_t *args, uint8_t arg_count,
+                                 fr_tagged_t *out) {
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_on(runtime));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_off(fr_runtime_t *runtime,
+                                  const fr_tagged_t *args,
+                                  uint8_t arg_count, fr_tagged_t *out) {
+  fr_err_t handle_err = FR_OK;
+  fr_err_t off_err = FR_OK;
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+  handle_err = fr_handle_close_kind(runtime, FR_HANDLE_KIND_BLE_CONNECTION);
+#endif
+  off_err = fr_platform_ble_off(runtime);
+  if (handle_err != FR_OK) {
+    return handle_err;
+  }
+  FR_TRY(off_err);
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_info(fr_runtime_t *runtime,
+                                   const fr_tagged_t *args,
+                                   uint8_t arg_count, fr_tagged_t *out) {
+  fr_ble_status_t status = {0};
+  const char *backend = NULL;
+  char roles[48];
+  char result[32];
+  char line[224];
+  int written = 0;
+
+  (void)runtime;
+  (void)args;
+  if (arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_status(&status));
+  backend = fr_platform_ble_backend_name();
+  if (backend == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_roles_text(status.roles, roles, sizeof(roles)));
+  FR_TRY(fr_native_ble_result_text(status.last_result, result,
+                                   sizeof(result)));
+
+  written = snprintf(line, sizeof(line),
+                     "ble backend=%s state=%s roles=%s coexistence=%s\n",
+                     backend, fr_native_ble_radio_state_name(status.radio_state),
+                     roles,
+                     status.coexistence_enabled ? "enabled" : "disabled");
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  if (status.own_address_valid) {
+    written = snprintf(
+        line, sizeof(line), "ble address=%s:%02X:%02X:%02X:%02X:%02X:%02X\n",
+        fr_native_ble_address_type_name(status.own_address_type),
+        (unsigned)status.own_address[0], (unsigned)status.own_address[1],
+        (unsigned)status.own_address[2], (unsigned)status.own_address[3],
+        (unsigned)status.own_address[4], (unsigned)status.own_address[5]);
+  } else {
+    written = snprintf(line, sizeof(line), "ble address=none\n");
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  if (status.requested_interval_ms > 0) {
+    written = snprintf(
+        line, sizeof(line),
+        "ble scan=%s requested=%u/%ums actual=%lu/%luus active=%u repeats=%u min-rssi=%d\n",
+        fr_native_ble_scan_state_name(status.scan_state),
+        (unsigned)status.requested_interval_ms,
+        (unsigned)status.requested_window_ms,
+        (unsigned long)status.actual_interval_us,
+        (unsigned long)status.actual_window_us,
+        status.active_scan ? 1u : 0u, status.repeats ? 1u : 0u,
+        (int)status.minimum_rssi);
+  } else {
+    written = snprintf(line, sizeof(line), "ble scan=%s parameters=none\n",
+                       fr_native_ble_scan_state_name(status.scan_state));
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+#if FR_BLE_ENABLE_BROADCASTER
+  if (status.advertise_requested_interval_ms > 0) {
+    written = snprintf(
+        line, sizeof(line),
+        "ble advertise=%s requested=%ums actual=%luus connectable=%u data=%u scan-response=%u starts=%lu stops=%lu\n",
+        fr_native_ble_advertise_state_name(status.advertise_state),
+        (unsigned)status.advertise_requested_interval_ms,
+        (unsigned long)status.advertise_actual_interval_us,
+        status.advertise_connectable ? 1u : 0u,
+        (unsigned)status.advertising_data_length,
+        (unsigned)status.scan_response_data_length,
+        (unsigned long)status.advertise_starts,
+        (unsigned long)status.advertise_stops);
+  } else {
+    written = snprintf(
+        line, sizeof(line), "ble advertise=%s parameters=none starts=%lu stops=%lu\n",
+        fr_native_ble_advertise_state_name(status.advertise_state),
+        (unsigned long)status.advertise_starts,
+        (unsigned long)status.advertise_stops);
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+  written = snprintf(
+      line, sizeof(line),
+      "ble connections=%u/%u pending=%u notices=%u/%u connects=%lu accepts=%lu disconnects=%lu rejected=%lu\n",
+      (unsigned)status.connection_count,
+      (unsigned)status.connection_capacity,
+      (unsigned)status.pending_connection_count,
+      (unsigned)status.connection_notice_count,
+      (unsigned)status.connection_notice_capacity,
+      (unsigned long)status.connection_connects,
+      (unsigned long)status.connection_accepts,
+      (unsigned long)status.connection_disconnects,
+      (unsigned long)status.incoming_rejected);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+#endif
+
+  if (status.current_valid) {
+    written = snprintf(
+        line, sizeof(line),
+        "ble queue=%u/%u high-water=%u received=%lu accepted=%lu filtered-rssi=%lu dequeued=%lu dropped=%lu malformed=%lu current=rssi:%d,flags:%u,data:%u\n",
+        (unsigned)status.queue_count, (unsigned)status.queue_capacity,
+        (unsigned)status.queue_high_water, (unsigned long)status.received,
+        (unsigned long)status.accepted, (unsigned long)status.filtered_rssi,
+        (unsigned long)status.dequeued, (unsigned long)status.dropped,
+        (unsigned long)status.malformed, (int)status.current_rssi,
+        (unsigned)status.current_flags, (unsigned)status.current_data_length);
+  } else {
+    written = snprintf(
+        line, sizeof(line),
+        "ble queue=%u/%u high-water=%u received=%lu accepted=%lu filtered-rssi=%lu dequeued=%lu dropped=%lu malformed=%lu current=no\n",
+        (unsigned)status.queue_count, (unsigned)status.queue_capacity,
+        (unsigned)status.queue_high_water, (unsigned long)status.received,
+        (unsigned long)status.accepted, (unsigned long)status.filtered_rssi,
+        (unsigned long)status.dequeued, (unsigned long)status.dropped,
+        (unsigned long)status.malformed);
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  written = snprintf(
+      line, sizeof(line),
+      "ble lifecycle=%lu shutdown=%u cleanup=%s late-callbacks=%lu resets=%lu\n",
+      (unsigned long)status.lifecycle_generation,
+      status.shutdown_in_progress ? 1u : 0u,
+      status.cleanup_required ? "required" : "clean",
+      (unsigned long)status.late_callback_count,
+      (unsigned long)status.reset_count);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  written = snprintf(
+      line, sizeof(line),
+      "ble last-op=%s result=%s platform=%ld reason=%ld at-ms=%lu\n",
+      fr_native_ble_operation_name(status.last_operation), result,
+      (long)status.last_platform_code, (long)status.last_protocol_reason,
+      (unsigned long)status.last_operation_ms);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+#if FR_BLE_ENABLE_GATT_SERVER || FR_BLE_ENABLE_GATT_CLIENT
+static fr_err_t fr_native_ble_connection_handle(
+    fr_runtime_t *runtime, fr_tagged_t tagged, fr_handle_ref_t *out_ref,
+    uint16_t *out_platform_index);
+
+#if FR_BLE_ENABLE_GATT_SERVER
+static const fr_record_name_t fr_native_ble_gatt_kind_field = {
+    (const uint8_t *)"kind", 4};
+static const fr_record_name_t fr_native_ble_gatt_uuid_field = {
+    (const uint8_t *)"uuid", 4};
+static const fr_record_name_t fr_native_ble_gatt_flags_field = {
+    (const uint8_t *)"flags", 5};
+static const fr_record_name_t fr_native_ble_gatt_size_field = {
+    (const uint8_t *)"size", 4};
+#endif
+
+static int fr_native_ble_gatt_hex(uint8_t byte) {
+  if (byte >= '0' && byte <= '9') {
+    return byte - '0';
+  }
+  if (byte >= 'a' && byte <= 'f') {
+    return byte - 'a' + 10;
+  }
+  if (byte >= 'A' && byte <= 'F') {
+    return byte - 'A' + 10;
+  }
+  return -1;
+}
+
+static fr_err_t fr_native_ble_gatt_uuid_parse(const uint8_t *text,
+                                              uint16_t length,
+                                              fr_ble_uuid_t *out_uuid) {
+  uint16_t text_index = 0;
+  uint8_t byte_index = 0;
+
+  if (text == NULL || out_uuid == NULL) {
+    return FR_ERR_INVALID;
+  }
+  memset(out_uuid, 0, sizeof(*out_uuid));
+  if (length == 4) {
+    out_uuid->kind = FR_BLE_UUID_16;
+    for (uint8_t i = 0; i < 2; i++) {
+      int high = fr_native_ble_gatt_hex(text[i * 2u]);
+      int low = fr_native_ble_gatt_hex(text[i * 2u + 1u]);
+
+      if (high < 0 || low < 0) {
+        return FR_ERR_DOMAIN;
+      }
+      out_uuid->bytes[i] = (uint8_t)((high << 4) | low);
+    }
+    return FR_OK;
+  }
+  if (length != 36) {
+    return FR_ERR_DOMAIN;
+  }
+
+  out_uuid->kind = FR_BLE_UUID_128;
+  while (text_index < length) {
+    int high = 0;
+    int low = 0;
+
+    if (text_index == 8 || text_index == 13 || text_index == 18 ||
+        text_index == 23) {
+      if (text[text_index] != '-') {
+        return FR_ERR_DOMAIN;
+      }
+      text_index += 1u;
+      continue;
+    }
+    if (text_index + 1u >= length || byte_index >= 16) {
+      return FR_ERR_DOMAIN;
+    }
+    high = fr_native_ble_gatt_hex(text[text_index]);
+    low = fr_native_ble_gatt_hex(text[text_index + 1u]);
+    if (high < 0 || low < 0) {
+      return FR_ERR_DOMAIN;
+    }
+    out_uuid->bytes[byte_index++] = (uint8_t)((high << 4) | low);
+    text_index += 2u;
+  }
+  return byte_index == 16 ? FR_OK : FR_ERR_DOMAIN;
+}
+
+#if FR_BLE_ENABLE_GATT_SERVER
+static fr_err_t fr_native_ble_gatt_uuid_text(const fr_ble_uuid_t *uuid,
+                                             char *out, size_t capacity) {
+  static const char hex[] = "0123456789abcdef";
+  static const uint8_t hyphens[] = {8, 13, 18, 23};
+  uint8_t byte_index = 0;
+
+  if (uuid == NULL || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (uuid->kind == FR_BLE_UUID_16) {
+    if (capacity < 5) {
+      return FR_ERR_CAPACITY;
+    }
+    for (uint8_t i = 0; i < 2; i++) {
+      out[i * 2u] = hex[uuid->bytes[i] >> 4];
+      out[i * 2u + 1u] = hex[uuid->bytes[i] & 0x0fu];
+    }
+    out[4] = '\0';
+    return FR_OK;
+  }
+  if (uuid->kind != FR_BLE_UUID_128 || capacity < 37) {
+    return uuid->kind == FR_BLE_UUID_128 ? FR_ERR_CAPACITY : FR_ERR_INVALID;
+  }
+
+  for (uint8_t text_index = 0; text_index < 36; text_index++) {
+    bool hyphen = false;
+
+    for (uint8_t i = 0; i < sizeof(hyphens); i++) {
+      if (text_index == hyphens[i]) {
+        hyphen = true;
+        break;
+      }
+    }
+    if (hyphen) {
+      out[text_index] = '-';
+    } else {
+      uint8_t byte = uuid->bytes[byte_index / 2u];
+
+      out[text_index] =
+          hex[(byte_index & 1u) == 0 ? byte >> 4 : byte & 0x0fu];
+      byte_index += 1u;
+    }
+  }
+  out[36] = '\0';
+  return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER
+static fr_err_t fr_native_ble_gatt_parse_table(
+    const fr_runtime_t *runtime, fr_tagged_t rows_tagged,
+    fr_ble_gatt_table_t *out_table) {
+  enum {
+    FR_NATIVE_BLE_GATT_PROPERTIES =
+        FR_BLE_GATT_CHR_READ | FR_BLE_GATT_CHR_WRITE |
+        FR_BLE_GATT_CHR_WRITE_COMMAND | FR_BLE_GATT_CHR_NOTIFY |
+        FR_BLE_GATT_CHR_INDICATE,
+    FR_NATIVE_BLE_GATT_SECURITY =
+        FR_BLE_GATT_CHR_READ_ENCRYPTED |
+        FR_BLE_GATT_CHR_WRITE_ENCRYPTED |
+        FR_BLE_GATT_CHR_READ_AUTHENTICATED |
+        FR_BLE_GATT_CHR_WRITE_AUTHENTICATED,
+    FR_NATIVE_BLE_GATT_FLAGS =
+        FR_NATIVE_BLE_GATT_PROPERTIES | FR_NATIVE_BLE_GATT_SECURITY,
+  };
+  fr_ble_status_t status = {0};
+  fr_object_id_t rows_id = 0;
+  uint16_t row_count = 0;
+  int16_t current_service = -1;
+  uint16_t cccd_count = 0;
+
+  if (runtime == NULL || out_table == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_status(&status));
+  if (status.radio_state != FR_BLE_RADIO_OFF) {
+    return FR_ERR_BLE_BUSY;
+  }
+  FR_TRY(fr_tagged_decode_object_id(rows_tagged, &rows_id));
+  FR_TRY(fr_cells_length(runtime, rows_id, &row_count));
+  if (row_count == 0 ||
+      row_count > FR_BLE_GATT_SERVICE_COUNT +
+                      FR_BLE_GATT_CHARACTERISTIC_COUNT) {
+    return FR_ERR_CAPACITY;
+  }
+
+  memset(out_table, 0, sizeof(*out_table));
+  out_table->row_count = row_count;
+  for (uint16_t row_id = 0; row_id < row_count; row_id++) {
+    fr_tagged_t row_tagged = fr_tagged_nil();
+    fr_tagged_t kind_tagged = fr_tagged_nil();
+    fr_tagged_t uuid_tagged = fr_tagged_nil();
+    fr_tagged_t flags_tagged = fr_tagged_nil();
+    fr_tagged_t size_tagged = fr_tagged_nil();
+    fr_object_id_t row_object_id = 0;
+    fr_object_id_t uuid_object_id = 0;
+    const uint8_t *uuid_text = NULL;
+    uint16_t uuid_length = 0;
+    fr_int_t kind = 0;
+    fr_int_t flags = 0;
+    fr_int_t size = 0;
+    fr_ble_uuid_t uuid = {0};
+
+    FR_TRY(fr_cells_read(runtime, rows_id, row_id, &row_tagged));
+    FR_TRY(fr_tagged_decode_object_id(row_tagged, &row_object_id));
+    FR_TRY(fr_record_read_field(runtime, row_object_id,
+                                fr_native_ble_gatt_kind_field, &kind_tagged));
+    FR_TRY(fr_record_read_field(runtime, row_object_id,
+                                fr_native_ble_gatt_uuid_field, &uuid_tagged));
+    FR_TRY(fr_record_read_field(runtime, row_object_id,
+                                fr_native_ble_gatt_flags_field,
+                                &flags_tagged));
+    FR_TRY(fr_record_read_field(runtime, row_object_id,
+                                fr_native_ble_gatt_size_field, &size_tagged));
+    if (fr_tagged_is_bool(kind_tagged) || fr_tagged_is_bool(flags_tagged) ||
+        fr_tagged_is_bool(size_tagged)) {
+      return FR_ERR_TYPE;
+    }
+    FR_TRY(fr_tagged_decode_int(kind_tagged, &kind));
+    FR_TRY(fr_tagged_decode_int(flags_tagged, &flags));
+    FR_TRY(fr_tagged_decode_int(size_tagged, &size));
+    FR_TRY(fr_tagged_decode_object_id(uuid_tagged, &uuid_object_id));
+    FR_TRY(fr_text_view(runtime, uuid_object_id, &uuid_text, &uuid_length));
+    FR_TRY(fr_native_ble_gatt_uuid_parse(uuid_text, uuid_length, &uuid));
+
+    if (kind == FR_BLE_GATT_KIND_SERVICE) {
+      fr_ble_gatt_service_row_t *service = NULL;
+
+      if (out_table->service_count == FR_BLE_GATT_SERVICE_COUNT) {
+        return FR_ERR_CAPACITY;
+      }
+      if (flags != FR_BLE_GATT_SERVICE_PRIMARY &&
+          flags != FR_BLE_GATT_SERVICE_SECONDARY) {
+        return FR_ERR_DOMAIN;
+      }
+      if (size != 0) {
+        return FR_ERR_DOMAIN;
+      }
+      if (current_service >= 0) {
+        fr_ble_gatt_service_row_t *prior =
+            &out_table->services[current_service];
+
+        prior->characteristic_count =
+            (uint16_t)(out_table->characteristic_count -
+                       prior->first_characteristic);
+      }
+
+      current_service = (int16_t)out_table->service_count;
+      service = &out_table->services[out_table->service_count++];
+      *service = (fr_ble_gatt_service_row_t){
+          .uuid = uuid,
+          .attribute_id = row_id,
+          .first_characteristic = out_table->characteristic_count,
+          .secondary = flags == FR_BLE_GATT_SERVICE_SECONDARY,
+      };
+      continue;
+    }
+
+    if (kind == FR_BLE_GATT_KIND_CHARACTERISTIC) {
+      fr_ble_gatt_characteristic_row_t *characteristic = NULL;
+
+      if (current_service < 0) {
+        return FR_ERR_DOMAIN;
+      }
+      if (out_table->characteristic_count ==
+          FR_BLE_GATT_CHARACTERISTIC_COUNT) {
+        return FR_ERR_CAPACITY;
+      }
+      if (flags < 0 || (flags & ~FR_NATIVE_BLE_GATT_FLAGS) != 0 ||
+          (flags & FR_NATIVE_BLE_GATT_PROPERTIES) == 0) {
+        return FR_ERR_DOMAIN;
+      }
+      if ((flags & FR_NATIVE_BLE_GATT_SECURITY) != 0) {
+        return FR_ERR_UNSUPPORTED;
+      }
+      if (size < 0 || size > FR_BLE_GATT_VALUE_BYTES ||
+          (uint32_t)out_table->value_bytes_used + (uint32_t)size >
+              FR_BLE_GATT_VALUE_BYTES) {
+        return FR_ERR_CAPACITY;
+      }
+      if ((flags & (FR_BLE_GATT_CHR_NOTIFY | FR_BLE_GATT_CHR_INDICATE)) != 0) {
+        cccd_count += 1u;
+        if (cccd_count > FR_BLE_GATT_CCCD_COUNT) {
+          return FR_ERR_CAPACITY;
+        }
+      }
+
+      characteristic =
+          &out_table->characteristics[out_table->characteristic_count++];
+      *characteristic = (fr_ble_gatt_characteristic_row_t){
+          .uuid = uuid,
+          .attribute_id = row_id,
+          .portable_flags = (uint16_t)flags,
+          .maximum_length = (uint16_t)size,
+          .value_offset = out_table->value_bytes_used,
+      };
+      out_table->value_bytes_used =
+          (uint16_t)(out_table->value_bytes_used + (uint16_t)size);
+      continue;
+    }
+
+    return FR_ERR_DOMAIN;
+  }
+
+  if (current_service < 0) {
+    return FR_ERR_DOMAIN;
+  }
+  out_table->services[current_service].characteristic_count =
+      (uint16_t)(out_table->characteristic_count -
+                 out_table->services[current_service].first_characteristic);
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_gatt_install(fr_runtime_t *runtime,
+                                           const fr_tagged_t *args,
+                                           uint8_t arg_count,
+                                           fr_tagged_t *out) {
+  fr_ble_gatt_table_t table;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_gatt_parse_table(runtime, args[0], &table));
+  FR_TRY(fr_platform_ble_gatt_install(&table));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+#endif
+
+static fr_err_t fr_native_ble_gatt_info(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count, fr_tagged_t *out) {
+#if FR_BLE_ENABLE_GATT_SERVER
+  fr_ble_gatt_status_t status = {0};
+  char uuid[37];
+#endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+  fr_ble_gatt_client_status_t client = {0};
+#endif
+  char line[224];
+  int written = 0;
+
+  (void)runtime;
+  (void)args;
+  if (arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+#if FR_BLE_ENABLE_GATT_SERVER
+  FR_TRY(fr_platform_ble_gatt_status(&status));
+  written = snprintf(
+      line, sizeof(line),
+      "ble gatt generation=%lu rows=%u services=%u/%u characteristics=%u/%u values=%u/%u cccds=%u/%u\n",
+      (unsigned long)status.table_generation,
+      (unsigned)status.table.row_count, (unsigned)status.table.service_count,
+      (unsigned)FR_BLE_GATT_SERVICE_COUNT,
+      (unsigned)status.table.characteristic_count,
+      (unsigned)FR_BLE_GATT_CHARACTERISTIC_COUNT,
+      (unsigned)status.table.value_bytes_used,
+      (unsigned)FR_BLE_GATT_VALUE_BYTES, (unsigned)status.subscription_count,
+      (unsigned)FR_BLE_GATT_CCCD_COUNT);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  for (uint16_t row_id = 0; row_id < status.table.row_count; row_id++) {
+    bool found = false;
+
+    for (uint16_t i = 0; i < status.table.service_count; i++) {
+      const fr_ble_gatt_service_row_t *service = &status.table.services[i];
+
+      if (service->attribute_id != row_id) {
+        continue;
+      }
+      FR_TRY(fr_native_ble_gatt_uuid_text(&service->uuid, uuid, sizeof(uuid)));
+      written = snprintf(
+          line, sizeof(line),
+          "ble gatt row=%u kind=service uuid=%s flags=%s characteristics=%u\n",
+          (unsigned)row_id, uuid,
+          service->secondary ? "secondary" : "primary",
+          (unsigned)service->characteristic_count);
+      FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+      found = true;
+      break;
+    }
+    if (found) {
+      continue;
+    }
+    for (uint16_t i = 0; i < status.table.characteristic_count; i++) {
+      const fr_ble_gatt_characteristic_row_t *characteristic =
+          &status.table.characteristics[i];
+
+      if (characteristic->attribute_id != row_id) {
+        continue;
+      }
+      FR_TRY(fr_native_ble_gatt_uuid_text(&characteristic->uuid, uuid,
+                                          sizeof(uuid)));
+      written = snprintf(
+          line, sizeof(line),
+          "ble gatt row=%u kind=characteristic uuid=%s flags=0x%04x max=%u length=%u handle=%u\n",
+          (unsigned)row_id, uuid, (unsigned)characteristic->portable_flags,
+          (unsigned)characteristic->maximum_length,
+          (unsigned)characteristic->value_length,
+          (unsigned)characteristic->target_value_handle);
+      FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+      found = true;
+      break;
+    }
+    if (!found) {
+      return FR_ERR_CORRUPT;
+    }
+  }
+
+  if (status.current_write_valid) {
+    written = snprintf(
+        line, sizeof(line),
+        "ble gatt writes=%u/%u high-water=%u overflow=%lu stale=%lu preaccept-rejected=%lu current=%u:%u indication=%s\n",
+        (unsigned)status.write_queue_count,
+        (unsigned)FR_BLE_GATT_WRITE_QUEUE_COUNT,
+        (unsigned)status.write_queue_high_water,
+        (unsigned long)status.write_queue_overflow,
+        (unsigned long)status.write_queue_stale,
+        (unsigned long)status.preaccept_write_rejected,
+        (unsigned)status.current_write_attribute_id,
+        (unsigned)status.current_write_data_length,
+        status.indication_pending ? "pending" : "idle");
+  } else {
+    written = snprintf(
+        line, sizeof(line),
+        "ble gatt writes=%u/%u high-water=%u overflow=%lu stale=%lu preaccept-rejected=%lu current=none indication=%s\n",
+        (unsigned)status.write_queue_count,
+        (unsigned)FR_BLE_GATT_WRITE_QUEUE_COUNT,
+        (unsigned)status.write_queue_high_water,
+        (unsigned long)status.write_queue_overflow,
+        (unsigned long)status.write_queue_stale,
+        (unsigned long)status.preaccept_write_rejected,
+        status.indication_pending ? "pending" : "idle");
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  written = snprintf(line, sizeof(line),
+                     "ble gatt last-att=%ld platform=%ld\n",
+                     (long)status.last_att_error,
+                     (long)status.last_platform_code);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT
+  FR_TRY(fr_platform_ble_gatt_client_status(&client));
+  if (client.current_notification_valid) {
+    written = snprintf(
+        line, sizeof(line),
+        "ble gatt client cache=%u/%u subscriptions=%u notifications=%u/%u high-water=%u dropped=%lu stale=%lu current=%u:%u:%s\n",
+        (unsigned)client.cache_count,
+        (unsigned)FR_BLE_GATT_CLIENT_CACHE_COUNT,
+        (unsigned)client.subscription_count,
+        (unsigned)client.notification_queue_count,
+        (unsigned)FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT,
+        (unsigned)client.notification_queue_high_water,
+        (unsigned long)client.notification_dropped,
+        (unsigned long)client.notification_stale,
+        (unsigned)client.current_notification_attribute_handle,
+        (unsigned)client.current_notification_data_length,
+        client.current_notification_indication ? "indication" : "notification");
+  } else {
+    written = snprintf(
+        line, sizeof(line),
+        "ble gatt client cache=%u/%u subscriptions=%u notifications=%u/%u high-water=%u dropped=%lu stale=%lu current=none\n",
+        (unsigned)client.cache_count,
+        (unsigned)FR_BLE_GATT_CLIENT_CACHE_COUNT,
+        (unsigned)client.subscription_count,
+        (unsigned)client.notification_queue_count,
+        (unsigned)FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT,
+        (unsigned)client.notification_queue_high_water,
+        (unsigned long)client.notification_dropped,
+        (unsigned long)client.notification_stale);
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+  written = snprintf(
+      line, sizeof(line),
+      "ble gatt client procedure=%s attribute=%u service-matches=%u characteristic-matches=%u last-att=%ld platform=%ld\n",
+      client.procedure_pending
+          ? fr_native_ble_operation_name(client.procedure_operation)
+          : "idle",
+      (unsigned)client.procedure_attribute_handle,
+      (unsigned)client.service_match_count,
+      (unsigned)client.characteristic_match_count,
+      (long)client.last_att_error, (long)client.last_platform_code);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+#endif
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+#if FR_BLE_ENABLE_GATT_SERVER
+static fr_err_t fr_native_ble_gatt_set(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t attribute_id = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &attribute_id));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[1], &bytes,
+                                             &length));
+  FR_TRY(fr_platform_ble_gatt_set(attribute_id, bytes, length));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_gatt_get(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  uint8_t bytes[FR_BLE_GATT_VALUE_BYTES];
+  uint16_t attribute_id = 0;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &attribute_id));
+  FR_TRY(fr_platform_ble_gatt_get(attribute_id, bytes, sizeof(bytes),
+                                  &length));
+  return fr_bytes_install(runtime, bytes, length, out);
+}
+
+static fr_err_t fr_native_ble_gatt_notify(fr_runtime_t *runtime,
+                                          const fr_tagged_t *args,
+                                          uint8_t arg_count,
+                                          fr_tagged_t *out) {
+  uint16_t connection_index = 0;
+  uint16_t attribute_id = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &connection_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_id));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
+                                             &length));
+  FR_TRY(fr_platform_ble_gatt_notify(connection_index, attribute_id, bytes,
+                                     length));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_gatt_indicate(fr_runtime_t *runtime,
+                                            const fr_tagged_t *args,
+                                            uint8_t arg_count,
+                                            fr_tagged_t *out) {
+  uint16_t connection_index = 0;
+  uint16_t attribute_id = 0;
+  uint16_t timeout_ms = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &connection_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_id));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
+                                             &length));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 3, &timeout_ms));
+  if (timeout_ms == 0) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_gatt_indicate(runtime, connection_index,
+                                       attribute_id, bytes, length,
+                                       timeout_ms));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_gatt_next_write(fr_runtime_t *runtime,
+                                              const fr_tagged_t *args,
+                                              uint8_t arg_count,
+                                              fr_tagged_t *out) {
+  fr_handle_ref_t connection_ref = {0};
+  bool has_write = false;
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_gatt_write_next(&has_write, &connection_ref));
+  if (!has_write) {
+    *out = fr_tagged_nil();
+    return FR_OK;
+  }
+  FR_TRY(fr_handle_lookup(runtime, connection_ref,
+                          FR_HANDLE_KIND_BLE_CONNECTION, NULL, NULL));
+  return fr_tagged_encode_handle_ref(connection_ref, out);
+}
+
+static fr_err_t fr_native_ble_gatt_write_attribute(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  fr_ble_gatt_write_t write = {0};
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_gatt_write_current(&write));
+  return fr_tagged_encode_int(write.attribute_id, out);
+}
+
+static fr_err_t fr_native_ble_gatt_write_data(fr_runtime_t *runtime,
+                                              const fr_tagged_t *args,
+                                              uint8_t arg_count,
+                                              fr_tagged_t *out) {
+  fr_ble_gatt_write_t write = {0};
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_gatt_write_current(&write));
+  return fr_bytes_install(runtime, write.data, write.data_length, out);
+}
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT
+static fr_err_t fr_native_ble_gatt_uuid_arg(const fr_runtime_t *runtime,
+                                            fr_tagged_t tagged,
+                                            fr_ble_uuid_t *out_uuid) {
+  fr_object_id_t object_id = 0;
+  const uint8_t *text = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || out_uuid == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_object_id(tagged, &object_id));
+  FR_TRY(fr_text_view(runtime, object_id, &text, &length));
+  return fr_native_ble_gatt_uuid_parse(text, length, out_uuid);
+}
+
+static fr_err_t fr_native_ble_gatt_client_find(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  fr_ble_uuid_t service_uuid = {0};
+  fr_ble_uuid_t characteristic_uuid = {0};
+  uint16_t connection_index = 0;
+  uint16_t timeout_ms = 0;
+  uint16_t attribute_handle = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &connection_index));
+  FR_TRY(fr_native_ble_gatt_uuid_arg(runtime, args[1], &service_uuid));
+  FR_TRY(fr_native_ble_gatt_uuid_arg(runtime, args[2],
+                                    &characteristic_uuid));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 3, &timeout_ms));
+  if (timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_gatt_client_find(
+      runtime, connection_index, &service_uuid, &characteristic_uuid,
+      timeout_ms, &attribute_handle));
+  return fr_tagged_encode_int(attribute_handle, out);
+}
+
+static fr_err_t fr_native_ble_gatt_client_read(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  uint8_t bytes[FR_BLE_GATT_CLIENT_DATA_BYTES];
+  uint16_t connection_index = 0;
+  uint16_t attribute_handle = 0;
+  uint16_t timeout_ms = 0;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &connection_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_handle));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 2, &timeout_ms));
+  if (timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_gatt_client_read(
+      runtime, connection_index, attribute_handle, timeout_ms, bytes,
+      sizeof(bytes), &length));
+  return fr_bytes_install(runtime, bytes, length, out);
+}
+
+static fr_err_t fr_native_ble_gatt_client_write(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  const uint8_t *bytes = NULL;
+  uint16_t connection_index = 0;
+  uint16_t attribute_handle = 0;
+  uint16_t length = 0;
+  uint16_t with_response = 0;
+  uint16_t timeout_ms = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 5 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &connection_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_handle));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
+                                             &length));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 3, &with_response));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 4, &timeout_ms));
+  if (length > FR_BLE_GATT_CLIENT_DATA_BYTES || with_response > 1 ||
+      timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_gatt_client_write(
+      runtime, connection_index, attribute_handle, bytes, length,
+      with_response == 1, timeout_ms));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_gatt_client_subscribe(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  uint16_t connection_index = 0;
+  uint16_t attribute_handle = 0;
+  uint16_t mode = 0;
+  uint16_t timeout_ms = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &connection_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_handle));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 2, &mode));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 3, &timeout_ms));
+  if ((mode != FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS &&
+       mode != FR_BLE_GATT_SUBSCRIBE_INDICATIONS) ||
+      timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_gatt_client_subscribe(
+      runtime, connection_index, attribute_handle,
+      (fr_ble_gatt_subscription_mode_t)mode, timeout_ms));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_gatt_client_unsubscribe(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  uint16_t connection_index = 0;
+  uint16_t attribute_handle = 0;
+  uint16_t timeout_ms = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &connection_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_handle));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 2, &timeout_ms));
+  if (timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_gatt_client_unsubscribe(
+      runtime, connection_index, attribute_handle, timeout_ms));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_gatt_next_notification(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  fr_handle_ref_t connection_ref = {0};
+  bool has_notification = false;
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_gatt_notification_next(&has_notification,
+                                                &connection_ref));
+  if (!has_notification) {
+    *out = fr_tagged_nil();
+    return FR_OK;
+  }
+  FR_TRY(fr_handle_lookup(runtime, connection_ref,
+                          FR_HANDLE_KIND_BLE_CONNECTION, NULL, NULL));
+  return fr_tagged_encode_handle_ref(connection_ref, out);
+}
+
+static fr_err_t fr_native_ble_gatt_notification_attribute(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  fr_ble_gatt_notification_t notification = {0};
+
+  (void)runtime;
+  (void)args;
+  if (arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_gatt_notification_current(&notification));
+  return fr_tagged_encode_int(notification.attribute_handle, out);
+}
+
+static fr_err_t fr_native_ble_gatt_notification_data(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  fr_ble_gatt_notification_t notification = {0};
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_gatt_notification_current(&notification));
+  return fr_bytes_install(runtime, notification.data, notification.data_length,
+                          out);
+}
+#endif
+#endif
+
+#if FR_BLE_ENABLE_OBSERVER
+static fr_err_t fr_native_ble_scan_start(fr_runtime_t *runtime,
+                                         const fr_tagged_t *args,
+                                         uint8_t arg_count,
+                                         fr_tagged_t *out) {
+  fr_int_t interval_ms = 0;
+  fr_int_t window_ms = 0;
+  fr_int_t active = 0;
+  fr_int_t repeats = 0;
+  fr_int_t minimum_rssi = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 5 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_tagged_is_bool(args[0]) || fr_tagged_is_bool(args[1]) ||
+      fr_tagged_is_bool(args[2]) || fr_tagged_is_bool(args[3]) ||
+      fr_tagged_is_bool(args[4])) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_int(args[0], &interval_ms));
+  FR_TRY(fr_tagged_decode_int(args[1], &window_ms));
+  FR_TRY(fr_tagged_decode_int(args[2], &active));
+  FR_TRY(fr_tagged_decode_int(args[3], &repeats));
+  FR_TRY(fr_tagged_decode_int(args[4], &minimum_rssi));
+  if (interval_ms < 0 || interval_ms > UINT16_MAX || window_ms < 0 ||
+      window_ms > UINT16_MAX || active < 0 || active > 1 || repeats < 0 ||
+      repeats > 1 || minimum_rssi < INT8_MIN || minimum_rssi > INT8_MAX) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_scan_start(
+      (uint16_t)interval_ms, (uint16_t)window_ms, active == 1, repeats == 1,
+      (int8_t)minimum_rssi));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_scan_stop(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count,
+                                        fr_tagged_t *out) {
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_stop(runtime));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_scan_next(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count,
+                                        fr_tagged_t *out) {
+  bool has_report = false;
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_next(&has_report));
+  return fr_tagged_encode_bool(has_report, out);
+}
+
+static fr_err_t fr_native_ble_scan_rssi(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count,
+                                        fr_tagged_t *out) {
+  fr_ble_scan_report_t report = {0};
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_current(&report));
+  return fr_tagged_encode_int(report.rssi, out);
+}
+
+static fr_err_t fr_native_ble_scan_peer(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count,
+                                        fr_tagged_t *out) {
+  fr_ble_scan_report_t report = {0};
+  uint8_t peer[7];
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_current(&report));
+  peer[0] = (uint8_t)report.address_type;
+  memcpy(&peer[1], report.address, sizeof(report.address));
+  return fr_bytes_install(runtime, peer, sizeof(peer), out);
+}
+
+static fr_err_t fr_native_ble_scan_flags(fr_runtime_t *runtime,
+                                         const fr_tagged_t *args,
+                                         uint8_t arg_count,
+                                         fr_tagged_t *out) {
+  fr_ble_scan_report_t report = {0};
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_current(&report));
+  return fr_tagged_encode_int(report.flags, out);
+}
+
+static fr_err_t fr_native_ble_scan_data(fr_runtime_t *runtime,
+                                        const fr_tagged_t *args,
+                                        uint8_t arg_count,
+                                        fr_tagged_t *out) {
+  fr_ble_scan_report_t report = {0};
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_scan_current(&report));
+  return fr_bytes_install(runtime, report.data, report.data_length, out);
+}
+#endif
+
+#if FR_BLE_ENABLE_BROADCASTER
+static fr_err_t fr_native_ble_validate_ad_data(const uint8_t *bytes,
+                                               uint16_t length) {
+  uint16_t offset = 0;
+
+  if (length > FR_BLE_ADVERTISEMENT_DATA_BYTES ||
+      (length > 0 && bytes == NULL)) {
+    return FR_ERR_CAPACITY;
+  }
+  while (offset < length) {
+    uint8_t field_length = bytes[offset];
+
+    if (field_length == 0 ||
+        (uint16_t)(offset + 1u + field_length) > length) {
+      return FR_ERR_INVALID;
+    }
+    offset = (uint16_t)(offset + 1u + field_length);
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_advertise_start(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  const uint8_t *advertising_data = NULL;
+  const uint8_t *scan_response_data = NULL;
+  uint16_t advertising_data_length = 0;
+  uint16_t scan_response_data_length = 0;
+  fr_int_t interval_ms = 0;
+  fr_int_t connectable = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_text_or_bytes_view(
+      runtime, args[0], &advertising_data, &advertising_data_length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(
+      runtime, args[1], &scan_response_data, &scan_response_data_length));
+  FR_TRY(fr_native_ble_validate_ad_data(advertising_data,
+                                       advertising_data_length));
+  FR_TRY(fr_native_ble_validate_ad_data(scan_response_data,
+                                       scan_response_data_length));
+  if (fr_tagged_is_bool(args[2]) || fr_tagged_is_bool(args[3])) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_int(args[2], &interval_ms));
+  FR_TRY(fr_tagged_decode_int(args[3], &connectable));
+  if (interval_ms < 20 || interval_ms > 10240 || connectable < 0 ||
+      connectable > 1) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_advertise_start(
+      advertising_data, (uint8_t)advertising_data_length, scan_response_data,
+      (uint8_t)scan_response_data_length, (uint16_t)interval_ms,
+      connectable == 1));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_advertise_stop(fr_runtime_t *runtime,
+                                             const fr_tagged_t *args,
+                                             uint8_t arg_count,
+                                             fr_tagged_t *out) {
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_advertise_stop());
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+static fr_err_t fr_native_ble_connection_handle(
+    fr_runtime_t *runtime, fr_tagged_t tagged, fr_handle_ref_t *out_ref,
+    uint16_t *out_platform_index) {
+  fr_handle_ref_t ref = {0};
+
+  if (runtime == NULL || out_platform_index == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_handle_ref(tagged, &ref));
+  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_BLE_CONNECTION, NULL,
+                          out_platform_index));
+  if (out_ref != NULL) {
+    *out_ref = ref;
+  }
+  return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL
+static fr_err_t fr_native_ble_connect(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, fr_tagged_t *out) {
+  fr_bytes_ref_t peer_ref = {0};
+  const uint8_t *peer_bytes = NULL;
+  uint16_t peer_length = 0;
+  uint8_t peer[7];
+  fr_int_t timeout_ms = 0;
+  fr_handle_ref_t handle_ref = {0};
+  fr_tagged_t handle = fr_tagged_nil();
+  uint16_t platform_index = 0;
+  fr_err_t err = FR_OK;
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL ||
+      fr_tagged_is_bool(args[1])) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &peer_ref));
+  FR_TRY(fr_bytes_view(runtime, peer_ref, &peer_bytes, &peer_length));
+  FR_TRY(fr_tagged_decode_int(args[1], &timeout_ms));
+  if (peer_length != sizeof(peer) || peer_bytes[0] > FR_BLE_ADDRESS_RANDOM_ID) {
+    return FR_ERR_INVALID;
+  }
+  if (timeout_ms < 1 || timeout_ms > FR_BLE_CONNECT_TIMEOUT_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+  memcpy(peer, peer_bytes, sizeof(peer));
+
+  FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_BLE_CONNECTION,
+                           &handle_ref, &handle));
+  err = fr_platform_ble_connect(runtime, peer, (uint16_t)timeout_ms, handle_ref,
+                                &platform_index);
+  if (err != FR_OK) {
+    (void)fr_handle_release_reserved(runtime, handle_ref);
+    return err;
+  }
+  err = fr_handle_activate(runtime, handle_ref, platform_index);
+  if (err != FR_OK) {
+    (void)fr_platform_ble_connection_close(platform_index);
+    (void)fr_handle_release_reserved(runtime, handle_ref);
+    return err;
+  }
+  *out = handle;
+  return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_PERIPHERAL
+static fr_err_t fr_native_ble_accept(fr_runtime_t *runtime,
+                                     const fr_tagged_t *args,
+                                     uint8_t arg_count, fr_tagged_t *out) {
+  fr_handle_ref_t handle_ref = {0};
+  fr_tagged_t handle = fr_tagged_nil();
+  uint16_t platform_index = 0;
+  bool pending = false;
+  bool accepted = false;
+  fr_err_t err = FR_OK;
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_connection_pending(&pending));
+  if (!pending) {
+    *out = fr_tagged_nil();
+    return FR_OK;
+  }
+
+  err = fr_handle_reserve(runtime, FR_HANDLE_KIND_BLE_CONNECTION,
+                          &handle_ref, &handle);
+  if (err != FR_OK) {
+    (void)fr_platform_ble_reject_pending();
+    return err;
+  }
+  err = fr_platform_ble_accept(handle_ref, &platform_index, &accepted);
+  if (err != FR_OK || !accepted) {
+    (void)fr_handle_release_reserved(runtime, handle_ref);
+    if (err != FR_OK) {
+      return err;
+    }
+    *out = fr_tagged_nil();
+    return FR_OK;
+  }
+  err = fr_handle_activate(runtime, handle_ref, platform_index);
+  if (err != FR_OK) {
+    (void)fr_platform_ble_connection_close(platform_index);
+    (void)fr_handle_release_reserved(runtime, handle_ref);
+    return err;
+  }
+  *out = handle;
+  return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+static fr_err_t fr_native_ble_connection_ready(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  bool ready = false;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &platform_index));
+  FR_TRY(fr_platform_ble_connection_ready(platform_index, &ready));
+  return fr_tagged_encode_bool(ready, out);
+}
+
+static fr_err_t fr_native_ble_connection_close(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  fr_handle_ref_t handle_ref = {0};
+  uint16_t platform_index = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], &handle_ref,
+                                          &platform_index));
+  (void)platform_index;
+  FR_TRY(fr_handle_close(runtime, handle_ref));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_connection_info(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  fr_ble_connection_info_t info = {0};
+  uint16_t platform_index = 0;
+  char line[224];
+  int written = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &platform_index));
+  FR_TRY(fr_platform_ble_connection_info(platform_index, &info));
+
+  written = snprintf(
+      line, sizeof(line),
+      "ble connection=%s role=%s peer=%s:%02X:%02X:%02X:%02X:%02X:%02X interval=%luus latency=%u timeout=%luus mtu=%u\n",
+      fr_native_ble_connection_state_name(info.state),
+      fr_native_ble_connection_role_name(info.role),
+      fr_native_ble_address_type_name(info.peer_address_type),
+      (unsigned)info.peer_address[0], (unsigned)info.peer_address[1],
+      (unsigned)info.peer_address[2], (unsigned)info.peer_address[3],
+      (unsigned)info.peer_address[4], (unsigned)info.peer_address[5],
+      (unsigned long)info.interval_us, (unsigned)info.latency,
+      (unsigned long)info.supervision_timeout_us, (unsigned)info.mtu);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  if (info.rssi_valid) {
+    written = snprintf(
+        line, sizeof(line),
+        "ble security encrypted=%u authenticated=%u bonded=%u rssi=%d connected-at-ms=%lu disconnected-at-ms=%lu reason=%ld\n",
+        info.encrypted ? 1u : 0u, info.authenticated ? 1u : 0u,
+        info.bonded ? 1u : 0u, (int)info.last_rssi,
+        (unsigned long)info.connected_at_ms,
+        (unsigned long)info.disconnected_at_ms, (long)info.last_reason);
+  } else {
+    written = snprintf(
+        line, sizeof(line),
+        "ble security encrypted=%u authenticated=%u bonded=%u rssi=unknown connected-at-ms=%lu disconnected-at-ms=%lu reason=%ld\n",
+        info.encrypted ? 1u : 0u, info.authenticated ? 1u : 0u,
+        info.bonded ? 1u : 0u, (unsigned long)info.connected_at_ms,
+        (unsigned long)info.disconnected_at_ms, (long)info.last_reason);
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_connection_rssi(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  int8_t rssi = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &platform_index));
+  FR_TRY(fr_platform_ble_connection_rssi(platform_index, &rssi));
+  return fr_tagged_encode_int(rssi, out);
+}
+
+static fr_err_t fr_native_ble_connection_params(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  fr_int_t minimum_interval_ms = 0;
+  fr_int_t maximum_interval_ms = 0;
+  fr_int_t latency = 0;
+  fr_int_t supervision_timeout_ms = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 5 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  for (uint8_t i = 1; i < arg_count; i++) {
+    if (fr_tagged_is_bool(args[i])) {
+      return FR_ERR_INVALID;
+    }
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &platform_index));
+  FR_TRY(fr_tagged_decode_int(args[1], &minimum_interval_ms));
+  FR_TRY(fr_tagged_decode_int(args[2], &maximum_interval_ms));
+  FR_TRY(fr_tagged_decode_int(args[3], &latency));
+  FR_TRY(fr_tagged_decode_int(args[4], &supervision_timeout_ms));
+  if (minimum_interval_ms < 8 || maximum_interval_ms < minimum_interval_ms ||
+      maximum_interval_ms > 4000 || latency < 0 || latency > 499 ||
+      supervision_timeout_ms < 100 || supervision_timeout_ms > 32000) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_connection_params(
+      platform_index, (uint16_t)minimum_interval_ms,
+      (uint16_t)maximum_interval_ms, (uint16_t)latency,
+      (uint16_t)supervision_timeout_ms));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_connection_mtu(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  uint16_t platform_index = 0;
+  uint16_t actual_mtu = 0;
+  fr_int_t requested_mtu = 0;
+  fr_int_t timeout_ms = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL ||
+      fr_tagged_is_bool(args[1]) || fr_tagged_is_bool(args[2])) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &platform_index));
+  FR_TRY(fr_tagged_decode_int(args[1], &requested_mtu));
+  FR_TRY(fr_tagged_decode_int(args[2], &timeout_ms));
+  if (requested_mtu < 23 || requested_mtu > 517 || timeout_ms < 1 ||
+      timeout_ms > 60000) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_connection_mtu(
+      runtime, platform_index, (uint16_t)requested_mtu,
+      (uint16_t)timeout_ms, &actual_mtu));
+  return fr_tagged_encode_int(actual_mtu, out);
+}
+#endif
+#endif
+
 #if FR_FEATURE_NATIVE_SIGNATURES
 #if FR_FEATURE_TRACE
 static const fr_native_param_t fr_native_trace_params[] = {
@@ -2128,7 +3806,8 @@ static fr_err_t fr_native_fire_event(fr_runtime_t *runtime,
 }
 #endif
 
-#if FR_FEATURE_TRACE || FR_FEATURE_PULSE || FR_FEATURE_CONSOLE_ROUTING
+#if FR_FEATURE_TRACE || FR_FEATURE_PULSE || FR_FEATURE_CONSOLE_ROUTING ||       \
+    FR_FEATURE_BLE
 static fr_err_t fr_native_write_rendered_line(const char *line, size_t cap,
                                               int written) {
   if (line == NULL) {
@@ -2942,6 +4621,393 @@ static const fr_native_signature_t fr_native_console_info_signature = {
 };
 #endif
 
+#if FR_FEATURE_BLE
+static const fr_native_signature_t fr_native_ble_on_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "initialize the compiled BLE roles and wait for radio readiness",
+};
+
+static const fr_native_signature_t fr_native_ble_off_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "close BLE links and shut down the radio",
+};
+
+static const fr_native_signature_t fr_native_ble_info_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "print BLE roles, radio, scan, advertising, connections, queue "
+            "pressure, and last raw reason",
+};
+
+#if FR_BLE_ENABLE_OBSERVER
+static const fr_native_param_t fr_native_ble_scan_start_params[] = {
+    {"interval_ms", FR_NATIVE_VALUE_INT},
+    {"window_ms", FR_NATIVE_VALUE_INT},
+    {"active", FR_NATIVE_VALUE_INT},
+    {"repeats", FR_NATIVE_VALUE_INT},
+    {"minimum_rssi", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_scan_start_signature = {
+    .params = fr_native_ble_scan_start_params,
+    .arg_count = 5,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "start an indefinite BLE scan with interval/window ms, "
+            "active/repeat flags, and minimum RSSI",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_stop_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "stop the active BLE scan and retain queued reports",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_next_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "move to the next queued BLE report and say whether one was "
+            "available",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_rssi_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the current BLE report RSSI in dBm",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_peer_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "copy the current BLE peer type and canonical address bytes",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_flags_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "return the current BLE report flags",
+};
+
+static const fr_native_signature_t fr_native_ble_scan_data_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "copy the current raw BLE advertisement bytes",
+};
+#endif
+
+#if FR_BLE_ENABLE_BROADCASTER
+static const fr_native_param_t fr_native_ble_advertise_start_params[] = {
+    {"advertising_data", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+    {"scan_response_data", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+    {"interval_ms", FR_NATIVE_VALUE_INT},
+    {"connectable", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_advertise_start_signature = {
+    .params = fr_native_ble_advertise_start_params,
+    .arg_count = 4,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "start legacy BLE advertising with raw AD payloads",
+};
+
+static const fr_native_signature_t fr_native_ble_advertise_stop_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "stop legacy BLE advertising",
+};
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL
+static const fr_native_param_t fr_native_ble_connect_params[] = {
+    {"peer", FR_NATIVE_VALUE_ANY},
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_connect_signature = {
+    .params = fr_native_ble_connect_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_HANDLE,
+    .help = "connect to one scanned BLE peer",
+};
+#endif
+
+#if FR_BLE_ENABLE_PERIPHERAL
+static const fr_native_signature_t fr_native_ble_accept_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "accept one pending BLE connection or return nil",
+};
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+static const fr_native_param_t fr_native_ble_connection_params_one[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+};
+
+static const fr_native_param_t fr_native_ble_connection_update_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"minimum_interval_ms", FR_NATIVE_VALUE_INT},
+    {"maximum_interval_ms", FR_NATIVE_VALUE_INT},
+    {"latency", FR_NATIVE_VALUE_INT},
+    {"supervision_timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_param_t fr_native_ble_connection_mtu_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"requested_mtu", FR_NATIVE_VALUE_INT},
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_connection_ready_signature = {
+    .params = fr_native_ble_connection_params_one,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "say whether a BLE connection is live",
+};
+
+static const fr_native_signature_t fr_native_ble_connection_close_signature = {
+    .params = fr_native_ble_connection_params_one,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "disconnect and release a BLE connection handle",
+};
+
+static const fr_native_signature_t fr_native_ble_connection_info_signature = {
+    .params = fr_native_ble_connection_params_one,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "print peer, link parameters, security state, and raw reason",
+};
+
+static const fr_native_signature_t fr_native_ble_connection_rssi_signature = {
+    .params = fr_native_ble_connection_params_one,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "read the live BLE connection RSSI in dBm",
+};
+
+static const fr_native_signature_t fr_native_ble_connection_params_signature = {
+    .params = fr_native_ble_connection_update_params,
+    .arg_count = 5,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "request bounded BLE connection parameters",
+};
+
+static const fr_native_signature_t fr_native_ble_connection_mtu_signature = {
+    .params = fr_native_ble_connection_mtu_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "exchange and return the actual BLE ATT MTU",
+};
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER || FR_BLE_ENABLE_GATT_CLIENT
+#if FR_BLE_ENABLE_GATT_SERVER
+static const fr_native_param_t fr_native_ble_gatt_install_params[] = {
+    {"rows", FR_NATIVE_VALUE_ANY},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_install_signature = {
+    .params = fr_native_ble_gatt_install_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "validate and copy one declarative local GATT table",
+};
+#endif
+
+static const fr_native_signature_t fr_native_ble_gatt_info_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "print local-server and remote-client GATT state",
+};
+
+#if FR_BLE_ENABLE_GATT_SERVER
+static const fr_native_param_t fr_native_ble_gatt_set_params[] = {
+    {"attribute", FR_NATIVE_VALUE_INT},
+    {"data", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_set_signature = {
+    .params = fr_native_ble_gatt_set_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "replace one local GATT value by source-row ID",
+};
+
+static const fr_native_param_t fr_native_ble_gatt_get_params[] = {
+    {"attribute", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_get_signature = {
+    .params = fr_native_ble_gatt_get_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "copy one local GATT value by source-row ID",
+};
+
+static const fr_native_param_t fr_native_ble_gatt_notify_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"attribute", FR_NATIVE_VALUE_INT},
+    {"data", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_notify_signature = {
+    .params = fr_native_ble_gatt_notify_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "send one subscribed GATT notification",
+};
+
+static const fr_native_param_t fr_native_ble_gatt_indicate_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"attribute", FR_NATIVE_VALUE_INT},
+    {"data", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_indicate_signature = {
+    .params = fr_native_ble_gatt_indicate_params,
+    .arg_count = 4,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "send and wait interruptibly for one subscribed GATT indication",
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_next_write_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "advance to the next accepted remote GATT write",
+};
+
+static const fr_native_signature_t
+    fr_native_ble_gatt_write_attribute_signature = {
+        .params = NULL,
+        .arg_count = 0,
+        .result = FR_NATIVE_VALUE_INT,
+        .help = "return the current remote write source-row ID",
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_write_data_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "copy the current remote GATT write data",
+};
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT
+static const fr_native_param_t fr_native_ble_gatt_client_find_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"service_uuid", FR_NATIVE_VALUE_TEXT},
+    {"characteristic_uuid", FR_NATIVE_VALUE_TEXT},
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_client_find_signature = {
+    .params = fr_native_ble_gatt_client_find_params,
+    .arg_count = 4,
+    .result = FR_NATIVE_VALUE_INT,
+    .help = "find one remote characteristic by service and characteristic UUID",
+};
+
+static const fr_native_param_t fr_native_ble_gatt_client_read_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"attribute", FR_NATIVE_VALUE_INT},
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_client_read_signature = {
+    .params = fr_native_ble_gatt_client_read_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "read one short remote characteristic value",
+};
+
+static const fr_native_param_t fr_native_ble_gatt_client_write_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"attribute", FR_NATIVE_VALUE_INT},
+    {"data", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+    {"with_response", FR_NATIVE_VALUE_INT},
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_client_write_signature = {
+    .params = fr_native_ble_gatt_client_write_params,
+    .arg_count = 5,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "write one short remote characteristic value",
+};
+
+static const fr_native_param_t fr_native_ble_gatt_client_subscribe_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"attribute", FR_NATIVE_VALUE_INT},
+    {"mode", FR_NATIVE_VALUE_INT},
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t
+    fr_native_ble_gatt_client_subscribe_signature = {
+        .params = fr_native_ble_gatt_client_subscribe_params,
+        .arg_count = 4,
+        .result = FR_NATIVE_VALUE_NIL,
+        .help = "subscribe to remote notifications or indications",
+};
+
+static const fr_native_param_t
+    fr_native_ble_gatt_client_unsubscribe_params[] = {
+        {"connection", FR_NATIVE_VALUE_HANDLE},
+        {"attribute", FR_NATIVE_VALUE_INT},
+        {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t
+    fr_native_ble_gatt_client_unsubscribe_signature = {
+        .params = fr_native_ble_gatt_client_unsubscribe_params,
+        .arg_count = 3,
+        .result = FR_NATIVE_VALUE_NIL,
+        .help = "unsubscribe from one remote characteristic",
+};
+
+static const fr_native_signature_t
+    fr_native_ble_gatt_next_notification_signature = {
+        .params = NULL,
+        .arg_count = 0,
+        .result = FR_NATIVE_VALUE_ANY,
+        .help = "advance to the next remote GATT notification",
+};
+
+static const fr_native_signature_t
+    fr_native_ble_gatt_notification_attribute_signature = {
+        .params = NULL,
+        .arg_count = 0,
+        .result = FR_NATIVE_VALUE_INT,
+        .help = "return the current remote notification ATT handle",
+};
+
+static const fr_native_signature_t
+    fr_native_ble_gatt_notification_data_signature = {
+        .params = NULL,
+        .arg_count = 0,
+        .result = FR_NATIVE_VALUE_ANY,
+        .help = "copy the current remote notification data",
+};
+#endif
+#endif
+#endif
+
 #if FR_FEATURE_PWM
 static const fr_native_param_t fr_native_pwm_open_params[] = {
     {"pin", FR_NATIVE_VALUE_INT},
@@ -3410,6 +5476,46 @@ enum {
   FR_TARGET_TAGGED_BAUD_57600 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_57600),
   FR_TARGET_TAGGED_BAUD_115200 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_115200),
   FR_TARGET_TAGGED_BAUD_1200 = FR_TAGGED_INT_LITERAL(FR_UART_BAUD_1200),
+};
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER
+enum {
+  FR_TARGET_TAGGED_BLE_GATT_SERVICE =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_KIND_SERVICE),
+  FR_TARGET_TAGGED_BLE_GATT_CHARACTERISTIC =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_KIND_CHARACTERISTIC),
+  FR_TARGET_TAGGED_BLE_GATT_PRIMARY =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_SERVICE_PRIMARY),
+  FR_TARGET_TAGGED_BLE_GATT_SECONDARY =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_SERVICE_SECONDARY),
+  FR_TARGET_TAGGED_BLE_GATT_READ =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_READ),
+  FR_TARGET_TAGGED_BLE_GATT_WRITE =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_WRITE),
+  FR_TARGET_TAGGED_BLE_GATT_WRITE_COMMAND =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_WRITE_COMMAND),
+  FR_TARGET_TAGGED_BLE_GATT_NOTIFY =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_NOTIFY),
+  FR_TARGET_TAGGED_BLE_GATT_INDICATE =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_INDICATE),
+  FR_TARGET_TAGGED_BLE_GATT_READ_ENCRYPTED =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_READ_ENCRYPTED),
+  FR_TARGET_TAGGED_BLE_GATT_WRITE_ENCRYPTED =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_WRITE_ENCRYPTED),
+  FR_TARGET_TAGGED_BLE_GATT_READ_AUTHENTICATED =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_READ_AUTHENTICATED),
+  FR_TARGET_TAGGED_BLE_GATT_WRITE_AUTHENTICATED =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_WRITE_AUTHENTICATED),
+};
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT
+enum {
+  FR_TARGET_TAGGED_BLE_GATT_NOTIFICATIONS =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS),
+  FR_TARGET_TAGGED_BLE_GATT_INDICATIONS =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_SUBSCRIBE_INDICATIONS),
 };
 #endif
 
@@ -4620,6 +6726,601 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_signature = &fr_native_console_info_signature,
 #endif
     },
+#endif
+#if FR_FEATURE_BLE
+    {
+        .slot_id = FR_SLOT_BLE_ON,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.on",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_on,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_on_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_INFO,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.info",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_info,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_info_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_OFF,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.off",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_off,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_off_signature,
+#endif
+    },
+#if FR_BLE_ENABLE_OBSERVER
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_START,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.start",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_start,
+        .native_arity = 5,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_start_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_STOP,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.stop",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_stop,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_stop_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_NEXT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.next?",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_next,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_next_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_RSSI,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.rssi",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_rssi,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_rssi_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_PEER,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.peer",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_peer,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_peer_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_FLAGS,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.flags",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_flags,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_flags_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_SCAN_DATA,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.scan.data",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_scan_data,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_scan_data_signature,
+#endif
+    },
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+    {
+        .slot_id = FR_SLOT_BLE_ADVERTISE_START,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.advertise.start",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_advertise_start,
+        .native_arity = 4,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_advertise_start_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_ADVERTISE_STOP,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.advertise.stop",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_advertise_stop,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_advertise_stop_signature,
+#endif
+    },
+#endif
+#if FR_BLE_ENABLE_CENTRAL
+    {
+        .slot_id = FR_SLOT_BLE_CONNECT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connect",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connect,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connect_signature,
+#endif
+    },
+#endif
+#if FR_BLE_ENABLE_PERIPHERAL
+    {
+        .slot_id = FR_SLOT_BLE_ACCEPT,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.accept",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_accept,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_accept_signature,
+#endif
+    },
+#endif
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_READY,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.ready?",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_ready,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_ready_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_CLOSE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.close",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_close,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_close_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_INFO,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.info",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_info,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_info_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_RSSI,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.rssi",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_rssi,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_rssi_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_PARAMS,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.params",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_params,
+        .native_arity = 5,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_params_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_CONNECTION_MTU,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.connection.mtu",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_connection_mtu,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_connection_mtu_signature,
+#endif
+    },
+#endif
+#if FR_BLE_ENABLE_GATT_SERVER
+    {
+        .slot_id = FR_SLOT_BLE_GATT_SERVICE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.service",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_SERVICE,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_CHARACTERISTIC,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.characteristic",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_CHARACTERISTIC,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_PRIMARY,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.primary",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_PRIMARY,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_SECONDARY,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.secondary",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_SECONDARY,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_READ,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.read",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_READ,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.write",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_WRITE,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE_COMMAND,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.write-command",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_WRITE_COMMAND,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_NOTIFY_FLAG,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.notify",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_NOTIFY,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_INDICATE_FLAG,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.indicate",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_INDICATE,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_READ_ENCRYPTED,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.read-encrypted",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_READ_ENCRYPTED,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE_ENCRYPTED,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.write-encrypted",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_WRITE_ENCRYPTED,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_READ_AUTHENTICATED,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.read-authenticated",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_READ_AUTHENTICATED,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE_AUTHENTICATED,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.write-authenticated",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_WRITE_AUTHENTICATED,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_INSTALL,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.install",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_install,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_install_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_INFO,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.info",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_info,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_info_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_SET,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.set",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_set,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_set_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_GET,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.get",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_get,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_get_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_NOTIFY,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.notify",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_notify,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_notify_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_INDICATE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.indicate",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_indicate,
+        .native_arity = 4,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_indicate_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_NEXT_WRITE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.next-write",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_next_write,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_next_write_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE_ATTRIBUTE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.write-attribute",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_write_attribute,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_write_attribute_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE_DATA,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.write-data",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_write_data,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_write_data_signature,
+#endif
+    },
+#endif
+#if FR_BLE_ENABLE_GATT_CLIENT && !FR_BLE_ENABLE_GATT_SERVER
+    {
+        .slot_id = FR_SLOT_BLE_GATT_INFO,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.info",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_info,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_info_signature,
+#endif
+    },
+#endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+    {
+        .slot_id = FR_SLOT_BLE_GATT_NOTIFICATIONS,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.notifications",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_NOTIFICATIONS,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_INDICATIONS,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.indications",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_INDICATIONS,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_FIND,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.find",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_client_find,
+        .native_arity = 4,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_client_find_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_CLIENT_READ,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.read",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_client_read,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_client_read_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_CLIENT_WRITE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.write",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_client_write,
+        .native_arity = 5,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_client_write_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_SUBSCRIBE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.subscribe",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_client_subscribe,
+        .native_arity = 4,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_client_subscribe_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_UNSUBSCRIBE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.unsubscribe",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_client_unsubscribe,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_client_unsubscribe_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_NEXT_NOTIFICATION,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.next-notification",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_next_notification,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_next_notification_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_NOTIFICATION_ATTRIBUTE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.notification-attribute",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_notification_attribute,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature =
+            &fr_native_ble_gatt_notification_attribute_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_NOTIFICATION_DATA,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.notification-data",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_notification_data,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_notification_data_signature,
+#endif
+    },
+#endif
 #endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
     {

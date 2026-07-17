@@ -76,6 +76,10 @@ fr_err_t fr_platform_millis(uint32_t *out_ms);
 fr_err_t fr_platform_micros(uint32_t *out_us);
 /* Let the platform scheduler run without changing Frothy program state. */
 void fr_platform_yield(void);
+/* Restart the target after destructive state changes. A supported restart
+ * does not return. Targets without support return FR_ERR_UNSUPPORTED; a
+ * failed restart request returns another error. */
+fr_err_t fr_platform_restart(void);
 fr_err_t fr_platform_gpio_mode(uint16_t pin, uint16_t mode);
 fr_err_t fr_platform_gpio_write(uint16_t pin, uint16_t value);
 fr_err_t fr_platform_gpio_read(uint16_t pin, uint16_t *out_value);
@@ -257,6 +261,517 @@ fr_err_t fr_platform_pulse_segment(uint16_t platform_index,
                                    fr_pulse_segment_t *out_segment);
 fr_err_t fr_platform_pulse_play(uint16_t platform_index);
 fr_err_t fr_platform_pulse_close(uint16_t platform_index);
+#endif
+
+#if FR_FEATURE_BLE
+typedef enum fr_ble_radio_state_t {
+  FR_BLE_RADIO_OFF = 0,
+  FR_BLE_RADIO_STARTING = 1,
+  FR_BLE_RADIO_READY = 2,
+  FR_BLE_RADIO_STOPPING = 3,
+  FR_BLE_RADIO_FAILED = 4,
+} fr_ble_radio_state_t;
+
+enum {
+  /* Runtime status bits; FR_BLE_ENABLE_* are compile-time profile gates. */
+  FR_BLE_ROLE_OBSERVER = 1u << 0,
+  FR_BLE_ROLE_BROADCASTER = 1u << 1,
+  FR_BLE_ROLE_CENTRAL = 1u << 2,
+  FR_BLE_ROLE_PERIPHERAL = 1u << 3,
+};
+
+enum {
+  /* Portable advertisement-report flags, never target stack event bits. */
+  FR_BLE_REPORT_CONNECTABLE = 1u << 0,
+  FR_BLE_REPORT_SCANNABLE = 1u << 1,
+  FR_BLE_REPORT_DIRECTED = 1u << 2,
+  FR_BLE_REPORT_SCAN_RESPONSE = 1u << 3,
+  FR_BLE_REPORT_LEGACY = 1u << 4,
+};
+
+typedef enum fr_ble_address_type_t {
+  FR_BLE_ADDRESS_PUBLIC = 0,
+  FR_BLE_ADDRESS_RANDOM = 1,
+  FR_BLE_ADDRESS_PUBLIC_ID = 2,
+  FR_BLE_ADDRESS_RANDOM_ID = 3,
+} fr_ble_address_type_t;
+
+#if FR_BLE_ENABLE_OBSERVER
+typedef struct fr_ble_scan_report_t {
+  /* Copied at the target callback boundary; address uses display order and
+   * flags use the portable FR_BLE_REPORT_* bits above. Payloads longer than
+   * FR_BLE_SCAN_DATA_BYTES are malformed, never truncated. This is an
+   * in-memory boundary, not a persistence or wire format. */
+  fr_ble_address_type_t address_type;
+  uint8_t address[6];
+  int8_t rssi;
+  uint8_t flags;
+  uint8_t data_length;
+  uint8_t data[FR_BLE_SCAN_DATA_BYTES];
+  uint32_t timestamp_ms; /* Boot-relative platform milliseconds; may wrap. */
+} fr_ble_scan_report_t;
+#endif
+
+typedef enum fr_ble_operation_t {
+  /* Foreground mutating calls retained by status. Read-only accessors do not
+   * replace the last operation, and project clear resets it. */
+  FR_BLE_OP_NONE = 0,
+  FR_BLE_OP_ON = 1,
+  FR_BLE_OP_SCAN_START = 2,
+  FR_BLE_OP_SCAN_STOP = 3,
+  FR_BLE_OP_SCAN_NEXT = 4,
+  FR_BLE_OP_ADVERTISE_START = 5,
+  FR_BLE_OP_ADVERTISE_STOP = 6,
+  FR_BLE_OP_OFF = 7,
+  FR_BLE_OP_CONNECT = 8,
+  FR_BLE_OP_ACCEPT = 9,
+  FR_BLE_OP_CONNECTION_CLOSE = 10,
+  FR_BLE_OP_CONNECTION_PARAMS = 11,
+  FR_BLE_OP_CONNECTION_MTU = 12,
+  FR_BLE_OP_GATT_INSTALL = 13,
+  FR_BLE_OP_GATT_SET = 14,
+  FR_BLE_OP_GATT_NOTIFY = 15,
+  FR_BLE_OP_GATT_INDICATE = 16,
+  FR_BLE_OP_GATT_WRITE_NEXT = 17,
+  FR_BLE_OP_GATT_FIND = 18,
+  FR_BLE_OP_GATT_READ = 19,
+  FR_BLE_OP_GATT_WRITE = 20,
+  FR_BLE_OP_GATT_SUBSCRIBE = 21,
+  FR_BLE_OP_GATT_UNSUBSCRIBE = 22,
+  FR_BLE_OP_GATT_NOTIFICATION_NEXT = 23,
+} fr_ble_operation_t;
+
+typedef enum fr_ble_scan_state_t {
+  FR_BLE_SCAN_IDLE = 0,
+  FR_BLE_SCAN_ACTIVE = 1,
+  FR_BLE_SCAN_STOPPING = 2,
+} fr_ble_scan_state_t;
+
+typedef enum fr_ble_advertise_state_t {
+  FR_BLE_ADVERTISE_IDLE = 0,
+  FR_BLE_ADVERTISE_ACTIVE = 1,
+  FR_BLE_ADVERTISE_STOPPING = 2,
+} fr_ble_advertise_state_t;
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+typedef enum fr_ble_connection_state_t {
+  FR_BLE_CONNECTION_FREE = 0,
+  FR_BLE_CONNECTION_CONNECTING = 1,
+  FR_BLE_CONNECTION_PENDING = 2,
+  FR_BLE_CONNECTION_LIVE = 3,
+  FR_BLE_CONNECTION_DISCONNECTED = 4,
+  FR_BLE_CONNECTION_CLOSING = 5,
+} fr_ble_connection_state_t;
+
+typedef enum fr_ble_connection_role_t {
+  FR_BLE_CONNECTION_ROLE_CENTRAL = 0,
+  FR_BLE_CONNECTION_ROLE_PERIPHERAL = 1,
+} fr_ble_connection_role_t;
+
+typedef struct fr_ble_connection_info_t {
+  fr_ble_connection_state_t state;
+  fr_ble_connection_role_t role;
+  fr_ble_address_type_t peer_address_type;
+  uint8_t peer_address[6];
+  uint32_t interval_us;
+  uint16_t latency;
+  uint32_t supervision_timeout_us;
+  uint16_t mtu;
+  bool encrypted;
+  bool authenticated;
+  bool bonded;
+  bool rssi_valid;
+  int8_t last_rssi;
+  int32_t last_reason;
+  uint32_t connected_at_ms;
+  uint32_t disconnected_at_ms;
+} fr_ble_connection_info_t;
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER || FR_BLE_ENABLE_GATT_CLIENT
+typedef enum fr_ble_uuid_kind_t {
+  FR_BLE_UUID_16 = 0,
+  FR_BLE_UUID_128 = 1,
+} fr_ble_uuid_kind_t;
+
+typedef struct fr_ble_uuid_t {
+  /* Bytes use canonical printed order. A backend performs any wire-order
+   * conversion at registration time. A 16-bit UUID occupies bytes 0 and 1. */
+  fr_ble_uuid_kind_t kind;
+  uint8_t bytes[16];
+} fr_ble_uuid_t;
+
+enum {
+  /* Portable characteristic properties and permissions. Backends map these
+   * bits explicitly; they are not target stack flags. */
+  FR_BLE_GATT_CHR_READ = 1u << 0,
+  FR_BLE_GATT_CHR_WRITE = 1u << 1,
+  FR_BLE_GATT_CHR_WRITE_COMMAND = 1u << 2,
+  FR_BLE_GATT_CHR_NOTIFY = 1u << 3,
+  FR_BLE_GATT_CHR_INDICATE = 1u << 4,
+  FR_BLE_GATT_CHR_READ_ENCRYPTED = 1u << 5,
+  FR_BLE_GATT_CHR_WRITE_ENCRYPTED = 1u << 6,
+  FR_BLE_GATT_CHR_READ_AUTHENTICATED = 1u << 7,
+  FR_BLE_GATT_CHR_WRITE_AUTHENTICATED = 1u << 8,
+};
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER
+
+enum {
+  FR_BLE_GATT_KIND_SERVICE = 1,
+  FR_BLE_GATT_KIND_CHARACTERISTIC = 2,
+};
+
+enum {
+  FR_BLE_GATT_SERVICE_PRIMARY = 1u << 0,
+  FR_BLE_GATT_SERVICE_SECONDARY = 1u << 1,
+};
+
+typedef struct fr_ble_gatt_service_row_t {
+  fr_ble_uuid_t uuid;
+  uint16_t attribute_id; /* Zero-based source row index. */
+  uint16_t first_characteristic;
+  uint16_t characteristic_count;
+  bool secondary;
+} fr_ble_gatt_service_row_t;
+
+typedef struct fr_ble_gatt_characteristic_row_t {
+  fr_ble_uuid_t uuid;
+  uint16_t attribute_id; /* Zero-based source row index. */
+  uint16_t portable_flags;
+  uint16_t maximum_length;
+  uint16_t value_offset;
+  uint16_t value_length;
+  /* Filled by the backend when the radio registers this table. It is never a
+   * public attribute ID and is cleared while no target handle exists. */
+  uint16_t target_value_handle;
+} fr_ble_gatt_characteristic_row_t;
+
+typedef struct fr_ble_gatt_table_t {
+  uint16_t row_count;
+  uint16_t service_count;
+  uint16_t characteristic_count;
+  uint16_t value_bytes_used;
+  fr_ble_gatt_service_row_t services[FR_BLE_GATT_SERVICE_COUNT];
+  fr_ble_gatt_characteristic_row_t
+      characteristics[FR_BLE_GATT_CHARACTERISTIC_COUNT];
+} fr_ble_gatt_table_t;
+
+typedef struct fr_ble_gatt_write_t {
+  uint16_t connection_index;
+  uint32_t connection_generation;
+  uint32_t table_generation;
+  uint16_t attribute_id;
+  uint16_t data_length;
+  uint8_t data[FR_BLE_GATT_WRITE_DATA_BYTES];
+  uint32_t timestamp_ms;
+} fr_ble_gatt_write_t;
+
+typedef struct fr_ble_gatt_subscription_t {
+  uint16_t connection_index;
+  uint32_t connection_generation;
+  uint16_t attribute_id;
+  bool notify;
+  bool indicate;
+} fr_ble_gatt_subscription_t;
+
+typedef struct fr_ble_gatt_status_t {
+  /* One target-synchronized snapshot. The value arena itself remains target
+   * owned; row lengths and target handles are copied with the table. */
+  fr_ble_gatt_table_t table;
+  uint32_t table_generation;
+  uint8_t subscription_count;
+  fr_ble_gatt_subscription_t subscriptions[FR_BLE_GATT_CCCD_COUNT];
+  uint8_t write_queue_count;
+  uint8_t write_queue_high_water;
+  uint32_t write_queue_overflow;
+  uint32_t write_queue_stale;
+  uint32_t preaccept_write_rejected;
+  bool current_write_valid;
+  uint16_t current_write_attribute_id;
+  uint16_t current_write_data_length;
+  bool indication_pending;
+  int32_t last_att_error;
+  int32_t last_platform_code;
+} fr_ble_gatt_status_t;
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT
+typedef enum fr_ble_gatt_subscription_mode_t {
+  FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS = 1,
+  FR_BLE_GATT_SUBSCRIBE_INDICATIONS = 2,
+} fr_ble_gatt_subscription_mode_t;
+
+typedef struct fr_ble_gatt_notification_t {
+  /* Remote ATT handles are protocol integers scoped to one connection. The
+   * existing runtime connection ref is returned separately by next. */
+  uint16_t connection_index;
+  uint32_t connection_generation;
+  uint16_t attribute_handle;
+  uint8_t data_length;
+  uint8_t data[FR_BLE_GATT_CLIENT_DATA_BYTES];
+  uint32_t timestamp_ms;
+  bool indication;
+} fr_ble_gatt_notification_t;
+
+typedef struct fr_ble_gatt_client_status_t {
+  uint8_t cache_count;
+  uint8_t subscription_count;
+  uint8_t notification_queue_count;
+  uint8_t notification_queue_high_water;
+  uint32_t notification_dropped;
+  uint32_t notification_stale;
+  bool current_notification_valid;
+  uint16_t current_notification_attribute_handle;
+  uint8_t current_notification_data_length;
+  bool current_notification_indication;
+  bool procedure_pending;
+  fr_ble_operation_t procedure_operation;
+  uint16_t procedure_attribute_handle;
+  uint16_t service_match_count;
+  uint16_t characteristic_match_count;
+  int32_t last_att_error;
+  int32_t last_platform_code;
+} fr_ble_gatt_client_status_t;
+#endif
+
+typedef struct fr_ble_status_t {
+  /* One copied snapshot. Mutable queues and target stack types stay behind
+   * the platform functions below. The target synchronizes callback state
+   * while making this copy. */
+  fr_ble_radio_state_t radio_state;
+  fr_ble_scan_state_t scan_state;
+  fr_ble_advertise_state_t advertise_state;
+  uint8_t roles;
+  bool coexistence_enabled; /* BLE may share a radio with another subsystem. */
+  uint32_t lifecycle_generation;
+  uint32_t scan_generation;
+  bool shutdown_in_progress;
+  bool cleanup_required;
+  uint32_t late_callback_count;
+
+  fr_ble_address_type_t own_address_type;
+  uint8_t own_address[6];
+  bool own_address_valid;
+
+  uint16_t requested_interval_ms;
+  uint16_t requested_window_ms;
+  uint32_t actual_interval_us;
+  uint32_t actual_window_us;
+  /* Valid range is -127..20 dBm; -127 accepts every valid RSSI. */
+  int8_t minimum_rssi;
+  bool active_scan;
+  bool repeats;
+
+  uint16_t advertise_requested_interval_ms;
+  uint32_t advertise_actual_interval_us;
+  bool advertise_connectable;
+  uint8_t advertising_data_length;
+  uint8_t scan_response_data_length;
+  uint32_t advertise_starts;
+  uint32_t advertise_stops;
+
+  uint8_t connection_count;
+  uint8_t connection_capacity;
+  uint8_t pending_connection_count;
+  uint8_t connection_notice_count;
+  uint8_t connection_notice_capacity;
+  uint32_t connection_connects;
+  uint32_t connection_accepts;
+  uint32_t connection_disconnects;
+  uint32_t incoming_rejected;
+
+  uint8_t queue_count;
+  uint8_t queue_capacity;
+  uint8_t queue_high_water;
+  /* received = accepted + filtered_rssi + malformed;
+   * accepted = queue_count + dequeued + dropped. */
+  uint32_t received;
+  uint32_t accepted;
+  uint32_t filtered_rssi;
+  uint32_t dequeued;
+  uint32_t dropped;
+  uint32_t malformed;
+  bool current_valid;
+  int8_t current_rssi;
+  uint8_t current_flags;
+  uint8_t current_data_length;
+
+  fr_ble_operation_t last_operation;
+  fr_err_t last_result;
+  int32_t last_platform_code;
+  /* A spontaneous reset may update this independently of the last foreground
+   * operation; reset_count identifies that asynchronous case. */
+  int32_t last_protocol_reason;
+  uint32_t last_operation_ms;
+  uint32_t reset_count;
+} fr_ble_status_t;
+
+const char *fr_platform_ble_backend_name(void);
+/* These calls can wait, so they receive the runtime only to poll its
+ * interrupt path. scan_start returns after the target accepts the start. */
+fr_err_t fr_platform_ble_on(fr_runtime_t *runtime);
+/* Stop scans, advertising, pending links, and live links, then shut down the
+ * radio. The common native closes runtime BLE handles before this call. */
+fr_err_t fr_platform_ble_off(fr_runtime_t *runtime);
+/* Clear the queue and cursor and shut the singleton radio down with its fixed
+ * cleanup timeout. Project teardown is already in progress, so this call does
+ * not poll the runtime interrupt path. */
+fr_err_t fr_platform_ble_project_clear(void);
+/* Return one internally consistent copy of lifecycle and queue state. */
+fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status);
+#if FR_BLE_ENABLE_OBSERVER
+/* Accept interval 3..10240 ms, window 3..interval, and RSSI -127..20. An
+ * active or stopping scan returns FR_ERR_BLE_BUSY. A start that passes those
+ * checks clears the prior queue, cursor, and session counters before the
+ * target call; a target failure leaves that new empty session visible. A full
+ * queue drops its oldest report before appending the newest. */
+fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
+                                    bool active, bool repeats,
+                                    int8_t minimum_rssi);
+/* Every stop attempt clears the current cursor. Stop is idempotent while idle,
+ * and queued reports remain available even when the bounded wait fails. */
+fr_err_t fr_platform_ble_scan_stop(fr_runtime_t *runtime);
+/* next moves the target-owned cursor; an empty queue clears it. current may
+ * be copied repeatedly until next, stop, a new scan, or project clear changes
+ * it. current returns FR_ERR_NOT_FOUND while that cursor is empty. */
+fr_err_t fr_platform_ble_scan_next(bool *out_has_report);
+fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report);
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+/* Copy one pair of framed legacy AD payloads and advertise indefinitely at
+ * 20..10240 ms. Scanning and advertising are mutually exclusive. */
+fr_err_t fr_platform_ble_advertise_start(
+    const uint8_t *advertising_data, uint8_t advertising_data_length,
+    const uint8_t *scan_response_data, uint8_t scan_response_data_length,
+    uint16_t interval_ms, bool connectable);
+fr_err_t fr_platform_ble_advertise_stop(void);
+#endif
+#if FR_BLE_ENABLE_CENTRAL
+/* peer is address type followed by six address bytes in display order. */
+fr_err_t fr_platform_ble_connect(fr_runtime_t *runtime, const uint8_t peer[7],
+                                 uint16_t timeout_ms,
+                                 fr_handle_ref_t runtime_ref,
+                                 uint16_t *out_platform_index);
+#endif
+#if FR_BLE_ENABLE_PERIPHERAL
+/* pending drains stale target notices but never creates a runtime handle.
+ * accept claims one pending link for an already-reserved runtime ref. */
+fr_err_t fr_platform_ble_connection_pending(bool *out_pending);
+fr_err_t fr_platform_ble_accept(fr_handle_ref_t runtime_ref,
+                                uint16_t *out_platform_index,
+                                bool *out_accepted);
+fr_err_t fr_platform_ble_reject_pending(void);
+#endif
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+fr_err_t fr_platform_ble_connection_ready(uint16_t platform_index,
+                                          bool *out_ready);
+fr_err_t fr_platform_ble_connection_close(uint16_t platform_index);
+fr_err_t fr_platform_ble_connection_info(
+    uint16_t platform_index, fr_ble_connection_info_t *out_info);
+fr_err_t fr_platform_ble_connection_rssi(uint16_t platform_index,
+                                         int8_t *out_rssi);
+fr_err_t fr_platform_ble_connection_params(
+    uint16_t platform_index, uint16_t minimum_interval_ms,
+    uint16_t maximum_interval_ms, uint16_t latency,
+    uint16_t supervision_timeout_ms);
+fr_err_t fr_platform_ble_connection_mtu(fr_runtime_t *runtime,
+                                        uint16_t platform_index,
+                                        uint16_t requested_mtu,
+                                        uint16_t timeout_ms,
+                                        uint16_t *out_actual_mtu);
+#endif
+#if FR_BLE_ENABLE_GATT_SERVER
+/* Install replaces one fully validated portable table while the radio is off.
+ * The target copies it, owns all values and queues, and retains it across
+ * ble.off. Project clear removes it. */
+fr_err_t fr_platform_ble_gatt_install(const fr_ble_gatt_table_t *table);
+fr_err_t fr_platform_ble_gatt_status(fr_ble_gatt_status_t *out_status);
+fr_err_t fr_platform_ble_gatt_set(uint16_t attribute_id,
+                                  const uint8_t *bytes, uint16_t length);
+fr_err_t fr_platform_ble_gatt_get(uint16_t attribute_id, uint8_t *out_bytes,
+                                  uint16_t capacity, uint16_t *out_length);
+fr_err_t fr_platform_ble_gatt_notify(uint16_t connection_index,
+                                     uint16_t attribute_id,
+                                     const uint8_t *bytes, uint16_t length);
+fr_err_t fr_platform_ble_gatt_indicate(fr_runtime_t *runtime,
+                                       uint16_t connection_index,
+                                       uint16_t attribute_id,
+                                       const uint8_t *bytes, uint16_t length,
+                                       uint16_t timeout_ms);
+/* next advances the one target-owned cursor. It returns only the runtime ref
+ * already attached by ble.accept and silently discards stale queue entries. */
+fr_err_t fr_platform_ble_gatt_write_next(bool *out_has_write,
+                                         fr_handle_ref_t *out_runtime_ref);
+fr_err_t fr_platform_ble_gatt_write_current(fr_ble_gatt_write_t *out_write);
+#endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+/* One foreground client procedure may run at a time. Discovery retains only a
+ * bounded connection-scoped characteristic cache; ATT handles remain ints. */
+fr_err_t fr_platform_ble_gatt_client_find(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    const fr_ble_uuid_t *service_uuid,
+    const fr_ble_uuid_t *characteristic_uuid, uint16_t timeout_ms,
+    uint16_t *out_attribute_handle);
+fr_err_t fr_platform_ble_gatt_client_read(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, uint16_t timeout_ms, uint8_t *out_bytes,
+    uint16_t capacity, uint16_t *out_length);
+fr_err_t fr_platform_ble_gatt_client_write(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, const uint8_t *bytes, uint16_t length,
+    bool with_response, uint16_t timeout_ms);
+fr_err_t fr_platform_ble_gatt_client_subscribe(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, fr_ble_gatt_subscription_mode_t mode,
+    uint16_t timeout_ms);
+fr_err_t fr_platform_ble_gatt_client_unsubscribe(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, uint16_t timeout_ms);
+/* next returns only an existing runtime connection ref and drains stale queue
+ * entries. current remains readable until the next cursor move or cleanup. */
+fr_err_t fr_platform_ble_gatt_notification_next(
+    bool *out_has_notification, fr_handle_ref_t *out_runtime_ref);
+fr_err_t fr_platform_ble_gatt_notification_current(
+    fr_ble_gatt_notification_t *out_notification);
+fr_err_t fr_platform_ble_gatt_client_status(
+    fr_ble_gatt_client_status_t *out_status);
+#endif
+#ifdef FR_HOST_TEST_HELPERS
+void fr_host_ble_reset(void);
+#if FR_BLE_ENABLE_OBSERVER
+fr_err_t fr_host_ble_push_scan_report(const fr_ble_scan_report_t *report);
+#endif
+void fr_host_ble_fail_next_on(fr_err_t err, int32_t raw_code);
+#if FR_BLE_ENABLE_OBSERVER
+void fr_host_ble_fail_next_scan_start(fr_err_t err, int32_t raw_code);
+#endif
+void fr_host_ble_timeout_next_on(void);
+#if FR_BLE_ENABLE_OBSERVER
+void fr_host_ble_timeout_next_scan_stop(void);
+#endif
+void fr_host_ble_post_reset(int32_t raw_reason);
+#if FR_BLE_ENABLE_PERIPHERAL
+fr_err_t fr_host_ble_queue_incoming(const uint8_t peer[7]);
+#endif
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+fr_err_t fr_host_ble_disconnect(uint16_t platform_index, int32_t reason);
+#endif
+#if FR_BLE_ENABLE_GATT_SERVER
+fr_err_t fr_host_ble_gatt_remote_write(uint16_t attribute_id,
+                                       const uint8_t *bytes,
+                                       uint16_t length);
+fr_err_t fr_host_ble_gatt_subscribe(uint16_t attribute_id, bool notify,
+                                    bool indicate);
+void fr_host_ble_timeout_next_indication(void);
+#endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+fr_err_t fr_host_ble_gatt_client_notify(uint16_t attribute_handle,
+                                        const uint8_t *bytes, uint16_t length,
+                                        bool indication);
+#endif
+#endif
 #endif
 
 #if FR_FEATURE_PERSISTENCE

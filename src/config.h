@@ -119,6 +119,110 @@
 #define FR_FEATURE_BYTES 0
 #endif
 
+#ifndef FR_FEATURE_BLE
+#define FR_FEATURE_BLE 0
+#endif
+
+#ifndef FR_BLE_ENABLE_OBSERVER
+#define FR_BLE_ENABLE_OBSERVER 0
+#endif
+
+#ifndef FR_BLE_ENABLE_BROADCASTER
+#define FR_BLE_ENABLE_BROADCASTER 0
+#endif
+
+#ifndef FR_BLE_ENABLE_CENTRAL
+#define FR_BLE_ENABLE_CENTRAL 0
+#endif
+
+#ifndef FR_BLE_ENABLE_PERIPHERAL
+#define FR_BLE_ENABLE_PERIPHERAL 0
+#endif
+
+#ifndef FR_BLE_ENABLE_GATT_SERVER
+#define FR_BLE_ENABLE_GATT_SERVER 0
+#endif
+
+#ifndef FR_BLE_ENABLE_GATT_CLIENT
+#define FR_BLE_ENABLE_GATT_CLIENT 0
+#endif
+
+#ifndef FR_BLE_SCAN_QUEUE_COUNT
+#define FR_BLE_SCAN_QUEUE_COUNT 0
+#endif
+
+#ifndef FR_BLE_SCAN_DATA_BYTES
+#define FR_BLE_SCAN_DATA_BYTES 0
+#endif
+
+#ifndef FR_BLE_ADVERTISEMENT_DATA_BYTES
+#define FR_BLE_ADVERTISEMENT_DATA_BYTES 0
+#endif
+
+#ifndef FR_BLE_CONNECTION_COUNT
+#define FR_BLE_CONNECTION_COUNT 0
+#endif
+
+#ifndef FR_BLE_PENDING_CONNECTION_COUNT
+#define FR_BLE_PENDING_CONNECTION_COUNT 0
+#endif
+
+#ifndef FR_BLE_CONNECTION_NOTICE_COUNT
+#define FR_BLE_CONNECTION_NOTICE_COUNT 0
+#endif
+
+#ifndef FR_BLE_CONNECT_TIMEOUT_MAX_MS
+#define FR_BLE_CONNECT_TIMEOUT_MAX_MS 0
+#endif
+
+#ifndef FR_BLE_START_TIMEOUT_MS
+#define FR_BLE_START_TIMEOUT_MS 0
+#endif
+
+#ifndef FR_BLE_STOP_TIMEOUT_MS
+#define FR_BLE_STOP_TIMEOUT_MS 0
+#endif
+
+#ifndef FR_BLE_GATT_SERVICE_COUNT
+#define FR_BLE_GATT_SERVICE_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_CHARACTERISTIC_COUNT
+#define FR_BLE_GATT_CHARACTERISTIC_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_VALUE_BYTES
+#define FR_BLE_GATT_VALUE_BYTES 0
+#endif
+
+#ifndef FR_BLE_GATT_WRITE_QUEUE_COUNT
+#define FR_BLE_GATT_WRITE_QUEUE_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_WRITE_DATA_BYTES
+#define FR_BLE_GATT_WRITE_DATA_BYTES 0
+#endif
+
+#ifndef FR_BLE_GATT_CCCD_COUNT
+#define FR_BLE_GATT_CCCD_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_CLIENT_CACHE_COUNT
+#define FR_BLE_GATT_CLIENT_CACHE_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_CLIENT_DATA_BYTES
+#define FR_BLE_GATT_CLIENT_DATA_BYTES 0
+#endif
+
+#ifndef FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT
+#define FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS
+#define FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS 0
+#endif
+
 #define FR_FEATURE_OBJECTS                                                   \
   (FR_FEATURE_CELLS || FR_FEATURE_TEXT || FR_FEATURE_RECORDS)
 
@@ -552,6 +656,168 @@
 
 #if FR_FEATURE_PULSE && !FR_FEATURE_REPL
 #error "FR_FEATURE_PULSE requires FR_FEATURE_REPL"
+#endif
+
+#if FR_FEATURE_BLE && !FR_FEATURE_BYTES
+#error "FR_FEATURE_BLE requires FR_FEATURE_BYTES"
+#endif
+
+#if FR_FEATURE_BLE && !FR_FEATURE_REPL
+#error "the first BLE profile requires FR_FEATURE_REPL"
+#endif
+
+#if !FR_FEATURE_BLE &&                                                     \
+    (FR_BLE_ENABLE_OBSERVER || FR_BLE_ENABLE_BROADCASTER ||                \
+     FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL)
+#error "BLE role gates require FR_FEATURE_BLE"
+#endif
+
+#if FR_FEATURE_BLE &&                                                       \
+    !(FR_BLE_ENABLE_OBSERVER || FR_BLE_ENABLE_BROADCASTER ||                \
+      FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL)
+#error "FR_FEATURE_BLE requires at least one BLE role"
+#endif
+
+#if (FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL) &&                 \
+    !FR_FEATURE_HANDLES
+#error "connected BLE roles require FR_FEATURE_HANDLES"
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL && !FR_BLE_ENABLE_OBSERVER
+#error "BLE central requires observer"
+#endif
+
+#if FR_BLE_ENABLE_PERIPHERAL && !FR_BLE_ENABLE_BROADCASTER
+#error "BLE peripheral requires broadcaster"
+#endif
+
+#if FR_BLE_ENABLE_OBSERVER &&                                              \
+    (FR_BLE_SCAN_QUEUE_COUNT < 1 || FR_BLE_SCAN_QUEUE_COUNT > 255)
+#error "BLE scan queue count must fit one byte"
+#endif
+
+#if FR_BLE_ENABLE_OBSERVER && FR_BLE_SCAN_DATA_BYTES != 31
+#error "legacy BLE scan reports require exactly 31 payload bytes"
+#endif
+
+#if !FR_BLE_ENABLE_OBSERVER &&                                             \
+    (FR_BLE_SCAN_QUEUE_COUNT != 0 || FR_BLE_SCAN_DATA_BYTES != 0)
+#error "BLE scan limits require the observer role"
+#endif
+
+#if FR_BLE_ENABLE_BROADCASTER && FR_BLE_ADVERTISEMENT_DATA_BYTES != 31
+#error "legacy BLE advertising requires exactly 31 payload bytes"
+#endif
+
+#if !FR_BLE_ENABLE_BROADCASTER && FR_BLE_ADVERTISEMENT_DATA_BYTES != 0
+#error "BLE advertising limits require the broadcaster role"
+#endif
+
+#if (FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL) &&                  \
+    FR_BLE_CONNECTION_COUNT != 1
+#error "the first connected BLE profile requires one connection slot"
+#endif
+
+#if FR_BLE_ENABLE_PERIPHERAL &&                                             \
+    (FR_BLE_PENDING_CONNECTION_COUNT != 1 ||                               \
+     FR_BLE_CONNECTION_NOTICE_COUNT < 1 ||                                 \
+     FR_BLE_CONNECTION_NOTICE_COUNT > 255)
+#error "the first BLE peripheral requires one pending slot and bounded notices"
+#endif
+
+#if !FR_BLE_ENABLE_PERIPHERAL &&                                            \
+    (FR_BLE_PENDING_CONNECTION_COUNT != 0 ||                               \
+     FR_BLE_CONNECTION_NOTICE_COUNT != 0)
+#error "pending BLE connection limits require the peripheral role"
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL &&                                                \
+    (FR_BLE_CONNECT_TIMEOUT_MAX_MS < 1 ||                                  \
+     FR_BLE_CONNECT_TIMEOUT_MAX_MS > 60000)
+#error "BLE central connect timeout must fit the foreground wait contract"
+#endif
+
+#if !FR_BLE_ENABLE_CENTRAL && FR_BLE_CONNECT_TIMEOUT_MAX_MS != 0
+#error "BLE connect timeout requires the central role"
+#endif
+
+#if !(FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL) &&                 \
+    FR_BLE_CONNECTION_COUNT != 0
+#error "BLE connection slots require a connected role"
+#endif
+
+#if FR_FEATURE_BLE &&                                                      \
+    (FR_BLE_START_TIMEOUT_MS < 1 || FR_BLE_STOP_TIMEOUT_MS < 1)
+#error "BLE lifecycle timeouts must be positive"
+#endif
+
+#if !FR_FEATURE_BLE &&                                                     \
+    (FR_BLE_START_TIMEOUT_MS != 0 || FR_BLE_STOP_TIMEOUT_MS != 0)
+#error "BLE lifecycle timeouts require FR_FEATURE_BLE"
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER &&                                           \
+    (!FR_FEATURE_BLE || !FR_BLE_ENABLE_PERIPHERAL)
+#error "the BLE GATT server requires the peripheral role"
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER &&                                           \
+    (!FR_FEATURE_CELLS || !FR_FEATURE_RECORDS || !FR_FEATURE_TEXT)
+#error "the BLE GATT server requires cells, records, and text"
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER &&                                           \
+    (FR_BLE_GATT_SERVICE_COUNT < 1 || FR_BLE_GATT_SERVICE_COUNT > 255 ||   \
+     FR_BLE_GATT_CHARACTERISTIC_COUNT < 1 ||                              \
+     FR_BLE_GATT_CHARACTERISTIC_COUNT > 255)
+#error "BLE GATT row capacities must fit one byte"
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER &&                                           \
+    (FR_BLE_GATT_VALUE_BYTES < 1 || FR_BLE_GATT_VALUE_BYTES > 65535 ||    \
+     FR_BLE_GATT_WRITE_QUEUE_COUNT < 1 ||                                 \
+     FR_BLE_GATT_WRITE_QUEUE_COUNT > 255 ||                               \
+     FR_BLE_GATT_WRITE_DATA_BYTES < 1 ||                                  \
+     FR_BLE_GATT_WRITE_DATA_BYTES > FR_BLE_GATT_VALUE_BYTES ||            \
+     FR_BLE_GATT_CCCD_COUNT < 1 ||                                        \
+     FR_BLE_GATT_CCCD_COUNT > FR_BLE_GATT_CHARACTERISTIC_COUNT)
+#error "BLE GATT storage limits are inconsistent"
+#endif
+
+#if !FR_BLE_ENABLE_GATT_SERVER &&                                         \
+    (FR_BLE_GATT_SERVICE_COUNT != 0 ||                                    \
+     FR_BLE_GATT_CHARACTERISTIC_COUNT != 0 ||                             \
+     FR_BLE_GATT_VALUE_BYTES != 0 ||                                      \
+     FR_BLE_GATT_WRITE_QUEUE_COUNT != 0 ||                                \
+     FR_BLE_GATT_WRITE_DATA_BYTES != 0 || FR_BLE_GATT_CCCD_COUNT != 0)
+#error "BLE GATT limits require the GATT server"
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT && (!FR_FEATURE_BLE || !FR_BLE_ENABLE_CENTRAL)
+#error "the BLE GATT client requires the central role"
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT && !FR_FEATURE_TEXT
+#error "the BLE GATT client requires text UUIDs"
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT &&                                          \
+    (FR_BLE_GATT_CLIENT_CACHE_COUNT < 1 ||                                \
+     FR_BLE_GATT_CLIENT_CACHE_COUNT > 255 ||                              \
+     FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT < 1 ||                          \
+     FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT > 255 ||                        \
+     FR_BLE_GATT_CLIENT_DATA_BYTES != 20 ||                               \
+     FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS < 1 ||                             \
+     FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS > 60000)
+#error "the first BLE GATT client requires MTU-23 data and bounded storage"
+#endif
+
+#if !FR_BLE_ENABLE_GATT_CLIENT &&                                         \
+    (FR_BLE_GATT_CLIENT_CACHE_COUNT != 0 ||                               \
+     FR_BLE_GATT_CLIENT_DATA_BYTES != 0 ||                                \
+     FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT != 0 ||                         \
+     FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS != 0)
+#error "BLE GATT client limits require the GATT client"
 #endif
 
 #if FR_FEATURE_PAD && FR_PROFILE_PAD_BYTES == 0

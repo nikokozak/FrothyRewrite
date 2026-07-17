@@ -10,8 +10,6 @@
 #include "persist_payload.h"
 #endif
 
-#include <stdlib.h>
-
 #if FR_FEATURE_SOURCE_BASE
 #include "compile.h"
 #include "fr_source_base.h"
@@ -185,19 +183,13 @@ static fr_err_t fr_base_install_def(fr_runtime_t *runtime,
 }
 
 fr_err_t fr_base_image_install(fr_runtime_t *runtime) {
-  /* T15-hwfix: heap-allocate the staging runtime — fr_runtime_t embeds
-   * profile-sized arrays (several KB on esp32_plain) and putting it on
-   * app_main's task stack alongside the compile scratch overflows. Freed
-   * before returning since the final state is copied to *runtime. */
-  fr_runtime_t *next = (fr_runtime_t *)malloc(sizeof(*next));
-  fr_err_t err;
-
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
-  if (next == NULL) {
-    return FR_ERR_CAPACITY;
-  }
+
+  /* The compiled-in base is trusted startup data. Build it in its permanent
+   * runtime so installation needs one profile-sized runtime and every base
+   * pointer is born against its final owner. Failure leaves runtime invalid. */
 
 #if FR_FEATURE_SOURCE_BASE
   fr_base_source_record_reset();
@@ -206,37 +198,27 @@ fr_err_t fr_base_image_install(fr_runtime_t *runtime) {
 #if FR_FEATURE_PERSISTENCE
   fr_persist_session_reset();
 #endif
-  err = fr_runtime_init(next);
-  if (err != FR_OK) { free(next); return err; }
+  FR_TRY(fr_runtime_init(runtime));
 
   for (uint16_t layer = 0; layer < fr_base_def_layer_count(); layer++) {
     fr_base_def_layer_t def_layer = {0};
 
-    err = fr_base_def_layer_at(layer, &def_layer);
-    if (err != FR_OK) { free(next); return err; }
+    FR_TRY(fr_base_def_layer_at(layer, &def_layer));
     if (def_layer.count > 0 && def_layer.defs == NULL) {
-      free(next);
       return FR_ERR_INVALID;
     }
     for (uint16_t i = 0; i < def_layer.count; i++) {
-      err = fr_base_install_def(next, &def_layer.defs[i]);
-      if (err != FR_OK) { free(next); return err; }
+      FR_TRY(fr_base_install_def(runtime, &def_layer.defs[i]));
     }
   }
 
 #if FR_FEATURE_SOURCE_BASE
-  err = fr_base_compile_source(next, fr_source_base_bytes,
-                               fr_source_base_bytes_len);
-  if (err != FR_OK) { free(next); return err; }
+  FR_TRY(fr_base_compile_source(runtime, fr_source_base_bytes,
+                                fr_source_base_bytes_len));
 #endif
 
-  err = fr_lib_natives_install(next);
-  if (err != FR_OK) { free(next); return err; }
-
-  fr_code_mark_base(next);
-  fr_native_mark_base(next);
-  *runtime = *next;
-  fr_code_rebase_ram_pointers(runtime, next);
-  free(next);
+  FR_TRY(fr_lib_natives_install(runtime));
+  fr_code_mark_base(runtime);
+  fr_native_mark_base(runtime);
   return FR_OK;
 }

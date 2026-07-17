@@ -774,6 +774,11 @@ fr_err_t fr_esp_platform_init(void) {
   return FR_OK;
 }
 
+fr_err_t fr_platform_restart(void) {
+  esp_restart();
+  return FR_ERR_IO;
+}
+
 fr_err_t fr_platform_delay_ms(uint16_t ms) {
   if (ms == 0) {
     return FR_OK;
@@ -1775,6 +1780,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
 #if FR_FEATURE_NET
   if (kind == FR_HANDLE_KIND_TCP) {
     return fr_platform_tcp_close(platform_index);
+  }
+#endif
+#if FR_FEATURE_BLE && (FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL)
+  if (kind == FR_HANDLE_KIND_BLE_CONNECTION) {
+    return fr_platform_ble_connection_close(platform_index);
   }
 #endif
   (void)kind;
