@@ -755,6 +755,31 @@ typedef struct fr_host_ble_connection_notice_t {
 #endif
 #endif
 
+#if FR_BLE_ENABLE_GATT_SERVER
+typedef struct fr_host_ble_gatt_t {
+  fr_ble_gatt_table_t table;
+  uint8_t value_bytes[FR_BLE_GATT_VALUE_BYTES];
+  uint32_t table_generation;
+
+  fr_ble_gatt_subscription_t subscriptions[FR_BLE_GATT_CCCD_COUNT];
+  uint8_t subscription_count;
+
+  fr_ble_gatt_write_t writes[FR_BLE_GATT_WRITE_QUEUE_COUNT];
+  uint8_t write_head;
+  uint8_t write_count;
+  uint8_t write_high_water;
+  uint32_t write_overflow;
+  uint32_t write_stale;
+  uint32_t preaccept_write_rejected;
+  bool current_write_valid;
+  fr_ble_gatt_write_t current_write;
+
+  bool indication_pending;
+  int32_t last_att_error;
+  int32_t last_platform_code;
+} fr_host_ble_gatt_t;
+#endif
+
 typedef struct fr_host_ble_state_t {
   fr_ble_radio_state_t radio_state;
 #if FR_BLE_ENABLE_OBSERVER
@@ -817,6 +842,9 @@ typedef struct fr_host_ble_state_t {
   uint8_t connection_notice_head;
   uint8_t connection_notice_count;
 #endif
+#if FR_BLE_ENABLE_GATT_SERVER
+  fr_host_ble_gatt_t gatt;
+#endif
 
   fr_ble_operation_t last_operation;
   fr_err_t last_result;
@@ -873,6 +901,90 @@ static void fr_host_ble_record(fr_ble_operation_t operation, fr_err_t result,
   fr_host_ble.last_operation_ms = fr_host_millis;
 }
 
+#if FR_BLE_ENABLE_GATT_SERVER
+static fr_ble_gatt_characteristic_row_t *
+fr_host_ble_gatt_characteristic(uint16_t attribute_id) {
+  for (uint16_t i = 0; i < fr_host_ble.gatt.table.characteristic_count; i++) {
+    if (fr_host_ble.gatt.table.characteristics[i].attribute_id ==
+        attribute_id) {
+      return &fr_host_ble.gatt.table.characteristics[i];
+    }
+  }
+  return NULL;
+}
+
+static bool fr_host_ble_gatt_table_valid(const fr_ble_gatt_table_t *table) {
+  uint16_t expected_value_offset = 0;
+  uint16_t expected_characteristic = 0;
+
+  if (table == NULL || table->service_count == 0 ||
+      table->service_count > FR_BLE_GATT_SERVICE_COUNT ||
+      table->characteristic_count > FR_BLE_GATT_CHARACTERISTIC_COUNT ||
+      table->row_count != table->service_count + table->characteristic_count ||
+      table->value_bytes_used > FR_BLE_GATT_VALUE_BYTES) {
+    return false;
+  }
+  for (uint16_t i = 0; i < table->service_count; i++) {
+    const fr_ble_gatt_service_row_t *service = &table->services[i];
+
+    if (service->attribute_id >= table->row_count ||
+        service->first_characteristic != expected_characteristic ||
+        service->characteristic_count >
+            table->characteristic_count - expected_characteristic) {
+      return false;
+    }
+    expected_characteristic =
+        (uint16_t)(expected_characteristic + service->characteristic_count);
+  }
+  if (expected_characteristic != table->characteristic_count) {
+    return false;
+  }
+  for (uint16_t i = 0; i < table->characteristic_count; i++) {
+    const fr_ble_gatt_characteristic_row_t *characteristic =
+        &table->characteristics[i];
+
+    if (characteristic->attribute_id >= table->row_count ||
+        characteristic->value_offset != expected_value_offset ||
+        characteristic->maximum_length >
+            table->value_bytes_used - expected_value_offset) {
+      return false;
+    }
+    expected_value_offset =
+        (uint16_t)(expected_value_offset + characteristic->maximum_length);
+  }
+  return expected_value_offset == table->value_bytes_used;
+}
+
+static void fr_host_ble_gatt_clear_subscriptions(void) {
+  memset(fr_host_ble.gatt.subscriptions, 0,
+         sizeof(fr_host_ble.gatt.subscriptions));
+  fr_host_ble.gatt.subscription_count = 0;
+}
+
+static void fr_host_ble_gatt_radio_on(void) {
+  for (uint16_t i = 0; i < fr_host_ble.gatt.table.characteristic_count; i++) {
+    fr_host_ble.gatt.table.characteristics[i].target_value_handle =
+        (uint16_t)(i + 1u);
+  }
+}
+
+static void fr_host_ble_gatt_radio_off(void) {
+  for (uint16_t i = 0; i < fr_host_ble.gatt.table.characteristic_count; i++) {
+    fr_host_ble.gatt.table.characteristics[i].target_value_handle = 0;
+  }
+  fr_host_ble_gatt_clear_subscriptions();
+  fr_host_ble.gatt.write_stale += fr_host_ble.gatt.write_count;
+  memset(fr_host_ble.gatt.writes, 0, sizeof(fr_host_ble.gatt.writes));
+  fr_host_ble.gatt.write_head = 0;
+  fr_host_ble.gatt.write_count = 0;
+  fr_host_ble.gatt.current_write_valid = false;
+  memset(&fr_host_ble.gatt.current_write, 0,
+         sizeof(fr_host_ble.gatt.current_write));
+  fr_host_ble.gatt.indication_pending = false;
+}
+
+#endif
+
 #if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
 static void fr_host_ble_connection_begin(fr_ble_connection_role_t role,
                                          const uint8_t peer[7],
@@ -899,6 +1011,9 @@ static void fr_host_ble_connection_begin(fr_ble_connection_role_t role,
 static void fr_host_ble_connection_free(void) {
   uint32_t generation = fr_host_ble.connection.generation;
 
+#if FR_BLE_ENABLE_GATT_SERVER
+  fr_host_ble_gatt_clear_subscriptions();
+#endif
   memset(&fr_host_ble.connection, 0, sizeof(fr_host_ble.connection));
   fr_host_ble.connection.generation = generation;
   fr_host_ble.connection.info.state = FR_BLE_CONNECTION_FREE;
@@ -924,6 +1039,9 @@ static bool fr_host_ble_connection_is_live(
 }
 
 static void fr_host_ble_connection_mark_disconnected(int32_t reason) {
+#if FR_BLE_ENABLE_GATT_SERVER
+  fr_host_ble_gatt_clear_subscriptions();
+#endif
   fr_host_ble.connection.info.state = FR_BLE_CONNECTION_DISCONNECTED;
   fr_host_ble.connection.info.rssi_valid = false;
   fr_host_ble.connection.info.last_reason = reason;
@@ -1054,6 +1172,9 @@ fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
     return failure;
   }
 
+#if FR_BLE_ENABLE_GATT_SERVER
+  fr_host_ble_gatt_radio_on();
+#endif
   fr_host_ble.radio_state = FR_BLE_RADIO_READY;
   fr_host_ble_record(FR_BLE_OP_ON, FR_OK, 0, 0);
   return FR_OK;
@@ -1090,6 +1211,9 @@ fr_err_t fr_platform_ble_off(fr_runtime_t *runtime) {
 #endif
 #if FR_BLE_ENABLE_PERIPHERAL
   fr_host_ble_notices_clear();
+#endif
+#if FR_BLE_ENABLE_GATT_SERVER
+  fr_host_ble_gatt_radio_off();
 #endif
   fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
   fr_host_ble.shutdown_in_progress = false;
@@ -1128,6 +1252,9 @@ fr_err_t fr_platform_ble_project_clear(void) {
 #endif
 #if FR_BLE_ENABLE_PERIPHERAL
   fr_host_ble_notices_clear();
+#endif
+#if FR_BLE_ENABLE_GATT_SERVER
+  memset(&fr_host_ble.gatt, 0, sizeof(fr_host_ble.gatt));
 #endif
   fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
 #if FR_BLE_ENABLE_OBSERVER
@@ -1633,6 +1760,115 @@ fr_err_t fr_platform_ble_connection_mtu(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_BLE_ENABLE_GATT_SERVER
+fr_err_t fr_platform_ble_gatt_install(const fr_ble_gatt_table_t *table) {
+  fr_ble_gatt_table_t copy;
+  uint32_t generation = fr_host_ble.gatt.table_generation + 1u;
+
+  if (table == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_host_ble.radio_state != FR_BLE_RADIO_OFF) {
+    fr_host_ble_record(FR_BLE_OP_GATT_INSTALL, FR_ERR_BLE_BUSY, 0, 0);
+    return FR_ERR_BLE_BUSY;
+  }
+  if (!fr_host_ble_gatt_table_valid(table)) {
+    fr_host_ble_record(FR_BLE_OP_GATT_INSTALL, FR_ERR_INVALID, 0, 0);
+    return FR_ERR_INVALID;
+  }
+
+  copy = *table;
+  for (uint16_t i = 0; i < copy.characteristic_count; i++) {
+    copy.characteristics[i].value_length = 0;
+    copy.characteristics[i].target_value_handle = 0;
+  }
+  memset(&fr_host_ble.gatt, 0, sizeof(fr_host_ble.gatt));
+  fr_host_ble.gatt.table = copy;
+  fr_host_ble.gatt.table_generation = generation;
+  fr_host_ble_record(FR_BLE_OP_GATT_INSTALL, FR_OK, 0, 0);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_gatt_status(fr_ble_gatt_status_t *out_status) {
+  if (out_status == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  *out_status = (fr_ble_gatt_status_t){
+      .table = fr_host_ble.gatt.table,
+      .table_generation = fr_host_ble.gatt.table_generation,
+      .subscription_count = fr_host_ble.gatt.subscription_count,
+      .write_queue_count = fr_host_ble.gatt.write_count,
+      .write_queue_high_water = fr_host_ble.gatt.write_high_water,
+      .write_queue_overflow = fr_host_ble.gatt.write_overflow,
+      .write_queue_stale = fr_host_ble.gatt.write_stale,
+      .preaccept_write_rejected =
+          fr_host_ble.gatt.preaccept_write_rejected,
+      .current_write_valid = fr_host_ble.gatt.current_write_valid,
+      .current_write_attribute_id =
+          fr_host_ble.gatt.current_write.attribute_id,
+      .current_write_data_length = fr_host_ble.gatt.current_write.data_length,
+      .indication_pending = fr_host_ble.gatt.indication_pending,
+      .last_att_error = fr_host_ble.gatt.last_att_error,
+      .last_platform_code = fr_host_ble.gatt.last_platform_code,
+  };
+  memcpy(out_status->subscriptions, fr_host_ble.gatt.subscriptions,
+         sizeof(out_status->subscriptions));
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_gatt_set(uint16_t attribute_id,
+                                  const uint8_t *bytes, uint16_t length) {
+  fr_ble_gatt_characteristic_row_t *characteristic =
+      fr_host_ble_gatt_characteristic(attribute_id);
+
+  if (length > 0 && bytes == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (characteristic == NULL) {
+    fr_host_ble_record(FR_BLE_OP_GATT_SET, FR_ERR_NOT_FOUND, 0, 0);
+    return FR_ERR_NOT_FOUND;
+  }
+  if (length > characteristic->maximum_length) {
+    fr_host_ble_record(FR_BLE_OP_GATT_SET, FR_ERR_CAPACITY, 0, 0);
+    return FR_ERR_CAPACITY;
+  }
+
+  if (length > 0) {
+    memcpy(&fr_host_ble.gatt.value_bytes[characteristic->value_offset], bytes,
+           length);
+  }
+  characteristic->value_length = length;
+  fr_host_ble_record(FR_BLE_OP_GATT_SET, FR_OK, 0, 0);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_gatt_get(uint16_t attribute_id, uint8_t *out_bytes,
+                                  uint16_t capacity, uint16_t *out_length) {
+  fr_ble_gatt_characteristic_row_t *characteristic =
+      fr_host_ble_gatt_characteristic(attribute_id);
+
+  if (out_bytes == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (characteristic == NULL) {
+    return FR_ERR_NOT_FOUND;
+  }
+  if (characteristic->value_length > capacity) {
+    return FR_ERR_CAPACITY;
+  }
+
+  if (characteristic->value_length > 0) {
+    memcpy(out_bytes,
+           &fr_host_ble.gatt.value_bytes[characteristic->value_offset],
+           characteristic->value_length);
+  }
+  *out_length = characteristic->value_length;
+  return FR_OK;
+}
+
+#endif
+
 #ifdef FR_HOST_TEST_HELPERS
 void fr_host_ble_reset(void) {
   memset(&fr_host_ble, 0, sizeof(fr_host_ble));
@@ -1746,6 +1982,7 @@ fr_err_t fr_host_ble_disconnect(uint16_t platform_index, int32_t reason) {
   return FR_OK;
 }
 #endif
+
 
 void fr_host_ble_fail_next_on(fr_err_t err, int32_t raw_code) {
   fr_host_ble.fail_next_on = err;

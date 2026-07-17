@@ -759,6 +759,7 @@
      FR_BLE_GATT_WRITE_QUEUE_COUNT > 255 ||                               \
      FR_BLE_GATT_WRITE_DATA_BYTES < 1 ||                                  \
      FR_BLE_GATT_WRITE_DATA_BYTES > FR_BLE_GATT_VALUE_BYTES ||            \
+     FR_BLE_GATT_CCCD_COUNT < 1 ||                                        \
      FR_BLE_GATT_CCCD_COUNT > FR_BLE_GATT_CHARACTERISTIC_COUNT)
 #error "BLE GATT storage limits are inconsistent"
 #endif
