@@ -409,6 +409,11 @@ fr_err_t fr_platform_handle_close(fr_handle_kind_t kind,
     return fr_platform_tcp_close(platform_index);
   }
 #endif
+#if FR_FEATURE_BLE && (FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL)
+  if (kind == FR_HANDLE_KIND_BLE_CONNECTION) {
+    return fr_platform_ble_connection_close(platform_index);
+  }
+#endif
   (void)kind;
   (void)platform_index;
   return FR_OK;
@@ -726,6 +731,30 @@ enum {
 };
 #endif
 
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+enum {
+  FR_HOST_BLE_CONNECTION_INDEX = 0,
+  FR_HOST_BLE_DEFAULT_INTERVAL_US = 30000,
+  FR_HOST_BLE_DEFAULT_SUPERVISION_TIMEOUT_US = 4000000,
+  FR_HOST_BLE_DEFAULT_MTU = 23,
+  FR_HOST_BLE_DEFAULT_RSSI = -42,
+};
+
+typedef struct fr_host_ble_connection_t {
+  fr_ble_connection_info_t info;
+  fr_handle_ref_t runtime_ref;
+  uint32_t generation;
+  bool has_runtime_ref;
+} fr_host_ble_connection_t;
+
+#if FR_BLE_ENABLE_PERIPHERAL
+typedef struct fr_host_ble_connection_notice_t {
+  uint16_t platform_index;
+  uint32_t generation;
+} fr_host_ble_connection_notice_t;
+#endif
+#endif
+
 typedef struct fr_host_ble_state_t {
   fr_ble_radio_state_t radio_state;
 #if FR_BLE_ENABLE_OBSERVER
@@ -773,6 +802,20 @@ typedef struct fr_host_ble_state_t {
   uint8_t scan_response_data[FR_BLE_ADVERTISEMENT_DATA_BYTES];
   uint32_t advertise_starts;
   uint32_t advertise_stops;
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+  fr_host_ble_connection_t connection;
+  uint32_t connection_connects;
+  uint32_t connection_accepts;
+  uint32_t connection_disconnects;
+  uint32_t incoming_rejected;
+#endif
+#if FR_BLE_ENABLE_PERIPHERAL
+  fr_host_ble_connection_notice_t
+      connection_notices[FR_BLE_CONNECTION_NOTICE_COUNT];
+  uint8_t connection_notice_head;
+  uint8_t connection_notice_count;
 #endif
 
   fr_ble_operation_t last_operation;
@@ -829,6 +872,105 @@ static void fr_host_ble_record(fr_ble_operation_t operation, fr_err_t result,
   fr_host_ble.last_protocol_reason = protocol_reason;
   fr_host_ble.last_operation_ms = fr_host_millis;
 }
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+static void fr_host_ble_connection_begin(fr_ble_connection_role_t role,
+                                         const uint8_t peer[7],
+                                         fr_ble_connection_state_t state) {
+  uint32_t generation = fr_host_ble.connection.generation + 1u;
+
+  memset(&fr_host_ble.connection, 0, sizeof(fr_host_ble.connection));
+  fr_host_ble.connection.generation = generation;
+  fr_host_ble.connection.info = (fr_ble_connection_info_t){
+      .state = state,
+      .role = role,
+      .peer_address_type = (fr_ble_address_type_t)peer[0],
+      .interval_us = FR_HOST_BLE_DEFAULT_INTERVAL_US,
+      .supervision_timeout_us = FR_HOST_BLE_DEFAULT_SUPERVISION_TIMEOUT_US,
+      .mtu = FR_HOST_BLE_DEFAULT_MTU,
+      .rssi_valid = true,
+      .last_rssi = FR_HOST_BLE_DEFAULT_RSSI,
+      .connected_at_ms = fr_host_millis,
+  };
+  memcpy(fr_host_ble.connection.info.peer_address, &peer[1],
+         sizeof(fr_host_ble.connection.info.peer_address));
+}
+
+static void fr_host_ble_connection_free(void) {
+  uint32_t generation = fr_host_ble.connection.generation;
+
+  memset(&fr_host_ble.connection, 0, sizeof(fr_host_ble.connection));
+  fr_host_ble.connection.generation = generation;
+  fr_host_ble.connection.info.state = FR_BLE_CONNECTION_FREE;
+}
+
+static fr_err_t fr_host_ble_connection_entry(
+    uint16_t platform_index, fr_host_ble_connection_t **out_connection) {
+  if (out_connection == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (platform_index != FR_HOST_BLE_CONNECTION_INDEX ||
+      fr_host_ble.connection.info.state == FR_BLE_CONNECTION_FREE) {
+    return FR_ERR_HANDLE;
+  }
+
+  *out_connection = &fr_host_ble.connection;
+  return FR_OK;
+}
+
+static bool fr_host_ble_connection_is_live(
+    const fr_host_ble_connection_t *connection) {
+  return connection->info.state == FR_BLE_CONNECTION_LIVE;
+}
+
+static void fr_host_ble_connection_mark_disconnected(int32_t reason) {
+  fr_host_ble.connection.info.state = FR_BLE_CONNECTION_DISCONNECTED;
+  fr_host_ble.connection.info.rssi_valid = false;
+  fr_host_ble.connection.info.last_reason = reason;
+  fr_host_ble.connection.info.disconnected_at_ms = fr_host_millis;
+  fr_host_ble.connection_disconnects += 1u;
+}
+#endif
+
+#if FR_BLE_ENABLE_PERIPHERAL
+static void fr_host_ble_notice_pop(void) {
+  if (fr_host_ble.connection_notice_count == 0) {
+    return;
+  }
+  fr_host_ble.connection_notice_head =
+      (uint8_t)((fr_host_ble.connection_notice_head + 1u) %
+                FR_BLE_CONNECTION_NOTICE_COUNT);
+  fr_host_ble.connection_notice_count -= 1u;
+}
+
+static bool fr_host_ble_notice_current(void) {
+  const fr_host_ble_connection_notice_t *notice = NULL;
+
+  if (fr_host_ble.connection_notice_count == 0) {
+    return false;
+  }
+  notice =
+      &fr_host_ble.connection_notices[fr_host_ble.connection_notice_head];
+  return notice->platform_index == FR_HOST_BLE_CONNECTION_INDEX &&
+         notice->generation == fr_host_ble.connection.generation &&
+         fr_host_ble.connection.info.state == FR_BLE_CONNECTION_PENDING;
+}
+
+static bool fr_host_ble_notice_find_current(void) {
+  while (fr_host_ble.connection_notice_count > 0 &&
+         !fr_host_ble_notice_current()) {
+    fr_host_ble_notice_pop();
+  }
+  return fr_host_ble.connection_notice_count > 0;
+}
+
+static void fr_host_ble_notices_clear(void) {
+  memset(fr_host_ble.connection_notices, 0,
+         sizeof(fr_host_ble.connection_notices));
+  fr_host_ble.connection_notice_head = 0;
+  fr_host_ble.connection_notice_count = 0;
+}
+#endif
 
 #if FR_BLE_ENABLE_OBSERVER
 static void fr_host_ble_clear_reports(void) {
@@ -917,6 +1059,45 @@ fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
   return FR_OK;
 }
 
+fr_err_t fr_platform_ble_off(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+#if FR_BLE_ENABLE_OBSERVER
+  if (fr_host_ble.scan_state != FR_BLE_SCAN_IDLE || fr_host_ble.count > 0 ||
+      fr_host_ble.current_valid) {
+    fr_host_ble.scan_generation += 1u;
+  }
+  fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
+  fr_host_ble_clear_reports();
+  fr_host_ble_clear_parameters();
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+  fr_host_ble.advertise_state = FR_BLE_ADVERTISE_IDLE;
+  fr_host_ble.advertise_requested_interval_ms = 0;
+  fr_host_ble.advertise_actual_interval_us = 0;
+  fr_host_ble.advertise_connectable = false;
+  fr_host_ble.advertising_data_length = 0;
+  memset(fr_host_ble.advertising_data, 0,
+         sizeof(fr_host_ble.advertising_data));
+  fr_host_ble.scan_response_data_length = 0;
+  memset(fr_host_ble.scan_response_data, 0,
+         sizeof(fr_host_ble.scan_response_data));
+#endif
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+  fr_host_ble_connection_free();
+#endif
+#if FR_BLE_ENABLE_PERIPHERAL
+  fr_host_ble_notices_clear();
+#endif
+  fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
+  fr_host_ble.shutdown_in_progress = false;
+  fr_host_ble.cleanup_required = false;
+  fr_host_ble_record(FR_BLE_OP_OFF, FR_OK, 0, 0);
+  return FR_OK;
+}
+
 fr_err_t fr_platform_ble_project_clear(void) {
 #if FR_BLE_ENABLE_OBSERVER
   if (fr_host_ble.scan_state != FR_BLE_SCAN_IDLE || fr_host_ble.count > 0 ||
@@ -937,6 +1118,16 @@ fr_err_t fr_platform_ble_project_clear(void) {
          sizeof(fr_host_ble.scan_response_data));
   fr_host_ble.advertise_starts = 0;
   fr_host_ble.advertise_stops = 0;
+#endif
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+  fr_host_ble_connection_free();
+  fr_host_ble.connection_connects = 0;
+  fr_host_ble.connection_accepts = 0;
+  fr_host_ble.connection_disconnects = 0;
+  fr_host_ble.incoming_rejected = 0;
+#endif
+#if FR_BLE_ENABLE_PERIPHERAL
+  fr_host_ble_notices_clear();
 #endif
   fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
 #if FR_BLE_ENABLE_OBSERVER
@@ -1013,6 +1204,22 @@ fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status) {
       .scan_response_data_length = fr_host_ble.scan_response_data_length,
       .advertise_starts = fr_host_ble.advertise_starts,
       .advertise_stops = fr_host_ble.advertise_stops,
+#endif
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+      .connection_count =
+          fr_host_ble.connection.info.state == FR_BLE_CONNECTION_FREE ? 0 : 1,
+      .connection_capacity = FR_BLE_CONNECTION_COUNT,
+#if FR_BLE_ENABLE_PERIPHERAL
+      .pending_connection_count =
+          fr_host_ble.connection.info.state == FR_BLE_CONNECTION_PENDING ? 1
+                                                                         : 0,
+      .connection_notice_count = fr_host_ble.connection_notice_count,
+      .connection_notice_capacity = FR_BLE_CONNECTION_NOTICE_COUNT,
+#endif
+      .connection_connects = fr_host_ble.connection_connects,
+      .connection_accepts = fr_host_ble.connection_accepts,
+      .connection_disconnects = fr_host_ble.connection_disconnects,
+      .incoming_rejected = fr_host_ble.incoming_rejected,
 #endif
       .last_operation = fr_host_ble.last_operation,
       .last_result = fr_host_ble.last_result,
@@ -1214,6 +1421,217 @@ fr_err_t fr_platform_ble_advertise_stop(void) {
 }
 #endif
 
+#if FR_BLE_ENABLE_CENTRAL
+fr_err_t fr_platform_ble_connect(const uint8_t peer[7], uint16_t timeout_ms,
+                                 fr_handle_ref_t runtime_ref,
+                                 uint16_t *out_platform_index) {
+  if (peer == NULL || out_platform_index == NULL ||
+      peer[0] > FR_BLE_ADDRESS_RANDOM_ID) {
+    return FR_ERR_INVALID;
+  }
+  if (timeout_ms == 0 || timeout_ms > FR_BLE_CONNECT_TIMEOUT_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+  if (fr_host_ble.radio_state != FR_BLE_RADIO_READY) {
+    fr_host_ble_record(FR_BLE_OP_CONNECT, FR_ERR_BLE_NOT_READY, 0, 0);
+    return FR_ERR_BLE_NOT_READY;
+  }
+#if FR_BLE_ENABLE_OBSERVER
+  if (fr_host_ble.scan_state != FR_BLE_SCAN_IDLE) {
+    fr_host_ble_record(FR_BLE_OP_CONNECT, FR_ERR_BLE_BUSY, 0, 0);
+    return FR_ERR_BLE_BUSY;
+  }
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+  if (fr_host_ble.advertise_state != FR_BLE_ADVERTISE_IDLE) {
+    fr_host_ble_record(FR_BLE_OP_CONNECT, FR_ERR_BLE_BUSY, 0, 0);
+    return FR_ERR_BLE_BUSY;
+  }
+#endif
+  if (fr_host_ble.connection.info.state != FR_BLE_CONNECTION_FREE) {
+    fr_host_ble_record(FR_BLE_OP_CONNECT, FR_ERR_CAPACITY, 0, 0);
+    return FR_ERR_CAPACITY;
+  }
+
+  fr_host_ble_connection_begin(FR_BLE_CONNECTION_ROLE_CENTRAL, peer,
+                               FR_BLE_CONNECTION_LIVE);
+  fr_host_ble.connection.runtime_ref = runtime_ref;
+  fr_host_ble.connection.has_runtime_ref = true;
+  fr_host_ble.connection_connects += 1u;
+  *out_platform_index = FR_HOST_BLE_CONNECTION_INDEX;
+  fr_host_ble_record(FR_BLE_OP_CONNECT, FR_OK, 0, 0);
+  return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_PERIPHERAL
+fr_err_t fr_platform_ble_connection_pending(bool *out_pending) {
+  if (out_pending == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_pending = fr_host_ble_notice_find_current();
+  fr_host_ble_record(FR_BLE_OP_ACCEPT, FR_OK, 0, 0);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_accept(fr_handle_ref_t runtime_ref,
+                                uint16_t *out_platform_index,
+                                bool *out_accepted) {
+  if (out_platform_index == NULL || out_accepted == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_platform_index = FR_HANDLE_PLATFORM_NONE;
+  *out_accepted = false;
+  if (!fr_host_ble_notice_find_current()) {
+    fr_host_ble_record(FR_BLE_OP_ACCEPT, FR_OK, 0, 0);
+    return FR_OK;
+  }
+
+  fr_host_ble_notice_pop();
+  fr_host_ble.connection.runtime_ref = runtime_ref;
+  fr_host_ble.connection.has_runtime_ref = true;
+  fr_host_ble.connection.info.state = FR_BLE_CONNECTION_LIVE;
+  fr_host_ble.connection_accepts += 1u;
+  *out_platform_index = FR_HOST_BLE_CONNECTION_INDEX;
+  *out_accepted = true;
+  fr_host_ble_record(FR_BLE_OP_ACCEPT, FR_OK, 0, 0);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_reject_pending(void) {
+  if (!fr_host_ble_notice_find_current()) {
+    return FR_OK;
+  }
+
+  fr_host_ble_notice_pop();
+  fr_host_ble.connection_disconnects += 1u;
+  fr_host_ble.incoming_rejected += 1u;
+  fr_host_ble_connection_free();
+  fr_host_ble_record(FR_BLE_OP_ACCEPT, FR_ERR_CAPACITY, 0, 0);
+  return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+fr_err_t fr_platform_ble_connection_ready(uint16_t platform_index,
+                                          bool *out_ready) {
+  fr_host_ble_connection_t *connection = NULL;
+
+  if (out_ready == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_ble_connection_entry(platform_index, &connection));
+  *out_ready = fr_host_ble_connection_is_live(connection);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_connection_close(uint16_t platform_index) {
+  fr_host_ble_connection_t *connection = NULL;
+
+  FR_TRY(fr_host_ble_connection_entry(platform_index, &connection));
+  if (connection->info.state != FR_BLE_CONNECTION_DISCONNECTED) {
+    fr_host_ble.connection_disconnects += 1u;
+  }
+  fr_host_ble_connection_free();
+  fr_host_ble_record(FR_BLE_OP_CONNECTION_CLOSE, FR_OK, 0, 0);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_connection_info(
+    uint16_t platform_index, fr_ble_connection_info_t *out_info) {
+  fr_host_ble_connection_t *connection = NULL;
+
+  if (out_info == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_ble_connection_entry(platform_index, &connection));
+  *out_info = connection->info;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_connection_rssi(uint16_t platform_index,
+                                         int8_t *out_rssi) {
+  fr_host_ble_connection_t *connection = NULL;
+
+  if (out_rssi == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_ble_connection_entry(platform_index, &connection));
+  if (!fr_host_ble_connection_is_live(connection)) {
+    fr_host_ble_record(FR_BLE_OP_CONNECTION_PARAMS,
+                       FR_ERR_BLE_DISCONNECTED, 0, 0);
+    return FR_ERR_BLE_DISCONNECTED;
+  }
+  if (!connection->info.rssi_valid) {
+    return FR_ERR_NOT_FOUND;
+  }
+  *out_rssi = connection->info.last_rssi;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_connection_params(
+    uint16_t platform_index, uint16_t minimum_interval_ms,
+    uint16_t maximum_interval_ms, uint16_t latency,
+    uint16_t supervision_timeout_ms) {
+  fr_host_ble_connection_t *connection = NULL;
+  uint32_t minimum_interval_units =
+      ((uint32_t)minimum_interval_ms * 4u + 2u) / 5u;
+  uint32_t maximum_interval_units =
+      ((uint32_t)maximum_interval_ms * 4u + 2u) / 5u;
+  uint32_t supervision_timeout_units =
+      ((uint32_t)supervision_timeout_ms + 5u) / 10u;
+
+  FR_TRY(fr_host_ble_connection_entry(platform_index, &connection));
+  if (!fr_host_ble_connection_is_live(connection)) {
+    fr_host_ble_record(FR_BLE_OP_CONNECTION_MTU, FR_ERR_BLE_DISCONNECTED, 0,
+                       0);
+    return FR_ERR_BLE_DISCONNECTED;
+  }
+  if (minimum_interval_units < 6u || maximum_interval_units > 3200u ||
+      minimum_interval_units > maximum_interval_units || latency > 499u ||
+      supervision_timeout_units < 10u ||
+      supervision_timeout_units > 3200u ||
+      supervision_timeout_units * 8u <=
+          ((uint32_t)latency + 1u) * maximum_interval_units * 2u) {
+    fr_host_ble_record(FR_BLE_OP_CONNECTION_PARAMS, FR_ERR_RANGE, 0, 0);
+    return FR_ERR_RANGE;
+  }
+
+  connection->info.interval_us = maximum_interval_units * 1250u;
+  connection->info.latency = latency;
+  connection->info.supervision_timeout_us =
+      supervision_timeout_units * 10000u;
+  fr_host_ble_record(FR_BLE_OP_CONNECTION_PARAMS, FR_OK, 0, 0);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_connection_mtu(fr_runtime_t *runtime,
+                                        uint16_t platform_index,
+                                        uint16_t requested_mtu,
+                                        uint16_t timeout_ms,
+                                        uint16_t *out_actual_mtu) {
+  fr_host_ble_connection_t *connection = NULL;
+
+  if (runtime == NULL || out_actual_mtu == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_host_ble_connection_entry(platform_index, &connection));
+  if (!fr_host_ble_connection_is_live(connection)) {
+    return FR_ERR_BLE_DISCONNECTED;
+  }
+  if (requested_mtu != FR_HOST_BLE_DEFAULT_MTU || timeout_ms == 0 ||
+      timeout_ms > 60000u) {
+    fr_host_ble_record(FR_BLE_OP_CONNECTION_MTU, FR_ERR_RANGE, 0, 0);
+    return FR_ERR_RANGE;
+  }
+
+  connection->info.mtu = FR_HOST_BLE_DEFAULT_MTU;
+  *out_actual_mtu = connection->info.mtu;
+  fr_host_ble_record(FR_BLE_OP_CONNECTION_MTU, FR_OK, 0, 0);
+  return FR_OK;
+}
+#endif
+
 #ifdef FR_HOST_TEST_HELPERS
 void fr_host_ble_reset(void) {
   memset(&fr_host_ble, 0, sizeof(fr_host_ble));
@@ -1265,6 +1683,69 @@ fr_err_t fr_host_ble_push_scan_report(const fr_ble_scan_report_t *report) {
   return FR_OK;
 }
 #endif
+
+#if FR_BLE_ENABLE_PERIPHERAL
+fr_err_t fr_host_ble_queue_incoming(const uint8_t peer[7]) {
+  uint8_t tail = 0;
+
+  if (peer == NULL || peer[0] > FR_BLE_ADDRESS_RANDOM_ID) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_host_ble.radio_state != FR_BLE_RADIO_READY
+#if FR_BLE_ENABLE_BROADCASTER
+      || fr_host_ble.advertise_state != FR_BLE_ADVERTISE_ACTIVE ||
+      !fr_host_ble.advertise_connectable
+#endif
+  ) {
+    return FR_ERR_BLE_NOT_READY;
+  }
+  if (fr_host_ble.connection.info.state != FR_BLE_CONNECTION_FREE ||
+      fr_host_ble.connection_notice_count == FR_BLE_CONNECTION_NOTICE_COUNT) {
+#if FR_BLE_ENABLE_BROADCASTER
+    fr_host_ble.advertise_state = FR_BLE_ADVERTISE_IDLE;
+#endif
+    fr_host_ble.incoming_rejected += 1u;
+    return FR_ERR_CAPACITY;
+  }
+
+  fr_host_ble_connection_begin(FR_BLE_CONNECTION_ROLE_PERIPHERAL, peer,
+                               FR_BLE_CONNECTION_PENDING);
+  tail = (uint8_t)((fr_host_ble.connection_notice_head +
+                    fr_host_ble.connection_notice_count) %
+                   FR_BLE_CONNECTION_NOTICE_COUNT);
+  fr_host_ble.connection_notices[tail] = (fr_host_ble_connection_notice_t){
+      .platform_index = FR_HOST_BLE_CONNECTION_INDEX,
+      .generation = fr_host_ble.connection.generation,
+  };
+  fr_host_ble.connection_notice_count += 1u;
+#if FR_BLE_ENABLE_BROADCASTER
+  fr_host_ble.advertise_state = FR_BLE_ADVERTISE_IDLE;
+#endif
+  return FR_OK;
+}
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+fr_err_t fr_host_ble_disconnect(uint16_t platform_index, int32_t reason) {
+  fr_host_ble_connection_t *connection = NULL;
+
+  FR_TRY(fr_host_ble_connection_entry(platform_index, &connection));
+  if (connection->info.state == FR_BLE_CONNECTION_DISCONNECTED) {
+    return FR_OK;
+  }
+  if (connection->info.state == FR_BLE_CONNECTION_PENDING) {
+    fr_host_ble_connection_mark_disconnected(reason);
+    fr_host_ble_connection_free();
+  } else if (fr_host_ble_connection_is_live(connection)) {
+    fr_host_ble_connection_mark_disconnected(reason);
+  } else {
+    return FR_ERR_BLE_BUSY;
+  }
+  fr_host_ble.last_protocol_reason = reason;
+  return FR_OK;
+}
+#endif
+
 void fr_host_ble_fail_next_on(fr_err_t err, int32_t raw_code) {
   fr_host_ble.fail_next_on = err;
   fr_host_ble.fail_next_on_raw_code = raw_code;
@@ -1309,6 +1790,14 @@ void fr_host_ble_post_reset(int32_t raw_reason) {
 #endif
 #if FR_BLE_ENABLE_BROADCASTER
   fr_host_ble.advertise_state = FR_BLE_ADVERTISE_IDLE;
+#endif
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+  if (fr_host_ble.connection.info.state == FR_BLE_CONNECTION_LIVE) {
+    fr_host_ble_connection_mark_disconnected(raw_reason);
+  } else if (fr_host_ble.connection.info.state == FR_BLE_CONNECTION_PENDING) {
+    fr_host_ble.connection_disconnects += 1u;
+    fr_host_ble_connection_free();
+  }
 #endif
   if (fr_host_ble.shutdown_in_progress) {
     fr_host_ble.radio_state = FR_BLE_RADIO_OFF;

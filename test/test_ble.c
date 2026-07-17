@@ -2,6 +2,7 @@
 
 #include "base_defs.h"
 #include "base_image.h"
+#include "handle.h"
 #include "object.h"
 #include "persist.h"
 #include "platform.h"
@@ -13,8 +14,10 @@
 
 #include <string.h>
 
-#if !FR_FEATURE_BLE || !FR_BLE_ENABLE_OBSERVER || !FR_BLE_ENABLE_BROADCASTER
-#error "test_ble requires the BLE observer and broadcaster profile gates"
+#if !FR_FEATURE_BLE || !FR_BLE_ENABLE_OBSERVER ||                         \
+    !FR_BLE_ENABLE_BROADCASTER || !FR_BLE_ENABLE_CENTRAL ||              \
+    !FR_BLE_ENABLE_PERIPHERAL
+#error "test_ble requires all four BLE role gates"
 #endif
 
 static fr_runtime_t s_runtime;
@@ -99,8 +102,8 @@ static void test_lifecycle_words_and_status_retention(void) {
   TEST_ASSERT_NOT_NULL(def->native_signature);
   TEST_ASSERT_EQUAL(FR_NATIVE_VALUE_NIL, def->native_signature->result);
   TEST_ASSERT_EQUAL_STRING(
-      "print BLE roles, radio, scan, advertising, queue pressure, and last "
-      "raw reason",
+      "print BLE roles, radio, scan, advertising, connections, queue pressure, "
+      "and last raw reason",
       def->native_signature->help);
 #endif
 
@@ -394,6 +397,281 @@ static void test_advertising_words_validate_and_gate_scan(void) {
   TEST_ASSERT_EQUAL_UINT32(0, status.advertise_stops);
 }
 
+static fr_tagged_t install_peer(uint8_t address_type, uint8_t id) {
+  uint8_t peer[7] = {address_type, 0x10, 0x20, 0x30,
+                     0x40,         0x50, id};
+  fr_tagged_t tagged = fr_tagged_nil();
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_bytes_install(&s_runtime, peer, sizeof(peer), &tagged));
+  return tagged;
+}
+
+static void test_central_connection_owns_one_inspectable_handle(void) {
+  const fr_base_def_t *connect = NULL;
+  const fr_base_def_t *ready = NULL;
+  const fr_base_def_t *close = NULL;
+  const fr_base_def_t *info = NULL;
+  const fr_base_def_t *rssi = NULL;
+  const fr_base_def_t *params = NULL;
+  const fr_base_def_t *mtu = NULL;
+  fr_tagged_t connect_args[2] = {0};
+  fr_tagged_t one_arg[1] = {0};
+  fr_tagged_t params_args[5] = {0};
+  fr_tagged_t mtu_args[3] = {0};
+  fr_tagged_t connection = fr_tagged_nil();
+  fr_tagged_t result = fr_tagged_nil();
+  fr_handle_ref_t connection_ref = {0};
+  fr_ble_connection_info_t connection_info = {0};
+  fr_ble_status_t status;
+  uint16_t platform_index = FR_HANDLE_PLATFORM_NONE;
+  fr_int_t integer = 0;
+  bool is_ready = false;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  read_native_def("ble.connect", FR_SLOT_BLE_CONNECT, 2, &connect);
+  read_native_def("ble.connection.ready?", FR_SLOT_BLE_CONNECTION_READY, 1,
+                  &ready);
+  read_native_def("ble.connection.close", FR_SLOT_BLE_CONNECTION_CLOSE, 1,
+                  &close);
+  read_native_def("ble.connection.info", FR_SLOT_BLE_CONNECTION_INFO, 1,
+                  &info);
+  read_native_def("ble.connection.rssi", FR_SLOT_BLE_CONNECTION_RSSI, 1,
+                  &rssi);
+  read_native_def("ble.connection.params", FR_SLOT_BLE_CONNECTION_PARAMS, 5,
+                  &params);
+  read_native_def("ble.connection.mtu", FR_SLOT_BLE_CONNECTION_MTU, 3, &mtu);
+#if FR_FEATURE_NATIVE_SIGNATURES
+  TEST_ASSERT_EQUAL(FR_NATIVE_VALUE_HANDLE, connect->native_signature->result);
+  TEST_ASSERT_EQUAL_STRING("peer", connect->native_signature->params[0].name);
+  TEST_ASSERT_EQUAL_STRING("timeout_ms",
+                           connect->native_signature->params[1].name);
+  TEST_ASSERT_EQUAL_STRING("say whether a BLE connection is live",
+                           ready->native_signature->help);
+  TEST_ASSERT_EQUAL_STRING(
+      "print peer, link parameters, security state, and raw reason",
+      info->native_signature->help);
+#endif
+
+  connect_args[0] = install_peer(FR_BLE_ADDRESS_PUBLIC, 0x60);
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1000, &connect_args[1]));
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_NOT_READY,
+                    connect->native_fn(&s_runtime, connect_args, 2, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_scan_start(100, 50, false, false, -90));
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_BUSY,
+                    connect->native_fn(&s_runtime, connect_args, 2, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_scan_stop(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    connect->native_fn(&s_runtime, connect_args, 2,
+                                       &connection));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_decode_handle_ref(connection, &connection_ref));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_handle_lookup(&s_runtime, connection_ref,
+                                     FR_HANDLE_KIND_BLE_CONNECTION, NULL,
+                                     &platform_index));
+  TEST_ASSERT_EQUAL_UINT16(0, platform_index);
+
+  status = read_status();
+  TEST_ASSERT_EQUAL_UINT8(1, status.connection_count);
+  TEST_ASSERT_EQUAL_UINT32(1, status.connection_connects);
+  TEST_ASSERT_EQUAL(FR_BLE_OP_CONNECT, status.last_operation);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_connection_info(platform_index,
+                                                    &connection_info));
+  TEST_ASSERT_EQUAL(FR_BLE_CONNECTION_LIVE, connection_info.state);
+  TEST_ASSERT_EQUAL(FR_BLE_CONNECTION_ROLE_CENTRAL, connection_info.role);
+  TEST_ASSERT_EQUAL_UINT8(0x60, connection_info.peer_address[5]);
+  TEST_ASSERT_EQUAL_UINT32(30000, connection_info.interval_us);
+  TEST_ASSERT_EQUAL_UINT16(23, connection_info.mtu);
+
+  one_arg[0] = connection;
+  TEST_ASSERT_EQUAL(FR_OK,
+                    ready->native_fn(&s_runtime, one_arg, 1, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_bool(result, &is_ready));
+  TEST_ASSERT_TRUE(is_ready);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    rssi->native_fn(&s_runtime, one_arg, 1, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(result, &integer));
+  TEST_ASSERT_EQUAL_INT(-42, integer);
+
+  params_args[0] = connection;
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(15, &params_args[1]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(30, &params_args[2]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(0, &params_args[3]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(4000, &params_args[4]));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    params->native_fn(&s_runtime, params_args, 5, &result));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_connection_info(platform_index,
+                                                    &connection_info));
+  TEST_ASSERT_EQUAL_UINT32(30000, connection_info.interval_us);
+  TEST_ASSERT_EQUAL_UINT32(4000000, connection_info.supervision_timeout_us);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(4000, &params_args[1]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(4000, &params_args[2]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(499, &params_args[3]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(100, &params_args[4]));
+  TEST_ASSERT_EQUAL(FR_ERR_RANGE,
+                    params->native_fn(&s_runtime, params_args, 5, &result));
+
+  mtu_args[0] = connection;
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(24, &mtu_args[1]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1000, &mtu_args[2]));
+  TEST_ASSERT_EQUAL(FR_ERR_RANGE,
+                    mtu->native_fn(&s_runtime, mtu_args, 3, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(23, &mtu_args[1]));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    mtu->native_fn(&s_runtime, mtu_args, 3, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(result, &integer));
+  TEST_ASSERT_EQUAL_INT(23, integer);
+
+  TEST_ASSERT_EQUAL(FR_ERR_CAPACITY,
+                    connect->native_fn(&s_runtime, connect_args, 2, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_disconnect(platform_index, 19));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    ready->native_fn(&s_runtime, one_arg, 1, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_bool(result, &is_ready));
+  TEST_ASSERT_FALSE(is_ready);
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_DISCONNECTED,
+                    rssi->native_fn(&s_runtime, one_arg, 1, &result));
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_DISCONNECTED,
+                    params->native_fn(&s_runtime, params_args, 5, &result));
+  TEST_ASSERT_EQUAL(FR_ERR_BLE_DISCONNECTED,
+                    mtu->native_fn(&s_runtime, mtu_args, 3, &result));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    info->native_fn(&s_runtime, one_arg, 1, &result));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_connection_info(platform_index,
+                                                    &connection_info));
+  TEST_ASSERT_EQUAL(FR_BLE_CONNECTION_DISCONNECTED, connection_info.state);
+  TEST_ASSERT_EQUAL_INT32(19, connection_info.last_reason);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    close->native_fn(&s_runtime, one_arg, 1, &result));
+  TEST_ASSERT_EQUAL(FR_ERR_HANDLE,
+                    ready->native_fn(&s_runtime, one_arg, 1, &result));
+  status = read_status();
+  TEST_ASSERT_EQUAL_UINT8(0, status.connection_count);
+  TEST_ASSERT_EQUAL_UINT32(1, status.connection_disconnects);
+  TEST_ASSERT_EQUAL(FR_BLE_OP_CONNECTION_CLOSE, status.last_operation);
+}
+
+static void test_peripheral_accept_drains_stale_notices_and_ble_off(void) {
+  static const uint8_t advertising_data[] = {2, 0x01, 0x06};
+  const uint8_t peer[7] = {FR_BLE_ADDRESS_RANDOM, 0xA1, 0xA2, 0xA3,
+                           0xA4,                  0xA5, 0xA6};
+  const fr_base_def_t *accept = NULL;
+  const fr_base_def_t *ready = NULL;
+  const fr_base_def_t *off = NULL;
+  fr_tagged_t connection = fr_tagged_nil();
+  fr_tagged_t result = fr_tagged_nil();
+  fr_tagged_t one_arg[1] = {0};
+  fr_tagged_t uart = fr_tagged_nil();
+  fr_handle_ref_t connection_ref = {0};
+  fr_handle_ref_t uart_ref = {0};
+  uint16_t connection_index = FR_HANDLE_PLATFORM_NONE;
+  uint16_t uart_index = FR_HANDLE_PLATFORM_NONE;
+  fr_ble_status_t status;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  read_native_def("ble.accept", FR_SLOT_BLE_ACCEPT, 0, &accept);
+  read_native_def("ble.connection.ready?", FR_SLOT_BLE_CONNECTION_READY, 1,
+                  &ready);
+  read_native_def("ble.off", FR_SLOT_BLE_OFF, 0, &off);
+#if FR_FEATURE_NATIVE_SIGNATURES
+  TEST_ASSERT_EQUAL(FR_NATIVE_VALUE_ANY, accept->native_signature->result);
+  TEST_ASSERT_EQUAL_STRING("accept one pending BLE connection or return nil",
+                           accept->native_signature->help);
+#endif
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    accept->native_fn(&s_runtime, NULL, 0, &result));
+  TEST_ASSERT_TRUE(fr_tagged_is_nil(result));
+  TEST_ASSERT_EQUAL(FR_BLE_OP_ACCEPT, read_status().last_operation);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_advertise_start(
+                        advertising_data, sizeof(advertising_data), NULL, 0,
+                        100, true));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_queue_incoming(peer));
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_ADVERTISE_IDLE, status.advertise_state);
+  TEST_ASSERT_EQUAL_UINT8(1, status.connection_count);
+  TEST_ASSERT_EQUAL_UINT8(1, status.pending_connection_count);
+  TEST_ASSERT_EQUAL_UINT8(1, status.connection_notice_count);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    accept->native_fn(&s_runtime, NULL, 0, &connection));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_decode_handle_ref(connection, &connection_ref));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_handle_lookup(&s_runtime, connection_ref,
+                                     FR_HANDLE_KIND_BLE_CONNECTION, NULL,
+                                     &connection_index));
+  status = read_status();
+  TEST_ASSERT_EQUAL_UINT8(0, status.pending_connection_count);
+  TEST_ASSERT_EQUAL_UINT8(0, status.connection_notice_count);
+  TEST_ASSERT_EQUAL_UINT32(1, status.connection_accepts);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_advertise_start(
+                        advertising_data, sizeof(advertising_data), NULL, 0,
+                        100, true));
+  TEST_ASSERT_EQUAL(FR_ERR_CAPACITY, fr_host_ble_queue_incoming(peer));
+  TEST_ASSERT_EQUAL_UINT32(1, read_status().incoming_rejected);
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_disconnect(connection_index, 8));
+  one_arg[0] = connection;
+  TEST_ASSERT_EQUAL(FR_OK,
+                    ready->native_fn(&s_runtime, one_arg, 1, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_handle_close(&s_runtime, connection_ref));
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_advertise_start(
+                        advertising_data, sizeof(advertising_data), NULL, 0,
+                        100, true));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_queue_incoming(peer));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_disconnect(0, 22));
+  TEST_ASSERT_EQUAL_UINT8(1, read_status().connection_notice_count);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    accept->native_fn(&s_runtime, NULL, 0, &result));
+  TEST_ASSERT_TRUE(fr_tagged_is_nil(result));
+  TEST_ASSERT_EQUAL_UINT8(0, read_status().connection_notice_count);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_advertise_start(
+                        advertising_data, sizeof(advertising_data), NULL, 0,
+                        100, true));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_queue_incoming(peer));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    accept->native_fn(&s_runtime, NULL, 0, &connection));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_decode_handle_ref(connection, &connection_ref));
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_handle_reserve(&s_runtime, FR_HANDLE_KIND_UART,
+                                      &uart_ref, &uart));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_uart_open(0, 115200, &uart_index));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_handle_activate(&s_runtime, uart_ref, uart_index));
+  TEST_ASSERT_EQUAL(FR_OK, off->native_fn(&s_runtime, NULL, 0, &result));
+  TEST_ASSERT_EQUAL(FR_ERR_HANDLE,
+                    fr_handle_lookup(&s_runtime, connection_ref,
+                                     FR_HANDLE_KIND_BLE_CONNECTION, NULL,
+                                     NULL));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_handle_lookup(&s_runtime, uart_ref, FR_HANDLE_KIND_UART,
+                                     NULL, NULL));
+  TEST_ASSERT_EQUAL(FR_OK, fr_handle_close(&s_runtime, uart_ref));
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_RADIO_OFF, status.radio_state);
+  TEST_ASSERT_EQUAL_UINT8(0, status.connection_count);
+  TEST_ASSERT_EQUAL_UINT8(0, status.connection_notice_count);
+  TEST_ASSERT_EQUAL(FR_BLE_OP_OFF, status.last_operation);
+}
+
 static void test_radio_lifecycle_and_status(void) {
   static const uint8_t own_address[6] = {0xaa, 0xbb, 0xcc,
                                          0xdd, 0xee, 0xff};
@@ -402,9 +680,12 @@ static void test_radio_lifecycle_and_status(void) {
   TEST_ASSERT_EQUAL_STRING("host-fixture", fr_platform_ble_backend_name());
   TEST_ASSERT_EQUAL(FR_BLE_RADIO_OFF, status.radio_state);
   TEST_ASSERT_EQUAL(FR_BLE_SCAN_IDLE, status.scan_state);
-  TEST_ASSERT_EQUAL_UINT8(FR_BLE_ROLE_OBSERVER | FR_BLE_ROLE_BROADCASTER,
+  TEST_ASSERT_EQUAL_UINT8(FR_BLE_ROLE_OBSERVER | FR_BLE_ROLE_BROADCASTER |
+                              FR_BLE_ROLE_CENTRAL | FR_BLE_ROLE_PERIPHERAL,
                           status.roles);
   TEST_ASSERT_EQUAL_UINT8(8, status.queue_capacity);
+  TEST_ASSERT_EQUAL_UINT8(1, status.connection_capacity);
+  TEST_ASSERT_EQUAL_UINT8(4, status.connection_notice_capacity);
   TEST_ASSERT_FALSE(status.coexistence_enabled);
 
   TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
@@ -637,6 +918,39 @@ static void test_runtime_clear_shuts_down_ble_before_reuse(void) {
   TEST_ASSERT_EQUAL_UINT8(1, read_status().queue_count);
 }
 
+static void test_runtime_clear_closes_connection_handle_before_radio(void) {
+  const fr_base_def_t *connect = NULL;
+  fr_tagged_t args[2] = {0};
+  fr_tagged_t connection = fr_tagged_nil();
+  fr_handle_ref_t connection_ref = {0};
+  fr_ble_status_t status;
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  read_native_def("ble.connect", FR_SLOT_BLE_CONNECT, 2, &connect);
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  args[0] = install_peer(FR_BLE_ADDRESS_PUBLIC, 0x77);
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1000, &args[1]));
+  TEST_ASSERT_EQUAL(
+      FR_OK, connect->native_fn(&s_runtime, args, 2, &connection));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_decode_handle_ref(connection, &connection_ref));
+  TEST_ASSERT_EQUAL_UINT8(1, read_status().connection_count);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_runtime_clear_project(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_ERR_HANDLE,
+                    fr_handle_lookup(&s_runtime, connection_ref,
+                                     FR_HANDLE_KIND_BLE_CONNECTION, NULL,
+                                     NULL));
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_RADIO_OFF, status.radio_state);
+  TEST_ASSERT_EQUAL_UINT8(0, status.connection_count);
+  TEST_ASSERT_EQUAL_UINT8(0, status.pending_connection_count);
+  TEST_ASSERT_EQUAL_UINT8(0, status.connection_notice_count);
+  TEST_ASSERT_EQUAL_UINT32(0, status.connection_connects);
+  TEST_ASSERT_EQUAL_UINT32(0, status.connection_disconnects);
+  TEST_ASSERT_EQUAL(FR_BLE_OP_NONE, status.last_operation);
+}
+
 static void test_save_and_restore_drop_volatile_ble_state(void) {
   fr_ble_scan_report_t report = report_with(7, -40, 3);
   fr_ble_status_t status;
@@ -696,12 +1010,15 @@ int main(void) {
   RUN_TEST(test_scanner_words_bridge_tagged_values_and_reports);
   RUN_TEST(test_scanner_loop_reuses_eval_bytes);
   RUN_TEST(test_advertising_words_validate_and_gate_scan);
+  RUN_TEST(test_central_connection_owns_one_inspectable_handle);
+  RUN_TEST(test_peripheral_accept_drains_stale_notices_and_ble_off);
   RUN_TEST(test_radio_lifecycle_and_status);
   RUN_TEST(test_scan_parameters_and_state_gates);
   RUN_TEST(test_queue_conservation_overflow_and_cursor);
   RUN_TEST(test_failures_timeouts_reset_and_clear);
   RUN_TEST(test_target_start_failure_owns_new_empty_session);
   RUN_TEST(test_runtime_clear_shuts_down_ble_before_reuse);
+  RUN_TEST(test_runtime_clear_closes_connection_handle_before_radio);
   RUN_TEST(test_save_and_restore_drop_volatile_ble_state);
   return UNITY_END();
 }
