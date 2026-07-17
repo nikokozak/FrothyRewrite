@@ -700,6 +700,463 @@ fr_err_t fr_platform_pulse_close(uint16_t platform_index) {
 
 #endif
 
+#if FR_FEATURE_BLE
+enum {
+  FR_HOST_BLE_INTERVAL_MIN_MS = 3,
+  FR_HOST_BLE_INTERVAL_MAX_MS = 10240,
+  FR_HOST_BLE_RSSI_MIN = -127,
+  FR_HOST_BLE_RSSI_MAX = 20,
+};
+
+#ifdef FR_HOST_TEST_HELPERS
+enum {
+  FR_HOST_BLE_REPORT_FLAGS =
+      FR_BLE_REPORT_CONNECTABLE | FR_BLE_REPORT_SCANNABLE |
+      FR_BLE_REPORT_DIRECTED | FR_BLE_REPORT_SCAN_RESPONSE |
+      FR_BLE_REPORT_LEGACY,
+};
+#endif
+
+typedef struct fr_host_ble_state_t {
+  fr_ble_radio_state_t radio_state;
+  fr_ble_scan_state_t scan_state;
+  uint32_t lifecycle_generation;
+  uint32_t scan_generation;
+  bool shutdown_in_progress;
+  bool cleanup_required;
+  uint32_t late_callback_count;
+
+  uint16_t requested_interval_ms;
+  uint16_t requested_window_ms;
+  uint32_t actual_interval_us;
+  uint32_t actual_window_us;
+  int8_t minimum_rssi;
+  bool active_scan;
+  bool repeats;
+
+  fr_ble_scan_report_t queue[FR_BLE_SCAN_QUEUE_COUNT];
+  uint8_t head;
+  uint8_t count;
+  uint8_t high_water;
+  uint32_t received;
+  uint32_t accepted;
+  uint32_t filtered_rssi;
+  uint32_t dequeued;
+  uint32_t dropped;
+  uint32_t malformed;
+  bool current_valid;
+  fr_ble_scan_report_t current;
+
+  fr_ble_operation_t last_operation;
+  fr_err_t last_result;
+  int32_t last_platform_code;
+  int32_t last_protocol_reason;
+  uint32_t last_operation_ms;
+  uint32_t reset_count;
+
+#ifdef FR_HOST_TEST_HELPERS
+  fr_err_t fail_next_on;
+  fr_err_t fail_next_scan_start;
+  bool timeout_next_on;
+  bool timeout_next_scan_stop;
+  int32_t fail_next_on_raw_code;
+  int32_t fail_next_scan_start_raw_code;
+#endif
+} fr_host_ble_state_t;
+
+static fr_host_ble_state_t fr_host_ble;
+static const uint8_t fr_host_ble_own_address[6] = {0xaa, 0xbb, 0xcc,
+                                                   0xdd, 0xee, 0xff};
+
+static uint8_t fr_host_ble_roles(void) {
+  uint8_t roles = 0;
+
+#if FR_BLE_ENABLE_OBSERVER
+  roles |= FR_BLE_ROLE_OBSERVER;
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+  roles |= FR_BLE_ROLE_BROADCASTER;
+#endif
+#if FR_BLE_ENABLE_CENTRAL
+  roles |= FR_BLE_ROLE_CENTRAL;
+#endif
+#if FR_BLE_ENABLE_PERIPHERAL
+  roles |= FR_BLE_ROLE_PERIPHERAL;
+#endif
+  return roles;
+}
+
+static void fr_host_ble_record(fr_ble_operation_t operation, fr_err_t result,
+                               int32_t platform_code,
+                               int32_t protocol_reason) {
+  fr_host_ble.last_operation = operation;
+  fr_host_ble.last_result = result;
+  fr_host_ble.last_platform_code = platform_code;
+  fr_host_ble.last_protocol_reason = protocol_reason;
+  fr_host_ble.last_operation_ms = fr_host_millis;
+}
+
+static void fr_host_ble_clear_reports(void) {
+  memset(fr_host_ble.queue, 0, sizeof(fr_host_ble.queue));
+  fr_host_ble.head = 0;
+  fr_host_ble.count = 0;
+  fr_host_ble.high_water = 0;
+  fr_host_ble.received = 0;
+  fr_host_ble.accepted = 0;
+  fr_host_ble.filtered_rssi = 0;
+  fr_host_ble.dequeued = 0;
+  fr_host_ble.dropped = 0;
+  fr_host_ble.malformed = 0;
+  fr_host_ble.current_valid = false;
+  memset(&fr_host_ble.current, 0, sizeof(fr_host_ble.current));
+}
+
+static void fr_host_ble_clear_parameters(void) {
+  fr_host_ble.requested_interval_ms = 0;
+  fr_host_ble.requested_window_ms = 0;
+  fr_host_ble.actual_interval_us = 0;
+  fr_host_ble.actual_window_us = 0;
+  fr_host_ble.minimum_rssi = 0;
+  fr_host_ble.active_scan = false;
+  fr_host_ble.repeats = false;
+}
+
+#ifdef FR_HOST_TEST_HELPERS
+static bool fr_host_ble_report_valid(const fr_ble_scan_report_t *report) {
+  return report->address_type >= FR_BLE_ADDRESS_PUBLIC &&
+         report->address_type <= FR_BLE_ADDRESS_RANDOM_ID &&
+         report->rssi >= FR_HOST_BLE_RSSI_MIN &&
+         report->rssi <= FR_HOST_BLE_RSSI_MAX &&
+         report->data_length <= FR_BLE_SCAN_DATA_BYTES &&
+         (report->flags & (uint8_t)~FR_HOST_BLE_REPORT_FLAGS) == 0;
+}
+#endif
+
+const char *fr_platform_ble_backend_name(void) { return "host-fixture"; }
+
+fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
+  fr_err_t failure = FR_OK;
+  int32_t raw_code = 0;
+
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_host_ble.radio_state == FR_BLE_RADIO_READY) {
+    fr_host_ble_record(FR_BLE_OP_ON, FR_OK, 0, 0);
+    return FR_OK;
+  }
+  if (fr_host_ble.radio_state == FR_BLE_RADIO_STARTING ||
+      fr_host_ble.radio_state == FR_BLE_RADIO_STOPPING) {
+    fr_host_ble_record(FR_BLE_OP_ON, FR_ERR_BLE_BUSY, 0, 0);
+    return FR_ERR_BLE_BUSY;
+  }
+
+  fr_host_ble.lifecycle_generation += 1u;
+  fr_host_ble.radio_state = FR_BLE_RADIO_STARTING;
+  fr_host_ble.shutdown_in_progress = false;
+  fr_host_ble.cleanup_required = false;
+
+#ifdef FR_HOST_TEST_HELPERS
+  failure = fr_host_ble.fail_next_on;
+  fr_host_ble.fail_next_on = FR_OK;
+  raw_code = fr_host_ble.fail_next_on_raw_code;
+  fr_host_ble.fail_next_on_raw_code = 0;
+  if (fr_host_ble.timeout_next_on) {
+    fr_host_ble.timeout_next_on = false;
+    fr_host_ble.radio_state = FR_BLE_RADIO_STOPPING;
+    fr_host_ble.shutdown_in_progress = true;
+    fr_host_ble.cleanup_required = true;
+    fr_host_ble_record(FR_BLE_OP_ON, FR_ERR_BLE_TIMEOUT, raw_code, 0);
+    return FR_ERR_BLE_TIMEOUT;
+  }
+#endif
+  if (failure != FR_OK) {
+    fr_host_ble.radio_state = FR_BLE_RADIO_FAILED;
+    fr_host_ble_record(FR_BLE_OP_ON, failure, raw_code, 0);
+    return failure;
+  }
+
+  fr_host_ble.radio_state = FR_BLE_RADIO_READY;
+  fr_host_ble_record(FR_BLE_OP_ON, FR_OK, 0, 0);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_project_clear(void) {
+  if (fr_host_ble.scan_state != FR_BLE_SCAN_IDLE || fr_host_ble.count > 0 ||
+      fr_host_ble.current_valid) {
+    fr_host_ble.scan_generation += 1u;
+  }
+  fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
+  fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
+  fr_host_ble.shutdown_in_progress = false;
+  fr_host_ble.cleanup_required = false;
+  fr_host_ble_clear_reports();
+  fr_host_ble_clear_parameters();
+  fr_host_ble.last_operation = FR_BLE_OP_NONE;
+  fr_host_ble.last_result = FR_OK;
+  fr_host_ble.last_platform_code = 0;
+  fr_host_ble.last_protocol_reason = 0;
+  fr_host_ble.last_operation_ms = fr_host_millis;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status) {
+  if (out_status == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  *out_status = (fr_ble_status_t){
+      .radio_state = fr_host_ble.radio_state,
+      .scan_state = fr_host_ble.scan_state,
+      .roles = fr_host_ble_roles(),
+      .coexistence_enabled = false,
+      .lifecycle_generation = fr_host_ble.lifecycle_generation,
+      .scan_generation = fr_host_ble.scan_generation,
+      .shutdown_in_progress = fr_host_ble.shutdown_in_progress,
+      .cleanup_required = fr_host_ble.cleanup_required,
+      .late_callback_count = fr_host_ble.late_callback_count,
+      .requested_interval_ms = fr_host_ble.requested_interval_ms,
+      .requested_window_ms = fr_host_ble.requested_window_ms,
+      .actual_interval_us = fr_host_ble.actual_interval_us,
+      .actual_window_us = fr_host_ble.actual_window_us,
+      .minimum_rssi = fr_host_ble.minimum_rssi,
+      .active_scan = fr_host_ble.active_scan,
+      .repeats = fr_host_ble.repeats,
+      .queue_count = fr_host_ble.count,
+      .queue_capacity = FR_BLE_SCAN_QUEUE_COUNT,
+      .queue_high_water = fr_host_ble.high_water,
+      .received = fr_host_ble.received,
+      .accepted = fr_host_ble.accepted,
+      .filtered_rssi = fr_host_ble.filtered_rssi,
+      .dequeued = fr_host_ble.dequeued,
+      .dropped = fr_host_ble.dropped,
+      .malformed = fr_host_ble.malformed,
+      .current_valid = fr_host_ble.current_valid,
+      .current_rssi = fr_host_ble.current.rssi,
+      .current_flags = fr_host_ble.current.flags,
+      .current_data_length = fr_host_ble.current.data_length,
+      .last_operation = fr_host_ble.last_operation,
+      .last_result = fr_host_ble.last_result,
+      .last_platform_code = fr_host_ble.last_platform_code,
+      .last_protocol_reason = fr_host_ble.last_protocol_reason,
+      .last_operation_ms = fr_host_ble.last_operation_ms,
+      .reset_count = fr_host_ble.reset_count,
+  };
+  if (fr_host_ble.radio_state == FR_BLE_RADIO_READY) {
+    out_status->own_address_type = FR_BLE_ADDRESS_PUBLIC;
+    memcpy(out_status->own_address, fr_host_ble_own_address,
+           sizeof(out_status->own_address));
+    out_status->own_address_valid = true;
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
+                                    bool active, bool repeats,
+                                    int8_t minimum_rssi) {
+  fr_err_t failure = FR_OK;
+  int32_t raw_code = 0;
+
+  if (interval_ms < FR_HOST_BLE_INTERVAL_MIN_MS ||
+      interval_ms > FR_HOST_BLE_INTERVAL_MAX_MS ||
+      window_ms < FR_HOST_BLE_INTERVAL_MIN_MS || window_ms > interval_ms ||
+      minimum_rssi < FR_HOST_BLE_RSSI_MIN ||
+      minimum_rssi > FR_HOST_BLE_RSSI_MAX) {
+    return FR_ERR_RANGE;
+  }
+#if !FR_BLE_ENABLE_OBSERVER
+  fr_host_ble_record(FR_BLE_OP_SCAN_START, FR_ERR_UNSUPPORTED, 0, 0);
+  return FR_ERR_UNSUPPORTED;
+#endif
+  if (fr_host_ble.radio_state == FR_BLE_RADIO_STARTING ||
+      fr_host_ble.radio_state == FR_BLE_RADIO_STOPPING) {
+    fr_host_ble_record(FR_BLE_OP_SCAN_START, FR_ERR_BLE_BUSY, 0, 0);
+    return FR_ERR_BLE_BUSY;
+  }
+  if (fr_host_ble.radio_state != FR_BLE_RADIO_READY) {
+    fr_host_ble_record(FR_BLE_OP_SCAN_START, FR_ERR_BLE_NOT_READY, 0, 0);
+    return FR_ERR_BLE_NOT_READY;
+  }
+  if (fr_host_ble.scan_state != FR_BLE_SCAN_IDLE) {
+    fr_host_ble_record(FR_BLE_OP_SCAN_START, FR_ERR_BLE_BUSY, 0, 0);
+    return FR_ERR_BLE_BUSY;
+  }
+
+  fr_host_ble_clear_reports();
+  fr_host_ble.requested_interval_ms = interval_ms;
+  fr_host_ble.requested_window_ms = window_ms;
+  fr_host_ble.actual_interval_us = (uint32_t)interval_ms * 1000u;
+  fr_host_ble.actual_window_us = (uint32_t)window_ms * 1000u;
+  fr_host_ble.minimum_rssi = minimum_rssi;
+  fr_host_ble.active_scan = active;
+  fr_host_ble.repeats = repeats;
+  fr_host_ble.scan_generation += 1u;
+
+#ifdef FR_HOST_TEST_HELPERS
+  failure = fr_host_ble.fail_next_scan_start;
+  fr_host_ble.fail_next_scan_start = FR_OK;
+  raw_code = fr_host_ble.fail_next_scan_start_raw_code;
+  fr_host_ble.fail_next_scan_start_raw_code = 0;
+#endif
+  if (failure != FR_OK) {
+    fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
+    fr_host_ble_record(FR_BLE_OP_SCAN_START, failure, raw_code, 0);
+    return failure;
+  }
+
+  fr_host_ble.scan_state = FR_BLE_SCAN_ACTIVE;
+  fr_host_ble_record(FR_BLE_OP_SCAN_START, FR_OK, 0, 0);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_scan_stop(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+  fr_host_ble.current_valid = false;
+  memset(&fr_host_ble.current, 0, sizeof(fr_host_ble.current));
+  if (fr_host_ble.scan_state == FR_BLE_SCAN_IDLE) {
+    fr_host_ble_record(FR_BLE_OP_SCAN_STOP, FR_OK, 0, 0);
+    return FR_OK;
+  }
+#ifdef FR_HOST_TEST_HELPERS
+  if (fr_host_ble.timeout_next_scan_stop) {
+    fr_host_ble.timeout_next_scan_stop = false;
+    fr_host_ble.scan_state = FR_BLE_SCAN_STOPPING;
+    fr_host_ble_record(FR_BLE_OP_SCAN_STOP, FR_ERR_BLE_TIMEOUT, 0, 0);
+    return FR_ERR_BLE_TIMEOUT;
+  }
+#endif
+  fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
+  fr_host_ble_record(FR_BLE_OP_SCAN_STOP, FR_OK, 0, 0);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_scan_next(bool *out_has_report) {
+  if (out_has_report == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_host_ble.count == 0) {
+    fr_host_ble.current_valid = false;
+    memset(&fr_host_ble.current, 0, sizeof(fr_host_ble.current));
+    *out_has_report = false;
+    return FR_OK;
+  }
+
+  fr_host_ble.current = fr_host_ble.queue[fr_host_ble.head];
+  fr_host_ble.current_valid = true;
+  fr_host_ble.head =
+      (uint8_t)((fr_host_ble.head + 1u) % FR_BLE_SCAN_QUEUE_COUNT);
+  fr_host_ble.count -= 1u;
+  fr_host_ble.dequeued += 1u;
+  *out_has_report = true;
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report) {
+  if (out_report == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (!fr_host_ble.current_valid) {
+    return FR_ERR_NOT_FOUND;
+  }
+  *out_report = fr_host_ble.current;
+  return FR_OK;
+}
+
+#ifdef FR_HOST_TEST_HELPERS
+void fr_host_ble_reset(void) {
+  memset(&fr_host_ble, 0, sizeof(fr_host_ble));
+  fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
+  fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
+  fr_host_ble.last_result = FR_OK;
+}
+
+fr_err_t fr_host_ble_push_scan_report(const fr_ble_scan_report_t *report) {
+  uint8_t tail = 0;
+
+  if (report == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_host_ble.scan_state != FR_BLE_SCAN_ACTIVE) {
+    fr_host_ble.late_callback_count += 1u;
+    return FR_OK;
+  }
+
+  fr_host_ble.received += 1u;
+  if (!fr_host_ble_report_valid(report)) {
+    fr_host_ble.malformed += 1u;
+    return FR_OK;
+  }
+  if (report->rssi < fr_host_ble.minimum_rssi) {
+    fr_host_ble.filtered_rssi += 1u;
+    return FR_OK;
+  }
+  if (fr_host_ble.count == FR_BLE_SCAN_QUEUE_COUNT) {
+    fr_host_ble.head =
+        (uint8_t)((fr_host_ble.head + 1u) % FR_BLE_SCAN_QUEUE_COUNT);
+    fr_host_ble.count -= 1u;
+    fr_host_ble.dropped += 1u;
+  }
+  tail = (uint8_t)((fr_host_ble.head + fr_host_ble.count) %
+                   FR_BLE_SCAN_QUEUE_COUNT);
+  fr_host_ble.queue[tail] = *report;
+  fr_host_ble.count += 1u;
+  fr_host_ble.accepted += 1u;
+  if (fr_host_ble.count > fr_host_ble.high_water) {
+    fr_host_ble.high_water = fr_host_ble.count;
+  }
+  return FR_OK;
+}
+
+void fr_host_ble_fail_next_on(fr_err_t err, int32_t raw_code) {
+  fr_host_ble.fail_next_on = err;
+  fr_host_ble.fail_next_on_raw_code = raw_code;
+  fr_host_ble.timeout_next_on = false;
+}
+
+void fr_host_ble_fail_next_scan_start(fr_err_t err, int32_t raw_code) {
+  fr_host_ble.fail_next_scan_start = err;
+  fr_host_ble.fail_next_scan_start_raw_code = raw_code;
+}
+
+void fr_host_ble_timeout_next_on(void) {
+  fr_host_ble.fail_next_on = FR_OK;
+  fr_host_ble.fail_next_on_raw_code = 0;
+  fr_host_ble.timeout_next_on = true;
+}
+
+void fr_host_ble_timeout_next_scan_stop(void) {
+  fr_host_ble.timeout_next_scan_stop = true;
+}
+
+void fr_host_ble_post_reset(int32_t raw_reason) {
+  if (fr_host_ble.radio_state == FR_BLE_RADIO_OFF) {
+    fr_host_ble.late_callback_count += 1u;
+    return;
+  }
+
+  fr_host_ble.reset_count += 1u;
+  fr_host_ble.last_protocol_reason = raw_reason;
+  fr_host_ble.dropped += fr_host_ble.count;
+  fr_host_ble.head = 0;
+  fr_host_ble.count = 0;
+  fr_host_ble.current_valid = false;
+  memset(&fr_host_ble.current, 0, sizeof(fr_host_ble.current));
+  fr_host_ble.scan_state = FR_BLE_SCAN_IDLE;
+  fr_host_ble.scan_generation += 1u;
+  if (fr_host_ble.shutdown_in_progress) {
+    fr_host_ble.radio_state = FR_BLE_RADIO_OFF;
+    fr_host_ble.shutdown_in_progress = false;
+    fr_host_ble.cleanup_required = false;
+  } else {
+    fr_host_ble.radio_state = FR_BLE_RADIO_FAILED;
+    fr_host_ble.cleanup_required = true;
+  }
+}
+#endif
+#endif
+
 #if FR_FEATURE_UART
 fr_err_t fr_platform_uart_open(uint16_t port, uint32_t baud,
                                uint16_t *out_platform_index) {

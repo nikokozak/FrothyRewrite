@@ -371,6 +371,8 @@ typedef struct fr_ble_status_t {
   fr_ble_operation_t last_operation;
   fr_err_t last_result;
   int32_t last_platform_code;
+  /* A spontaneous reset may update this independently of the last foreground
+   * operation; reset_count identifies that asynchronous case. */
   int32_t last_protocol_reason;
   uint32_t last_operation_ms;
   uint32_t reset_count;
@@ -387,20 +389,30 @@ fr_err_t fr_platform_ble_project_clear(void);
 /* Return one internally consistent copy of lifecycle and queue state. */
 fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status);
 /* Accept interval 3..10240 ms, window 3..interval, and RSSI -127..20. An
- * active or stopping scan returns FR_ERR_BLE_BUSY. A successful start clears
- * the prior queue, cursor, and session counters. A full queue drops its oldest
- * report before appending the newest. */
+ * active or stopping scan returns FR_ERR_BLE_BUSY. A start that passes those
+ * checks clears the prior queue, cursor, and session counters before the
+ * target call; a target failure leaves that new empty session visible. A full
+ * queue drops its oldest report before appending the newest. */
 fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
                                     bool active, bool repeats,
                                     int8_t minimum_rssi);
-/* Stop is idempotent while idle. A successful stop retains queued reports but
- * clears the current cursor. */
+/* Every stop attempt clears the current cursor. Stop is idempotent while idle,
+ * and queued reports remain available even when the bounded wait fails. */
 fr_err_t fr_platform_ble_scan_stop(fr_runtime_t *runtime);
 /* next moves the target-owned cursor; an empty queue clears it. current may
  * be copied repeatedly until next, stop, a new scan, or project clear changes
  * it. current returns FR_ERR_NOT_FOUND while that cursor is empty. */
 fr_err_t fr_platform_ble_scan_next(bool *out_has_report);
 fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report);
+#ifdef FR_HOST_TEST_HELPERS
+void fr_host_ble_reset(void);
+fr_err_t fr_host_ble_push_scan_report(const fr_ble_scan_report_t *report);
+void fr_host_ble_fail_next_on(fr_err_t err, int32_t raw_code);
+void fr_host_ble_fail_next_scan_start(fr_err_t err, int32_t raw_code);
+void fr_host_ble_timeout_next_on(void);
+void fr_host_ble_timeout_next_scan_stop(void);
+void fr_host_ble_post_reset(int32_t raw_reason);
+#endif
 #endif
 
 #if FR_FEATURE_PERSISTENCE
