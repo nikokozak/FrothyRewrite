@@ -4405,6 +4405,37 @@ enum {
 };
 #endif
 
+#if FR_BLE_ENABLE_GATT_SERVER
+enum {
+  FR_TARGET_TAGGED_BLE_GATT_SERVICE =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_KIND_SERVICE),
+  FR_TARGET_TAGGED_BLE_GATT_CHARACTERISTIC =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_KIND_CHARACTERISTIC),
+  FR_TARGET_TAGGED_BLE_GATT_PRIMARY =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_SERVICE_PRIMARY),
+  FR_TARGET_TAGGED_BLE_GATT_SECONDARY =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_SERVICE_SECONDARY),
+  FR_TARGET_TAGGED_BLE_GATT_READ =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_READ),
+  FR_TARGET_TAGGED_BLE_GATT_WRITE =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_WRITE),
+  FR_TARGET_TAGGED_BLE_GATT_WRITE_COMMAND =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_WRITE_COMMAND),
+  FR_TARGET_TAGGED_BLE_GATT_NOTIFY =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_NOTIFY),
+  FR_TARGET_TAGGED_BLE_GATT_INDICATE =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_INDICATE),
+  FR_TARGET_TAGGED_BLE_GATT_READ_ENCRYPTED =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_READ_ENCRYPTED),
+  FR_TARGET_TAGGED_BLE_GATT_WRITE_ENCRYPTED =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_WRITE_ENCRYPTED),
+  FR_TARGET_TAGGED_BLE_GATT_READ_AUTHENTICATED =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_READ_AUTHENTICATED),
+  FR_TARGET_TAGGED_BLE_GATT_WRITE_AUTHENTICATED =
+      FR_TAGGED_INT_LITERAL(FR_BLE_GATT_CHR_WRITE_AUTHENTICATED),
+};
+#endif
+
 const fr_base_def_t fr_target_base_defs[] = {
     {
         .slot_id = FR_SLOT_MS,
@@ -5850,6 +5881,112 @@ const fr_base_def_t fr_target_base_defs[] = {
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_ble_connection_mtu_signature,
 #endif
+    },
+#endif
+#if FR_BLE_ENABLE_GATT_SERVER
+    {
+        .slot_id = FR_SLOT_BLE_GATT_SERVICE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.service",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_SERVICE,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_CHARACTERISTIC,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.characteristic",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_CHARACTERISTIC,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_PRIMARY,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.primary",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_PRIMARY,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_SECONDARY,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.secondary",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_SECONDARY,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_READ,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.read",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_READ,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.write",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_WRITE,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE_COMMAND,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.write-command",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_WRITE_COMMAND,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_NOTIFY,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.notify",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_NOTIFY,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_INDICATE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.indicate",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_INDICATE,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_READ_ENCRYPTED,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.read-encrypted",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_READ_ENCRYPTED,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE_ENCRYPTED,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.write-encrypted",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_WRITE_ENCRYPTED,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_READ_AUTHENTICATED,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.read-authenticated",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_READ_AUTHENTICATED,
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE_AUTHENTICATED,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "$ble.gatt.write-authenticated",
+#endif
+        .kind = FR_BASE_DEF_LITERAL,
+        .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_WRITE_AUTHENTICATED,
     },
 #endif
 #endif
