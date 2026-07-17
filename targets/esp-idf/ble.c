@@ -83,6 +83,7 @@ typedef struct fr_esp_ble_state_t {
   fr_ble_radio_state_t radio_state;
   uint32_t lifecycle_generation;
   uint32_t completion_generation;
+  bool port_initialized;
   bool host_task_running;
   bool shutdown_in_progress;
   bool cleanup_required;
@@ -195,6 +196,7 @@ static void fr_esp_ble_abandon_scan_locked(void) {
 static void fr_esp_ble_mark_off_locked(void) {
   fr_esp_ble.radio_state = FR_BLE_RADIO_OFF;
   fr_esp_ble.completion_generation = 0;
+  fr_esp_ble.port_initialized = false;
   fr_esp_ble.host_task_running = false;
   fr_esp_ble.shutdown_in_progress = false;
   fr_esp_ble.cleanup_required = false;
@@ -422,13 +424,16 @@ static void fr_esp_ble_on_reset(int reason) {
 #endif
   if (!fr_esp_ble.shutdown_in_progress) {
     fr_esp_ble.radio_state = FR_BLE_RADIO_FAILED;
-    fr_esp_ble.cleanup_required = fr_esp_ble.host_task_running;
+    fr_esp_ble.cleanup_required = fr_esp_ble.port_initialized;
   }
   portEXIT_CRITICAL(&fr_esp_ble_lock);
 }
 
 static void fr_esp_ble_host_task(void *argument) {
   (void)argument;
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  fr_esp_ble.host_task_running = true;
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
   nimble_port_run();
   nimble_port_freertos_deinit();
 }
@@ -537,7 +542,7 @@ static fr_err_t fr_esp_ble_begin_cleanup(void) {
     portEXIT_CRITICAL(&fr_esp_ble_lock);
     return FR_OK;
   }
-  if (!fr_esp_ble.host_task_running && !fr_esp_ble.cleanup_required) {
+  if (!fr_esp_ble.port_initialized && !fr_esp_ble.cleanup_required) {
     fr_esp_ble_mark_off_locked();
     portEXIT_CRITICAL(&fr_esp_ble_lock);
     return FR_OK;
@@ -771,7 +776,7 @@ fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
   ble_hs_cfg.sync_cb = fr_esp_ble_on_sync;
 
   portENTER_CRITICAL(&fr_esp_ble_lock);
-  fr_esp_ble.host_task_running = true;
+  fr_esp_ble.port_initialized = true;
   portEXIT_CRITICAL(&fr_esp_ble_lock);
   nimble_port_freertos_init(fr_esp_ble_host_task);
 
