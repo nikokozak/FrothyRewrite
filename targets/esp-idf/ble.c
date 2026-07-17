@@ -14,7 +14,6 @@
 #include "host/util/util.h"
 #include "nimble/nimble_npl.h"
 #include "nimble/nimble_port.h"
-#include "nimble/nimble_port_freertos.h"
 #include "sdkconfig.h"
 
 #include <stdint.h>
@@ -84,6 +83,7 @@ typedef struct fr_esp_ble_state_t {
   uint32_t lifecycle_generation;
   uint32_t completion_generation;
   bool port_initialized;
+  bool host_task_created;
   bool host_task_running;
   bool shutdown_in_progress;
   bool cleanup_required;
@@ -197,6 +197,7 @@ static void fr_esp_ble_mark_off_locked(void) {
   fr_esp_ble.radio_state = FR_BLE_RADIO_OFF;
   fr_esp_ble.completion_generation = 0;
   fr_esp_ble.port_initialized = false;
+  fr_esp_ble.host_task_created = false;
   fr_esp_ble.host_task_running = false;
   fr_esp_ble.shutdown_in_progress = false;
   fr_esp_ble.cleanup_required = false;
@@ -435,7 +436,11 @@ static void fr_esp_ble_host_task(void *argument) {
   fr_esp_ble.host_task_running = true;
   portEXIT_CRITICAL(&fr_esp_ble_lock);
   nimble_port_run();
-  nimble_port_freertos_deinit();
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  fr_esp_ble.host_task_running = false;
+  fr_esp_ble.host_task_created = false;
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  vTaskDelete(NULL);
 }
 
 static void fr_esp_ble_cleanup_task(void *argument) {
@@ -445,7 +450,7 @@ static void fr_esp_ble_cleanup_task(void *argument) {
   esp_err_t deinit_code = ESP_OK;
 
   portENTER_CRITICAL(&fr_esp_ble_lock);
-  stop_host = fr_esp_ble.host_task_running;
+  stop_host = fr_esp_ble.host_task_created;
   portEXIT_CRITICAL(&fr_esp_ble_lock);
 
   if (stop_host) {
@@ -466,6 +471,7 @@ static void fr_esp_ble_cleanup_task(void *argument) {
     fr_esp_ble_mark_off_locked();
   } else {
     if (stop_code == 0) {
+      fr_esp_ble.host_task_created = false;
       fr_esp_ble.host_task_running = false;
     }
     fr_esp_ble.radio_state = FR_BLE_RADIO_FAILED;
@@ -530,7 +536,7 @@ static void fr_esp_ble_cleanup_when_host_ready(struct ble_npl_event *event) {
 
 static fr_err_t fr_esp_ble_begin_cleanup(void) {
   uint32_t generation = 0;
-  bool host_task_running = false;
+  bool host_task_created = false;
 
   portENTER_CRITICAL(&fr_esp_ble_lock);
   if (fr_esp_ble.radio_state == FR_BLE_RADIO_OFF) {
@@ -549,7 +555,7 @@ static fr_err_t fr_esp_ble_begin_cleanup(void) {
   }
 
   generation = fr_esp_ble.lifecycle_generation;
-  host_task_running = fr_esp_ble.host_task_running;
+  host_task_created = fr_esp_ble.host_task_created;
   fr_esp_ble.radio_state = FR_BLE_RADIO_STOPPING;
   fr_esp_ble.shutdown_in_progress = true;
   fr_esp_ble.cleanup_required = true;
@@ -559,7 +565,7 @@ static fr_err_t fr_esp_ble_begin_cleanup(void) {
 #endif
   portEXIT_CRITICAL(&fr_esp_ble_lock);
 
-  if (!host_task_running) {
+  if (!host_task_created) {
     return fr_esp_ble_start_cleanup_task(generation);
   }
   ble_npl_eventq_put(nimble_port_get_dflt_eventq(),
@@ -700,6 +706,7 @@ const char *fr_platform_ble_backend_name(void) { return "nimble"; }
  * lock below synchronizes those calls with NimBLE callbacks and cleanup. */
 fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
   uint32_t generation = 0;
+  BaseType_t task_created = pdFAIL;
   esp_err_t init_code = ESP_OK;
 
   if (runtime == NULL) {
@@ -778,7 +785,28 @@ fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
   portENTER_CRITICAL(&fr_esp_ble_lock);
   fr_esp_ble.port_initialized = true;
   portEXIT_CRITICAL(&fr_esp_ble_lock);
-  nimble_port_freertos_init(fr_esp_ble_host_task);
+
+  /* ESP-IDF's NimBLE task wrapper discards this creation result. Keep it at
+   * the target edge so cleanup can distinguish a failed create from a task
+   * that was created successfully but has not entered yet. */
+  task_created = xTaskCreatePinnedToCore(
+      fr_esp_ble_host_task, "nimble_host", NIMBLE_HS_STACK_SIZE, NULL,
+      configMAX_PRIORITIES - 4, NULL, NIMBLE_CORE);
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (task_created == pdPASS) {
+    fr_esp_ble.host_task_created = true;
+  } else if (generation == fr_esp_ble.lifecycle_generation &&
+             fr_esp_ble.radio_state == FR_BLE_RADIO_STARTING) {
+    fr_esp_ble.radio_state = FR_BLE_RADIO_FAILED;
+    fr_esp_ble.cleanup_required = true;
+    fr_esp_ble_record_locked(FR_BLE_OP_ON, FR_ERR_CAPACITY,
+                             (int32_t)task_created);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  if (task_created != pdPASS) {
+    (void)fr_esp_ble_begin_cleanup();
+    return FR_ERR_CAPACITY;
+  }
 
   return fr_esp_ble_wait_start(runtime, generation);
 }
