@@ -147,6 +147,8 @@ static void test_declarative_gatt_table_is_atomic_and_inspectable(void) {
       "set gattrows[0] to svcrow",
       "set gattrows[1] to levelrow",
       "set gattrows[2] to customrow",
+      "payload is \"ready\"",
+      "oversized is \"too-long!\"",
   };
   static const uint8_t custom_uuid[] = {
       0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78,
@@ -154,15 +156,25 @@ static void test_declarative_gatt_table_is_atomic_and_inspectable(void) {
   };
   const fr_base_def_t *install = NULL;
   const fr_base_def_t *info = NULL;
+  const fr_base_def_t *set = NULL;
+  const fr_base_def_t *get = NULL;
   fr_ble_gatt_status_t status = {0};
   fr_tagged_t rows = fr_tagged_nil();
+  fr_tagged_t payload = fr_tagged_nil();
+  fr_tagged_t oversized = fr_tagged_nil();
+  fr_tagged_t args[2] = {0};
   fr_tagged_t result = fr_tagged_nil();
+  fr_bytes_ref_t bytes_ref = {0};
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
   fr_slot_id_t slot_id = 0;
   char out[64];
 
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
   read_native_def("ble.gatt.install", FR_SLOT_BLE_GATT_INSTALL, 1, &install);
   read_native_def("ble.gatt.info", FR_SLOT_BLE_GATT_INFO, 0, &info);
+  read_native_def("ble.gatt.set", FR_SLOT_BLE_GATT_SET, 2, &set);
+  read_native_def("ble.gatt.get", FR_SLOT_BLE_GATT_GET, 1, &get);
   for (size_t i = 0; i < sizeof(source) / sizeof(source[0]); i++) {
     TEST_ASSERT_EQUAL_MESSAGE(
         FR_OK, fr_repl_eval_line(&s_runtime, source[i], out, sizeof(out)),
@@ -209,6 +221,39 @@ static void test_declarative_gatt_table_is_atomic_and_inspectable(void) {
                            status.table.characteristics[1].value_offset);
   TEST_ASSERT_EQUAL_UINT16(8,
                            status.table.characteristics[1].maximum_length);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "payload", &slot_id));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, slot_id, &payload));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "oversized", &slot_id));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, slot_id, &oversized));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(2, &args[0]));
+  args[1] = payload;
+  TEST_ASSERT_EQUAL(FR_OK,
+                    set->native_fn(&s_runtime, args, 2, &result));
+  TEST_ASSERT_TRUE(fr_tagged_is_nil(result));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    get->native_fn(&s_runtime, args, 1, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_bytes_ref(result, &bytes_ref));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_bytes_view(&s_runtime, bytes_ref, &bytes, &length));
+  TEST_ASSERT_EQUAL_UINT16(5, length);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY("ready", bytes, length);
+
+  args[1] = oversized;
+  TEST_ASSERT_EQUAL(FR_ERR_CAPACITY,
+                    set->native_fn(&s_runtime, args, 2, &result));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    get->native_fn(&s_runtime, args, 1, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_bytes_ref(result, &bytes_ref));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_bytes_view(&s_runtime, bytes_ref, &bytes, &length));
+  TEST_ASSERT_EQUAL_UINT16(5, length);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY("ready", bytes, length);
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_gatt_status(&status));
+  TEST_ASSERT_EQUAL_UINT16(5,
+                           status.table.characteristics[1].value_length);
 
   TEST_ASSERT_EQUAL(FR_OK,
                     info->native_fn(&s_runtime, NULL, 0, &result));
