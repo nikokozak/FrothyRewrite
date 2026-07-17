@@ -45,6 +45,8 @@ enum {
   FR_ESP_BLE_CLEANUP_PRIORITY = tskIDLE_PRIORITY + 2,
   FR_ESP_BLE_SCAN_INTERVAL_MIN_MS = 3,
   FR_ESP_BLE_SCAN_INTERVAL_MAX_MS = 10240,
+  FR_ESP_BLE_ADVERTISE_INTERVAL_MIN_MS = 20,
+  FR_ESP_BLE_ADVERTISE_INTERVAL_MAX_MS = 10240,
   FR_ESP_BLE_RSSI_MIN = -127,
   FR_ESP_BLE_RSSI_MAX = 20,
 };
@@ -78,6 +80,23 @@ typedef struct fr_esp_ble_scan_t {
 } fr_esp_ble_scan_t;
 #endif
 
+#if FR_BLE_ENABLE_BROADCASTER
+typedef struct fr_esp_ble_advertise_t {
+  fr_ble_advertise_state_t state;
+  uint32_t generation;
+
+  uint16_t requested_interval_ms;
+  uint32_t actual_interval_us;
+  bool connectable;
+  uint8_t advertising_data_length;
+  uint8_t advertising_data[FR_BLE_ADVERTISEMENT_DATA_BYTES];
+  uint8_t scan_response_data_length;
+  uint8_t scan_response_data[FR_BLE_ADVERTISEMENT_DATA_BYTES];
+  uint32_t starts;
+  uint32_t stops;
+} fr_esp_ble_advertise_t;
+#endif
+
 typedef struct fr_esp_ble_state_t {
   fr_ble_radio_state_t radio_state;
   uint32_t lifecycle_generation;
@@ -96,6 +115,9 @@ typedef struct fr_esp_ble_state_t {
 
 #if FR_BLE_ENABLE_OBSERVER
   fr_esp_ble_scan_t scan;
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+  fr_esp_ble_advertise_t advertise;
 #endif
 
   fr_ble_operation_t last_operation;
@@ -193,6 +215,34 @@ static void fr_esp_ble_abandon_scan_locked(void) {
 }
 #endif
 
+#if FR_BLE_ENABLE_BROADCASTER
+static void fr_esp_ble_clear_advertise_locked(void) {
+  fr_esp_ble.advertise.requested_interval_ms = 0;
+  fr_esp_ble.advertise.actual_interval_us = 0;
+  fr_esp_ble.advertise.connectable = false;
+  fr_esp_ble.advertise.advertising_data_length = 0;
+  memset(fr_esp_ble.advertise.advertising_data, 0,
+         sizeof(fr_esp_ble.advertise.advertising_data));
+  fr_esp_ble.advertise.scan_response_data_length = 0;
+  memset(fr_esp_ble.advertise.scan_response_data, 0,
+         sizeof(fr_esp_ble.advertise.scan_response_data));
+}
+
+static void fr_esp_ble_abandon_advertise_locked(void) {
+  if (fr_esp_ble.advertise.state != FR_BLE_ADVERTISE_IDLE) {
+    fr_esp_ble.advertise.generation += 1u;
+  }
+  fr_esp_ble.advertise.state = FR_BLE_ADVERTISE_IDLE;
+}
+
+static void fr_esp_ble_clear_advertise_all_locked(void) {
+  fr_esp_ble_abandon_advertise_locked();
+  fr_esp_ble_clear_advertise_locked();
+  fr_esp_ble.advertise.starts = 0;
+  fr_esp_ble.advertise.stops = 0;
+}
+#endif
+
 static void fr_esp_ble_mark_off_locked(void) {
   fr_esp_ble.radio_state = FR_BLE_RADIO_OFF;
   fr_esp_ble.completion_generation = 0;
@@ -226,6 +276,14 @@ static bool fr_esp_ble_address_type(uint8_t raw_type,
   }
 }
 
+#if FR_BLE_ENABLE_OBSERVER || FR_BLE_ENABLE_BROADCASTER
+static uint16_t fr_esp_ble_gap_units(uint16_t milliseconds) {
+  /* Legacy GAP interval units are 625 us. Adding half a unit rounds to the
+   * nearest supported value; an exact half cannot occur for integer ms. */
+  return (uint16_t)(((uint32_t)milliseconds * 1000u + 312u) / 625u);
+}
+#endif
+
 #if FR_BLE_ENABLE_OBSERVER
 static bool fr_esp_ble_report_flags(uint8_t event_type, uint8_t *out_flags) {
   uint8_t flags = FR_BLE_REPORT_LEGACY;
@@ -253,12 +311,6 @@ static bool fr_esp_ble_report_flags(uint8_t event_type, uint8_t *out_flags) {
   }
   *out_flags = flags;
   return true;
-}
-
-static uint16_t fr_esp_ble_scan_units(uint16_t milliseconds) {
-  /* Legacy scan units are 625 us. Adding half a unit rounds to the nearest
-   * supported value; an exact half cannot occur for integer milliseconds. */
-  return (uint16_t)(((uint32_t)milliseconds * 1000u + 312u) / 625u);
 }
 
 static bool fr_esp_ble_scan_callback_current_locked(uint32_t generation) {
@@ -369,6 +421,32 @@ static int fr_esp_ble_scan_event(struct ble_gap_event *event, void *argument) {
 }
 #endif
 
+#if FR_BLE_ENABLE_BROADCASTER
+static int fr_esp_ble_advertise_event(struct ble_gap_event *event,
+                                      void *argument) {
+  uint32_t generation = (uint32_t)(uintptr_t)argument;
+
+  if (event == NULL ||
+      (event->type != BLE_GAP_EVENT_ADV_COMPLETE &&
+       event->type != BLE_GAP_EVENT_CONNECT)) {
+    return 0;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (generation != fr_esp_ble.advertise.generation ||
+      fr_esp_ble.advertise.state == FR_BLE_ADVERTISE_IDLE) {
+    fr_esp_ble.late_callback_count += 1u;
+  } else {
+    fr_esp_ble.advertise.state = FR_BLE_ADVERTISE_IDLE;
+    fr_esp_ble.last_protocol_reason =
+        event->type == BLE_GAP_EVENT_CONNECT ? event->connect.status
+                                             : event->adv_complete.reason;
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return 0;
+}
+#endif
+
 static void fr_esp_ble_on_sync(void) {
   fr_ble_address_type_t address_type = FR_BLE_ADDRESS_PUBLIC;
   uint8_t raw_address[6] = {0};
@@ -422,6 +500,9 @@ static void fr_esp_ble_on_reset(int reason) {
   fr_esp_ble.own_address_valid = false;
 #if FR_BLE_ENABLE_OBSERVER
   fr_esp_ble_abandon_scan_locked();
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+  fr_esp_ble_abandon_advertise_locked();
 #endif
   if (!fr_esp_ble.shutdown_in_progress) {
     fr_esp_ble.radio_state = FR_BLE_RADIO_FAILED;
@@ -573,6 +654,9 @@ static fr_err_t fr_esp_ble_begin_cleanup(void) {
   fr_esp_ble.own_address_valid = false;
 #if FR_BLE_ENABLE_OBSERVER
   fr_esp_ble_abandon_scan_locked();
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+  fr_esp_ble_abandon_advertise_locked();
 #endif
   portEXIT_CRITICAL(&fr_esp_ble_lock);
 
@@ -858,8 +942,8 @@ fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
     return FR_ERR_RANGE;
   }
 
-  interval_units = fr_esp_ble_scan_units(interval_ms);
-  window_units = fr_esp_ble_scan_units(window_ms);
+  interval_units = fr_esp_ble_gap_units(interval_ms);
+  window_units = fr_esp_ble_gap_units(window_ms);
   if (window_units > interval_units) {
     return FR_ERR_RANGE;
   }
@@ -881,6 +965,13 @@ fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
     portEXIT_CRITICAL(&fr_esp_ble_lock);
     return FR_ERR_BLE_BUSY;
   }
+#if FR_BLE_ENABLE_BROADCASTER
+  if (fr_esp_ble.advertise.state != FR_BLE_ADVERTISE_IDLE) {
+    fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_ERR_BLE_BUSY, 0);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_BLE_BUSY;
+  }
+#endif
 
   fr_esp_ble_clear_reports_locked();
   fr_esp_ble.scan.requested_interval_ms = interval_ms;
@@ -1035,12 +1126,175 @@ fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report) {
 }
 #endif
 
+#if FR_BLE_ENABLE_BROADCASTER
+fr_err_t fr_platform_ble_advertise_start(
+    const uint8_t *advertising_data, uint8_t advertising_data_length,
+    const uint8_t *scan_response_data, uint8_t scan_response_data_length,
+    uint16_t interval_ms, bool connectable) {
+  struct ble_gap_adv_params parameters = {0};
+  uint16_t interval_units = 0;
+  uint32_t generation = 0;
+  uint8_t own_address_type = 0;
+  int rc = 0;
+  bool started = false;
+
+  if ((advertising_data_length > 0 && advertising_data == NULL) ||
+      (scan_response_data_length > 0 && scan_response_data == NULL)) {
+    return FR_ERR_INVALID;
+  }
+  if (advertising_data_length > FR_BLE_ADVERTISEMENT_DATA_BYTES ||
+      scan_response_data_length > FR_BLE_ADVERTISEMENT_DATA_BYTES) {
+    return FR_ERR_CAPACITY;
+  }
+  if (interval_ms < FR_ESP_BLE_ADVERTISE_INTERVAL_MIN_MS ||
+      interval_ms > FR_ESP_BLE_ADVERTISE_INTERVAL_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+
+  interval_units = fr_esp_ble_gap_units(interval_ms);
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (fr_esp_ble.radio_state == FR_BLE_RADIO_STARTING ||
+      fr_esp_ble.radio_state == FR_BLE_RADIO_STOPPING) {
+    fr_esp_ble_record_locked(FR_BLE_OP_ADVERTISE_START, FR_ERR_BLE_BUSY, 0);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_BLE_BUSY;
+  }
+  if (fr_esp_ble.radio_state != FR_BLE_RADIO_READY) {
+    fr_esp_ble_record_locked(FR_BLE_OP_ADVERTISE_START,
+                             FR_ERR_BLE_NOT_READY, 0);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_BLE_NOT_READY;
+  }
+#if FR_BLE_ENABLE_OBSERVER
+  if (fr_esp_ble.scan.state != FR_BLE_SCAN_IDLE) {
+    fr_esp_ble_record_locked(FR_BLE_OP_ADVERTISE_START, FR_ERR_BLE_BUSY, 0);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_BLE_BUSY;
+  }
+#endif
+  if (fr_esp_ble.advertise.state != FR_BLE_ADVERTISE_IDLE) {
+    fr_esp_ble_record_locked(FR_BLE_OP_ADVERTISE_START, FR_ERR_BLE_BUSY, 0);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_BLE_BUSY;
+  }
+
+  fr_esp_ble_clear_advertise_locked();
+  if (advertising_data_length > 0) {
+    memcpy(fr_esp_ble.advertise.advertising_data, advertising_data,
+           advertising_data_length);
+  }
+  if (scan_response_data_length > 0) {
+    memcpy(fr_esp_ble.advertise.scan_response_data, scan_response_data,
+           scan_response_data_length);
+  }
+  fr_esp_ble.advertise.advertising_data_length = advertising_data_length;
+  fr_esp_ble.advertise.scan_response_data_length = scan_response_data_length;
+  fr_esp_ble.advertise.requested_interval_ms = interval_ms;
+  fr_esp_ble.advertise.actual_interval_us =
+      (uint32_t)interval_units * 625u;
+  fr_esp_ble.advertise.connectable = connectable;
+  fr_esp_ble.advertise.generation += 1u;
+  generation = fr_esp_ble.advertise.generation;
+  own_address_type = fr_esp_ble.own_address_raw_type;
+  fr_esp_ble.advertise.state = FR_BLE_ADVERTISE_ACTIVE;
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+  rc = ble_gap_adv_set_data(fr_esp_ble.advertise.advertising_data,
+                            advertising_data_length);
+  if (rc == 0) {
+    rc = ble_gap_adv_rsp_set_data(fr_esp_ble.advertise.scan_response_data,
+                                  scan_response_data_length);
+  }
+  if (rc == 0) {
+    parameters.conn_mode = connectable ? BLE_GAP_CONN_MODE_UND
+                                       : BLE_GAP_CONN_MODE_NON;
+    parameters.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    parameters.itvl_min = interval_units;
+    parameters.itvl_max = interval_units;
+    rc = ble_gap_adv_start(own_address_type, NULL, BLE_HS_FOREVER, &parameters,
+                           fr_esp_ble_advertise_event,
+                           (void *)(uintptr_t)generation);
+  }
+  if (rc != 0) {
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    if (generation == fr_esp_ble.advertise.generation) {
+      fr_esp_ble.advertise.state = FR_BLE_ADVERTISE_IDLE;
+    }
+    fr_esp_ble_record_locked(FR_BLE_OP_ADVERTISE_START, FR_ERR_IO, rc);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_IO;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  started = generation == fr_esp_ble.advertise.generation &&
+            fr_esp_ble.advertise.state == FR_BLE_ADVERTISE_ACTIVE &&
+            fr_esp_ble.radio_state == FR_BLE_RADIO_READY;
+  if (started) {
+    fr_esp_ble.advertise.starts += 1u;
+    fr_esp_ble_record_locked(FR_BLE_OP_ADVERTISE_START, FR_OK, 0);
+  } else {
+    fr_esp_ble_record_locked(FR_BLE_OP_ADVERTISE_START, FR_ERR_IO, 0);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  if (!started) {
+    (void)ble_gap_adv_stop();
+    return FR_ERR_IO;
+  }
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_advertise_stop(void) {
+  uint32_t generation = 0;
+  fr_err_t result = FR_OK;
+  int rc = 0;
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (fr_esp_ble.advertise.state == FR_BLE_ADVERTISE_IDLE) {
+    fr_esp_ble_record_locked(FR_BLE_OP_ADVERTISE_STOP, FR_OK, 0);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_OK;
+  }
+  generation = fr_esp_ble.advertise.generation;
+  fr_esp_ble.advertise.state = FR_BLE_ADVERTISE_STOPPING;
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+  rc = ble_gap_adv_active() ? ble_gap_adv_stop() : BLE_HS_EALREADY;
+  if (rc != 0 && rc != BLE_HS_EALREADY) {
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    fr_esp_ble_record_locked(FR_BLE_OP_ADVERTISE_STOP, FR_ERR_IO, rc);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_IO;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (generation != fr_esp_ble.advertise.generation ||
+      fr_esp_ble.radio_state != FR_BLE_RADIO_READY ||
+      (fr_esp_ble.advertise.state != FR_BLE_ADVERTISE_STOPPING &&
+       fr_esp_ble.advertise.state != FR_BLE_ADVERTISE_IDLE)) {
+    fr_esp_ble_record_locked(FR_BLE_OP_ADVERTISE_STOP, FR_ERR_IO, 0);
+    result = FR_ERR_IO;
+  } else {
+    fr_esp_ble.advertise.state = FR_BLE_ADVERTISE_IDLE;
+    fr_esp_ble.advertise.stops += 1u;
+    fr_esp_ble_record_locked(FR_BLE_OP_ADVERTISE_STOP, FR_OK, 0);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return result;
+}
+#endif
+
 fr_err_t fr_platform_ble_project_clear(void) {
   fr_err_t err = FR_OK;
 
 #if FR_BLE_ENABLE_OBSERVER
   portENTER_CRITICAL(&fr_esp_ble_lock);
   fr_esp_ble_invalidate_scan_locked(true);
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  fr_esp_ble_clear_advertise_all_locked();
   portEXIT_CRITICAL(&fr_esp_ble_lock);
 #endif
   err = fr_esp_ble_begin_cleanup();
@@ -1072,6 +1326,11 @@ fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status) {
       .scan_state = fr_esp_ble.scan.state,
 #else
       .scan_state = FR_BLE_SCAN_IDLE,
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+      .advertise_state = fr_esp_ble.advertise.state,
+#else
+      .advertise_state = FR_BLE_ADVERTISE_IDLE,
 #endif
       .roles = fr_esp_ble_roles(),
 #if CONFIG_ESP_COEX_SW_COEXIST_ENABLE
@@ -1109,6 +1368,19 @@ fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status) {
       .current_rssi = fr_esp_ble.scan.current.rssi,
       .current_flags = fr_esp_ble.scan.current.flags,
       .current_data_length = fr_esp_ble.scan.current.data_length,
+#endif
+#if FR_BLE_ENABLE_BROADCASTER
+      .advertise_requested_interval_ms =
+          fr_esp_ble.advertise.requested_interval_ms,
+      .advertise_actual_interval_us =
+          fr_esp_ble.advertise.actual_interval_us,
+      .advertise_connectable = fr_esp_ble.advertise.connectable,
+      .advertising_data_length =
+          fr_esp_ble.advertise.advertising_data_length,
+      .scan_response_data_length =
+          fr_esp_ble.advertise.scan_response_data_length,
+      .advertise_starts = fr_esp_ble.advertise.starts,
+      .advertise_stops = fr_esp_ble.advertise.stops,
 #endif
       .last_operation = fr_esp_ble.last_operation,
       .last_result = fr_esp_ble.last_result,
