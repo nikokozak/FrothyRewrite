@@ -373,8 +373,9 @@ $(SOURCE_BASE_H): Makefile | $(BUILD_DIR)
 
 $(SOURCE_BASE_C): $(SOURCE_BASE) Makefile | $(BUILD_DIR)
 	@mkdir -p $(GEN_DIR)
-	{ printf '#include "fr_source_base.h"\n#if FR_FEATURE_SOURCE_BASE\nconst char fr_source_base_bytes[] = {\n'; \
-	  xxd -i < $(SOURCE_BASE); \
+	{ set -e; command -v od >/dev/null; command -v awk >/dev/null; \
+	  printf '#include "fr_source_base.h"\n#if FR_FEATURE_SOURCE_BASE\nconst char fr_source_base_bytes[] = {\n'; \
+	  od -An -v -tx1 < $(SOURCE_BASE) | awk '{ printf "  "; for (i = 1; i <= NF; i++) printf "0x%s, ", $$i; printf "\n" }'; \
 	  printf '};\nconst uint16_t fr_source_base_bytes_len = %s;\n#endif\n' "$$(wc -c < $(SOURCE_BASE) | tr -d ' ')"; \
 	} > $@
 
