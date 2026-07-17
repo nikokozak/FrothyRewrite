@@ -13001,6 +13001,15 @@ static void test_repl(void) {
             fr_repl_eval_line(&runtime, "adc.above: 14, 600", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "false\nok\n") == 0);
+  CHECK("host microsecond delay carries sub-millisecond time",
+        fr_platform_millis(&before_ms) == FR_OK &&
+            fr_platform_micros(&before_us) == FR_OK &&
+            fr_platform_delay_us(1500) == FR_OK &&
+            fr_platform_millis(&after_ms) == FR_OK &&
+            fr_platform_micros(&after_us) == FR_OK &&
+            after_us - before_us == 1500u &&
+            after_ms - before_ms == (before_us % 1000u + 1500u) / 1000u &&
+            after_us % 1000u == (before_us + 1500u) % 1000u);
   CHECK("repl samples millis before delay",
         fr_platform_millis(&before_ms) == FR_OK);
   snprintf(expected_ms, sizeof(expected_ms), "%u\nok\n", (unsigned)before_ms);
