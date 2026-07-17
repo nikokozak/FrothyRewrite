@@ -9,7 +9,9 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "host/ble_att.h"
 #include "host/ble_gap.h"
+#include "host/ble_gatt.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 #include "nimble/nimble_npl.h"
@@ -39,6 +41,21 @@
 #error "Frothy and NimBLE peripheral roles disagree"
 #endif
 
+#if (FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL) &&                  \
+    FR_BLE_CONNECTION_COUNT != CONFIG_BT_NIMBLE_MAX_CONNECTIONS
+#error "Frothy and NimBLE connection counts disagree"
+#endif
+
+#if (FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL) &&                  \
+    CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU != 23
+#error "the first Frothy connection profile requires ATT MTU 23"
+#endif
+
+#if (FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL) &&                  \
+    (!CONFIG_BT_NIMBLE_GATT_CLIENT || CONFIG_BT_NIMBLE_GATT_MAX_PROCS < 1)
+#error "Frothy connection MTU exchange requires one GATT client procedure"
+#endif
+
 enum {
   FR_ESP_BLE_WAIT_TICKS = 1,
   FR_ESP_BLE_CLEANUP_STACK_BYTES = 3072,
@@ -49,6 +66,15 @@ enum {
   FR_ESP_BLE_ADVERTISE_INTERVAL_MAX_MS = 10240,
   FR_ESP_BLE_RSSI_MIN = -127,
   FR_ESP_BLE_RSSI_MAX = 20,
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+  FR_ESP_BLE_CONNECTION_INDEX = 0,
+  FR_ESP_BLE_CONNECTION_INTERVAL_UNIT_US = 1250,
+  FR_ESP_BLE_SUPERVISION_TIMEOUT_UNIT_US = 10000,
+  FR_ESP_BLE_CONNECTION_INTERVAL_MIN_UNITS = 6,
+  FR_ESP_BLE_CONNECTION_INTERVAL_MAX_UNITS = 3200,
+  FR_ESP_BLE_SUPERVISION_TIMEOUT_MIN_UNITS = 10,
+  FR_ESP_BLE_SUPERVISION_TIMEOUT_MAX_UNITS = 3200,
+#endif
 };
 
 #if FR_BLE_ENABLE_OBSERVER
@@ -97,6 +123,53 @@ typedef struct fr_esp_ble_advertise_t {
 } fr_esp_ble_advertise_t;
 #endif
 
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+typedef struct fr_esp_ble_connection_t {
+  fr_ble_connection_state_t state;
+  fr_ble_connection_role_t role;
+  uint32_t generation;
+  uint16_t stack_handle;
+
+  fr_handle_ref_t runtime_ref;
+  bool has_runtime_ref;
+
+  fr_ble_address_type_t peer_address_type;
+  uint8_t peer_address[6];
+
+  uint16_t interval_units;
+  uint16_t latency;
+  uint16_t supervision_timeout_units;
+  uint16_t mtu;
+
+  uint16_t requested_minimum_interval_ms;
+  uint16_t requested_maximum_interval_ms;
+  uint16_t requested_latency;
+  uint16_t requested_supervision_timeout_ms;
+
+  bool encrypted;
+  bool authenticated;
+  bool bonded;
+  bool rssi_valid;
+  int8_t last_rssi;
+  int32_t last_reason;
+  uint32_t connected_at_ms;
+  uint32_t disconnected_at_ms;
+
+  bool connect_complete;
+  int32_t connect_status;
+  bool params_pending;
+  bool mtu_pending;
+  int32_t mtu_status;
+} fr_esp_ble_connection_t;
+
+#if FR_BLE_ENABLE_PERIPHERAL
+typedef struct fr_esp_ble_connection_notice_t {
+  uint16_t platform_index;
+  uint32_t connection_generation;
+} fr_esp_ble_connection_notice_t;
+#endif
+#endif
+
 typedef struct fr_esp_ble_state_t {
   fr_ble_radio_state_t radio_state;
   uint32_t lifecycle_generation;
@@ -118,6 +191,19 @@ typedef struct fr_esp_ble_state_t {
 #endif
 #if FR_BLE_ENABLE_BROADCASTER
   fr_esp_ble_advertise_t advertise;
+#endif
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+  fr_esp_ble_connection_t connection;
+  uint32_t connection_connects;
+  uint32_t connection_accepts;
+  uint32_t connection_disconnects;
+  uint32_t incoming_rejected;
+#endif
+#if FR_BLE_ENABLE_PERIPHERAL
+  fr_esp_ble_connection_notice_t
+      connection_notices[FR_BLE_CONNECTION_NOTICE_COUNT];
+  uint8_t connection_notice_head;
+  uint8_t connection_notice_count;
 #endif
 
   fr_ble_operation_t last_operation;
@@ -275,6 +361,221 @@ static bool fr_esp_ble_address_type(uint8_t raw_type,
     return false;
   }
 }
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+static bool fr_esp_ble_raw_address(const uint8_t peer[7],
+                                   ble_addr_t *out_address) {
+  uint8_t raw_type = 0;
+
+  if (peer == NULL || out_address == NULL) {
+    return false;
+  }
+  switch ((fr_ble_address_type_t)peer[0]) {
+  case FR_BLE_ADDRESS_PUBLIC:
+    raw_type = BLE_ADDR_PUBLIC;
+    break;
+  case FR_BLE_ADDRESS_RANDOM:
+    raw_type = BLE_ADDR_RANDOM;
+    break;
+  case FR_BLE_ADDRESS_PUBLIC_ID:
+    raw_type = BLE_ADDR_PUBLIC_ID;
+    break;
+  case FR_BLE_ADDRESS_RANDOM_ID:
+    raw_type = BLE_ADDR_RANDOM_ID;
+    break;
+  default:
+    return false;
+  }
+
+  memset(out_address, 0, sizeof(*out_address));
+  out_address->type = raw_type;
+  for (uint8_t i = 0; i < sizeof(out_address->val); i++) {
+    out_address->val[i] = peer[sizeof(out_address->val) - i];
+  }
+  return true;
+}
+
+static fr_err_t fr_esp_ble_host_error(int rc) {
+  switch (rc) {
+  case 0:
+    return FR_OK;
+  case BLE_HS_EBUSY:
+  case BLE_HS_EALREADY:
+    return FR_ERR_BLE_BUSY;
+  case BLE_HS_ENOTCONN:
+    return FR_ERR_BLE_DISCONNECTED;
+  case BLE_HS_ETIMEOUT:
+    return FR_ERR_BLE_TIMEOUT;
+  case BLE_HS_ENOMEM:
+    return FR_ERR_CAPACITY;
+  case BLE_HS_EINVAL:
+    return FR_ERR_RANGE;
+  default:
+    return FR_ERR_IO;
+  }
+}
+
+static uint16_t fr_esp_ble_connection_interval_units(uint16_t milliseconds) {
+  return (uint16_t)(((uint32_t)milliseconds * 4u + 2u) / 5u);
+}
+
+static uint16_t
+fr_esp_ble_supervision_timeout_units(uint16_t milliseconds) {
+  return (uint16_t)(((uint32_t)milliseconds + 5u) / 10u);
+}
+
+static void fr_esp_ble_connection_free_locked(void) {
+  uint32_t generation = fr_esp_ble.connection.generation;
+
+  memset(&fr_esp_ble.connection, 0, sizeof(fr_esp_ble.connection));
+  fr_esp_ble.connection.generation = generation;
+  fr_esp_ble.connection.state = FR_BLE_CONNECTION_FREE;
+  fr_esp_ble.connection.stack_handle = BLE_HS_CONN_HANDLE_NONE;
+}
+
+static uint32_t fr_esp_ble_connection_reserve_locked(
+    fr_ble_connection_role_t role, fr_handle_ref_t runtime_ref,
+    bool has_runtime_ref) {
+  uint32_t generation = fr_esp_ble.connection.generation + 1u;
+
+  memset(&fr_esp_ble.connection, 0, sizeof(fr_esp_ble.connection));
+  fr_esp_ble.connection.state = FR_BLE_CONNECTION_CONNECTING;
+  fr_esp_ble.connection.role = role;
+  fr_esp_ble.connection.generation = generation;
+  fr_esp_ble.connection.stack_handle = BLE_HS_CONN_HANDLE_NONE;
+  fr_esp_ble.connection.runtime_ref = runtime_ref;
+  fr_esp_ble.connection.has_runtime_ref = has_runtime_ref;
+  fr_esp_ble.connection.mtu = BLE_ATT_MTU_DFLT;
+  return generation;
+}
+
+static bool fr_esp_ble_connection_copy_descriptor_locked(
+    const struct ble_gap_conn_desc *descriptor, uint16_t mtu) {
+  fr_ble_address_type_t address_type = FR_BLE_ADDRESS_PUBLIC;
+  fr_ble_connection_role_t role = FR_BLE_CONNECTION_ROLE_CENTRAL;
+
+  if (descriptor == NULL ||
+      !fr_esp_ble_address_type(descriptor->peer_ota_addr.type,
+                               &address_type)) {
+    return false;
+  }
+  if (descriptor->role == BLE_GAP_ROLE_MASTER) {
+    role = FR_BLE_CONNECTION_ROLE_CENTRAL;
+  } else if (descriptor->role == BLE_GAP_ROLE_SLAVE) {
+    role = FR_BLE_CONNECTION_ROLE_PERIPHERAL;
+  } else {
+    return false;
+  }
+  if (role != fr_esp_ble.connection.role) {
+    return false;
+  }
+
+  fr_esp_ble.connection.stack_handle = descriptor->conn_handle;
+  fr_esp_ble.connection.peer_address_type = address_type;
+  for (uint8_t i = 0; i < sizeof(fr_esp_ble.connection.peer_address); i++) {
+    fr_esp_ble.connection.peer_address[i] =
+        descriptor->peer_ota_addr
+            .val[sizeof(fr_esp_ble.connection.peer_address) - 1u - i];
+  }
+  fr_esp_ble.connection.interval_units = descriptor->conn_itvl;
+  fr_esp_ble.connection.latency = descriptor->conn_latency;
+  fr_esp_ble.connection.supervision_timeout_units =
+      descriptor->supervision_timeout;
+  fr_esp_ble.connection.mtu = mtu > 0 ? mtu : BLE_ATT_MTU_DFLT;
+  fr_esp_ble.connection.encrypted = descriptor->sec_state.encrypted;
+  fr_esp_ble.connection.authenticated = descriptor->sec_state.authenticated;
+  fr_esp_ble.connection.bonded = descriptor->sec_state.bonded;
+  return true;
+}
+
+static void fr_esp_ble_connection_mark_disconnected_locked(
+    const struct ble_gap_conn_desc *descriptor, int32_t reason) {
+  if (descriptor != NULL) {
+    (void)fr_esp_ble_connection_copy_descriptor_locked(
+        descriptor, fr_esp_ble.connection.mtu);
+  }
+  fr_esp_ble.connection.state = FR_BLE_CONNECTION_DISCONNECTED;
+  fr_esp_ble.connection.stack_handle = BLE_HS_CONN_HANDLE_NONE;
+  fr_esp_ble.connection.rssi_valid = false;
+  fr_esp_ble.connection.last_reason = reason;
+  fr_esp_ble.connection.disconnected_at_ms = fr_esp_ble_now_ms();
+  fr_esp_ble.connection.params_pending = false;
+  fr_esp_ble.connection.mtu_pending = false;
+  fr_esp_ble.connection.mtu_status = BLE_HS_ENOTCONN;
+  fr_esp_ble.connection_disconnects += 1u;
+  fr_esp_ble.last_protocol_reason = reason;
+}
+
+#if FR_BLE_ENABLE_PERIPHERAL
+static void fr_esp_ble_connection_notice_pop_locked(void) {
+  if (fr_esp_ble.connection_notice_count == 0) {
+    return;
+  }
+  fr_esp_ble.connection_notice_head =
+      (uint8_t)((fr_esp_ble.connection_notice_head + 1u) %
+                FR_BLE_CONNECTION_NOTICE_COUNT);
+  fr_esp_ble.connection_notice_count -= 1u;
+}
+
+static bool fr_esp_ble_connection_notice_current_locked(void) {
+  const fr_esp_ble_connection_notice_t *notice = NULL;
+
+  if (fr_esp_ble.connection_notice_count == 0) {
+    return false;
+  }
+  notice =
+      &fr_esp_ble.connection_notices[fr_esp_ble.connection_notice_head];
+  return notice->platform_index == FR_ESP_BLE_CONNECTION_INDEX &&
+         notice->connection_generation == fr_esp_ble.connection.generation &&
+         fr_esp_ble.connection.state == FR_BLE_CONNECTION_PENDING;
+}
+
+static bool fr_esp_ble_connection_notice_find_locked(void) {
+  while (fr_esp_ble.connection_notice_count > 0 &&
+         !fr_esp_ble_connection_notice_current_locked()) {
+    fr_esp_ble_connection_notice_pop_locked();
+  }
+  return fr_esp_ble.connection_notice_count > 0;
+}
+
+static void fr_esp_ble_connection_notices_clear_locked(void) {
+  memset(fr_esp_ble.connection_notices, 0,
+         sizeof(fr_esp_ble.connection_notices));
+  fr_esp_ble.connection_notice_head = 0;
+  fr_esp_ble.connection_notice_count = 0;
+}
+
+static void fr_esp_ble_connection_notice_push_locked(uint32_t generation) {
+  uint8_t tail =
+      (uint8_t)((fr_esp_ble.connection_notice_head +
+                 fr_esp_ble.connection_notice_count) %
+                FR_BLE_CONNECTION_NOTICE_COUNT);
+
+  fr_esp_ble.connection_notices[tail] =
+      (fr_esp_ble_connection_notice_t){
+          .platform_index = FR_ESP_BLE_CONNECTION_INDEX,
+          .connection_generation = generation,
+      };
+  fr_esp_ble.connection_notice_count += 1u;
+}
+#endif
+
+static void fr_esp_ble_connections_clear_locked(bool reset_counters) {
+  if (fr_esp_ble.connection.state != FR_BLE_CONNECTION_FREE) {
+    fr_esp_ble.connection.generation += 1u;
+  }
+  fr_esp_ble_connection_free_locked();
+#if FR_BLE_ENABLE_PERIPHERAL
+  fr_esp_ble_connection_notices_clear_locked();
+#endif
+  if (reset_counters) {
+    fr_esp_ble.connection_connects = 0;
+    fr_esp_ble.connection_accepts = 0;
+    fr_esp_ble.connection_disconnects = 0;
+    fr_esp_ble.incoming_rejected = 0;
+  }
+}
+#endif
 
 #if FR_BLE_ENABLE_OBSERVER || FR_BLE_ENABLE_BROADCASTER
 static uint16_t fr_esp_ble_gap_units(uint16_t milliseconds) {
