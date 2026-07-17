@@ -913,11 +913,16 @@ static void test_peripheral_accept_drains_stale_notices_and_ble_off(void) {
   fr_tagged_t uart = fr_tagged_nil();
   fr_handle_ref_t connection_ref = {0};
   fr_handle_ref_t uart_ref = {0};
+  fr_ble_gatt_status_t gatt_status = {0};
+  uint8_t gatt_value = 7;
+  uint8_t current_value = 0;
   uint16_t connection_index = FR_HANDLE_PLATFORM_NONE;
+  uint16_t current_length = 0;
   uint16_t uart_index = FR_HANDLE_PLATFORM_NONE;
   fr_ble_status_t status;
 
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  install_gatt_event_table();
   read_native_def("ble.accept", FR_SLOT_BLE_ACCEPT, 0, &accept);
   read_native_def("ble.connection.ready?", FR_SLOT_BLE_CONNECTION_READY, 1,
                   &ready);
@@ -990,6 +995,13 @@ static void test_peripheral_accept_drains_stale_notices_and_ble_off(void) {
                     accept->native_fn(&s_runtime, NULL, 0, &connection));
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_tagged_decode_handle_ref(connection, &connection_ref));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_host_ble_gatt_remote_write(1, &gatt_value, 1));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_host_ble_gatt_subscribe(1, true, false));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_gatt_status(&gatt_status));
+  TEST_ASSERT_EQUAL_UINT8(1, gatt_status.write_queue_count);
+  TEST_ASSERT_EQUAL_UINT8(1, gatt_status.subscription_count);
 
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_handle_reserve(&s_runtime, FR_HANDLE_KIND_UART,
@@ -1011,6 +1023,22 @@ static void test_peripheral_accept_drains_stale_notices_and_ble_off(void) {
   TEST_ASSERT_EQUAL_UINT8(0, status.connection_count);
   TEST_ASSERT_EQUAL_UINT8(0, status.connection_notice_count);
   TEST_ASSERT_EQUAL(FR_BLE_OP_OFF, status.last_operation);
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_gatt_status(&gatt_status));
+  TEST_ASSERT_EQUAL_UINT32(1, gatt_status.table_generation);
+  TEST_ASSERT_EQUAL_UINT16(3, gatt_status.table.row_count);
+  TEST_ASSERT_EQUAL_UINT16(
+      0, gatt_status.table.characteristics[0].target_value_handle);
+  TEST_ASSERT_EQUAL_UINT16(
+      1, gatt_status.table.characteristics[0].value_length);
+  TEST_ASSERT_EQUAL_UINT8(0, gatt_status.write_queue_count);
+  TEST_ASSERT_EQUAL_UINT32(1, gatt_status.write_queue_stale);
+  TEST_ASSERT_EQUAL_UINT8(0, gatt_status.subscription_count);
+  TEST_ASSERT_FALSE(gatt_status.indication_pending);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_platform_ble_gatt_get(1, &current_value, 1,
+                                             &current_length));
+  TEST_ASSERT_EQUAL_UINT16(1, current_length);
+  TEST_ASSERT_EQUAL_UINT8(gatt_value, current_value);
 }
 
 static void test_radio_lifecycle_and_status(void) {
