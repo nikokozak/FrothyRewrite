@@ -227,6 +227,73 @@ typedef struct fr_esp_ble_gatt_t {
 } fr_esp_ble_gatt_t;
 #endif
 
+#if FR_BLE_ENABLE_GATT_CLIENT
+typedef struct fr_esp_ble_gatt_client_cache_t {
+  uint32_t connection_generation;
+  uint16_t value_handle;
+  uint16_t cccd_handle;
+  uint16_t properties;
+  fr_ble_gatt_subscription_mode_t subscription_mode;
+  bool valid;
+} fr_esp_ble_gatt_client_cache_t;
+
+typedef enum fr_esp_ble_gatt_client_stage_t {
+  FR_ESP_BLE_GATT_CLIENT_STAGE_NONE = 0,
+  FR_ESP_BLE_GATT_CLIENT_STAGE_SERVICE,
+  FR_ESP_BLE_GATT_CLIENT_STAGE_CHARACTERISTIC,
+  FR_ESP_BLE_GATT_CLIENT_STAGE_DESCRIPTOR,
+  FR_ESP_BLE_GATT_CLIENT_STAGE_READ,
+  FR_ESP_BLE_GATT_CLIENT_STAGE_WRITE,
+  FR_ESP_BLE_GATT_CLIENT_STAGE_SUBSCRIPTION,
+} fr_esp_ble_gatt_client_stage_t;
+
+typedef struct fr_esp_ble_gatt_client_procedure_t {
+  bool pending;
+  bool abandoned;
+  bool stage_complete;
+  fr_ble_operation_t operation;
+  fr_esp_ble_gatt_client_stage_t stage;
+  uint32_t connection_generation;
+  uint16_t stack_handle;
+  uint16_t attribute_handle;
+  int32_t status;
+
+  ble_uuid_any_t service_uuid;
+  ble_uuid_any_t characteristic_uuid;
+  uint16_t service_start_handle;
+  uint16_t service_end_handle;
+  uint16_t value_handle;
+  uint16_t characteristic_end_handle;
+  uint16_t cccd_handle;
+  uint16_t properties;
+  fr_ble_gatt_subscription_mode_t subscription_mode;
+
+  uint8_t data[FR_BLE_GATT_CLIENT_DATA_BYTES];
+  uint8_t data_length;
+} fr_esp_ble_gatt_client_procedure_t;
+
+typedef struct fr_esp_ble_gatt_client_t {
+  fr_esp_ble_gatt_client_cache_t cache[FR_BLE_GATT_CLIENT_CACHE_COUNT];
+  uint8_t cache_count;
+
+  fr_ble_gatt_notification_t
+      notifications[FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT];
+  uint8_t notification_head;
+  uint8_t notification_count;
+  uint8_t notification_high_water;
+  uint32_t notification_dropped;
+  uint32_t notification_stale;
+  bool current_notification_valid;
+  fr_ble_gatt_notification_t current_notification;
+
+  fr_esp_ble_gatt_client_procedure_t procedure;
+  uint16_t service_match_count;
+  uint16_t characteristic_match_count;
+  int32_t last_att_error;
+  int32_t last_platform_code;
+} fr_esp_ble_gatt_client_t;
+#endif
+
 typedef struct fr_esp_ble_state_t {
   fr_ble_radio_state_t radio_state;
   uint32_t lifecycle_generation;
@@ -265,6 +332,9 @@ typedef struct fr_esp_ble_state_t {
 #if FR_BLE_ENABLE_GATT_SERVER
   fr_esp_ble_gatt_t gatt;
 #endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+  fr_esp_ble_gatt_client_t gatt_client;
+#endif
 
   fr_ble_operation_t last_operation;
   fr_err_t last_result;
@@ -277,6 +347,10 @@ typedef struct fr_esp_ble_state_t {
 static portMUX_TYPE fr_esp_ble_lock = portMUX_INITIALIZER_UNLOCKED;
 static fr_esp_ble_state_t fr_esp_ble;
 static struct ble_npl_event fr_esp_ble_cleanup_ready_event;
+
+#if FR_BLE_ENABLE_GATT_CLIENT
+static void fr_esp_ble_gatt_client_clear_locked(void);
+#endif
 
 static uint32_t fr_esp_ble_now_ms(void) {
   return (uint32_t)((uint64_t)esp_timer_get_time() / 1000u);
@@ -307,6 +381,25 @@ static void fr_esp_ble_record_locked(fr_ble_operation_t operation,
   fr_esp_ble.last_platform_code = platform_code;
   fr_esp_ble.last_operation_ms = fr_esp_ble_now_ms();
 }
+
+#if FR_BLE_ENABLE_GATT_SERVER || FR_BLE_ENABLE_GATT_CLIENT
+static void fr_esp_ble_gatt_uuid_build(const fr_ble_uuid_t *portable,
+                                       ble_uuid_any_t *target) {
+  memset(target, 0, sizeof(*target));
+  if (portable->kind == FR_BLE_UUID_16) {
+    target->u16.u.type = BLE_UUID_TYPE_16;
+    target->u16.value =
+        (uint16_t)((uint16_t)portable->bytes[0] << 8u) | portable->bytes[1];
+    return;
+  }
+
+  target->u128.u.type = BLE_UUID_TYPE_128;
+  for (uint8_t i = 0; i < sizeof(target->u128.value); i++) {
+    target->u128.value[i] =
+        portable->bytes[sizeof(target->u128.value) - 1u - i];
+  }
+}
+#endif
 
 #if FR_BLE_ENABLE_GATT_SERVER
 enum {
@@ -436,23 +529,6 @@ fr_esp_ble_gatt_table_valid(const fr_ble_gatt_table_t *table) {
     }
   }
   return true;
-}
-
-static void fr_esp_ble_gatt_uuid_build(const fr_ble_uuid_t *portable,
-                                       ble_uuid_any_t *target) {
-  memset(target, 0, sizeof(*target));
-  if (portable->kind == FR_BLE_UUID_16) {
-    target->u16.u.type = BLE_UUID_TYPE_16;
-    target->u16.value =
-        (uint16_t)((uint16_t)portable->bytes[0] << 8u) | portable->bytes[1];
-    return;
-  }
-
-  target->u128.u.type = BLE_UUID_TYPE_128;
-  for (uint8_t i = 0; i < sizeof(target->u128.value); i++) {
-    target->u128.value[i] =
-        portable->bytes[sizeof(target->u128.value) - 1u - i];
-  }
 }
 
 static uint16_t fr_esp_ble_gatt_flags(uint16_t portable) {
@@ -923,6 +999,9 @@ static void fr_esp_ble_mark_off_locked(void) {
 #if FR_BLE_ENABLE_GATT_SERVER
   fr_esp_ble_gatt_radio_off_locked();
 #endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+  fr_esp_ble_gatt_client_clear_locked();
+#endif
   fr_esp_ble.radio_state = FR_BLE_RADIO_OFF;
   fr_esp_ble.completion_generation = 0;
   fr_esp_ble.port_initialized = false;
@@ -1008,6 +1087,563 @@ static fr_err_t fr_esp_ble_host_error(int rc) {
   }
 }
 
+#if FR_BLE_ENABLE_GATT_CLIENT
+static fr_err_t fr_esp_ble_connection_entry_locked(uint16_t platform_index);
+static bool fr_esp_ble_connection_event_current_locked(
+    uint32_t generation, uint16_t stack_handle);
+
+static int32_t fr_esp_ble_gatt_client_att_error(int32_t status) {
+  if (status > BLE_HS_ERR_ATT_BASE && status < BLE_HS_ERR_HCI_BASE) {
+    return status - BLE_HS_ERR_ATT_BASE;
+  }
+  return 0;
+}
+
+static fr_err_t fr_esp_ble_gatt_client_error(int32_t status) {
+  int32_t att_error = fr_esp_ble_gatt_client_att_error(status);
+
+  if (status == 0) {
+    return FR_OK;
+  }
+  if (att_error != 0) {
+    switch (att_error) {
+    case BLE_ATT_ERR_INVALID_HANDLE:
+    case BLE_ATT_ERR_ATTR_NOT_FOUND:
+      return FR_ERR_NOT_FOUND;
+    case BLE_ATT_ERR_READ_NOT_PERMITTED:
+    case BLE_ATT_ERR_WRITE_NOT_PERMITTED:
+    case BLE_ATT_ERR_REQ_NOT_SUPPORTED:
+    case BLE_ATT_ERR_INSUFFICIENT_AUTHEN:
+    case BLE_ATT_ERR_INSUFFICIENT_AUTHOR:
+    case BLE_ATT_ERR_INSUFFICIENT_KEY_SZ:
+    case BLE_ATT_ERR_INSUFFICIENT_ENC:
+      return FR_ERR_UNSUPPORTED;
+    case BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN:
+    case BLE_ATT_ERR_INSUFFICIENT_RES:
+      return FR_ERR_CAPACITY;
+    default:
+      return FR_ERR_IO;
+    }
+  }
+  switch (status) {
+  case BLE_HS_ENOENT:
+    return FR_ERR_NOT_FOUND;
+  case BLE_HS_ENOTSUP:
+    return FR_ERR_UNSUPPORTED;
+  case BLE_HS_EMSGSIZE:
+  case BLE_HS_ENOMEM_EVT:
+    return FR_ERR_CAPACITY;
+  case BLE_HS_EAUTHEN:
+  case BLE_HS_EAUTHOR:
+  case BLE_HS_EENCRYPT:
+  case BLE_HS_EENCRYPT_KEY_SZ:
+    return FR_ERR_UNSUPPORTED;
+  default:
+    return fr_esp_ble_host_error(status);
+  }
+}
+
+static uint16_t fr_esp_ble_gatt_client_properties(uint8_t target) {
+  uint16_t portable = 0;
+
+  if ((target & BLE_GATT_CHR_PROP_READ) != 0) {
+    portable |= FR_BLE_GATT_CHR_READ;
+  }
+  if ((target & BLE_GATT_CHR_PROP_WRITE) != 0) {
+    portable |= FR_BLE_GATT_CHR_WRITE;
+  }
+  if ((target & BLE_GATT_CHR_PROP_WRITE_NO_RSP) != 0) {
+    portable |= FR_BLE_GATT_CHR_WRITE_COMMAND;
+  }
+  if ((target & BLE_GATT_CHR_PROP_NOTIFY) != 0) {
+    portable |= FR_BLE_GATT_CHR_NOTIFY;
+  }
+  if ((target & BLE_GATT_CHR_PROP_INDICATE) != 0) {
+    portable |= FR_BLE_GATT_CHR_INDICATE;
+  }
+  return portable;
+}
+
+static fr_esp_ble_gatt_client_cache_t *
+fr_esp_ble_gatt_client_cache_locked(uint16_t attribute_handle) {
+  for (uint8_t i = 0; i < FR_BLE_GATT_CLIENT_CACHE_COUNT; i++) {
+    fr_esp_ble_gatt_client_cache_t *entry =
+        &fr_esp_ble.gatt_client.cache[i];
+
+    if (entry->valid && entry->value_handle == attribute_handle &&
+        entry->connection_generation == fr_esp_ble.connection.generation) {
+      return entry;
+    }
+  }
+  return NULL;
+}
+
+static uint8_t fr_esp_ble_gatt_client_subscription_count_locked(void) {
+  uint8_t count = 0;
+
+  for (uint8_t i = 0; i < FR_BLE_GATT_CLIENT_CACHE_COUNT; i++) {
+    const fr_esp_ble_gatt_client_cache_t *entry =
+        &fr_esp_ble.gatt_client.cache[i];
+
+    if (entry->valid && entry->subscription_mode != 0) {
+      count += 1u;
+    }
+  }
+  return count;
+}
+
+static void fr_esp_ble_gatt_client_finish_locked(int32_t status) {
+  fr_esp_ble.gatt_client.procedure.pending = false;
+  fr_esp_ble.gatt_client.procedure.status = status;
+  fr_esp_ble.gatt_client.last_att_error =
+      fr_esp_ble_gatt_client_att_error(status);
+  fr_esp_ble.gatt_client.last_platform_code = status == 0 ? 0 : status;
+}
+
+static void fr_esp_ble_gatt_client_connection_closed_locked(
+    uint32_t generation) {
+  memset(fr_esp_ble.gatt_client.cache, 0,
+         sizeof(fr_esp_ble.gatt_client.cache));
+  fr_esp_ble.gatt_client.cache_count = 0;
+  if (fr_esp_ble.gatt_client.procedure.pending &&
+      fr_esp_ble.gatt_client.procedure.connection_generation == generation) {
+    fr_esp_ble_gatt_client_finish_locked(BLE_HS_ENOTCONN);
+  }
+}
+
+static void fr_esp_ble_gatt_client_clear_locked(void) {
+  memset(&fr_esp_ble.gatt_client, 0, sizeof(fr_esp_ble.gatt_client));
+}
+
+static bool fr_esp_ble_gatt_client_callback_current_locked(
+    uint32_t generation, uint16_t stack_handle,
+    fr_esp_ble_gatt_client_stage_t stage) {
+  return fr_esp_ble.gatt_client.procedure.pending &&
+         fr_esp_ble.gatt_client.procedure.connection_generation ==
+             generation &&
+         fr_esp_ble.gatt_client.procedure.stack_handle == stack_handle &&
+         fr_esp_ble.gatt_client.procedure.stage == stage &&
+         generation == fr_esp_ble.connection.generation;
+}
+
+static fr_err_t fr_esp_ble_gatt_client_check_locked(
+    uint16_t connection_index) {
+  fr_err_t err = FR_OK;
+
+  if (fr_esp_ble.radio_state != FR_BLE_RADIO_READY) {
+    return FR_ERR_BLE_NOT_READY;
+  }
+  err = fr_esp_ble_connection_entry_locked(connection_index);
+  if (err != FR_OK) {
+    return err;
+  }
+  if (fr_esp_ble.connection.state != FR_BLE_CONNECTION_LIVE ||
+      fr_esp_ble.connection.role != FR_BLE_CONNECTION_ROLE_CENTRAL) {
+    return FR_ERR_BLE_DISCONNECTED;
+  }
+  if (fr_esp_ble.connection.mtu_pending ||
+      fr_esp_ble.gatt_client.procedure.pending) {
+    return FR_ERR_BLE_BUSY;
+  }
+  return FR_OK;
+}
+
+static uint32_t fr_esp_ble_gatt_client_start_locked(
+    fr_ble_operation_t operation, fr_esp_ble_gatt_client_stage_t stage,
+    uint16_t attribute_handle) {
+  uint32_t generation = fr_esp_ble.connection.generation;
+
+  memset(&fr_esp_ble.gatt_client.procedure, 0,
+         sizeof(fr_esp_ble.gatt_client.procedure));
+  fr_esp_ble.gatt_client.procedure.pending = true;
+  fr_esp_ble.gatt_client.procedure.operation = operation;
+  fr_esp_ble.gatt_client.procedure.stage = stage;
+  fr_esp_ble.gatt_client.procedure.connection_generation = generation;
+  fr_esp_ble.gatt_client.procedure.stack_handle =
+      fr_esp_ble.connection.stack_handle;
+  fr_esp_ble.gatt_client.procedure.attribute_handle = attribute_handle;
+  fr_esp_ble.gatt_client.last_att_error = 0;
+  fr_esp_ble.gatt_client.last_platform_code = 0;
+  return generation;
+}
+
+static void fr_esp_ble_gatt_client_finish_find_locked(void) {
+  fr_esp_ble_gatt_client_cache_t *entry =
+      fr_esp_ble_gatt_client_cache_locked(
+          fr_esp_ble.gatt_client.procedure.value_handle);
+  fr_ble_gatt_subscription_mode_t subscription_mode = 0;
+
+  if (entry != NULL &&
+      entry->cccd_handle == fr_esp_ble.gatt_client.procedure.cccd_handle) {
+    subscription_mode = entry->subscription_mode;
+  }
+  if (entry == NULL) {
+    for (uint8_t i = 0; i < FR_BLE_GATT_CLIENT_CACHE_COUNT; i++) {
+      if (!fr_esp_ble.gatt_client.cache[i].valid) {
+        entry = &fr_esp_ble.gatt_client.cache[i];
+        fr_esp_ble.gatt_client.cache_count += 1u;
+        break;
+      }
+    }
+  }
+  if (entry == NULL) {
+    fr_esp_ble_gatt_client_finish_locked(BLE_HS_ENOMEM);
+    return;
+  }
+
+  *entry = (fr_esp_ble_gatt_client_cache_t){
+      .connection_generation = fr_esp_ble.connection.generation,
+      .value_handle = fr_esp_ble.gatt_client.procedure.value_handle,
+      .cccd_handle = fr_esp_ble.gatt_client.procedure.cccd_handle,
+      .properties = fr_esp_ble.gatt_client.procedure.properties,
+      .subscription_mode = subscription_mode,
+      .valid = true,
+  };
+  fr_esp_ble.gatt_client.procedure.attribute_handle = entry->value_handle;
+  fr_esp_ble_gatt_client_finish_locked(0);
+}
+
+static void fr_esp_ble_gatt_client_launch_failed(
+    uint32_t generation, fr_esp_ble_gatt_client_stage_t stage, int status) {
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (fr_esp_ble_gatt_client_callback_current_locked(
+          generation, fr_esp_ble.gatt_client.procedure.stack_handle, stage)) {
+    fr_esp_ble_gatt_client_finish_locked(status);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+}
+
+static int fr_esp_ble_gatt_client_descriptor_discovered(
+    uint16_t stack_handle, const struct ble_gatt_error *error,
+    uint16_t characteristic_handle, const struct ble_gatt_dsc *descriptor,
+    void *argument);
+
+static int fr_esp_ble_gatt_client_characteristic_discovered(
+    uint16_t stack_handle, const struct ble_gatt_error *error,
+    const struct ble_gatt_chr *characteristic, void *argument) {
+  uint32_t generation = (uint32_t)(uintptr_t)argument;
+  int status = error == NULL ? BLE_HS_EINVAL : error->status;
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble_gatt_client_callback_current_locked(
+          generation, stack_handle,
+          FR_ESP_BLE_GATT_CLIENT_STAGE_CHARACTERISTIC)) {
+    fr_esp_ble.late_callback_count += 1u;
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return 0;
+  }
+  if (status == 0 && characteristic != NULL) {
+    if (fr_esp_ble.gatt_client.procedure.value_handle != 0 &&
+        fr_esp_ble.gatt_client.procedure.characteristic_end_handle == 0 &&
+        characteristic->def_handle >
+            fr_esp_ble.gatt_client.procedure.value_handle) {
+      fr_esp_ble.gatt_client.procedure.characteristic_end_handle =
+          (uint16_t)(characteristic->def_handle - 1u);
+    }
+    if (ble_uuid_cmp(
+            &characteristic->uuid.u,
+            &fr_esp_ble.gatt_client.procedure.characteristic_uuid.u) == 0) {
+      fr_esp_ble.gatt_client.characteristic_match_count += 1u;
+      if (fr_esp_ble.gatt_client.procedure.value_handle == 0) {
+        fr_esp_ble.gatt_client.procedure.value_handle =
+            characteristic->val_handle;
+        fr_esp_ble.gatt_client.procedure.properties =
+            fr_esp_ble_gatt_client_properties(characteristic->properties);
+      }
+    }
+  } else if (status == BLE_HS_EDONE) {
+    if (fr_esp_ble.gatt_client.procedure.abandoned) {
+      fr_esp_ble_gatt_client_finish_locked(BLE_HS_EPREEMPTED);
+    } else if (fr_esp_ble.gatt_client.procedure.value_handle == 0) {
+      fr_esp_ble_gatt_client_finish_locked(BLE_HS_ENOENT);
+    } else {
+      if (fr_esp_ble.gatt_client.procedure.characteristic_end_handle == 0) {
+        fr_esp_ble.gatt_client.procedure.characteristic_end_handle =
+            fr_esp_ble.gatt_client.procedure.service_end_handle;
+      }
+      fr_esp_ble.gatt_client.procedure.status = 0;
+      fr_esp_ble.gatt_client.procedure.stage_complete = true;
+    }
+  } else {
+    fr_esp_ble_gatt_client_finish_locked(status);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return 0;
+}
+
+static int fr_esp_ble_gatt_client_service_discovered(
+    uint16_t stack_handle, const struct ble_gatt_error *error,
+    const struct ble_gatt_svc *service, void *argument) {
+  uint32_t generation = (uint32_t)(uintptr_t)argument;
+  int status = error == NULL ? BLE_HS_EINVAL : error->status;
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble_gatt_client_callback_current_locked(
+          generation, stack_handle, FR_ESP_BLE_GATT_CLIENT_STAGE_SERVICE)) {
+    fr_esp_ble.late_callback_count += 1u;
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return 0;
+  }
+  if (status == 0 && service != NULL) {
+    fr_esp_ble.gatt_client.service_match_count += 1u;
+    if (fr_esp_ble.gatt_client.procedure.service_start_handle == 0) {
+      fr_esp_ble.gatt_client.procedure.service_start_handle =
+          service->start_handle;
+      fr_esp_ble.gatt_client.procedure.service_end_handle =
+          service->end_handle;
+    }
+  } else if (status == BLE_HS_EDONE) {
+    if (fr_esp_ble.gatt_client.procedure.abandoned) {
+      fr_esp_ble_gatt_client_finish_locked(BLE_HS_EPREEMPTED);
+    } else if (fr_esp_ble.gatt_client.procedure.service_start_handle == 0) {
+      fr_esp_ble_gatt_client_finish_locked(BLE_HS_ENOENT);
+    } else {
+      fr_esp_ble.gatt_client.procedure.status = 0;
+      fr_esp_ble.gatt_client.procedure.stage_complete = true;
+    }
+  } else {
+    fr_esp_ble_gatt_client_finish_locked(status);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return 0;
+}
+
+static int fr_esp_ble_gatt_client_descriptor_discovered(
+    uint16_t stack_handle, const struct ble_gatt_error *error,
+    uint16_t characteristic_handle, const struct ble_gatt_dsc *descriptor,
+    void *argument) {
+  uint32_t generation = (uint32_t)(uintptr_t)argument;
+  int status = error == NULL ? BLE_HS_EINVAL : error->status;
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble_gatt_client_callback_current_locked(
+          generation, stack_handle,
+          FR_ESP_BLE_GATT_CLIENT_STAGE_DESCRIPTOR)) {
+    fr_esp_ble.late_callback_count += 1u;
+  } else if (status == 0 && descriptor != NULL &&
+             characteristic_handle ==
+                 fr_esp_ble.gatt_client.procedure.value_handle) {
+    if (fr_esp_ble.gatt_client.procedure.cccd_handle == 0 &&
+        ble_uuid_cmp(&descriptor->uuid.u,
+                     BLE_UUID16_DECLARE(BLE_GATT_DSC_CLT_CFG_UUID16)) == 0) {
+      fr_esp_ble.gatt_client.procedure.cccd_handle = descriptor->handle;
+    }
+  } else if (status == BLE_HS_EDONE) {
+    if (fr_esp_ble.gatt_client.procedure.abandoned) {
+      fr_esp_ble_gatt_client_finish_locked(BLE_HS_EPREEMPTED);
+    } else {
+      fr_esp_ble_gatt_client_finish_find_locked();
+    }
+  } else {
+    fr_esp_ble_gatt_client_finish_locked(status);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return 0;
+}
+
+static int fr_esp_ble_gatt_client_read_complete(
+    uint16_t stack_handle, const struct ble_gatt_error *error,
+    struct ble_gatt_attr *attribute, void *argument) {
+  uint32_t generation = (uint32_t)(uintptr_t)argument;
+  uint8_t bytes[FR_BLE_GATT_CLIENT_DATA_BYTES] = {0};
+  uint16_t length = 0;
+  int status = error == NULL ? BLE_HS_EINVAL : error->status;
+
+  if (status == 0) {
+    if (attribute == NULL || attribute->om == NULL) {
+      status = BLE_HS_EINVAL;
+    } else if (OS_MBUF_PKTLEN(attribute->om) >
+               FR_BLE_GATT_CLIENT_DATA_BYTES) {
+      status = BLE_HS_EMSGSIZE;
+    } else {
+      status = ble_hs_mbuf_to_flat(attribute->om, bytes, sizeof(bytes),
+                                   &length);
+    }
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble_gatt_client_callback_current_locked(
+          generation, stack_handle, FR_ESP_BLE_GATT_CLIENT_STAGE_READ)) {
+    fr_esp_ble.late_callback_count += 1u;
+  } else {
+    if (status == 0) {
+      memcpy(fr_esp_ble.gatt_client.procedure.data, bytes, length);
+      fr_esp_ble.gatt_client.procedure.data_length = (uint8_t)length;
+    }
+    fr_esp_ble_gatt_client_finish_locked(status);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return 0;
+}
+
+static int fr_esp_ble_gatt_client_write_complete(
+    uint16_t stack_handle, const struct ble_gatt_error *error,
+    struct ble_gatt_attr *attribute, void *argument) {
+  uint32_t generation = (uint32_t)(uintptr_t)argument;
+  int status = error == NULL ? BLE_HS_EINVAL : error->status;
+
+  (void)attribute;
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble_gatt_client_callback_current_locked(
+          generation, stack_handle, FR_ESP_BLE_GATT_CLIENT_STAGE_WRITE)) {
+    fr_esp_ble.late_callback_count += 1u;
+  } else {
+    fr_esp_ble_gatt_client_finish_locked(status);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return 0;
+}
+
+static int fr_esp_ble_gatt_client_subscription_complete(
+    uint16_t stack_handle, const struct ble_gatt_error *error,
+    struct ble_gatt_attr *attribute, void *argument) {
+  uint32_t generation = (uint32_t)(uintptr_t)argument;
+  int status = error == NULL ? BLE_HS_EINVAL : error->status;
+
+  (void)attribute;
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble_gatt_client_callback_current_locked(
+          generation, stack_handle,
+          FR_ESP_BLE_GATT_CLIENT_STAGE_SUBSCRIPTION)) {
+    fr_esp_ble.late_callback_count += 1u;
+  } else {
+    if (status == 0) {
+      fr_esp_ble_gatt_client_cache_t *entry =
+          fr_esp_ble_gatt_client_cache_locked(
+              fr_esp_ble.gatt_client.procedure.attribute_handle);
+
+      if (entry == NULL) {
+        status = BLE_HS_ENOENT;
+      } else {
+        entry->subscription_mode =
+            fr_esp_ble.gatt_client.procedure.subscription_mode;
+      }
+    }
+    fr_esp_ble_gatt_client_finish_locked(status);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return 0;
+}
+
+static void fr_esp_ble_gatt_client_receive_notification(
+    uint32_t generation, const struct ble_gap_event *event) {
+  uint8_t bytes[FR_BLE_GATT_CLIENT_DATA_BYTES] = {0};
+  uint16_t length = 0;
+  int copy_status = BLE_HS_EINVAL;
+  uint8_t tail = 0;
+
+  if (event->notify_rx.om != NULL &&
+      OS_MBUF_PKTLEN(event->notify_rx.om) <=
+          FR_BLE_GATT_CLIENT_DATA_BYTES) {
+    copy_status = ble_hs_mbuf_to_flat(event->notify_rx.om, bytes,
+                                      sizeof(bytes), &length);
+  } else if (event->notify_rx.om != NULL) {
+    copy_status = BLE_HS_EMSGSIZE;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble_connection_event_current_locked(
+          generation, event->notify_rx.conn_handle) ||
+      fr_esp_ble.connection.state != FR_BLE_CONNECTION_LIVE ||
+      fr_esp_ble.connection.role != FR_BLE_CONNECTION_ROLE_CENTRAL ||
+      !fr_esp_ble.connection.has_runtime_ref) {
+    fr_esp_ble.late_callback_count += 1u;
+  } else {
+    fr_esp_ble_gatt_client_cache_t *entry =
+        fr_esp_ble_gatt_client_cache_locked(event->notify_rx.attr_handle);
+    fr_ble_gatt_subscription_mode_t expected =
+        event->notify_rx.indication ? FR_BLE_GATT_SUBSCRIBE_INDICATIONS
+                                    : FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS;
+
+    if (copy_status != 0 || entry == NULL ||
+        entry->subscription_mode != expected ||
+        fr_esp_ble.gatt_client.notification_count ==
+            FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT) {
+      fr_esp_ble.gatt_client.notification_dropped += 1u;
+      if (copy_status != 0) {
+        fr_esp_ble.gatt_client.last_platform_code = copy_status;
+      }
+    } else {
+      tail = (uint8_t)((fr_esp_ble.gatt_client.notification_head +
+                        fr_esp_ble.gatt_client.notification_count) %
+                       FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT);
+      fr_esp_ble.gatt_client.notifications[tail] =
+          (fr_ble_gatt_notification_t){
+              .connection_index = FR_ESP_BLE_CONNECTION_INDEX,
+              .connection_generation = fr_esp_ble.connection.generation,
+              .attribute_handle = event->notify_rx.attr_handle,
+              .data_length = (uint8_t)length,
+              .timestamp_ms = fr_esp_ble_now_ms(),
+              .indication = event->notify_rx.indication,
+          };
+      if (length > 0) {
+        memcpy(fr_esp_ble.gatt_client.notifications[tail].data, bytes,
+               length);
+      }
+      fr_esp_ble.gatt_client.notification_count += 1u;
+      if (fr_esp_ble.gatt_client.notification_count >
+          fr_esp_ble.gatt_client.notification_high_water) {
+        fr_esp_ble.gatt_client.notification_high_water =
+            fr_esp_ble.gatt_client.notification_count;
+      }
+    }
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+}
+
+static fr_err_t fr_esp_ble_gatt_client_wait(
+    fr_runtime_t *runtime, uint32_t generation,
+    fr_ble_operation_t operation, uint64_t deadline_us,
+    bool wait_for_stage) {
+  for (;;) {
+    bool current = false;
+    bool pending = false;
+    bool stage_complete = false;
+    int32_t status = 0;
+    fr_err_t err = FR_OK;
+
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    current = fr_esp_ble.gatt_client.procedure.connection_generation ==
+                  generation &&
+              fr_esp_ble.gatt_client.procedure.operation == operation;
+    if (current) {
+      pending = fr_esp_ble.gatt_client.procedure.pending;
+      stage_complete = fr_esp_ble.gatt_client.procedure.stage_complete;
+      status = fr_esp_ble.gatt_client.procedure.status;
+    }
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+    if (!current) {
+      err = FR_ERR_BLE_DISCONNECTED;
+    } else if (!pending) {
+      err = fr_esp_ble_gatt_client_error(status);
+    } else if (!wait_for_stage || !stage_complete) {
+      err = fr_platform_poll_interrupt(runtime);
+      if (err == FR_OK && fr_runtime_is_interrupted(runtime)) {
+        err = FR_ERR_INTERRUPTED;
+      }
+      if (err == FR_OK && (uint64_t)esp_timer_get_time() > deadline_us) {
+        err = FR_ERR_BLE_TIMEOUT;
+      }
+    }
+    if (err == FR_OK && pending && wait_for_stage && stage_complete) {
+      return FR_OK;
+    }
+    if (err != FR_OK || !pending) {
+      portENTER_CRITICAL(&fr_esp_ble_lock);
+      if (err != FR_OK && current &&
+          fr_esp_ble.gatt_client.procedure.pending) {
+        fr_esp_ble.gatt_client.procedure.abandoned = true;
+      }
+      fr_esp_ble_record_locked(operation, err, status);
+      portEXIT_CRITICAL(&fr_esp_ble_lock);
+      return err;
+    }
+    vTaskDelay(FR_ESP_BLE_WAIT_TICKS);
+  }
+}
+#endif
+
 static uint16_t fr_esp_ble_connection_interval_units(uint16_t milliseconds) {
   return (uint16_t)(((uint32_t)milliseconds * 4u + 2u) / 5u);
 }
@@ -1022,6 +1658,9 @@ static void fr_esp_ble_connection_free_locked(void) {
 
 #if FR_BLE_ENABLE_GATT_SERVER
   fr_esp_ble_gatt_connection_closed_locked(generation, BLE_HS_ENOTCONN);
+#endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+  fr_esp_ble_gatt_client_connection_closed_locked(generation);
 #endif
   memset(&fr_esp_ble.connection, 0, sizeof(fr_esp_ble.connection));
   fr_esp_ble.connection.generation = generation;
@@ -1093,6 +1732,10 @@ static void fr_esp_ble_connection_mark_disconnected_locked(
 #if FR_BLE_ENABLE_GATT_SERVER
   fr_esp_ble_gatt_connection_closed_locked(fr_esp_ble.connection.generation,
                                             BLE_HS_ENOTCONN);
+#endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+  fr_esp_ble_gatt_client_connection_closed_locked(
+      fr_esp_ble.connection.generation);
 #endif
   fr_esp_ble.connection.state = FR_BLE_CONNECTION_DISCONNECTED;
   fr_esp_ble.connection.stack_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -1523,6 +2166,12 @@ static int fr_esp_ble_connection_event(struct ble_gap_event *event,
     }
     portEXIT_CRITICAL(&fr_esp_ble_lock);
     return 0;
+
+#if FR_BLE_ENABLE_GATT_CLIENT
+  case BLE_GAP_EVENT_NOTIFY_RX:
+    fr_esp_ble_gatt_client_receive_notification(generation, event);
+    return 0;
+#endif
 
 #if FR_BLE_ENABLE_GATT_SERVER
   case BLE_GAP_EVENT_SUBSCRIBE:
@@ -3054,6 +3703,11 @@ fr_err_t fr_platform_ble_connection_mtu(fr_runtime_t *runtime,
     portEXIT_CRITICAL(&fr_esp_ble_lock);
     return FR_OK;
   }
+#if FR_BLE_ENABLE_GATT_CLIENT
+  if (err == FR_OK && fr_esp_ble.gatt_client.procedure.pending) {
+    err = FR_ERR_BLE_BUSY;
+  }
+#endif
   if (err == FR_OK && fr_esp_ble.connection.mtu_pending) {
     err = FR_ERR_BLE_BUSY;
   }
@@ -3153,6 +3807,474 @@ fr_err_t fr_platform_ble_connection_mtu(fr_runtime_t *runtime,
     }
     vTaskDelay(FR_ESP_BLE_WAIT_TICKS);
   }
+}
+#endif
+
+#if FR_BLE_ENABLE_GATT_CLIENT
+fr_err_t fr_platform_ble_gatt_client_find(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    const fr_ble_uuid_t *service_uuid,
+    const fr_ble_uuid_t *characteristic_uuid, uint16_t timeout_ms,
+    uint16_t *out_attribute_handle) {
+  fr_err_t err = FR_OK;
+  uint64_t deadline_us = 0;
+  uint32_t generation = 0;
+  uint16_t stack_handle = BLE_HS_CONN_HANDLE_NONE;
+  uint16_t start_handle = 0;
+  uint16_t end_handle = 0;
+  int rc = 0;
+  bool launch = false;
+
+  if (runtime == NULL || service_uuid == NULL || characteristic_uuid == NULL ||
+      out_attribute_handle == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if ((service_uuid->kind != FR_BLE_UUID_16 &&
+       service_uuid->kind != FR_BLE_UUID_128) ||
+      (characteristic_uuid->kind != FR_BLE_UUID_16 &&
+       characteristic_uuid->kind != FR_BLE_UUID_128) ||
+      timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  err = fr_esp_ble_gatt_client_check_locked(connection_index);
+  if (err == FR_OK) {
+    generation = fr_esp_ble_gatt_client_start_locked(
+        FR_BLE_OP_GATT_FIND, FR_ESP_BLE_GATT_CLIENT_STAGE_SERVICE, 0);
+    stack_handle = fr_esp_ble.gatt_client.procedure.stack_handle;
+    fr_esp_ble_gatt_uuid_build(
+        service_uuid, &fr_esp_ble.gatt_client.procedure.service_uuid);
+    fr_esp_ble_gatt_uuid_build(
+        characteristic_uuid,
+        &fr_esp_ble.gatt_client.procedure.characteristic_uuid);
+    fr_esp_ble.gatt_client.service_match_count = 0;
+    fr_esp_ble.gatt_client.characteristic_match_count = 0;
+  } else {
+    fr_esp_ble_record_locked(FR_BLE_OP_GATT_FIND, err, 0);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  if (err != FR_OK) {
+    return err;
+  }
+  deadline_us = (uint64_t)esp_timer_get_time() +
+                (uint64_t)timeout_ms * 1000u;
+
+  rc = ble_gattc_disc_svc_by_uuid(
+      stack_handle, &fr_esp_ble.gatt_client.procedure.service_uuid.u,
+      fr_esp_ble_gatt_client_service_discovered,
+      (void *)(uintptr_t)generation);
+  if (rc != 0) {
+    fr_esp_ble_gatt_client_launch_failed(
+        generation, FR_ESP_BLE_GATT_CLIENT_STAGE_SERVICE, rc);
+  }
+  err = fr_esp_ble_gatt_client_wait(runtime, generation,
+                                    FR_BLE_OP_GATT_FIND, deadline_us, true);
+  if (err != FR_OK) {
+    return err;
+  }
+
+  /* NimBLE frees its one procedure record immediately after the terminal
+   * callback returns. Yield once before asking that same pool for the next
+   * discovery stage. */
+  vTaskDelay(FR_ESP_BLE_WAIT_TICKS);
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (fr_esp_ble_gatt_client_callback_current_locked(
+          generation, stack_handle, FR_ESP_BLE_GATT_CLIENT_STAGE_SERVICE)) {
+    start_handle = fr_esp_ble.gatt_client.procedure.service_start_handle;
+    end_handle = fr_esp_ble.gatt_client.procedure.service_end_handle;
+    fr_esp_ble.gatt_client.procedure.stage =
+        FR_ESP_BLE_GATT_CLIENT_STAGE_CHARACTERISTIC;
+    fr_esp_ble.gatt_client.procedure.stage_complete = false;
+    launch = true;
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  if (launch) {
+    rc = ble_gattc_disc_all_chrs(
+        stack_handle, start_handle, end_handle,
+        fr_esp_ble_gatt_client_characteristic_discovered,
+        (void *)(uintptr_t)generation);
+    if (rc != 0) {
+      fr_esp_ble_gatt_client_launch_failed(
+          generation, FR_ESP_BLE_GATT_CLIENT_STAGE_CHARACTERISTIC, rc);
+    }
+  }
+  err = fr_esp_ble_gatt_client_wait(runtime, generation,
+                                    FR_BLE_OP_GATT_FIND, deadline_us, true);
+  if (err != FR_OK) {
+    return err;
+  }
+
+  vTaskDelay(FR_ESP_BLE_WAIT_TICKS);
+  launch = false;
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (fr_esp_ble_gatt_client_callback_current_locked(
+          generation, stack_handle,
+          FR_ESP_BLE_GATT_CLIENT_STAGE_CHARACTERISTIC)) {
+    start_handle = fr_esp_ble.gatt_client.procedure.value_handle;
+    end_handle =
+        fr_esp_ble.gatt_client.procedure.characteristic_end_handle;
+    if ((fr_esp_ble.gatt_client.procedure.properties &
+         (FR_BLE_GATT_CHR_NOTIFY | FR_BLE_GATT_CHR_INDICATE)) == 0 ||
+        start_handle >= end_handle) {
+      fr_esp_ble_gatt_client_finish_find_locked();
+    } else {
+      fr_esp_ble.gatt_client.procedure.stage =
+          FR_ESP_BLE_GATT_CLIENT_STAGE_DESCRIPTOR;
+      fr_esp_ble.gatt_client.procedure.stage_complete = false;
+      launch = true;
+    }
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  if (launch) {
+    rc = ble_gattc_disc_all_dscs(
+        stack_handle, start_handle, end_handle,
+        fr_esp_ble_gatt_client_descriptor_discovered,
+        (void *)(uintptr_t)generation);
+    if (rc != 0) {
+      fr_esp_ble_gatt_client_launch_failed(
+          generation, FR_ESP_BLE_GATT_CLIENT_STAGE_DESCRIPTOR, rc);
+    }
+  }
+  err = fr_esp_ble_gatt_client_wait(runtime, generation,
+                                    FR_BLE_OP_GATT_FIND, deadline_us, false);
+  if (err == FR_OK) {
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    *out_attribute_handle =
+        fr_esp_ble.gatt_client.procedure.attribute_handle;
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+  }
+  return err;
+}
+
+fr_err_t fr_platform_ble_gatt_client_read(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, uint16_t timeout_ms, uint8_t *out_bytes,
+    uint16_t capacity, uint16_t *out_length) {
+  fr_esp_ble_gatt_client_cache_t *entry = NULL;
+  fr_err_t err = FR_OK;
+  uint32_t generation = 0;
+  uint16_t stack_handle = BLE_HS_CONN_HANDLE_NONE;
+  int rc = 0;
+
+  if (runtime == NULL || out_bytes == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (attribute_handle == 0 || timeout_ms == 0 ||
+      timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  err = fr_esp_ble_gatt_client_check_locked(connection_index);
+  if (err == FR_OK) {
+    entry = fr_esp_ble_gatt_client_cache_locked(attribute_handle);
+    if (entry == NULL) {
+      err = FR_ERR_NOT_FOUND;
+      fr_esp_ble.gatt_client.last_att_error = BLE_ATT_ERR_INVALID_HANDLE;
+    } else if ((entry->properties & FR_BLE_GATT_CHR_READ) == 0) {
+      err = FR_ERR_UNSUPPORTED;
+      fr_esp_ble.gatt_client.last_att_error =
+          BLE_ATT_ERR_READ_NOT_PERMITTED;
+    }
+  }
+  if (err == FR_OK) {
+    generation = fr_esp_ble_gatt_client_start_locked(
+        FR_BLE_OP_GATT_READ, FR_ESP_BLE_GATT_CLIENT_STAGE_READ,
+        attribute_handle);
+    stack_handle = fr_esp_ble.gatt_client.procedure.stack_handle;
+  } else {
+    fr_esp_ble_record_locked(FR_BLE_OP_GATT_READ, err, 0);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  if (err != FR_OK) {
+    return err;
+  }
+
+  rc = ble_gattc_read(stack_handle, attribute_handle,
+                      fr_esp_ble_gatt_client_read_complete,
+                      (void *)(uintptr_t)generation);
+  if (rc != 0) {
+    fr_esp_ble_gatt_client_launch_failed(
+        generation, FR_ESP_BLE_GATT_CLIENT_STAGE_READ, rc);
+  }
+  err = fr_esp_ble_gatt_client_wait(runtime, generation,
+                                    FR_BLE_OP_GATT_READ,
+                                    (uint64_t)esp_timer_get_time() +
+                                        (uint64_t)timeout_ms * 1000u,
+                                    false);
+  if (err != FR_OK) {
+    return err;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (fr_esp_ble.gatt_client.procedure.data_length > capacity) {
+    err = FR_ERR_CAPACITY;
+  } else {
+    *out_length = fr_esp_ble.gatt_client.procedure.data_length;
+    memcpy(out_bytes, fr_esp_ble.gatt_client.procedure.data, *out_length);
+  }
+  if (err != FR_OK) {
+    fr_esp_ble_record_locked(FR_BLE_OP_GATT_READ, err, BLE_HS_EMSGSIZE);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return err;
+}
+
+fr_err_t fr_platform_ble_gatt_client_write(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, const uint8_t *bytes, uint16_t length,
+    bool with_response, uint16_t timeout_ms) {
+  fr_esp_ble_gatt_client_cache_t *entry = NULL;
+  uint16_t required_property = with_response ? FR_BLE_GATT_CHR_WRITE
+                                             : FR_BLE_GATT_CHR_WRITE_COMMAND;
+  fr_err_t err = FR_OK;
+  uint32_t generation = 0;
+  uint16_t stack_handle = BLE_HS_CONN_HANDLE_NONE;
+  int rc = 0;
+
+  if (runtime == NULL || (length > 0 && bytes == NULL)) {
+    return FR_ERR_INVALID;
+  }
+  if (attribute_handle == 0 || length > FR_BLE_GATT_CLIENT_DATA_BYTES ||
+      timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
+    return FR_ERR_RANGE;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  err = fr_esp_ble_gatt_client_check_locked(connection_index);
+  if (err == FR_OK) {
+    entry = fr_esp_ble_gatt_client_cache_locked(attribute_handle);
+    if (entry == NULL) {
+      err = FR_ERR_NOT_FOUND;
+      fr_esp_ble.gatt_client.last_att_error = BLE_ATT_ERR_INVALID_HANDLE;
+    } else if ((entry->properties & required_property) == 0) {
+      err = FR_ERR_UNSUPPORTED;
+      fr_esp_ble.gatt_client.last_att_error =
+          BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+    }
+  }
+  if (err == FR_OK) {
+    stack_handle = fr_esp_ble.connection.stack_handle;
+    if (with_response) {
+      generation = fr_esp_ble_gatt_client_start_locked(
+          FR_BLE_OP_GATT_WRITE, FR_ESP_BLE_GATT_CLIENT_STAGE_WRITE,
+          attribute_handle);
+    }
+  } else {
+    fr_esp_ble_record_locked(FR_BLE_OP_GATT_WRITE, err, 0);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  if (err != FR_OK) {
+    return err;
+  }
+
+  if (!with_response) {
+    rc = ble_gattc_write_no_rsp_flat(stack_handle, attribute_handle, bytes,
+                                     length);
+    err = fr_esp_ble_gatt_client_error(rc);
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    fr_esp_ble.gatt_client.last_att_error =
+        fr_esp_ble_gatt_client_att_error(rc);
+    fr_esp_ble.gatt_client.last_platform_code = rc == 0 ? 0 : rc;
+    fr_esp_ble_record_locked(FR_BLE_OP_GATT_WRITE, err, rc);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return err;
+  }
+
+  rc = ble_gattc_write_flat(stack_handle, attribute_handle, bytes, length,
+                            fr_esp_ble_gatt_client_write_complete,
+                            (void *)(uintptr_t)generation);
+  if (rc != 0) {
+    fr_esp_ble_gatt_client_launch_failed(
+        generation, FR_ESP_BLE_GATT_CLIENT_STAGE_WRITE, rc);
+  }
+  return fr_esp_ble_gatt_client_wait(runtime, generation,
+                                     FR_BLE_OP_GATT_WRITE,
+                                     (uint64_t)esp_timer_get_time() +
+                                         (uint64_t)timeout_ms * 1000u,
+                                     false);
+}
+
+static fr_err_t fr_esp_ble_gatt_client_subscription(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, fr_ble_gatt_subscription_mode_t mode,
+    uint16_t timeout_ms, fr_ble_operation_t operation) {
+  fr_esp_ble_gatt_client_cache_t *entry = NULL;
+  uint16_t required_property =
+      mode == FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS
+          ? FR_BLE_GATT_CHR_NOTIFY
+          : FR_BLE_GATT_CHR_INDICATE;
+  uint8_t cccd_value[2] = {(uint8_t)mode, 0};
+  fr_err_t err = FR_OK;
+  uint32_t generation = 0;
+  uint16_t stack_handle = BLE_HS_CONN_HANDLE_NONE;
+  uint16_t cccd_handle = 0;
+  int rc = 0;
+
+  if (runtime == NULL || attribute_handle == 0 || timeout_ms == 0 ||
+      timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS ||
+      (mode != 0 && mode != FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS &&
+       mode != FR_BLE_GATT_SUBSCRIBE_INDICATIONS)) {
+    return FR_ERR_INVALID;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  err = fr_esp_ble_gatt_client_check_locked(connection_index);
+  if (err == FR_OK) {
+    entry = fr_esp_ble_gatt_client_cache_locked(attribute_handle);
+    if (entry == NULL || entry->cccd_handle == 0) {
+      err = FR_ERR_NOT_FOUND;
+    } else if (mode != 0 && (entry->properties & required_property) == 0) {
+      err = FR_ERR_UNSUPPORTED;
+    }
+  }
+  if (err == FR_OK) {
+    generation = fr_esp_ble_gatt_client_start_locked(
+        operation, FR_ESP_BLE_GATT_CLIENT_STAGE_SUBSCRIPTION,
+        attribute_handle);
+    fr_esp_ble.gatt_client.procedure.subscription_mode = mode;
+    stack_handle = fr_esp_ble.gatt_client.procedure.stack_handle;
+    cccd_handle = entry->cccd_handle;
+  } else {
+    fr_esp_ble_record_locked(operation, err, 0);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  if (err != FR_OK) {
+    return err;
+  }
+
+  rc = ble_gattc_write_flat(stack_handle, cccd_handle, cccd_value,
+                            sizeof(cccd_value),
+                            fr_esp_ble_gatt_client_subscription_complete,
+                            (void *)(uintptr_t)generation);
+  if (rc != 0) {
+    fr_esp_ble_gatt_client_launch_failed(
+        generation, FR_ESP_BLE_GATT_CLIENT_STAGE_SUBSCRIPTION, rc);
+  }
+  return fr_esp_ble_gatt_client_wait(runtime, generation, operation,
+                                     (uint64_t)esp_timer_get_time() +
+                                         (uint64_t)timeout_ms * 1000u,
+                                     false);
+}
+
+fr_err_t fr_platform_ble_gatt_client_subscribe(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, fr_ble_gatt_subscription_mode_t mode,
+    uint16_t timeout_ms) {
+  if (mode != FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS &&
+      mode != FR_BLE_GATT_SUBSCRIBE_INDICATIONS) {
+    return FR_ERR_INVALID;
+  }
+  return fr_esp_ble_gatt_client_subscription(
+      runtime, connection_index, attribute_handle, mode, timeout_ms,
+      FR_BLE_OP_GATT_SUBSCRIBE);
+}
+
+fr_err_t fr_platform_ble_gatt_client_unsubscribe(
+    fr_runtime_t *runtime, uint16_t connection_index,
+    uint16_t attribute_handle, uint16_t timeout_ms) {
+  return fr_esp_ble_gatt_client_subscription(
+      runtime, connection_index, attribute_handle, 0, timeout_ms,
+      FR_BLE_OP_GATT_UNSUBSCRIBE);
+}
+
+fr_err_t fr_platform_ble_gatt_notification_next(
+    bool *out_has_notification, fr_handle_ref_t *out_runtime_ref) {
+  if (out_has_notification == NULL || out_runtime_ref == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  *out_has_notification = false;
+  *out_runtime_ref = (fr_handle_ref_t){0};
+  fr_esp_ble.gatt_client.current_notification_valid = false;
+  memset(&fr_esp_ble.gatt_client.current_notification, 0,
+         sizeof(fr_esp_ble.gatt_client.current_notification));
+  while (fr_esp_ble.gatt_client.notification_count > 0) {
+    fr_ble_gatt_notification_t notification =
+        fr_esp_ble.gatt_client
+            .notifications[fr_esp_ble.gatt_client.notification_head];
+
+    fr_esp_ble.gatt_client.notification_head =
+        (uint8_t)((fr_esp_ble.gatt_client.notification_head + 1u) %
+                  FR_BLE_GATT_NOTIFICATION_QUEUE_COUNT);
+    fr_esp_ble.gatt_client.notification_count -= 1u;
+    if (notification.connection_index != FR_ESP_BLE_CONNECTION_INDEX ||
+        notification.connection_generation !=
+            fr_esp_ble.connection.generation ||
+        !fr_esp_ble.connection.has_runtime_ref ||
+        fr_esp_ble.connection.state == FR_BLE_CONNECTION_FREE) {
+      fr_esp_ble.gatt_client.notification_stale += 1u;
+      continue;
+    }
+
+    fr_esp_ble.gatt_client.current_notification = notification;
+    fr_esp_ble.gatt_client.current_notification_valid = true;
+    *out_runtime_ref = fr_esp_ble.connection.runtime_ref;
+    *out_has_notification = true;
+    break;
+  }
+  fr_esp_ble_record_locked(FR_BLE_OP_GATT_NOTIFICATION_NEXT, FR_OK, 0);
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_gatt_notification_current(
+    fr_ble_gatt_notification_t *out_notification) {
+  if (out_notification == NULL) {
+    return FR_ERR_INVALID;
+  }
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble.gatt_client.current_notification_valid) {
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_NOT_FOUND;
+  }
+  *out_notification = fr_esp_ble.gatt_client.current_notification;
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return FR_OK;
+}
+
+fr_err_t fr_platform_ble_gatt_client_status(
+    fr_ble_gatt_client_status_t *out_status) {
+  if (out_status == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  *out_status = (fr_ble_gatt_client_status_t){
+      .cache_count = fr_esp_ble.gatt_client.cache_count,
+      .subscription_count =
+          fr_esp_ble_gatt_client_subscription_count_locked(),
+      .notification_queue_count =
+          fr_esp_ble.gatt_client.notification_count,
+      .notification_queue_high_water =
+          fr_esp_ble.gatt_client.notification_high_water,
+      .notification_dropped =
+          fr_esp_ble.gatt_client.notification_dropped,
+      .notification_stale = fr_esp_ble.gatt_client.notification_stale,
+      .current_notification_valid =
+          fr_esp_ble.gatt_client.current_notification_valid,
+      .current_notification_attribute_handle =
+          fr_esp_ble.gatt_client.current_notification.attribute_handle,
+      .current_notification_data_length =
+          fr_esp_ble.gatt_client.current_notification.data_length,
+      .current_notification_indication =
+          fr_esp_ble.gatt_client.current_notification.indication,
+      .procedure_pending = fr_esp_ble.gatt_client.procedure.pending,
+      .procedure_operation = fr_esp_ble.gatt_client.procedure.pending
+                                 ? fr_esp_ble.gatt_client.procedure.operation
+                                 : FR_BLE_OP_NONE,
+      .procedure_attribute_handle =
+          fr_esp_ble.gatt_client.procedure.attribute_handle,
+      .service_match_count = fr_esp_ble.gatt_client.service_match_count,
+      .characteristic_match_count =
+          fr_esp_ble.gatt_client.characteristic_match_count,
+      .last_att_error = fr_esp_ble.gatt_client.last_att_error,
+      .last_platform_code = fr_esp_ble.gatt_client.last_platform_code,
+  };
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return FR_OK;
 }
 #endif
 
@@ -3614,6 +4736,9 @@ fr_err_t fr_platform_ble_off(fr_runtime_t *runtime) {
 #if FR_BLE_ENABLE_GATT_SERVER
   fr_esp_ble_gatt_radio_off_locked();
 #endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+  fr_esp_ble_gatt_client_clear_locked();
+#endif
   portEXIT_CRITICAL(&fr_esp_ble_lock);
 
   err = fr_esp_ble_begin_cleanup();
@@ -3651,6 +4776,11 @@ fr_err_t fr_platform_ble_project_clear(void) {
   fr_esp_ble_gatt_radio_off_locked();
   portEXIT_CRITICAL(&fr_esp_ble_lock);
 #endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  fr_esp_ble_gatt_client_clear_locked();
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+#endif
   err = fr_esp_ble_begin_cleanup();
 
   if (err == FR_OK) {
@@ -3660,6 +4790,10 @@ fr_err_t fr_platform_ble_project_clear(void) {
     portENTER_CRITICAL(&fr_esp_ble_lock);
 #if FR_BLE_ENABLE_GATT_SERVER
     memset(&fr_esp_ble.gatt, 0, sizeof(fr_esp_ble.gatt));
+#endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+    memset(&fr_esp_ble.gatt_client, 0,
+           sizeof(fr_esp_ble.gatt_client));
 #endif
     fr_esp_ble.last_operation = FR_BLE_OP_NONE;
     fr_esp_ble.last_result = FR_OK;
