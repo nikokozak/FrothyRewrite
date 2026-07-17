@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { DEFAULT_INITIAL_SOURCE } from "../src/editor.js";
 import {
   addProjectFile,
   acknowledgeBrowserDraft,
@@ -106,7 +107,7 @@ test("project: cloud open installs a validated independent document", () => {
   assert.equal(opened.pendingCloudSave, false);
 });
 
-test("project: new project keeps source and drops the cloud association", () => {
+test("project: new project starts fresh without requesting a cloud save", () => {
   const cloudDraft = openCloudProjectDraft(
     createBrowserDraft("local\n"),
     "11111111-1111-1111-1111-111111111111",
@@ -117,17 +118,18 @@ test("project: new project keeps source and drops the cloud association", () => 
 
   const started = startNewProjectDraft(cloudDraft);
 
-  assert.equal(started.document.files["main.fr"], "cloud\n");
+  assert.equal(started.document.files["main.fr"], DEFAULT_INITIAL_SOURCE);
+  assert.equal(started.activePath, "main.fr");
   assert.equal(started.cloudProjectId, null);
   assert.equal(started.cloudProjectTitle, null);
   assert.equal(started.baseLockVersion, null);
   assert.equal(started.pendingCloudSave, false);
 });
 
-test("project: title changes stay local until a cloud project exists", () => {
+test("project: title changes request a cloud save", () => {
   const local = setBrowserDraftTitle(createBrowserDraft("local\n"), "Local signals");
   assert.equal(local.cloudProjectTitle, "Local signals");
-  assert.equal(local.pendingCloudSave, false);
+  assert.equal(local.pendingCloudSave, true);
 
   const cloud = openCloudProjectDraft(
     local,
@@ -191,6 +193,7 @@ test("project: file actions preserve the whole document and required files", () 
 
   assert.equal(created.activePath, "src/blink.fr");
   assert.equal(created.document.files["main.fr"], "main\n");
+  assert.equal(created.pendingCloudSave, true);
 
   const renamed = renameProjectFile(created, "src/blink.fr", "src/led.fr");
   const selected = selectProjectFile(renamed, "frothy.toml");

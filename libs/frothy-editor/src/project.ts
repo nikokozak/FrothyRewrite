@@ -510,7 +510,7 @@ function withProjectDocument(
     activePath,
     localRevision: draft.localRevision + 1,
     document,
-    pendingCloudSave: draft.pendingCloudSave || draft.cloudProjectId !== null,
+    pendingCloudSave: true,
   });
 }
 
@@ -618,8 +618,9 @@ export function startNewProjectDraft(draft: BrowserDraft): BrowserDraft {
     cloudProjectId: null,
     cloudProjectTitle: null,
     baseLockVersion: null,
+    activePath: "main.fr",
     localRevision: draft.localRevision + 1,
-    document: copyProjectDocument(draft.document),
+    document: createProjectDocument(DEFAULT_INITIAL_SOURCE),
     pendingCloudSave: false,
   });
 }
@@ -632,7 +633,7 @@ export function setBrowserDraftTitle(draft: BrowserDraft, title: string): Browse
     ...draft,
     cloudProjectTitle: title,
     localRevision: draft.localRevision + 1,
-    pendingCloudSave: draft.pendingCloudSave || draft.cloudProjectId !== null,
+    pendingCloudSave: true,
   });
 }
 
