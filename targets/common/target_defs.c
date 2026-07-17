@@ -13,7 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#if FR_FEATURE_CONSOLE_ROUTING
+#if FR_FEATURE_CONSOLE_ROUTING || FR_FEATURE_BLE
 static fr_err_t fr_native_write_rendered_line(const char *line, size_t cap,
                                               int written);
 #endif
@@ -1310,6 +1310,260 @@ static fr_err_t fr_native_console_info(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_BLE
+static const char *fr_native_ble_radio_state_name(
+    fr_ble_radio_state_t state) {
+  switch (state) {
+  case FR_BLE_RADIO_OFF:
+    return "off";
+  case FR_BLE_RADIO_STARTING:
+    return "starting";
+  case FR_BLE_RADIO_READY:
+    return "ready";
+  case FR_BLE_RADIO_STOPPING:
+    return "stopping";
+  case FR_BLE_RADIO_FAILED:
+    return "failed";
+  default:
+    return "unknown";
+  }
+}
+
+static const char *fr_native_ble_scan_state_name(fr_ble_scan_state_t state) {
+  switch (state) {
+  case FR_BLE_SCAN_IDLE:
+    return "idle";
+  case FR_BLE_SCAN_ACTIVE:
+    return "active";
+  case FR_BLE_SCAN_STOPPING:
+    return "stopping";
+  default:
+    return "unknown";
+  }
+}
+
+static const char *fr_native_ble_address_type_name(
+    fr_ble_address_type_t type) {
+  switch (type) {
+  case FR_BLE_ADDRESS_PUBLIC:
+    return "public";
+  case FR_BLE_ADDRESS_RANDOM:
+    return "random";
+  case FR_BLE_ADDRESS_PUBLIC_ID:
+    return "public-id";
+  case FR_BLE_ADDRESS_RANDOM_ID:
+    return "random-id";
+  default:
+    return "unknown";
+  }
+}
+
+static const char *fr_native_ble_operation_name(fr_ble_operation_t operation) {
+  switch (operation) {
+  case FR_BLE_OP_NONE:
+    return "none";
+  case FR_BLE_OP_ON:
+    return "on";
+  case FR_BLE_OP_SCAN_START:
+    return "scan.start";
+  case FR_BLE_OP_SCAN_STOP:
+    return "scan.stop";
+  case FR_BLE_OP_SCAN_NEXT:
+    return "scan.next";
+  default:
+    return "unknown";
+  }
+}
+
+static fr_err_t fr_native_ble_roles_text(uint8_t roles, char *out,
+                                         size_t cap) {
+  static const struct {
+    uint8_t bit;
+    const char *name;
+  } labels[] = {
+      {FR_BLE_ROLE_OBSERVER, "observer"},
+      {FR_BLE_ROLE_BROADCASTER, "broadcaster"},
+      {FR_BLE_ROLE_CENTRAL, "central"},
+      {FR_BLE_ROLE_PERIPHERAL, "peripheral"},
+  };
+  size_t used = 0;
+
+  if (out == NULL || cap == 0) {
+    return FR_ERR_INVALID;
+  }
+  out[0] = '\0';
+  for (size_t i = 0; i < sizeof(labels) / sizeof(labels[0]); i++) {
+    int written = 0;
+
+    if ((roles & labels[i].bit) == 0) {
+      continue;
+    }
+    written = snprintf(out + used, cap - used, "%s%s", used > 0 ? "," : "",
+                       labels[i].name);
+    if (written < 0) {
+      return FR_ERR_IO;
+    }
+    if ((size_t)written >= cap - used) {
+      return FR_ERR_CAPACITY;
+    }
+    used += (size_t)written;
+  }
+  if (used == 0) {
+    int written = snprintf(out, cap, "none");
+
+    if (written < 0) {
+      return FR_ERR_IO;
+    }
+    if ((size_t)written >= cap) {
+      return FR_ERR_CAPACITY;
+    }
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_result_text(fr_err_t result, char *out,
+                                          size_t cap) {
+  const char *name = result == FR_OK ? "ok" : fr_err_name(result);
+  int written = 0;
+
+  if (out == NULL || cap == 0) {
+    return FR_ERR_INVALID;
+  }
+  if (name == NULL) {
+    name = "unknown";
+  }
+  written = snprintf(out, cap, "%s", name);
+  if (written < 0) {
+    return FR_ERR_IO;
+  }
+  if ((size_t)written >= cap) {
+    return FR_ERR_CAPACITY;
+  }
+  for (int i = 0; i < written; i++) {
+    if (out[i] == ' ') {
+      out[i] = '-';
+    }
+  }
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_on(fr_runtime_t *runtime,
+                                 const fr_tagged_t *args, uint8_t arg_count,
+                                 fr_tagged_t *out) {
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_on(runtime));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_info(fr_runtime_t *runtime,
+                                   const fr_tagged_t *args,
+                                   uint8_t arg_count, fr_tagged_t *out) {
+  fr_ble_status_t status = {0};
+  const char *backend = NULL;
+  char roles[48];
+  char result[32];
+  char line[224];
+  int written = 0;
+
+  (void)runtime;
+  (void)args;
+  if (arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_status(&status));
+  backend = fr_platform_ble_backend_name();
+  if (backend == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_roles_text(status.roles, roles, sizeof(roles)));
+  FR_TRY(fr_native_ble_result_text(status.last_result, result,
+                                   sizeof(result)));
+
+  written = snprintf(line, sizeof(line),
+                     "ble backend=%s state=%s roles=%s coexistence=%s\n",
+                     backend, fr_native_ble_radio_state_name(status.radio_state),
+                     roles,
+                     status.coexistence_enabled ? "enabled" : "disabled");
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  if (status.own_address_valid) {
+    written = snprintf(
+        line, sizeof(line), "ble address=%s:%02X:%02X:%02X:%02X:%02X:%02X\n",
+        fr_native_ble_address_type_name(status.own_address_type),
+        (unsigned)status.own_address[0], (unsigned)status.own_address[1],
+        (unsigned)status.own_address[2], (unsigned)status.own_address[3],
+        (unsigned)status.own_address[4], (unsigned)status.own_address[5]);
+  } else {
+    written = snprintf(line, sizeof(line), "ble address=none\n");
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  if (status.requested_interval_ms > 0) {
+    written = snprintf(
+        line, sizeof(line),
+        "ble scan=%s requested=%u/%ums actual=%lu/%luus active=%u repeats=%u min-rssi=%d\n",
+        fr_native_ble_scan_state_name(status.scan_state),
+        (unsigned)status.requested_interval_ms,
+        (unsigned)status.requested_window_ms,
+        (unsigned long)status.actual_interval_us,
+        (unsigned long)status.actual_window_us,
+        status.active_scan ? 1u : 0u, status.repeats ? 1u : 0u,
+        (int)status.minimum_rssi);
+  } else {
+    written = snprintf(line, sizeof(line), "ble scan=%s parameters=none\n",
+                       fr_native_ble_scan_state_name(status.scan_state));
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  if (status.current_valid) {
+    written = snprintf(
+        line, sizeof(line),
+        "ble queue=%u/%u high-water=%u received=%lu accepted=%lu filtered-rssi=%lu dequeued=%lu dropped=%lu malformed=%lu current=rssi:%d,flags:%u,data:%u\n",
+        (unsigned)status.queue_count, (unsigned)status.queue_capacity,
+        (unsigned)status.queue_high_water, (unsigned long)status.received,
+        (unsigned long)status.accepted, (unsigned long)status.filtered_rssi,
+        (unsigned long)status.dequeued, (unsigned long)status.dropped,
+        (unsigned long)status.malformed, (int)status.current_rssi,
+        (unsigned)status.current_flags, (unsigned)status.current_data_length);
+  } else {
+    written = snprintf(
+        line, sizeof(line),
+        "ble queue=%u/%u high-water=%u received=%lu accepted=%lu filtered-rssi=%lu dequeued=%lu dropped=%lu malformed=%lu current=no\n",
+        (unsigned)status.queue_count, (unsigned)status.queue_capacity,
+        (unsigned)status.queue_high_water, (unsigned long)status.received,
+        (unsigned long)status.accepted, (unsigned long)status.filtered_rssi,
+        (unsigned long)status.dequeued, (unsigned long)status.dropped,
+        (unsigned long)status.malformed);
+  }
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  written = snprintf(
+      line, sizeof(line),
+      "ble lifecycle=%lu shutdown=%u cleanup=%s late-callbacks=%lu resets=%lu\n",
+      (unsigned long)status.lifecycle_generation,
+      status.shutdown_in_progress ? 1u : 0u,
+      status.cleanup_required ? "required" : "clean",
+      (unsigned long)status.late_callback_count,
+      (unsigned long)status.reset_count);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  written = snprintf(
+      line, sizeof(line),
+      "ble last-op=%s result=%s platform=%ld reason=%ld at-ms=%lu\n",
+      fr_native_ble_operation_name(status.last_operation), result,
+      (long)status.last_platform_code, (long)status.last_protocol_reason,
+      (unsigned long)status.last_operation_ms);
+  FR_TRY(fr_native_write_rendered_line(line, sizeof(line), written));
+
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+#endif
+
 #if FR_FEATURE_NATIVE_SIGNATURES
 #if FR_FEATURE_TRACE
 static const fr_native_param_t fr_native_trace_params[] = {
@@ -2094,7 +2348,8 @@ static fr_err_t fr_native_fire_event(fr_runtime_t *runtime,
 }
 #endif
 
-#if FR_FEATURE_TRACE || FR_FEATURE_PULSE || FR_FEATURE_CONSOLE_ROUTING
+#if FR_FEATURE_TRACE || FR_FEATURE_PULSE || FR_FEATURE_CONSOLE_ROUTING ||       \
+    FR_FEATURE_BLE
 static fr_err_t fr_native_write_rendered_line(const char *line, size_t cap,
                                               int written) {
   if (line == NULL) {
@@ -2905,6 +3160,23 @@ static const fr_native_signature_t fr_native_console_info_signature = {
     .arg_count = 0,
     .result = FR_NATIVE_VALUE_NIL,
     .help = "print the active console route",
+};
+#endif
+
+#if FR_FEATURE_BLE
+static const fr_native_signature_t fr_native_ble_on_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "initialize the compiled BLE roles and wait for radio readiness",
+};
+
+static const fr_native_signature_t fr_native_ble_info_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "print BLE roles, radio state, scan state, queue pressure, and "
+            "last raw reason",
 };
 #endif
 
@@ -4562,6 +4834,32 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 0,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_console_info_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_BLE
+    {
+        .slot_id = FR_SLOT_BLE_ON,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.on",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_on,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_on_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_INFO,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.info",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_info,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_info_signature,
 #endif
     },
 #endif

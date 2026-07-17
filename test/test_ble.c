@@ -1,6 +1,9 @@
 /* Focused proof for the deterministic host BLE platform contract. */
 
+#include "base_defs.h"
+#include "base_image.h"
 #include "platform.h"
+#include "repl.h"
 #include "runtime.h"
 
 #include "unity/unity.h"
@@ -41,6 +44,68 @@ static fr_ble_scan_report_t report_with(uint8_t id, int8_t rssi,
     report.data[0] = id;
   }
   return report;
+}
+
+static void test_lifecycle_words_and_status_retention(void) {
+  const fr_base_def_t *def = NULL;
+  fr_base_layer_t layer = FR_BASE_LAYER_CORE;
+  fr_ble_status_t status;
+  fr_slot_id_t slot_id = 0;
+  char out[64];
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_base_slot_id_for_name("ble.on", &slot_id));
+  TEST_ASSERT_EQUAL_UINT16(FR_SLOT_BLE_ON, slot_id);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_base_def_for_slot(slot_id, &def, &layer));
+  TEST_ASSERT_EQUAL(FR_BASE_LAYER_TARGET, layer);
+  TEST_ASSERT_EQUAL_UINT8(0, def->native_arity);
+#if FR_FEATURE_NATIVE_SIGNATURES
+  TEST_ASSERT_NOT_NULL(def->native_signature);
+  TEST_ASSERT_EQUAL(FR_NATIVE_VALUE_NIL, def->native_signature->result);
+  TEST_ASSERT_EQUAL_STRING(
+      "initialize the compiled BLE roles and wait for radio readiness",
+      def->native_signature->help);
+#endif
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_base_slot_id_for_name("ble.info", &slot_id));
+  TEST_ASSERT_EQUAL_UINT16(FR_SLOT_BLE_INFO, slot_id);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_base_def_for_slot(slot_id, &def, &layer));
+  TEST_ASSERT_EQUAL(FR_BASE_LAYER_TARGET, layer);
+  TEST_ASSERT_EQUAL_UINT8(0, def->native_arity);
+#if FR_FEATURE_NATIVE_SIGNATURES
+  TEST_ASSERT_NOT_NULL(def->native_signature);
+  TEST_ASSERT_EQUAL(FR_NATIVE_VALUE_NIL, def->native_signature->result);
+  TEST_ASSERT_EQUAL_STRING(
+      "print BLE roles, radio state, scan state, queue pressure, and last raw "
+      "reason",
+      def->native_signature->help);
+#endif
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "ble.info:", out,
+                                      sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", out);
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_OP_NONE, status.last_operation);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "ble.on:", out,
+                                      sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", out);
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_RADIO_READY, status.radio_state);
+  TEST_ASSERT_EQUAL(FR_BLE_OP_ON, status.last_operation);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "ble.info:", out,
+                                      sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", out);
+  TEST_ASSERT_EQUAL(FR_BLE_OP_ON, read_status().last_operation);
 }
 
 static void test_radio_lifecycle_and_status(void) {
@@ -287,6 +352,7 @@ static void test_runtime_clear_shuts_down_ble_before_reuse(void) {
 
 int main(void) {
   UNITY_BEGIN();
+  RUN_TEST(test_lifecycle_words_and_status_retention);
   RUN_TEST(test_radio_lifecycle_and_status);
   RUN_TEST(test_scan_parameters_and_state_gates);
   RUN_TEST(test_queue_conservation_overflow_and_cursor);
