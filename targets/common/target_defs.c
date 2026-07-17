@@ -2105,6 +2105,40 @@ static fr_err_t fr_native_ble_gatt_info(fr_runtime_t *runtime,
   *out = fr_tagged_nil();
   return FR_OK;
 }
+
+static fr_err_t fr_native_ble_gatt_set(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  uint16_t attribute_id = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &attribute_id));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[1], &bytes,
+                                             &length));
+  FR_TRY(fr_platform_ble_gatt_set(attribute_id, bytes, length));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_gatt_get(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  uint8_t bytes[FR_BLE_GATT_VALUE_BYTES];
+  uint16_t attribute_id = 0;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_decode_u16(args, arg_count, 0, &attribute_id));
+  FR_TRY(fr_platform_ble_gatt_get(attribute_id, bytes, sizeof(bytes),
+                                  &length));
+  return fr_bytes_install(runtime, bytes, length, out);
+}
 #endif
 
 #if FR_BLE_ENABLE_OBSERVER
@@ -4388,6 +4422,29 @@ static const fr_native_signature_t fr_native_ble_gatt_info_signature = {
     .help = "print the copied GATT rows, value budget, subscriptions, and "
             "write pressure",
 };
+
+static const fr_native_param_t fr_native_ble_gatt_set_params[] = {
+    {"attribute", FR_NATIVE_VALUE_INT},
+    {"data", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_set_signature = {
+    .params = fr_native_ble_gatt_set_params,
+    .arg_count = 2,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "replace one local GATT value by source-row ID",
+};
+
+static const fr_native_param_t fr_native_ble_gatt_get_params[] = {
+    {"attribute", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_get_signature = {
+    .params = fr_native_ble_gatt_get_params,
+    .arg_count = 1,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "copy one local GATT value by source-row ID",
+};
 #endif
 #endif
 
@@ -6457,6 +6514,30 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 0,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_ble_gatt_info_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_SET,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.set",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_set,
+        .native_arity = 2,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_set_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_GET,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.get",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_get,
+        .native_arity = 1,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_get_signature,
 #endif
     },
 #endif
