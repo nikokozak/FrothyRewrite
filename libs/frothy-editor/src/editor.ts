@@ -22,7 +22,7 @@ import type { Transcript } from "./transcript.js";
 import { makeStorage } from "./storage.js";
 import type { SketchStorage } from "./storage.js";
 
-export const DEFAULT_INITIAL_SOURCE = `-- Welcome to Frothy. Edit, then Run File (Cmd/Ctrl+Shift+Enter).
+export const DEFAULT_INITIAL_SOURCE = `-- Welcome to Frothy. Edit, then run the sketch (Cmd/Ctrl+Shift+Enter).
 to greet [ "hello, world" ]
 greet:
 `;
@@ -157,8 +157,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     suppressEcho = echoBox.checked;
   });
   echoToggle.append(echoBox, doc.createTextNode(" Hide echo"));
-  commandBar.append(runFormBtn, runFileBtn);
-  if (runProjectBtn) commandBar.append(runProjectBtn);
+  commandBar.append(runFormBtn);
+  commandBar.append(runProjectBtn ?? runFileBtn);
   commandBar.append(
     interruptBtn,
     browseWordsBtn,
@@ -490,13 +490,24 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       if (form?.complete) source = form.source;
     }
     if (!source) {
-      transcript.note("select one complete form or Run File");
+      transcript.note(
+        opts.resolveProject
+          ? "select one complete form or Run Project"
+          : "select one complete form or Run File",
+      );
+      return;
+    }
+    if (opts.resolveProject && /^include(?:\s|$)/.test(source.trimStart())) {
+      transcript.note("include is handled by Run Project and cannot be sent directly to the device");
       return;
     }
     const runningRepl = repl;
     setSessionState("running");
     try {
-      await sendForm(source);
+      const response = await sendForm(source);
+      if (opts.resolveProject && response?.kind === "error" && response.code === 7) {
+        transcript.note("If this word is defined in another file, Run Project first.");
+      }
     } finally {
       if (repl === runningRepl) setSessionState("idle");
     }
@@ -733,13 +744,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     view.focus();
   });
 
-  // Keyboard: Cmd/Ctrl+Enter runs one form; add Shift to run the file.
+  // Keyboard: Cmd/Ctrl+Enter runs one form; add Shift to run the project or file.
   editorHost.addEventListener(
     "keydown",
     (ev) => {
       if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
         ev.preventDefault();
-        if (ev.shiftKey) void runFile();
+        if (ev.shiftKey) void (opts.resolveProject ? runProject() : runFile());
         else void runForm();
       }
     },

@@ -36,6 +36,11 @@ test("editor keeps one CodeMirror state per project file", () => {
     .find((button) => button.textContent === "Run Project");
   assert.ok(runProject);
   assert.equal(runProject.disabled, true);
+  assert.equal(
+    [...window.document.querySelectorAll("button")]
+      .some((button) => button.textContent === "Run File"),
+    false,
+  );
 
   handle.setSource("main changed\n");
   handle.openDocument("src/blink.fr", "blink\n");
@@ -52,4 +57,23 @@ test("editor keeps one CodeMirror state per project file", () => {
   handle.openDocument("src/led.fr", "fresh\n");
   assert.equal(handle.getSource(), "fresh\n");
   handle.destroy();
+
+  const standalone = mountEditor({
+    mount: window.document.querySelector("#editor") as HTMLElement,
+    storage: {
+      load: () => "standalone\n",
+      save: () => true,
+      download: () => undefined,
+    },
+  });
+  assert.ok(
+    [...window.document.querySelectorAll("button")]
+      .find((button) => button.textContent === "Run File"),
+  );
+  assert.equal(
+    [...window.document.querySelectorAll("button")]
+      .some((button) => button.textContent === "Run Project"),
+    false,
+  );
+  standalone.destroy();
 });
