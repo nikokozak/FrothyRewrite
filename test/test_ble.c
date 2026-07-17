@@ -8,6 +8,7 @@
 #include "platform.h"
 #include "repl.h"
 #include "runtime.h"
+#include "slot.h"
 #include "tagged.h"
 
 #include "unity/unity.h"
@@ -16,8 +17,8 @@
 
 #if !FR_FEATURE_BLE || !FR_BLE_ENABLE_OBSERVER ||                         \
     !FR_BLE_ENABLE_BROADCASTER || !FR_BLE_ENABLE_CENTRAL ||              \
-    !FR_BLE_ENABLE_PERIPHERAL
-#error "test_ble requires all four BLE role gates"
+    !FR_BLE_ENABLE_PERIPHERAL || !FR_BLE_ENABLE_GATT_SERVER
+#error "test_ble requires all four BLE role gates and the GATT server"
 #endif
 
 static fr_runtime_t s_runtime;
@@ -127,6 +128,115 @@ static void test_lifecycle_words_and_status_retention(void) {
                                       sizeof(out)));
   TEST_ASSERT_EQUAL_STRING("ok\n", out);
   TEST_ASSERT_EQUAL(FR_BLE_OP_ON, read_status().last_operation);
+}
+
+static void test_declarative_gatt_table_is_atomic_and_inspectable(void) {
+  static const char *source[] = {
+      "record GattRow [ kind, uuid, flags, size ]",
+      "svcrow is GattRow: $ble.gatt.service, \"180F\", "
+      "$ble.gatt.primary, 0",
+      "levelflags is 0",
+      "set levelflags to $ble.gatt.read + $ble.gatt.notify",
+      "levelrow is GattRow: $ble.gatt.characteristic, \"2A19\", "
+      "levelflags, 1",
+      "customflags is 0",
+      "set customflags to $ble.gatt.read + $ble.gatt.write",
+      "customrow is GattRow: $ble.gatt.characteristic, "
+      "\"12345678-1234-5678-1234-56789ABCDEF0\", customflags, 8",
+      "gattrows is cells(3)",
+      "set gattrows[0] to svcrow",
+      "set gattrows[1] to levelrow",
+      "set gattrows[2] to customrow",
+  };
+  static const uint8_t custom_uuid[] = {
+      0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78,
+      0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+  };
+  const fr_base_def_t *install = NULL;
+  const fr_base_def_t *info = NULL;
+  fr_ble_gatt_status_t status = {0};
+  fr_tagged_t rows = fr_tagged_nil();
+  fr_tagged_t result = fr_tagged_nil();
+  fr_slot_id_t slot_id = 0;
+  char out[64];
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  read_native_def("ble.gatt.install", FR_SLOT_BLE_GATT_INSTALL, 1, &install);
+  read_native_def("ble.gatt.info", FR_SLOT_BLE_GATT_INFO, 0, &info);
+  for (size_t i = 0; i < sizeof(source) / sizeof(source[0]); i++) {
+    TEST_ASSERT_EQUAL_MESSAGE(
+        FR_OK, fr_repl_eval_line(&s_runtime, source[i], out, sizeof(out)),
+        source[i]);
+  }
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_id_for_name(&s_runtime, "gattrows", &slot_id));
+  TEST_ASSERT_EQUAL(FR_OK, fr_slot_read(&s_runtime, slot_id, &rows));
+
+  TEST_ASSERT_EQUAL(
+      FR_OK, install->native_fn(&s_runtime, &rows, 1, &result));
+  TEST_ASSERT_TRUE(fr_tagged_is_nil(result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_gatt_status(&status));
+  TEST_ASSERT_EQUAL_UINT32(1, status.table_generation);
+  TEST_ASSERT_EQUAL_UINT16(3, status.table.row_count);
+  TEST_ASSERT_EQUAL_UINT16(1, status.table.service_count);
+  TEST_ASSERT_EQUAL_UINT16(2, status.table.characteristic_count);
+  TEST_ASSERT_EQUAL_UINT16(9, status.table.value_bytes_used);
+  TEST_ASSERT_EQUAL_UINT16(0, status.table.services[0].attribute_id);
+  TEST_ASSERT_EQUAL_UINT16(0, status.table.services[0].first_characteristic);
+  TEST_ASSERT_EQUAL_UINT16(2, status.table.services[0].characteristic_count);
+  TEST_ASSERT_FALSE(status.table.services[0].secondary);
+  TEST_ASSERT_EQUAL(FR_BLE_UUID_16, status.table.services[0].uuid.kind);
+  TEST_ASSERT_EQUAL_HEX8(0x18, status.table.services[0].uuid.bytes[0]);
+  TEST_ASSERT_EQUAL_HEX8(0x0f, status.table.services[0].uuid.bytes[1]);
+  TEST_ASSERT_EQUAL_UINT16(1,
+                           status.table.characteristics[0].attribute_id);
+  TEST_ASSERT_EQUAL_UINT16(FR_BLE_GATT_CHR_READ | FR_BLE_GATT_CHR_NOTIFY,
+                           status.table.characteristics[0].portable_flags);
+  TEST_ASSERT_EQUAL_UINT16(1,
+                           status.table.characteristics[0].maximum_length);
+  TEST_ASSERT_EQUAL_UINT16(0,
+                           status.table.characteristics[0].value_offset);
+  TEST_ASSERT_EQUAL_UINT16(0,
+                           status.table.characteristics[0].value_length);
+  TEST_ASSERT_EQUAL_UINT16(2,
+                           status.table.characteristics[1].attribute_id);
+  TEST_ASSERT_EQUAL(FR_BLE_UUID_128,
+                    status.table.characteristics[1].uuid.kind);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(
+      custom_uuid, status.table.characteristics[1].uuid.bytes,
+      sizeof(custom_uuid));
+  TEST_ASSERT_EQUAL_UINT16(1,
+                           status.table.characteristics[1].value_offset);
+  TEST_ASSERT_EQUAL_UINT16(8,
+                           status.table.characteristics[1].maximum_length);
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    info->native_fn(&s_runtime, NULL, 0, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  TEST_ASSERT_EQUAL(
+      FR_ERR_BLE_BUSY, install->native_fn(&s_runtime, &rows, 1, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_gatt_status(&status));
+  TEST_ASSERT_EQUAL_UINT32(1, status.table_generation);
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_off(&s_runtime));
+
+  TEST_ASSERT_EQUAL(
+      FR_OK,
+      fr_repl_eval_line(
+          &s_runtime,
+          "badrow is GattRow: $ble.gatt.service, \"180\", "
+          "$ble.gatt.primary, 0",
+          out, sizeof(out)));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime,
+                                      "set gattrows[0] to badrow", out,
+                                      sizeof(out)));
+  TEST_ASSERT_EQUAL(
+      FR_ERR_DOMAIN, install->native_fn(&s_runtime, &rows, 1, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_gatt_status(&status));
+  TEST_ASSERT_EQUAL_UINT32(1, status.table_generation);
+  TEST_ASSERT_EQUAL_UINT16(3, status.table.row_count);
+  TEST_ASSERT_EQUAL_HEX8(0x18, status.table.services[0].uuid.bytes[0]);
+  TEST_ASSERT_EQUAL_HEX8(0x0f, status.table.services[0].uuid.bytes[1]);
 }
 
 static void test_scanner_words_bridge_tagged_values_and_reports(void) {
@@ -1011,6 +1121,7 @@ static void test_save_and_restore_drop_volatile_ble_state(void) {
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_lifecycle_words_and_status_retention);
+  RUN_TEST(test_declarative_gatt_table_is_atomic_and_inspectable);
   RUN_TEST(test_scanner_words_bridge_tagged_values_and_reports);
   RUN_TEST(test_scanner_loop_reuses_eval_bytes);
   RUN_TEST(test_advertising_words_validate_and_gate_scan);
