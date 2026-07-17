@@ -267,6 +267,37 @@ static void test_scanner_words_bridge_tagged_values_and_reports(void) {
   }
 }
 
+static void test_scanner_loop_reuses_eval_bytes(void) {
+  fr_ble_scan_report_t report;
+  fr_ble_scan_report_t current;
+  fr_ble_status_t status;
+  char out[64];
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_scan_start(100, 50, false, false, -90));
+  for (uint8_t id = 0; id < FR_BLE_SCAN_QUEUE_COUNT; id++) {
+    report = report_with(id, -40, FR_BLE_SCAN_DATA_BYTES);
+    TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_push_scan_report(&report));
+  }
+
+  TEST_ASSERT_EQUAL(
+      FR_OK,
+      fr_repl_eval_line(
+          &s_runtime,
+          "repeat 8 [ ble.scan.next?:; ble.scan.peer:; ble.scan.data: ]",
+          out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", out);
+  status = read_status();
+  TEST_ASSERT_EQUAL_UINT8(0, status.queue_count);
+  TEST_ASSERT_EQUAL_UINT32(8, status.dequeued);
+  TEST_ASSERT_TRUE(status.current_valid);
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_scan_current(&current));
+  TEST_ASSERT_EQUAL_UINT8(7, current.address[5]);
+  TEST_ASSERT_EQUAL_UINT8(7, current.data[0]);
+}
+
 static void test_radio_lifecycle_and_status(void) {
   static const uint8_t own_address[6] = {0xaa, 0xbb, 0xcc,
                                          0xdd, 0xee, 0xff};
@@ -513,6 +544,7 @@ int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_lifecycle_words_and_status_retention);
   RUN_TEST(test_scanner_words_bridge_tagged_values_and_reports);
+  RUN_TEST(test_scanner_loop_reuses_eval_bytes);
   RUN_TEST(test_radio_lifecycle_and_status);
   RUN_TEST(test_scan_parameters_and_state_gates);
   RUN_TEST(test_queue_conservation_overflow_and_cursor);
