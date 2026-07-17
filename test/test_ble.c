@@ -540,6 +540,54 @@ static void test_runtime_clear_shuts_down_ble_before_reuse(void) {
   TEST_ASSERT_EQUAL_UINT8(1, read_status().queue_count);
 }
 
+static void test_save_and_restore_drop_volatile_ble_state(void) {
+  fr_ble_scan_report_t report = report_with(7, -40, 3);
+  fr_ble_status_t status;
+  char out[64];
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_scan_start(100, 50, false, false, -90));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_push_scan_report(&report));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "ble.scan.next?:", out,
+                                      sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("true\nok\n", out);
+  TEST_ASSERT_EQUAL(FR_ERR_VOLATILE,
+                    fr_repl_eval_line(&s_runtime,
+                                      "saved-peer is ble.scan.peer:", out,
+                                      sizeof(out)));
+
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "save", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", out);
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_RADIO_OFF, status.radio_state);
+  TEST_ASSERT_EQUAL(FR_BLE_SCAN_IDLE, status.scan_state);
+  TEST_ASSERT_EQUAL_UINT8(0, status.queue_count);
+  TEST_ASSERT_FALSE(status.current_valid);
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_platform_ble_scan_start(100, 50, false, false, -90));
+  TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_push_scan_report(&report));
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_RADIO_READY, status.radio_state);
+  TEST_ASSERT_EQUAL(FR_BLE_SCAN_ACTIVE, status.scan_state);
+  TEST_ASSERT_EQUAL_UINT8(1, status.queue_count);
+
+  TEST_ASSERT_EQUAL(
+      FR_OK, fr_repl_eval_line(&s_runtime, "restore", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("ok\n", out);
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_RADIO_OFF, status.radio_state);
+  TEST_ASSERT_EQUAL(FR_BLE_SCAN_IDLE, status.scan_state);
+  TEST_ASSERT_EQUAL_UINT8(0, status.queue_count);
+  TEST_ASSERT_FALSE(status.current_valid);
+  TEST_ASSERT_EQUAL(FR_BLE_OP_NONE, status.last_operation);
+}
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_lifecycle_words_and_status_retention);
@@ -551,5 +599,6 @@ int main(void) {
   RUN_TEST(test_failures_timeouts_reset_and_clear);
   RUN_TEST(test_target_start_failure_owns_new_empty_session);
   RUN_TEST(test_runtime_clear_shuts_down_ble_before_reuse);
+  RUN_TEST(test_save_and_restore_drop_volatile_ble_state);
   return UNITY_END();
 }
