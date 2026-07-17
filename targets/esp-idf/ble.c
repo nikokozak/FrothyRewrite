@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "host/ble_gap.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 #include "nimble/nimble_port.h"
@@ -42,7 +43,40 @@ enum {
   FR_ESP_BLE_WAIT_TICKS = 1,
   FR_ESP_BLE_CLEANUP_STACK_BYTES = 3072,
   FR_ESP_BLE_CLEANUP_PRIORITY = tskIDLE_PRIORITY + 2,
+  FR_ESP_BLE_SCAN_INTERVAL_MIN_MS = 3,
+  FR_ESP_BLE_SCAN_INTERVAL_MAX_MS = 10240,
+  FR_ESP_BLE_RSSI_MIN = -127,
+  FR_ESP_BLE_RSSI_MAX = 20,
 };
+
+#if FR_BLE_ENABLE_OBSERVER
+typedef struct fr_esp_ble_scan_t {
+  fr_ble_scan_state_t state;
+  uint32_t generation;
+
+  uint16_t requested_interval_ms;
+  uint16_t requested_window_ms;
+  uint32_t actual_interval_us;
+  uint32_t actual_window_us;
+  int8_t minimum_rssi;
+  bool active;
+  bool repeats;
+
+  fr_ble_scan_report_t queue[FR_BLE_SCAN_QUEUE_COUNT];
+  uint8_t head;
+  uint8_t count;
+  uint8_t high_water;
+  uint32_t received;
+  uint32_t accepted;
+  uint32_t filtered_rssi;
+  uint32_t dequeued;
+  uint32_t dropped;
+  uint32_t malformed;
+
+  bool current_valid;
+  fr_ble_scan_report_t current;
+} fr_esp_ble_scan_t;
+#endif
 
 typedef struct fr_esp_ble_state_t {
   fr_ble_radio_state_t radio_state;
@@ -54,8 +88,13 @@ typedef struct fr_esp_ble_state_t {
   uint32_t late_callback_count;
 
   fr_ble_address_type_t own_address_type;
+  uint8_t own_address_raw_type;
   uint8_t own_address[6];
   bool own_address_valid;
+
+#if FR_BLE_ENABLE_OBSERVER
+  fr_esp_ble_scan_t scan;
+#endif
 
   fr_ble_operation_t last_operation;
   fr_err_t last_result;
@@ -98,6 +137,59 @@ static void fr_esp_ble_record_locked(fr_ble_operation_t operation,
   fr_esp_ble.last_operation_ms = fr_esp_ble_now_ms();
 }
 
+#if FR_BLE_ENABLE_OBSERVER
+static void fr_esp_ble_clear_reports_locked(void) {
+  memset(fr_esp_ble.scan.queue, 0, sizeof(fr_esp_ble.scan.queue));
+  fr_esp_ble.scan.head = 0;
+  fr_esp_ble.scan.count = 0;
+  fr_esp_ble.scan.high_water = 0;
+  fr_esp_ble.scan.received = 0;
+  fr_esp_ble.scan.accepted = 0;
+  fr_esp_ble.scan.filtered_rssi = 0;
+  fr_esp_ble.scan.dequeued = 0;
+  fr_esp_ble.scan.dropped = 0;
+  fr_esp_ble.scan.malformed = 0;
+  fr_esp_ble.scan.current_valid = false;
+  memset(&fr_esp_ble.scan.current, 0, sizeof(fr_esp_ble.scan.current));
+}
+
+static void fr_esp_ble_clear_scan_parameters_locked(void) {
+  fr_esp_ble.scan.requested_interval_ms = 0;
+  fr_esp_ble.scan.requested_window_ms = 0;
+  fr_esp_ble.scan.actual_interval_us = 0;
+  fr_esp_ble.scan.actual_window_us = 0;
+  fr_esp_ble.scan.minimum_rssi = 0;
+  fr_esp_ble.scan.active = false;
+  fr_esp_ble.scan.repeats = false;
+}
+
+static void fr_esp_ble_invalidate_scan_locked(bool clear_parameters) {
+  if (fr_esp_ble.scan.state != FR_BLE_SCAN_IDLE ||
+      fr_esp_ble.scan.count > 0 || fr_esp_ble.scan.current_valid) {
+    fr_esp_ble.scan.generation += 1u;
+  }
+  fr_esp_ble.scan.state = FR_BLE_SCAN_IDLE;
+  fr_esp_ble_clear_reports_locked();
+  if (clear_parameters) {
+    fr_esp_ble_clear_scan_parameters_locked();
+  }
+}
+
+static void fr_esp_ble_abandon_scan_locked(void) {
+  if (fr_esp_ble.scan.state != FR_BLE_SCAN_IDLE ||
+      fr_esp_ble.scan.count > 0 || fr_esp_ble.scan.current_valid) {
+    fr_esp_ble.scan.generation += 1u;
+  }
+  fr_esp_ble.scan.dropped += fr_esp_ble.scan.count;
+  memset(fr_esp_ble.scan.queue, 0, sizeof(fr_esp_ble.scan.queue));
+  fr_esp_ble.scan.head = 0;
+  fr_esp_ble.scan.count = 0;
+  fr_esp_ble.scan.state = FR_BLE_SCAN_IDLE;
+  fr_esp_ble.scan.current_valid = false;
+  memset(&fr_esp_ble.scan.current, 0, sizeof(fr_esp_ble.scan.current));
+}
+#endif
+
 static void fr_esp_ble_mark_off_locked(void) {
   fr_esp_ble.radio_state = FR_BLE_RADIO_OFF;
   fr_esp_ble.completion_generation = 0;
@@ -105,6 +197,7 @@ static void fr_esp_ble_mark_off_locked(void) {
   fr_esp_ble.shutdown_in_progress = false;
   fr_esp_ble.cleanup_required = false;
   fr_esp_ble.own_address_valid = false;
+  fr_esp_ble.own_address_raw_type = 0;
   memset(fr_esp_ble.own_address, 0, sizeof(fr_esp_ble.own_address));
 }
 
@@ -127,6 +220,149 @@ static bool fr_esp_ble_address_type(uint8_t raw_type,
     return false;
   }
 }
+
+#if FR_BLE_ENABLE_OBSERVER
+static bool fr_esp_ble_report_flags(uint8_t event_type, uint8_t *out_flags) {
+  uint8_t flags = FR_BLE_REPORT_LEGACY;
+
+  if (out_flags == NULL) {
+    return false;
+  }
+  switch (event_type) {
+  case BLE_HCI_ADV_RPT_EVTYPE_ADV_IND:
+    flags |= FR_BLE_REPORT_CONNECTABLE | FR_BLE_REPORT_SCANNABLE;
+    break;
+  case BLE_HCI_ADV_RPT_EVTYPE_DIR_IND:
+    flags |= FR_BLE_REPORT_CONNECTABLE | FR_BLE_REPORT_DIRECTED;
+    break;
+  case BLE_HCI_ADV_RPT_EVTYPE_SCAN_IND:
+    flags |= FR_BLE_REPORT_SCANNABLE;
+    break;
+  case BLE_HCI_ADV_RPT_EVTYPE_NONCONN_IND:
+    break;
+  case BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP:
+    flags |= FR_BLE_REPORT_SCANNABLE | FR_BLE_REPORT_SCAN_RESPONSE;
+    break;
+  default:
+    return false;
+  }
+  *out_flags = flags;
+  return true;
+}
+
+static uint16_t fr_esp_ble_scan_units(uint16_t milliseconds) {
+  /* Legacy scan units are 625 us. Adding half a unit rounds to the nearest
+   * supported value; an exact half cannot occur for integer milliseconds. */
+  return (uint16_t)(((uint32_t)milliseconds * 1000u + 312u) / 625u);
+}
+
+static bool fr_esp_ble_scan_callback_current_locked(uint32_t generation) {
+  return fr_esp_ble.scan.state == FR_BLE_SCAN_ACTIVE &&
+         fr_esp_ble.scan.generation == generation;
+}
+
+static void fr_esp_ble_receive_report(uint32_t generation,
+                                      const struct ble_gap_disc_desc *desc) {
+  fr_ble_scan_report_t report = {0};
+  fr_ble_address_type_t address_type = FR_BLE_ADDRESS_PUBLIC;
+  int8_t minimum_rssi = 0;
+  bool malformed = false;
+  bool filtered = false;
+  uint8_t i = 0;
+  uint8_t tail = 0;
+
+  if (desc == NULL) {
+    return;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble_scan_callback_current_locked(generation)) {
+    fr_esp_ble.late_callback_count += 1u;
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return;
+  }
+  minimum_rssi = fr_esp_ble.scan.minimum_rssi;
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+  malformed =
+      !fr_esp_ble_address_type(desc->addr.type, &address_type) ||
+      !fr_esp_ble_report_flags(desc->event_type, &report.flags) ||
+      desc->rssi < FR_ESP_BLE_RSSI_MIN || desc->rssi > FR_ESP_BLE_RSSI_MAX ||
+      desc->length_data > FR_BLE_SCAN_DATA_BYTES ||
+      (desc->length_data > 0 && desc->data == NULL);
+  if (!malformed) {
+    report.address_type = address_type;
+    for (i = 0; i < sizeof(report.address); ++i) {
+      report.address[i] = desc->addr.val[sizeof(report.address) - 1u - i];
+    }
+    report.rssi = desc->rssi;
+    report.data_length = desc->length_data;
+    if (report.data_length > 0) {
+      memcpy(report.data, desc->data, report.data_length);
+    }
+    report.timestamp_ms = fr_esp_ble_now_ms();
+    filtered = report.rssi < minimum_rssi;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble_scan_callback_current_locked(generation)) {
+    fr_esp_ble.late_callback_count += 1u;
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return;
+  }
+
+  fr_esp_ble.scan.received += 1u;
+  if (malformed) {
+    fr_esp_ble.scan.malformed += 1u;
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return;
+  }
+  if (filtered) {
+    fr_esp_ble.scan.filtered_rssi += 1u;
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return;
+  }
+  if (fr_esp_ble.scan.count == FR_BLE_SCAN_QUEUE_COUNT) {
+    fr_esp_ble.scan.head =
+        (uint8_t)((fr_esp_ble.scan.head + 1u) % FR_BLE_SCAN_QUEUE_COUNT);
+    fr_esp_ble.scan.count -= 1u;
+    fr_esp_ble.scan.dropped += 1u;
+  }
+  tail = (uint8_t)((fr_esp_ble.scan.head + fr_esp_ble.scan.count) %
+                   FR_BLE_SCAN_QUEUE_COUNT);
+  fr_esp_ble.scan.queue[tail] = report;
+  fr_esp_ble.scan.count += 1u;
+  fr_esp_ble.scan.accepted += 1u;
+  if (fr_esp_ble.scan.count > fr_esp_ble.scan.high_water) {
+    fr_esp_ble.scan.high_water = fr_esp_ble.scan.count;
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+}
+
+static int fr_esp_ble_scan_event(struct ble_gap_event *event, void *argument) {
+  uint32_t generation = (uint32_t)(uintptr_t)argument;
+
+  if (event == NULL) {
+    return 0;
+  }
+  if (event->type == BLE_GAP_EVENT_DISC) {
+    fr_esp_ble_receive_report(generation, &event->disc);
+    return 0;
+  }
+  if (event->type == BLE_GAP_EVENT_DISC_COMPLETE) {
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    if (generation != fr_esp_ble.scan.generation ||
+        fr_esp_ble.scan.state == FR_BLE_SCAN_IDLE) {
+      fr_esp_ble.late_callback_count += 1u;
+    } else {
+      fr_esp_ble.scan.state = FR_BLE_SCAN_IDLE;
+      fr_esp_ble.last_protocol_reason = event->disc_complete.reason;
+    }
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+  }
+  return 0;
+}
+#endif
 
 static void fr_esp_ble_on_sync(void) {
   fr_ble_address_type_t address_type = FR_BLE_ADDRESS_PUBLIC;
@@ -162,6 +398,7 @@ static void fr_esp_ble_on_sync(void) {
   }
 
   fr_esp_ble.own_address_type = address_type;
+  fr_esp_ble.own_address_raw_type = raw_type;
   /* NimBLE stores addresses least-significant byte first; Frothy stores the
    * same address in the display order used by people and tools. */
   for (i = 0; i < sizeof(raw_address); ++i) {
@@ -178,6 +415,9 @@ static void fr_esp_ble_on_reset(int reason) {
   fr_esp_ble.last_protocol_reason = reason;
   fr_esp_ble.reset_count += 1u;
   fr_esp_ble.own_address_valid = false;
+#if FR_BLE_ENABLE_OBSERVER
+  fr_esp_ble_abandon_scan_locked();
+#endif
   if (!fr_esp_ble.shutdown_in_progress) {
     fr_esp_ble.radio_state = FR_BLE_RADIO_FAILED;
     fr_esp_ble.cleanup_required = fr_esp_ble.host_task_running;
@@ -253,6 +493,9 @@ static fr_err_t fr_esp_ble_begin_cleanup(void) {
   fr_esp_ble.shutdown_in_progress = true;
   fr_esp_ble.cleanup_required = true;
   fr_esp_ble.own_address_valid = false;
+#if FR_BLE_ENABLE_OBSERVER
+  fr_esp_ble_abandon_scan_locked();
+#endif
   portEXIT_CRITICAL(&fr_esp_ble_lock);
 
   created = xTaskCreate(fr_esp_ble_cleanup_task, "frothy_ble_stop",
@@ -488,8 +731,234 @@ fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
   return fr_esp_ble_wait_start(runtime, generation);
 }
 
+fr_err_t fr_platform_ble_scan_start(uint16_t interval_ms, uint16_t window_ms,
+                                    bool active, bool repeats,
+                                    int8_t minimum_rssi) {
+#if FR_BLE_ENABLE_OBSERVER
+  struct ble_gap_disc_params parameters = {0};
+  uint16_t interval_units = 0;
+  uint16_t window_units = 0;
+  uint32_t generation = 0;
+  uint8_t own_address_type = 0;
+  int rc = 0;
+  bool started = false;
+
+  if (interval_ms < FR_ESP_BLE_SCAN_INTERVAL_MIN_MS ||
+      interval_ms > FR_ESP_BLE_SCAN_INTERVAL_MAX_MS ||
+      window_ms < FR_ESP_BLE_SCAN_INTERVAL_MIN_MS ||
+      window_ms > interval_ms || minimum_rssi < FR_ESP_BLE_RSSI_MIN ||
+      minimum_rssi > FR_ESP_BLE_RSSI_MAX) {
+    return FR_ERR_RANGE;
+  }
+
+  interval_units = fr_esp_ble_scan_units(interval_ms);
+  window_units = fr_esp_ble_scan_units(window_ms);
+  if (window_units > interval_units) {
+    return FR_ERR_RANGE;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (fr_esp_ble.radio_state == FR_BLE_RADIO_STARTING ||
+      fr_esp_ble.radio_state == FR_BLE_RADIO_STOPPING) {
+    fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_ERR_BLE_BUSY, 0);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_BLE_BUSY;
+  }
+  if (fr_esp_ble.radio_state != FR_BLE_RADIO_READY) {
+    fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_ERR_BLE_NOT_READY, 0);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_BLE_NOT_READY;
+  }
+  if (fr_esp_ble.scan.state != FR_BLE_SCAN_IDLE) {
+    fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_ERR_BLE_BUSY, 0);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_BLE_BUSY;
+  }
+
+  fr_esp_ble_clear_reports_locked();
+  fr_esp_ble.scan.requested_interval_ms = interval_ms;
+  fr_esp_ble.scan.requested_window_ms = window_ms;
+  fr_esp_ble.scan.actual_interval_us = (uint32_t)interval_units * 625u;
+  fr_esp_ble.scan.actual_window_us = (uint32_t)window_units * 625u;
+  fr_esp_ble.scan.minimum_rssi = minimum_rssi;
+  fr_esp_ble.scan.active = active;
+  fr_esp_ble.scan.repeats = repeats;
+  fr_esp_ble.scan.generation += 1u;
+  generation = fr_esp_ble.scan.generation;
+  own_address_type = fr_esp_ble.own_address_raw_type;
+  /* Publish callback ownership before asking NimBLE to enable the controller.
+   * A report can then be accepted even if the host task runs immediately on
+   * the other core. A failed start returns the state to idle below. */
+  fr_esp_ble.scan.state = FR_BLE_SCAN_ACTIVE;
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+  parameters.itvl = interval_units;
+  parameters.window = window_units;
+  parameters.filter_policy = 0;
+  parameters.limited = 0;
+  parameters.passive = active ? 0u : 1u;
+  parameters.filter_duplicates = repeats ? 0u : 1u;
+  parameters.disable_observer_mode = 0;
+  rc = ble_gap_disc(own_address_type, BLE_HS_FOREVER, &parameters,
+                    fr_esp_ble_scan_event,
+                    (void *)(uintptr_t)generation);
+  if (rc != 0) {
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    if (generation == fr_esp_ble.scan.generation &&
+        fr_esp_ble.scan.state == FR_BLE_SCAN_ACTIVE) {
+      fr_esp_ble.scan.state = FR_BLE_SCAN_IDLE;
+      fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_ERR_IO, rc);
+    }
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_IO;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  started = generation == fr_esp_ble.scan.generation &&
+            fr_esp_ble.scan.state == FR_BLE_SCAN_ACTIVE &&
+            fr_esp_ble.radio_state == FR_BLE_RADIO_READY;
+  if (started) {
+    fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_OK, 0);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  if (!started) {
+    (void)ble_gap_disc_cancel();
+    return FR_ERR_IO;
+  }
+  return FR_OK;
+#else
+  (void)interval_ms;
+  (void)window_ms;
+  (void)active;
+  (void)repeats;
+  (void)minimum_rssi;
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  fr_esp_ble_record_locked(FR_BLE_OP_SCAN_START, FR_ERR_UNSUPPORTED, 0);
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return FR_ERR_UNSUPPORTED;
+#endif
+}
+
+fr_err_t fr_platform_ble_scan_stop(fr_runtime_t *runtime) {
+#if FR_BLE_ENABLE_OBSERVER
+  uint32_t generation = 0;
+  int rc = 0;
+
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  fr_esp_ble.scan.current_valid = false;
+  memset(&fr_esp_ble.scan.current, 0, sizeof(fr_esp_ble.scan.current));
+  if (fr_esp_ble.scan.state == FR_BLE_SCAN_IDLE) {
+    fr_esp_ble_record_locked(FR_BLE_OP_SCAN_STOP, FR_OK, 0);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_OK;
+  }
+  generation = fr_esp_ble.scan.generation;
+  fr_esp_ble.scan.state = FR_BLE_SCAN_STOPPING;
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+  /* In the pinned NimBLE host, a successful cancel synchronously disables
+   * discovery and clears its state; it does not emit DISC_COMPLETE. */
+  if (ble_gap_disc_active()) {
+    rc = ble_gap_disc_cancel();
+  } else {
+    rc = BLE_HS_EALREADY;
+  }
+  if (rc != 0 && rc != BLE_HS_EALREADY) {
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    if (generation == fr_esp_ble.scan.generation &&
+        fr_esp_ble.scan.state == FR_BLE_SCAN_STOPPING) {
+      fr_esp_ble_record_locked(FR_BLE_OP_SCAN_STOP, FR_ERR_IO, rc);
+    }
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_IO;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (generation == fr_esp_ble.scan.generation &&
+      fr_esp_ble.scan.state == FR_BLE_SCAN_STOPPING) {
+    fr_esp_ble.scan.state = FR_BLE_SCAN_IDLE;
+    fr_esp_ble_record_locked(FR_BLE_OP_SCAN_STOP, FR_OK, 0);
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return FR_OK;
+#else
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
+  return FR_OK;
+#endif
+}
+
+fr_err_t fr_platform_ble_scan_next(bool *out_has_report) {
+#if FR_BLE_ENABLE_OBSERVER
+  if (out_has_report == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (fr_esp_ble.scan.count == 0) {
+    fr_esp_ble.scan.current_valid = false;
+    memset(&fr_esp_ble.scan.current, 0, sizeof(fr_esp_ble.scan.current));
+    *out_has_report = false;
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_OK;
+  }
+
+  fr_esp_ble.scan.current = fr_esp_ble.scan.queue[fr_esp_ble.scan.head];
+  memset(&fr_esp_ble.scan.queue[fr_esp_ble.scan.head], 0,
+         sizeof(fr_esp_ble.scan.queue[fr_esp_ble.scan.head]));
+  fr_esp_ble.scan.current_valid = true;
+  fr_esp_ble.scan.head =
+      (uint8_t)((fr_esp_ble.scan.head + 1u) % FR_BLE_SCAN_QUEUE_COUNT);
+  fr_esp_ble.scan.count -= 1u;
+  fr_esp_ble.scan.dequeued += 1u;
+  *out_has_report = true;
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return FR_OK;
+#else
+  if (out_has_report == NULL) {
+    return FR_ERR_INVALID;
+  }
+  *out_has_report = false;
+  return FR_OK;
+#endif
+}
+
+fr_err_t fr_platform_ble_scan_current(fr_ble_scan_report_t *out_report) {
+#if FR_BLE_ENABLE_OBSERVER
+  if (out_report == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble.scan.current_valid) {
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return FR_ERR_NOT_FOUND;
+  }
+  *out_report = fr_esp_ble.scan.current;
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return FR_OK;
+#else
+  if (out_report == NULL) {
+    return FR_ERR_INVALID;
+  }
+  return FR_ERR_NOT_FOUND;
+#endif
+}
+
 fr_err_t fr_platform_ble_project_clear(void) {
-  fr_err_t err = fr_esp_ble_begin_cleanup();
+  fr_err_t err = FR_OK;
+
+#if FR_BLE_ENABLE_OBSERVER
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  fr_esp_ble_invalidate_scan_locked(true);
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+#endif
+  err = fr_esp_ble_begin_cleanup();
 
   if (err == FR_OK) {
     err = fr_esp_ble_wait_cleanup(NULL);
@@ -514,7 +983,11 @@ fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status) {
   portENTER_CRITICAL(&fr_esp_ble_lock);
   *out_status = (fr_ble_status_t){
       .radio_state = fr_esp_ble.radio_state,
+#if FR_BLE_ENABLE_OBSERVER
+      .scan_state = fr_esp_ble.scan.state,
+#else
       .scan_state = FR_BLE_SCAN_IDLE,
+#endif
       .roles = fr_esp_ble_roles(),
 #if CONFIG_ESP_COEX_SW_COEXIST_ENABLE
       .coexistence_enabled = true,
@@ -522,12 +995,36 @@ fr_err_t fr_platform_ble_status(fr_ble_status_t *out_status) {
       .coexistence_enabled = false,
 #endif
       .lifecycle_generation = fr_esp_ble.lifecycle_generation,
+#if FR_BLE_ENABLE_OBSERVER
+      .scan_generation = fr_esp_ble.scan.generation,
+#endif
       .shutdown_in_progress = fr_esp_ble.shutdown_in_progress,
       .cleanup_required = fr_esp_ble.cleanup_required,
       .late_callback_count = fr_esp_ble.late_callback_count,
       .own_address_type = fr_esp_ble.own_address_type,
       .own_address_valid = fr_esp_ble.own_address_valid,
+#if FR_BLE_ENABLE_OBSERVER
+      .requested_interval_ms = fr_esp_ble.scan.requested_interval_ms,
+      .requested_window_ms = fr_esp_ble.scan.requested_window_ms,
+      .actual_interval_us = fr_esp_ble.scan.actual_interval_us,
+      .actual_window_us = fr_esp_ble.scan.actual_window_us,
+      .minimum_rssi = fr_esp_ble.scan.minimum_rssi,
+      .active_scan = fr_esp_ble.scan.active,
+      .repeats = fr_esp_ble.scan.repeats,
+      .queue_count = fr_esp_ble.scan.count,
       .queue_capacity = FR_BLE_SCAN_QUEUE_COUNT,
+      .queue_high_water = fr_esp_ble.scan.high_water,
+      .received = fr_esp_ble.scan.received,
+      .accepted = fr_esp_ble.scan.accepted,
+      .filtered_rssi = fr_esp_ble.scan.filtered_rssi,
+      .dequeued = fr_esp_ble.scan.dequeued,
+      .dropped = fr_esp_ble.scan.dropped,
+      .malformed = fr_esp_ble.scan.malformed,
+      .current_valid = fr_esp_ble.scan.current_valid,
+      .current_rssi = fr_esp_ble.scan.current.rssi,
+      .current_flags = fr_esp_ble.scan.current.flags,
+      .current_data_length = fr_esp_ble.scan.current.data_length,
+#endif
       .last_operation = fr_esp_ble.last_operation,
       .last_result = fr_esp_ble.last_result,
       .last_platform_code = fr_esp_ble.last_platform_code,

@@ -64,6 +64,7 @@ idf_component_register(
         ${FR_GEN_DIR}
         ${FR_LIB_EXT_INCLUDE_DIRS}
     REQUIRES
+        bt
         driver
         esp_adc
         esp_event
