@@ -9,7 +9,8 @@ ESP_IDF_PROFILE_STAMP := $(BUILD_DIR)/.frothy-profile-$(PROFILE)
 ESP_IDF_SDKCONFIG_STAMP := $(BUILD_DIR)/.frothy-sdkconfig-defaults
 ESP_IDF_SDKCONFIG_DEFAULTS := \
 	targets/esp-idf/sdkconfig.defaults \
-	profiles/$(PROFILE).sdkconfig.defaults
+	profiles/$(PROFILE).sdkconfig.defaults \
+	$(wildcard profiles/$(PROFILE).sdkconfig.defaults.$(BOARD_ESP_IDF_TARGET))
 
 TARGET_BUILD_DEPS += \
 	targets/esp-idf/CMakeLists.txt \
