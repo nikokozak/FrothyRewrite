@@ -1,8 +1,8 @@
 {
   "name": "frothy",
   "displayName": "Frothy",
-  "description": "Live Frothy workflow inside VS Code: connect to a board, run forms and files, inspect words, save and restore.",
-  "version": "0.4.0",
+  "description": "Live Frothy workflow inside VS Code: connect to a board, run forms and files, inspect words, flash and build firmware.",
+  "version": "0.5.0",
   "publisher": "NikolaiKozak",
   "license": "MIT",
   "repository": {
@@ -11,6 +11,9 @@
     "directory": "editors/vscode"
   },
   "homepage": "https://github.com/nikokozak/FrothyRewrite/tree/main/editors/vscode#readme",
+  "bugs": {
+    "url": "https://github.com/nikokozak/FrothyRewrite/issues"
+  },
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -18,9 +21,22 @@
     "Programming Languages",
     "Other"
   ],
+  "keywords": [
+    "hardware",
+    "embedded",
+    "serial",
+    "repl",
+    "microcontroller"
+  ],
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#2c1a10",
+    "theme": "dark"
+  },
   "main": "./out/extension.js",
   "activationEvents": [
-    "onLanguage:frothy"
+    "onLanguage:frothy",
+    "workspaceContains:frothy.toml"
   ],
   "contributes": {
     "languages": [
@@ -57,41 +73,111 @@
       { "command": "frothy.openExample",   "title": "Frothy: Open Example",     "icon": "$(book)" },
       { "command": "frothy.browseWords",   "title": "Frothy: Browse Words",     "icon": "$(list-unordered)" },
       { "command": "frothy.inspectWord",   "title": "Frothy: Inspect Word",     "icon": "$(symbol-field)" },
-      { "command": "frothy.status",        "title": "Frothy: Show Status",     "icon": "$(info)" },
-      { "command": "frothy.mem",           "title": "Frothy: Memory",          "icon": "$(graph)" },
+      { "command": "frothy.status",        "title": "Frothy: Show Status",      "icon": "$(info)" },
+      { "command": "frothy.mem",           "title": "Frothy: Memory",           "icon": "$(graph)" },
       { "command": "frothy.save",          "title": "Frothy: Save Overlay",     "icon": "$(save)" },
       { "command": "frothy.restore",       "title": "Frothy: Restore Overlay",  "icon": "$(history)" },
       { "command": "frothy.interrupt",     "title": "Frothy: Interrupt",        "icon": "$(debug-stop)" },
-      { "command": "frothy.showOutput",    "title": "Frothy: Show Output",      "icon": "$(terminal)" }
+      { "command": "frothy.showOutput",    "title": "Frothy: Show Output",      "icon": "$(terminal)" },
+      { "command": "frothy.flash",         "title": "Frothy: Flash Firmware",   "icon": "$(zap)" },
+      { "command": "frothy.build",         "title": "Frothy: Build Firmware",   "icon": "$(tools)" },
+      { "command": "frothy.install",       "title": "Frothy: Install Project Library", "icon": "$(package)" },
+      { "command": "frothy.doctor",        "title": "Frothy: Doctor",           "icon": "$(pulse)" },
+      { "command": "frothy.initProject",   "title": "Frothy: New Project",      "icon": "$(new-folder)" },
+      { "command": "frothy.wipeUser",      "title": "Frothy: Wipe User Definitions", "icon": "$(trash)" },
+      { "command": "frothy.stopSessions",  "title": "Frothy: Stop Serial Sessions", "icon": "$(stop-circle)" },
+      { "command": "frothy.openRepl",      "title": "Frothy: Open REPL in Terminal", "icon": "$(terminal)" },
+      { "command": "frothy.openMenu",      "title": "Frothy: Open CLI Menu",    "icon": "$(list-selection)" },
+      { "command": "frothy.refreshWords",  "title": "Frothy: Refresh Words",    "icon": "$(refresh)" }
     ],
     "keybindings": [
-      { "command": "frothy.runForm",       "key": "ctrl+enter",       "mac": "cmd+enter",      "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
-      { "command": "frothy.runFile",       "key": "ctrl+shift+enter", "mac": "cmd+shift+enter", "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
-      { "command": "frothy.rerun",         "key": "ctrl+alt+r",       "mac": "cmd+alt+r",      "when": "editorTextFocus && editorLangId == frothy && frothy.isConnected && !frothy.isBusy && frothy.hasLastForm" },
-      { "command": "frothy.interrupt",     "key": "ctrl+alt+.",       "mac": "cmd+alt+.",     "when": "frothy.isConnected && frothy.isBusy" }
+      { "command": "frothy.runForm",       "key": "ctrl+enter",       "mac": "cmd+enter",       "when": "editorTextFocus && editorLangId == frothy" },
+      { "command": "frothy.runFile",       "key": "ctrl+shift+enter", "mac": "cmd+shift+enter", "when": "editorTextFocus && editorLangId == frothy" },
+      { "command": "frothy.rerun",         "key": "ctrl+alt+r",       "mac": "cmd+alt+r",       "when": "editorTextFocus && editorLangId == frothy" },
+      { "command": "frothy.interrupt",     "key": "ctrl+alt+.",       "mac": "cmd+alt+.",       "when": "frothy.isConnected && frothy.isBusy" }
     ],
     "menus": {
       "editor/title": [
-        { "command": "frothy.runForm",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "navigation@1" },
-        { "command": "frothy.interrupt",     "when": "editorLangId == frothy && frothy.isConnected && frothy.isBusy",  "group": "navigation@1" }
+        { "command": "frothy.runForm",       "when": "editorLangId == frothy && !frothy.isBusy", "group": "navigation@1" },
+        { "command": "frothy.interrupt",     "when": "editorLangId == frothy && frothy.isBusy",  "group": "navigation@1" }
       ],
       "editor/context": [
-        { "command": "frothy.runForm",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@1" },
-        { "command": "frothy.runFile",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@2" },
-        { "command": "frothy.rerun",         "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy && frothy.hasLastForm", "group": "frothy@3" },
-        { "command": "frothy.inspectWord",   "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy", "group": "frothy@4" }
+        { "command": "frothy.runForm",       "when": "editorLangId == frothy && !frothy.isBusy", "group": "frothy@1" },
+        { "command": "frothy.runFile",       "when": "editorLangId == frothy && !frothy.isBusy", "group": "frothy@2" },
+        { "command": "frothy.rerun",         "when": "editorLangId == frothy && !frothy.isBusy && frothy.hasLastForm", "group": "frothy@3" },
+        { "command": "frothy.inspectWord",   "when": "editorLangId == frothy && !frothy.isBusy", "group": "frothy@4" }
       ],
       "commandPalette": [
-        { "command": "frothy.runForm",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
-        { "command": "frothy.runFile",       "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
-        { "command": "frothy.rerun",         "when": "frothy.isConnected && !frothy.isBusy && frothy.hasLastForm" },
-        { "command": "frothy.openExample" },
-        { "command": "frothy.browseWords",   "when": "frothy.isConnected && !frothy.isBusy" },
-        { "command": "frothy.inspectWord",   "when": "editorLangId == frothy && frothy.isConnected && !frothy.isBusy" },
+        { "command": "frothy.runForm",       "when": "editorLangId == frothy" },
+        { "command": "frothy.runFile",       "when": "editorLangId == frothy" },
+        { "command": "frothy.rerun",         "when": "frothy.hasLastForm" },
+        { "command": "frothy.inspectWord",   "when": "editorLangId == frothy" },
         { "command": "frothy.disconnect",    "when": "frothy.isConnected" },
         { "command": "frothy.interrupt",     "when": "frothy.isConnected && frothy.isBusy" }
+      ],
+      "view/title": [
+        { "command": "frothy.connect",      "when": "view == frothyDevice && !frothy.isConnected", "group": "navigation@1" },
+        { "command": "frothy.disconnect",   "when": "view == frothyDevice && frothy.isConnected && !frothy.isBusy", "group": "navigation@1" },
+        { "command": "frothy.interrupt",    "when": "view == frothyDevice && frothy.isBusy", "group": "navigation@2" },
+        { "command": "frothy.refreshWords", "when": "view == frothyWords", "group": "navigation@1" }
       ]
     },
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "frothy", "title": "Frothy", "icon": "media/frothy.svg" }
+      ]
+    },
+    "views": {
+      "frothy": [
+        { "id": "frothyDevice",  "name": "Device" },
+        { "id": "frothyWords",   "name": "Words" },
+        { "id": "frothyProject", "name": "Project" }
+      ]
+    },
+    "walkthroughs": [
+      {
+        "id": "frothy.gettingStarted",
+        "title": "Get started with Frothy",
+        "description": "Flash a board, connect, and run your first live code.",
+        "steps": [
+          {
+            "id": "installCli",
+            "title": "Install the Frothy CLI",
+            "description": "The extension drives the frothy CLI; install it and the rest follows.\n[Verify with Doctor](command:frothy.doctor)",
+            "media": { "markdown": "media/walkthroughs/install.md" },
+            "completionEvents": ["onCommand:frothy.doctor"]
+          },
+          {
+            "id": "flashBoard",
+            "title": "Flash your board",
+            "description": "Install the Frothy firmware once per board, over USB.\n[Flash Firmware](command:frothy.flash)",
+            "media": { "markdown": "media/walkthroughs/flash.md" },
+            "completionEvents": ["onCommand:frothy.flash"]
+          },
+          {
+            "id": "connect",
+            "title": "Connect",
+            "description": "Open a live session to the board.\n[Connect](command:frothy.connect)",
+            "media": { "markdown": "media/walkthroughs/connect.md" },
+            "completionEvents": ["onContext:frothy.isConnected"]
+          },
+          {
+            "id": "runForm",
+            "title": "Run your first form",
+            "description": "Open an example and press Cmd/Ctrl+Enter — or click the ▷ Run lens above any form.\n[Open Example](command:frothy.openExample)",
+            "media": { "markdown": "media/walkthroughs/run.md" },
+            "completionEvents": ["onCommand:frothy.runForm"]
+          },
+          {
+            "id": "explore",
+            "title": "Explore the live device",
+            "description": "The Words view lists everything defined on the chip right now — click a word to inspect it.\n[Open the Frothy sidebar](command:workbench.view.extension.frothy)",
+            "media": { "markdown": "media/walkthroughs/explore.md" },
+            "completionEvents": ["onView:frothyWords"]
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "Frothy",
       "properties": {
@@ -114,6 +200,11 @@
           "type": "boolean",
           "default": false,
           "description": "Connect automatically when a Frothy file is opened."
+        },
+        "frothy.codeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a ▷ Run lens above each complete top-level form."
         }
       }
     }
@@ -121,7 +212,7 @@
   "scripts": {
     "build": "tsc --noEmit && esbuild src/extension.ts --bundle --platform=node --target=node18 --external:vscode --format=cjs --outfile=out/extension.js",
     "test": "npm run test:unit",
-    "test:unit": "esbuild test/session-records.test.ts test/forms.test.ts --bundle --platform=node --target=node18 --format=cjs --outdir=out/test && node --test out/test/session-records.test.js out/test/forms.test.js",
+    "test:unit": "esbuild test/session-records.test.ts test/forms.test.ts test/words.test.ts --bundle --platform=node --target=node18 --format=cjs --outdir=out/test && node --test out/test/session-records.test.js out/test/forms.test.js out/test/words.test.js",
     "posttest": "node -e \"require('node:fs').rmSync('out/test', { recursive: true, force: true })\"",
     "vscode:prepublish": "npm run build",
     "package": "vsce package"
