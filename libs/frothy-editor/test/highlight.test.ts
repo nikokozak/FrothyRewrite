@@ -6,8 +6,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { insertBracket } from "@codemirror/autocomplete";
+import { EditorState } from "@codemirror/state";
+import { getIndentation } from "@codemirror/language";
 
-import { tokenStream } from "../src/highlight.js";
+import { frothyLanguage, tokenStream } from "../src/highlight.js";
 
 test("highlight: keywords, numbers, text, brackets, names, operators, call sites", () => {
   const src = `-- greeting setup
@@ -84,4 +87,25 @@ test("highlight: a double-dash only opens a comment after whitespace/line start"
 test("highlight: constants are distinct from keywords and names", () => {
   assert.deepEqual(tokenStream("$led_builtin"), ["constant"]);
   assert.deepEqual(tokenStream("true nil"), ["constant", "constant"]);
+});
+
+test("language indents nested square-bracket blocks and their closing lines", () => {
+  const state = EditorState.create({
+    doc: "to greet [\nif true [\nprint: \"hi\"\n]\n]",
+    extensions: [frothyLanguage()],
+  });
+
+  assert.equal(getIndentation(state, state.doc.line(2).from), 2);
+  assert.equal(getIndentation(state, state.doc.line(3).from), 4);
+  assert.equal(getIndentation(state, state.doc.line(4).from), 2);
+  assert.equal(getIndentation(state, state.doc.line(5).from), 0);
+});
+
+test("language closes only Frothy brackets and text quotes", () => {
+  const state = EditorState.create({ extensions: [frothyLanguage()] });
+
+  for (const [open, pair] of [["[", "[]"], ["(", "()"], ["\"", "\"\""]]) {
+    assert.equal(insertBracket(state, open)?.newDoc.toString(), pair);
+  }
+  assert.equal(insertBracket(state, "{"), null);
 });

@@ -5,12 +5,14 @@
 
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import {
   defaultKeymap,
   history,
   historyKeymap,
   indentWithTab,
 } from "@codemirror/commands";
+import { bracketMatching } from "@codemirror/language";
 import { createConnector, WebSerialTransport } from "@frothy/repl";
 import type { ReplConnector, Response, Status } from "@frothy/repl";
 
@@ -228,10 +230,17 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         history(),
         frothyLanguage(),
         frothyHighlight(),
+        bracketMatching({ brackets: "()[]" }),
+        closeBrackets(),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) scheduleSave();
         }),
-        keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+        keymap.of([
+          ...closeBracketsKeymap,
+          indentWithTab,
+          ...defaultKeymap,
+          ...historyKeymap,
+        ]),
       ],
     });
   }

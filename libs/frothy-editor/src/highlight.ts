@@ -15,8 +15,13 @@
 //   names:     identifier chars (.: allowed inside, e.g. text.concat:)
 //   call mark: trailing `:` on a name marks a function call site
 
-import { StreamLanguage, LanguageSupport } from "@codemirror/language";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import {
+  HighlightStyle,
+  indentOnInput,
+  LanguageSupport,
+  StreamLanguage,
+  syntaxHighlighting,
+} from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 
 const KEYWORDS = new Set([
@@ -58,6 +63,7 @@ interface FrothyState {
   inString: boolean;
   escape: boolean;
   inBlockComment: boolean;
+  bracketDepth: number;
   // True when whitespace or a line start precedes the current position. A `--`
   // / `-*` opens a comment only then — mirrors parse.c's `skipped` gate, so
   // `10--5` stays arithmetic (10 - -5) rather than being grayed as a comment.
@@ -65,7 +71,13 @@ interface FrothyState {
 }
 
 function startState(): FrothyState {
-  return { inString: false, escape: false, inBlockComment: false, spaceBefore: true };
+  return {
+    inString: false,
+    escape: false,
+    inBlockComment: false,
+    bracketDepth: 0,
+    spaceBefore: true,
+  };
 }
 
 function isNameStart(ch: string): boolean {
@@ -149,6 +161,8 @@ function tokenize(stream: StreamHandle, state: FrothyState): string | null {
 
   if (ch === "[" || ch === "]") {
     stream.next();
+    if (ch === "[") state.bracketDepth += 1;
+    else if (state.bracketDepth > 0) state.bracketDepth -= 1;
     return "bracket";
   }
 
@@ -216,6 +230,15 @@ const frothyStream = StreamLanguage.define<FrothyState>({
   token(stream: unknown, state: FrothyState) {
     return tokenize(stream as StreamHandle, state);
   },
+  indent(state, textAfter, context) {
+    if (state.bracketDepth === 0) return null;
+    const depth = state.bracketDepth - (/^\s*\]/.test(textAfter) ? 1 : 0);
+    return Math.max(0, depth) * context.unit;
+  },
+  languageData: {
+    closeBrackets: { brackets: ["(", "[", "\""] },
+    indentOnInput: /^\s*\]$/,
+  },
   tokenTable: {
     keyword: t.keyword,
     name: t.variableName,
@@ -244,7 +267,7 @@ const frothyHighlightStyle = HighlightStyle.define([
 ]);
 
 export function frothyLanguage(): LanguageSupport {
-  return new LanguageSupport(frothyStream);
+  return new LanguageSupport(frothyStream, indentOnInput());
 }
 
 export function frothyHighlight() {
