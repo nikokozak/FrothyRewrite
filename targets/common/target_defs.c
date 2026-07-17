@@ -1692,6 +1692,10 @@ static fr_err_t fr_native_ble_info(fr_runtime_t *runtime,
 }
 
 #if FR_BLE_ENABLE_GATT_SERVER
+static fr_err_t fr_native_ble_connection_handle(
+    fr_runtime_t *runtime, fr_tagged_t tagged, fr_handle_ref_t *out_ref,
+    uint16_t *out_platform_index);
+
 static const fr_record_name_t fr_native_ble_gatt_kind_field = {
     (const uint8_t *)"kind", 4};
 static const fr_record_name_t fr_native_ble_gatt_uuid_field = {
@@ -2138,6 +2142,106 @@ static fr_err_t fr_native_ble_gatt_get(fr_runtime_t *runtime,
   FR_TRY(fr_platform_ble_gatt_get(attribute_id, bytes, sizeof(bytes),
                                   &length));
   return fr_bytes_install(runtime, bytes, length, out);
+}
+
+static fr_err_t fr_native_ble_gatt_notify(fr_runtime_t *runtime,
+                                          const fr_tagged_t *args,
+                                          uint8_t arg_count,
+                                          fr_tagged_t *out) {
+  uint16_t connection_index = 0;
+  uint16_t attribute_id = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &connection_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_id));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
+                                             &length));
+  FR_TRY(fr_platform_ble_gatt_notify(connection_index, attribute_id, bytes,
+                                     length));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_gatt_indicate(fr_runtime_t *runtime,
+                                            const fr_tagged_t *args,
+                                            uint8_t arg_count,
+                                            fr_tagged_t *out) {
+  uint16_t connection_index = 0;
+  uint16_t attribute_id = 0;
+  uint16_t timeout_ms = 0;
+  const uint8_t *bytes = NULL;
+  uint16_t length = 0;
+
+  if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+                                          &connection_index));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_id));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
+                                             &length));
+  FR_TRY(fr_native_decode_u16(args, arg_count, 3, &timeout_ms));
+  if (timeout_ms == 0) {
+    return FR_ERR_RANGE;
+  }
+  FR_TRY(fr_platform_ble_gatt_indicate(runtime, connection_index,
+                                       attribute_id, bytes, length,
+                                       timeout_ms));
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
+static fr_err_t fr_native_ble_gatt_next_write(fr_runtime_t *runtime,
+                                              const fr_tagged_t *args,
+                                              uint8_t arg_count,
+                                              fr_tagged_t *out) {
+  fr_handle_ref_t connection_ref = {0};
+  bool has_write = false;
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_gatt_write_next(&has_write, &connection_ref));
+  if (!has_write) {
+    *out = fr_tagged_nil();
+    return FR_OK;
+  }
+  FR_TRY(fr_handle_lookup(runtime, connection_ref,
+                          FR_HANDLE_KIND_BLE_CONNECTION, NULL, NULL));
+  return fr_tagged_encode_handle_ref(connection_ref, out);
+}
+
+static fr_err_t fr_native_ble_gatt_write_attribute(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    fr_tagged_t *out) {
+  fr_ble_gatt_write_t write = {0};
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_gatt_write_current(&write));
+  return fr_tagged_encode_int(write.attribute_id, out);
+}
+
+static fr_err_t fr_native_ble_gatt_write_data(fr_runtime_t *runtime,
+                                              const fr_tagged_t *args,
+                                              uint8_t arg_count,
+                                              fr_tagged_t *out) {
+  fr_ble_gatt_write_t write = {0};
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_ble_gatt_write_current(&write));
+  return fr_bytes_install(runtime, write.data, write.data_length, out);
 }
 #endif
 
@@ -4445,6 +4549,55 @@ static const fr_native_signature_t fr_native_ble_gatt_get_signature = {
     .result = FR_NATIVE_VALUE_ANY,
     .help = "copy one local GATT value by source-row ID",
 };
+
+static const fr_native_param_t fr_native_ble_gatt_notify_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"attribute", FR_NATIVE_VALUE_INT},
+    {"data", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_notify_signature = {
+    .params = fr_native_ble_gatt_notify_params,
+    .arg_count = 3,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "send one subscribed GATT notification",
+};
+
+static const fr_native_param_t fr_native_ble_gatt_indicate_params[] = {
+    {"connection", FR_NATIVE_VALUE_HANDLE},
+    {"attribute", FR_NATIVE_VALUE_INT},
+    {"data", FR_NATIVE_VALUE_TEXT_OR_BYTES},
+    {"timeout_ms", FR_NATIVE_VALUE_INT},
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_indicate_signature = {
+    .params = fr_native_ble_gatt_indicate_params,
+    .arg_count = 4,
+    .result = FR_NATIVE_VALUE_NIL,
+    .help = "send and wait interruptibly for one subscribed GATT indication",
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_next_write_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "advance to the next accepted remote GATT write",
+};
+
+static const fr_native_signature_t
+    fr_native_ble_gatt_write_attribute_signature = {
+        .params = NULL,
+        .arg_count = 0,
+        .result = FR_NATIVE_VALUE_INT,
+        .help = "return the current remote write source-row ID",
+};
+
+static const fr_native_signature_t fr_native_ble_gatt_write_data_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_ANY,
+    .help = "copy the current remote GATT write data",
+};
 #endif
 #endif
 
@@ -6445,7 +6598,7 @@ const fr_base_def_t fr_target_base_defs[] = {
         .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_WRITE_COMMAND,
     },
     {
-        .slot_id = FR_SLOT_BLE_GATT_NOTIFY,
+        .slot_id = FR_SLOT_BLE_GATT_NOTIFY_FLAG,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
         .name = "$ble.gatt.notify",
 #endif
@@ -6453,7 +6606,7 @@ const fr_base_def_t fr_target_base_defs[] = {
         .literal_tagged = FR_TARGET_TAGGED_BLE_GATT_NOTIFY,
     },
     {
-        .slot_id = FR_SLOT_BLE_GATT_INDICATE,
+        .slot_id = FR_SLOT_BLE_GATT_INDICATE_FLAG,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
         .name = "$ble.gatt.indicate",
 #endif
@@ -6538,6 +6691,66 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_ble_gatt_get_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_NOTIFY,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.notify",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_notify,
+        .native_arity = 3,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_notify_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_INDICATE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.indicate",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_indicate,
+        .native_arity = 4,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_indicate_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_NEXT_WRITE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.next-write",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_next_write,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_next_write_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE_ATTRIBUTE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.write-attribute",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_write_attribute,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_write_attribute_signature,
+#endif
+    },
+    {
+        .slot_id = FR_SLOT_BLE_GATT_WRITE_DATA,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "ble.gatt.write-data",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_ble_gatt_write_data,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_ble_gatt_write_data_signature,
 #endif
     },
 #endif
