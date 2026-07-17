@@ -1,0 +1,3 @@
+# This file realizes the esp32_plain C profile in ESP-IDF. Keep Bluetooth off
+# until that profile exposes the BLE contract and the target has its backend.
+CONFIG_BT_ENABLED=n

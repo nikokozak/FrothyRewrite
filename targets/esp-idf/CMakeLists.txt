@@ -5,5 +5,21 @@ set(FR_REWRITE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." CACHE PATH
 set(FR_REWRITE_BOARD "esp32_devkit_v1" CACHE STRING "Frothy board")
 set(FR_REWRITE_PROFILE "esp32_plain" CACHE STRING "Frothy profile")
 
+set(FR_PROFILE_SDKCONFIG_DEFAULTS
+    "${FR_REWRITE_ROOT}/profiles/${FR_REWRITE_PROFILE}.sdkconfig.defaults")
+if(NOT EXISTS "${FR_PROFILE_SDKCONFIG_DEFAULTS}")
+    message(FATAL_ERROR
+        "missing ESP-IDF defaults for Frothy profile ${FR_REWRITE_PROFILE}: "
+        "${FR_PROFILE_SDKCONFIG_DEFAULTS}")
+endif()
+
+# Frothy's checked-in defaults own the configuration. Target defaults come
+# first, then the profile may override them. The build's sdkconfig is generated
+# from this list and is not a second profile customization surface.
+set(SDKCONFIG_DEFAULTS
+    "${CMAKE_CURRENT_LIST_DIR}/sdkconfig.defaults"
+    "${FR_PROFILE_SDKCONFIG_DEFAULTS}")
+message(STATUS "Frothy sdkconfig defaults: ${SDKCONFIG_DEFAULTS}")
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(frothy)
