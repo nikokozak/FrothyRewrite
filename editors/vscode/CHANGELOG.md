@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.1 — 2026-07-17
+
+### Changed
+
+- **The Words fetch is manual and invisible.** 0.5.0 fetched the vocabulary
+  automatically after every run and rendered it into the transcript
+  (`> words` plus the full word list, every time), and revealed the output
+  panel doing it. Fetching now happens only when explicitly asked — the
+  view's refresh button, the palette command, or the empty-state row — and
+  is silent in the transcript. Completion serves the last fetched list,
+  labeled "on device (last refresh)". Disconnecting clears the cache.
+
 ## 0.5.0 — 2026-07-16
 
 The extension grows a visible home and the full firmware lifecycle. Session
@@ -10,8 +22,9 @@ plumbing is unchanged; this release is UI and reach.
 - **Frothy sidebar** (Activity Bar cup icon) with three native tree views:
   - **Device** — connection state, port, profile, mode, plus one-click
     Status, Memory, Save Overlay, and Restore Overlay.
-  - **Words** — the device's vocabulary as a persistent view, fetched on
-    demand via its refresh button; click a word to `see` it.
+  - **Words** — the device's vocabulary as a persistent view, refreshed
+    automatically after each run (made manual in 0.5.1); click a word to
+    `see` it.
   - **Project** — the whole lifecycle: Getting Started, New Project, Build,
     Flash, Install Library, Open Example, REPL, Doctor, CLI Menu, Stop
     Serial Sessions, Wipe User Definitions.
@@ -42,12 +55,6 @@ plumbing is unchanged; this release is UI and reach.
 - Status, Memory, Save, and Restore now give the friendly connect hint when
   disconnected instead of a raw error message.
 - Rerun with no prior form says so instead of doing nothing.
-- **The Words fetch is manual and invisible.** An earlier iteration fetched
-  the vocabulary automatically after every run and rendered it into the
-  transcript (`> words` plus the full word list, every time). Fetching now
-  happens only when explicitly asked — the view's refresh button, the
-  palette command, or the empty-state row — and is silent in the transcript.
-  Completion serves the last fetched list.
 
 ## 0.4.0 — 2026-07-10
 

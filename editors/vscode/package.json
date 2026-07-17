@@ -2,7 +2,7 @@
   "name": "frothy",
   "displayName": "Frothy",
   "description": "Live Frothy workflow inside VS Code: connect to a board, run forms and files, inspect words, flash and build firmware.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "NikolaiKozak",
   "license": "MIT",
   "repository": {
