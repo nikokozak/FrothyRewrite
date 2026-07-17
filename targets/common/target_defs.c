@@ -1577,11 +1577,13 @@ static fr_err_t fr_native_ble_scan_start(fr_runtime_t *runtime,
   if (runtime == NULL || args == NULL || arg_count != 5 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_tagged_decode_int(args[0], &interval_ms));
-  FR_TRY(fr_tagged_decode_int(args[1], &window_ms));
-  if (fr_tagged_is_bool(args[2]) || fr_tagged_is_bool(args[3])) {
+  if (fr_tagged_is_bool(args[0]) || fr_tagged_is_bool(args[1]) ||
+      fr_tagged_is_bool(args[2]) || fr_tagged_is_bool(args[3]) ||
+      fr_tagged_is_bool(args[4])) {
     return FR_ERR_INVALID;
   }
+  FR_TRY(fr_tagged_decode_int(args[0], &interval_ms));
+  FR_TRY(fr_tagged_decode_int(args[1], &window_ms));
   FR_TRY(fr_tagged_decode_int(args[2], &active));
   FR_TRY(fr_tagged_decode_int(args[3], &repeats));
   FR_TRY(fr_tagged_decode_int(args[4], &minimum_rssi));

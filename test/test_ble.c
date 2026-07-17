@@ -201,6 +201,11 @@ static void test_scanner_words_bridge_tagged_values_and_reports(void) {
   args[3] = fr_tagged_false();
   TEST_ASSERT_EQUAL(FR_ERR_INVALID,
                     defs[0]->native_fn(&s_runtime, args, 5, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(0, &args[3]));
+  args[4] = fr_tagged_true();
+  TEST_ASSERT_EQUAL(FR_ERR_INVALID,
+                    defs[0]->native_fn(&s_runtime, args, 5, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(-90, &args[4]));
   TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(2, &args[2]));
   TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1, &args[3]));
   TEST_ASSERT_EQUAL(FR_ERR_RANGE,
