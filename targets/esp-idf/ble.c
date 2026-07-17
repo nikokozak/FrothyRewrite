@@ -722,10 +722,215 @@ static int fr_esp_ble_scan_event(struct ble_gap_event *event, void *argument) {
 }
 #endif
 
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+static bool fr_esp_ble_connection_event_current_locked(uint32_t generation,
+                                                       uint16_t stack_handle) {
+  return generation == fr_esp_ble.connection.generation &&
+         fr_esp_ble.connection.state != FR_BLE_CONNECTION_FREE &&
+         fr_esp_ble.connection.stack_handle == stack_handle;
+}
+
+static void fr_esp_ble_connection_refresh(uint32_t generation,
+                                          uint16_t stack_handle,
+                                          int status) {
+  struct ble_gap_conn_desc descriptor = {0};
+  int descriptor_status = ble_gap_conn_find(stack_handle, &descriptor);
+  uint16_t mtu = descriptor_status == 0 ? ble_att_mtu(stack_handle)
+                                        : BLE_ATT_MTU_DFLT;
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble_connection_event_current_locked(generation, stack_handle)) {
+    fr_esp_ble.late_callback_count += 1u;
+  } else if (status == 0 && descriptor_status == 0) {
+    (void)fr_esp_ble_connection_copy_descriptor_locked(&descriptor, mtu);
+  } else {
+    fr_esp_ble.last_protocol_reason =
+        status != 0 ? status : descriptor_status;
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+}
+
+static int fr_esp_ble_connection_event(struct ble_gap_event *event,
+                                       void *argument) {
+  uint32_t generation = (uint32_t)(uintptr_t)argument;
+  struct ble_gap_conn_desc descriptor = {0};
+  uint16_t stack_handle = BLE_HS_CONN_HANDLE_NONE;
+  uint16_t mtu = BLE_ATT_MTU_DFLT;
+  int descriptor_status = 0;
+  bool terminate = false;
+
+  if (event == NULL) {
+    return 0;
+  }
+
+  switch (event->type) {
+#if FR_BLE_ENABLE_CENTRAL
+  case BLE_GAP_EVENT_CONNECT:
+    stack_handle = event->connect.conn_handle;
+    if (event->connect.status == 0) {
+      descriptor_status = ble_gap_conn_find(stack_handle, &descriptor);
+      if (descriptor_status == 0) {
+        mtu = ble_att_mtu(stack_handle);
+      }
+    }
+
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    if (generation != fr_esp_ble.connection.generation ||
+        fr_esp_ble.connection.role != FR_BLE_CONNECTION_ROLE_CENTRAL ||
+        (fr_esp_ble.connection.state != FR_BLE_CONNECTION_CONNECTING &&
+         fr_esp_ble.connection.state != FR_BLE_CONNECTION_CLOSING)) {
+      fr_esp_ble.late_callback_count += 1u;
+    } else if (event->connect.status != 0 || descriptor_status != 0) {
+      int status = event->connect.status != 0 ? event->connect.status
+                                              : descriptor_status;
+
+      fr_esp_ble.connection.connect_complete = true;
+      fr_esp_ble.connection.connect_status = status;
+      fr_esp_ble.connection.last_reason = status;
+      fr_esp_ble.last_protocol_reason = status;
+      if (fr_esp_ble.connection.state == FR_BLE_CONNECTION_CLOSING) {
+        fr_esp_ble_connection_free_locked();
+      }
+    } else if (fr_esp_ble.connection.state == FR_BLE_CONNECTION_CLOSING) {
+      fr_esp_ble.connection.stack_handle = stack_handle;
+      fr_esp_ble.connection.connect_complete = true;
+      terminate = true;
+    } else if (!fr_esp_ble_connection_copy_descriptor_locked(&descriptor,
+                                                              mtu)) {
+      fr_esp_ble.connection.stack_handle = stack_handle;
+      fr_esp_ble.connection.state = FR_BLE_CONNECTION_CLOSING;
+      fr_esp_ble.connection.connect_complete = true;
+      fr_esp_ble.connection.connect_status = BLE_HS_EINVAL;
+      fr_esp_ble.connection.last_reason = BLE_HS_EINVAL;
+      fr_esp_ble.last_protocol_reason = BLE_HS_EINVAL;
+      terminate = true;
+    } else {
+      fr_esp_ble.connection.state = FR_BLE_CONNECTION_LIVE;
+      fr_esp_ble.connection.connect_complete = true;
+      fr_esp_ble.connection.connect_status = 0;
+      fr_esp_ble.connection.connected_at_ms = fr_esp_ble_now_ms();
+      fr_esp_ble.connection_connects += 1u;
+    }
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+    if (terminate) {
+      (void)ble_gap_terminate(stack_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
+    return 0;
+#endif
+
+  case BLE_GAP_EVENT_DISCONNECT:
+    stack_handle = event->disconnect.conn.conn_handle;
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    if (!fr_esp_ble_connection_event_current_locked(generation,
+                                                     stack_handle)) {
+      fr_esp_ble.late_callback_count += 1u;
+    } else if (fr_esp_ble.connection.state == FR_BLE_CONNECTION_LIVE) {
+      fr_esp_ble_connection_mark_disconnected_locked(
+          &event->disconnect.conn, event->disconnect.reason);
+    } else if (fr_esp_ble.connection.state == FR_BLE_CONNECTION_PENDING ||
+               fr_esp_ble.connection.state == FR_BLE_CONNECTION_CLOSING ||
+               fr_esp_ble.connection.state == FR_BLE_CONNECTION_CONNECTING) {
+      fr_esp_ble_connection_mark_disconnected_locked(
+          &event->disconnect.conn, event->disconnect.reason);
+      fr_esp_ble_connection_free_locked();
+    } else {
+      fr_esp_ble.late_callback_count += 1u;
+    }
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return 0;
+
+  case BLE_GAP_EVENT_CONN_UPDATE:
+    fr_esp_ble_connection_refresh(generation, event->conn_update.conn_handle,
+                                  event->conn_update.status);
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    if (fr_esp_ble_connection_event_current_locked(
+            generation, event->conn_update.conn_handle)) {
+      fr_esp_ble.connection.params_pending = false;
+    }
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return 0;
+
+  case BLE_GAP_EVENT_CONN_UPDATE_REQ:
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    terminate = !fr_esp_ble_connection_event_current_locked(
+        generation, event->conn_update_req.conn_handle);
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return terminate ? BLE_ERR_CONN_LIMIT : 0;
+
+  case BLE_GAP_EVENT_ENC_CHANGE:
+    fr_esp_ble_connection_refresh(generation, event->enc_change.conn_handle,
+                                  event->enc_change.status);
+    return 0;
+
+  case BLE_GAP_EVENT_MTU:
+    if (event->mtu.channel_id != BLE_L2CAP_CID_ATT) {
+      return 0;
+    }
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    if (!fr_esp_ble_connection_event_current_locked(generation,
+                                                     event->mtu.conn_handle)) {
+      fr_esp_ble.late_callback_count += 1u;
+    } else {
+      fr_esp_ble.connection.mtu = event->mtu.value;
+    }
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return 0;
+
+  case BLE_GAP_EVENT_TERM_FAILURE:
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    if (!fr_esp_ble_connection_event_current_locked(
+            generation, event->term_failure.conn_handle)) {
+      fr_esp_ble.late_callback_count += 1u;
+    } else {
+      fr_esp_ble.connection.last_reason = event->term_failure.status;
+      fr_esp_ble.last_protocol_reason = event->term_failure.status;
+    }
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+    return 0;
+
+  default:
+    return 0;
+  }
+}
+
+static int fr_esp_ble_mtu_complete(uint16_t stack_handle,
+                                   const struct ble_gatt_error *error,
+                                   uint16_t mtu, void *argument) {
+  uint32_t generation = (uint32_t)(uintptr_t)argument;
+  int status = error == NULL ? BLE_HS_EINVAL : error->status;
+
+  portENTER_CRITICAL(&fr_esp_ble_lock);
+  if (!fr_esp_ble_connection_event_current_locked(generation, stack_handle) ||
+      !fr_esp_ble.connection.mtu_pending) {
+    fr_esp_ble.late_callback_count += 1u;
+  } else {
+    fr_esp_ble.connection.mtu_pending = false;
+    fr_esp_ble.connection.mtu_status = status;
+    if (status == 0) {
+      fr_esp_ble.connection.mtu = mtu;
+    } else {
+      fr_esp_ble.connection.last_reason = status;
+      fr_esp_ble.last_protocol_reason = status;
+    }
+  }
+  portEXIT_CRITICAL(&fr_esp_ble_lock);
+  return 0;
+}
+#endif
+
 #if FR_BLE_ENABLE_BROADCASTER
 static int fr_esp_ble_advertise_event(struct ble_gap_event *event,
                                       void *argument) {
   uint32_t generation = (uint32_t)(uintptr_t)argument;
+#if FR_BLE_ENABLE_PERIPHERAL
+  struct ble_gap_conn_desc descriptor = {0};
+  uint32_t connection_generation = 0;
+  uint16_t connection_mtu = BLE_ATT_MTU_DFLT;
+  int callback_status = 0;
+  int descriptor_status = 0;
+  bool reject = false;
+#endif
 
   if (event == NULL ||
       (event->type != BLE_GAP_EVENT_ADV_COMPLETE &&
@@ -733,17 +938,87 @@ static int fr_esp_ble_advertise_event(struct ble_gap_event *event,
     return 0;
   }
 
+  if (event->type == BLE_GAP_EVENT_CONNECT && event->connect.status == 0) {
+#if FR_BLE_ENABLE_PERIPHERAL
+    descriptor_status =
+        ble_gap_conn_find(event->connect.conn_handle, &descriptor);
+    if (descriptor_status == 0) {
+      connection_mtu = ble_att_mtu(event->connect.conn_handle);
+    }
+#endif
+  }
+
   portENTER_CRITICAL(&fr_esp_ble_lock);
   if (generation != fr_esp_ble.advertise.generation ||
       fr_esp_ble.advertise.state == FR_BLE_ADVERTISE_IDLE) {
     fr_esp_ble.late_callback_count += 1u;
+#if FR_BLE_ENABLE_PERIPHERAL
+    if (event->type == BLE_GAP_EVENT_CONNECT && event->connect.status == 0) {
+      fr_esp_ble.incoming_rejected += 1u;
+      reject = true;
+    }
+#endif
   } else {
     fr_esp_ble.advertise.state = FR_BLE_ADVERTISE_IDLE;
     fr_esp_ble.last_protocol_reason =
         event->type == BLE_GAP_EVENT_CONNECT ? event->connect.status
                                              : event->adv_complete.reason;
+#if FR_BLE_ENABLE_PERIPHERAL
+    if (event->type == BLE_GAP_EVENT_CONNECT && event->connect.status == 0) {
+      (void)fr_esp_ble_connection_notice_find_locked();
+      if (descriptor_status != 0 ||
+          fr_esp_ble.connection.state != FR_BLE_CONNECTION_FREE ||
+          fr_esp_ble.connection_notice_count ==
+              FR_BLE_CONNECTION_NOTICE_COUNT) {
+        fr_esp_ble.incoming_rejected += 1u;
+        reject = true;
+      } else {
+        connection_generation = fr_esp_ble_connection_reserve_locked(
+            FR_BLE_CONNECTION_ROLE_PERIPHERAL, (fr_handle_ref_t){0}, false);
+        if (!fr_esp_ble_connection_copy_descriptor_locked(
+                &descriptor, connection_mtu)) {
+          fr_esp_ble_connection_free_locked();
+          fr_esp_ble.incoming_rejected += 1u;
+          reject = true;
+        }
+      }
+    }
+#endif
   }
   portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+#if FR_BLE_ENABLE_PERIPHERAL
+  if (reject) {
+    (void)ble_gap_terminate(event->connect.conn_handle, BLE_ERR_CONN_LIMIT);
+    return 0;
+  }
+  if (connection_generation != 0) {
+    callback_status = ble_gap_set_event_cb(
+        event->connect.conn_handle, fr_esp_ble_connection_event,
+        (void *)(uintptr_t)connection_generation);
+
+    portENTER_CRITICAL(&fr_esp_ble_lock);
+    if (connection_generation != fr_esp_ble.connection.generation ||
+        fr_esp_ble.connection.state != FR_BLE_CONNECTION_CONNECTING) {
+      fr_esp_ble.late_callback_count += 1u;
+      reject = true;
+    } else if (callback_status != 0) {
+      fr_esp_ble_connection_free_locked();
+      fr_esp_ble.incoming_rejected += 1u;
+      fr_esp_ble.last_protocol_reason = callback_status;
+      reject = true;
+    } else {
+      fr_esp_ble.connection.state = FR_BLE_CONNECTION_PENDING;
+      fr_esp_ble.connection.connected_at_ms = fr_esp_ble_now_ms();
+      fr_esp_ble_connection_notice_push_locked(connection_generation);
+    }
+    portEXIT_CRITICAL(&fr_esp_ble_lock);
+
+    if (reject) {
+      (void)ble_gap_terminate(event->connect.conn_handle, BLE_ERR_CONN_LIMIT);
+    }
+  }
+#endif
   return 0;
 }
 #endif
