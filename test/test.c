@@ -188,6 +188,14 @@ static fr_err_t test_persist_apply_user_overlay(
 #define FR_TEST_CONSOLE_SLOT_COUNT 0
 #endif
 
+#if FR_FEATURE_CELLS
+#define FR_TEST_CELLS_WORDS " cells.read cells.write"
+#define FR_TEST_CELLS_SLOT_COUNT 2
+#else
+#define FR_TEST_CELLS_WORDS ""
+#define FR_TEST_CELLS_SLOT_COUNT 0
+#endif
+
 enum {
   FR_TEST_PERSIST_RECORD_CODE = 1,
   FR_TEST_PERSIST_RECORD_BIND = 2,
@@ -214,6 +222,7 @@ enum {
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_CELLS_WORDS                                             \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
@@ -224,6 +233,7 @@ enum {
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_CELLS_WORDS                                             \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
@@ -234,6 +244,7 @@ enum {
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_CELLS_WORDS                                             \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
@@ -244,7 +255,7 @@ enum {
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
    FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
    FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT +                      \
-   FR_TEST_CONSOLE_SLOT_COUNT)
+   FR_TEST_CONSOLE_SLOT_COUNT + FR_TEST_CELLS_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -253,6 +264,7 @@ enum {
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_CELLS_WORDS                                             \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
@@ -262,6 +274,7 @@ enum {
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_CELLS_WORDS                                             \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
@@ -271,6 +284,7 @@ enum {
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_CELLS_WORDS                                             \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
@@ -281,7 +295,7 @@ enum {
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
    FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
    FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT +                      \
-   FR_TEST_CONSOLE_SLOT_COUNT)
+   FR_TEST_CONSOLE_SLOT_COUNT + FR_TEST_CELLS_SLOT_COUNT)
 #endif
 
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
@@ -449,6 +463,7 @@ static void test_base_def_contract(void) {
       (FR_FEATURE_TRACE ? 12 : 0) + (FR_FEATURE_PULSE ? 9 : 0) +
       (FR_FEATURE_CONSOLE_ROUTING ? 3 : 0) +
       (FR_FEATURE_MATH ? 7 : 0) +
+      (FR_FEATURE_CELLS ? 2 : 0) +
       FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT +
       FR_TEST_EVENT_REGISTER_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT;
   uint16_t global_index = 0;
@@ -479,7 +494,7 @@ static void test_base_def_contract(void) {
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
   CHECK("fire-event slot follows protocol blocks",
-        FR_SLOT_FIRE_EVENT == FR_SLOT_AFTER_CONSOLE);
+        FR_SLOT_FIRE_EVENT == FR_SLOT_AFTER_CELLS);
   CHECK("board capability slot follows fire-event slot",
         FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_FIRE_EVENT + 1);
   CHECK("board local slot ids follow board capability slots",
@@ -488,7 +503,7 @@ static void test_base_def_contract(void) {
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
   CHECK("board capability slot follows target capability blocks",
-        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CONSOLE);
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CELLS);
   CHECK("board local slot ids follow board capability slots",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #endif
@@ -498,7 +513,7 @@ static void test_base_def_contract(void) {
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
   CHECK("board capability slot follows target capability blocks",
-        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CONSOLE);
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CELLS);
   CHECK("board local slot ids follow board capability slots",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #else
@@ -507,7 +522,7 @@ static void test_base_def_contract(void) {
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
   CHECK("board capability slot follows target capability blocks",
-        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CONSOLE);
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CELLS);
   CHECK("board local slot ids follow board capability slots",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #endif
@@ -516,6 +531,11 @@ static void test_base_def_contract(void) {
         FR_SLOT_CONSOLE_UART == FR_SLOT_AFTER_PULSE &&
             FR_SLOT_CONSOLE_DEFAULT == FR_SLOT_CONSOLE_UART + 1 &&
             FR_SLOT_CONSOLE_INFO == FR_SLOT_CONSOLE_DEFAULT + 1);
+#endif
+#if FR_FEATURE_CELLS
+  CHECK("cells words follow protocol capabilities",
+        FR_SLOT_CELLS_READ == FR_SLOT_AFTER_CONSOLE &&
+            FR_SLOT_CELLS_WRITE == FR_SLOT_CELLS_READ + 1);
 #endif
 
   for (uint16_t layer_index = 0; layer_index < fr_base_def_layer_count();
@@ -4117,6 +4137,7 @@ static void test_cells(void) {
 #endif
   fr_int_t decoded = 0;
   uint16_t length = 0;
+  char out[192];
 
   CHECK("cells runtime init", fr_runtime_init(&runtime) == FR_OK);
   CHECK("cells encode one", fr_tagged_encode_int(1, &one) == FR_OK);
@@ -4215,6 +4236,43 @@ static void test_cells(void) {
   CHECK("cells no partial failed install",
         fr_cells_install(&runtime, 1, NULL, &extra_object_id) ==
             FR_ERR_CAPACITY);
+
+  CHECK("cells words install base image",
+        fr_base_image_install(&runtime) == FR_OK);
+  CHECK("cells.read renders signature",
+        fr_repl_eval_line(&runtime, "see cells.read", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "cells.read(cells: any, index: int) -> any\n"
+                   "read a value from cells passed to a word\n"
+                   "ok\n") == 0);
+  CHECK("cells.write renders signature",
+        fr_repl_eval_line(&runtime, "see cells.write", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out,
+                   "cells.write(cells: any, index: int, value: any) -> nil\n"
+                   "write a value to cells passed to a word\n"
+                   "ok\n") == 0);
+  CHECK("cells words allocate caller state",
+        fr_repl_eval_line(&runtime, "box is cells(2)", out, sizeof(out)) ==
+            FR_OK);
+  CHECK("cells.write accepts cells argument",
+        fr_repl_eval_line(
+            &runtime,
+            "to box.write with box, value [ cells.write: box, 0, value ]",
+            out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "box.write: box, 37", out,
+                              sizeof(out)) == FR_OK);
+  CHECK("cells.read returns value through argument",
+        fr_repl_eval_line(&runtime, "cells.read: box, 0", out, sizeof(out)) ==
+                FR_OK &&
+            strcmp(out, "37\nok\n") == 0);
+  CHECK("cells.read preserves bounds error",
+        fr_repl_eval_line(&runtime, "cells.read: box, 2", out, sizeof(out)) ==
+            FR_ERR_RANGE);
+  CHECK("cells.write rejects wrong object kind",
+        fr_repl_eval_line(&runtime, "cells.write: true, 0, 1", out,
+                          sizeof(out)) == FR_ERR_TYPE);
 }
 #endif
 
