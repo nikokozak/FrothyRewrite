@@ -139,6 +139,10 @@
 #define FR_BLE_ENABLE_PERIPHERAL 0
 #endif
 
+#ifndef FR_BLE_ENABLE_GATT_SERVER
+#define FR_BLE_ENABLE_GATT_SERVER 0
+#endif
+
 #ifndef FR_BLE_SCAN_QUEUE_COUNT
 #define FR_BLE_SCAN_QUEUE_COUNT 0
 #endif
@@ -173,6 +177,30 @@
 
 #ifndef FR_BLE_STOP_TIMEOUT_MS
 #define FR_BLE_STOP_TIMEOUT_MS 0
+#endif
+
+#ifndef FR_BLE_GATT_SERVICE_COUNT
+#define FR_BLE_GATT_SERVICE_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_CHARACTERISTIC_COUNT
+#define FR_BLE_GATT_CHARACTERISTIC_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_VALUE_BYTES
+#define FR_BLE_GATT_VALUE_BYTES 0
+#endif
+
+#ifndef FR_BLE_GATT_WRITE_QUEUE_COUNT
+#define FR_BLE_GATT_WRITE_QUEUE_COUNT 0
+#endif
+
+#ifndef FR_BLE_GATT_WRITE_DATA_BYTES
+#define FR_BLE_GATT_WRITE_DATA_BYTES 0
+#endif
+
+#ifndef FR_BLE_GATT_CCCD_COUNT
+#define FR_BLE_GATT_CCCD_COUNT 0
 #endif
 
 #define FR_FEATURE_OBJECTS                                                   \
@@ -706,6 +734,42 @@
 #if !FR_FEATURE_BLE &&                                                     \
     (FR_BLE_START_TIMEOUT_MS != 0 || FR_BLE_STOP_TIMEOUT_MS != 0)
 #error "BLE lifecycle timeouts require FR_FEATURE_BLE"
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER &&                                           \
+    (!FR_FEATURE_BLE || !FR_BLE_ENABLE_PERIPHERAL)
+#error "the BLE GATT server requires the peripheral role"
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER &&                                           \
+    (!FR_FEATURE_CELLS || !FR_FEATURE_RECORDS || !FR_FEATURE_TEXT)
+#error "the BLE GATT server requires cells, records, and text"
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER &&                                           \
+    (FR_BLE_GATT_SERVICE_COUNT < 1 || FR_BLE_GATT_SERVICE_COUNT > 255 ||   \
+     FR_BLE_GATT_CHARACTERISTIC_COUNT < 1 ||                              \
+     FR_BLE_GATT_CHARACTERISTIC_COUNT > 255)
+#error "BLE GATT row capacities must fit one byte"
+#endif
+
+#if FR_BLE_ENABLE_GATT_SERVER &&                                           \
+    (FR_BLE_GATT_VALUE_BYTES < 1 || FR_BLE_GATT_VALUE_BYTES > 65535 ||    \
+     FR_BLE_GATT_WRITE_QUEUE_COUNT < 1 ||                                 \
+     FR_BLE_GATT_WRITE_QUEUE_COUNT > 255 ||                               \
+     FR_BLE_GATT_WRITE_DATA_BYTES < 1 ||                                  \
+     FR_BLE_GATT_WRITE_DATA_BYTES > FR_BLE_GATT_VALUE_BYTES ||            \
+     FR_BLE_GATT_CCCD_COUNT > FR_BLE_GATT_CHARACTERISTIC_COUNT)
+#error "BLE GATT storage limits are inconsistent"
+#endif
+
+#if !FR_BLE_ENABLE_GATT_SERVER &&                                         \
+    (FR_BLE_GATT_SERVICE_COUNT != 0 ||                                    \
+     FR_BLE_GATT_CHARACTERISTIC_COUNT != 0 ||                             \
+     FR_BLE_GATT_VALUE_BYTES != 0 ||                                      \
+     FR_BLE_GATT_WRITE_QUEUE_COUNT != 0 ||                                \
+     FR_BLE_GATT_WRITE_DATA_BYTES != 0 || FR_BLE_GATT_CCCD_COUNT != 0)
+#error "BLE GATT limits require the GATT server"
 #endif
 
 #if FR_FEATURE_PAD && FR_PROFILE_PAD_BYTES == 0
