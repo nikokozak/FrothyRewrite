@@ -1061,6 +1061,7 @@ static bool fr_host_ble_connection_is_live(
   return connection->info.state == FR_BLE_CONNECTION_LIVE;
 }
 
+#ifdef FR_HOST_TEST_HELPERS
 static void fr_host_ble_connection_mark_disconnected(int32_t reason) {
 #if FR_BLE_ENABLE_GATT_SERVER
   fr_host_ble_gatt_clear_subscriptions();
@@ -1071,6 +1072,7 @@ static void fr_host_ble_connection_mark_disconnected(int32_t reason) {
   fr_host_ble.connection.info.disconnected_at_ms = fr_host_millis;
   fr_host_ble.connection_disconnects += 1u;
 }
+#endif
 #endif
 
 #if FR_BLE_ENABLE_PERIPHERAL
