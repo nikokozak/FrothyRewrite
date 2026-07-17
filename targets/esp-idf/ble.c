@@ -446,6 +446,7 @@ static void fr_esp_ble_host_task(void *argument) {
 static void fr_esp_ble_cleanup_task(void *argument) {
   uint32_t generation = (uint32_t)(uintptr_t)argument;
   bool stop_host = false;
+  bool host_running = false;
   int stop_code = 0;
   esp_err_t deinit_code = ESP_OK;
 
@@ -455,6 +456,16 @@ static void fr_esp_ble_cleanup_task(void *argument) {
 
   if (stop_host) {
     stop_code = nimble_port_stop();
+    if (stop_code == 0) {
+      do {
+        portENTER_CRITICAL(&fr_esp_ble_lock);
+        host_running = fr_esp_ble.host_task_running;
+        portEXIT_CRITICAL(&fr_esp_ble_lock);
+        if (host_running) {
+          vTaskDelay(FR_ESP_BLE_WAIT_TICKS);
+        }
+      } while (host_running);
+    }
   }
   if (stop_code == 0) {
     if (fr_esp_ble_cleanup_ready_event.event != NULL) {
