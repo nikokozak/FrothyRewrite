@@ -3,6 +3,7 @@
 #include "base_defs.h"
 #include "base_image.h"
 #include "object.h"
+#include "persist.h"
 #include "platform.h"
 #include "repl.h"
 #include "runtime.h"
@@ -550,6 +551,11 @@ static void test_save_and_restore_drop_volatile_ble_state(void) {
   TEST_ASSERT_EQUAL(
       FR_OK, fr_platform_ble_scan_start(100, 50, false, false, -90));
   TEST_ASSERT_EQUAL(FR_OK, fr_host_ble_push_scan_report(&report));
+  TEST_ASSERT_EQUAL(FR_ERR_INVALID, fr_persist_restore(NULL));
+  status = read_status();
+  TEST_ASSERT_EQUAL(FR_BLE_RADIO_READY, status.radio_state);
+  TEST_ASSERT_EQUAL(FR_BLE_SCAN_ACTIVE, status.scan_state);
+  TEST_ASSERT_EQUAL_UINT8(1, status.queue_count);
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_repl_eval_line(&s_runtime, "ble.scan.next?:", out,
                                       sizeof(out)));

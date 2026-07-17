@@ -283,6 +283,9 @@ fr_err_t fr_persist_save(fr_runtime_t *runtime) {
  * base-image boundary and remounts saved code so code ids do not drift. The
  * no-payload path still skips reset so an empty restore cannot collapse L1. */
 fr_err_t fr_persist_restore(fr_runtime_t *runtime) {
+  if (runtime == NULL) {
+    return FR_ERR_INVALID;
+  }
   fr_persist_forget_boot_image();
 #if FR_FEATURE_BLE
   /* Public restore preserves library-tier slots, so it cannot clear the whole
