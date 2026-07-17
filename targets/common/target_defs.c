@@ -1697,38 +1697,6 @@ static fr_err_t fr_native_sqrt(fr_runtime_t *runtime, const fr_tagged_t *args,
 }
 #endif
 
-#if FR_FEATURE_CELLS
-static fr_err_t fr_native_cells_read(fr_runtime_t *runtime,
-                                     const fr_tagged_t *args,
-                                     uint8_t arg_count, fr_tagged_t *out) {
-  fr_object_id_t object_id = 0;
-  uint16_t index = 0;
-
-  if (args == NULL || arg_count != 2 || out == NULL) {
-    return FR_ERR_INVALID;
-  }
-  FR_TRY(fr_tagged_decode_object_id(args[0], &object_id));
-  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &index));
-  return fr_cells_read(runtime, object_id, index, out);
-}
-
-static fr_err_t fr_native_cells_write(fr_runtime_t *runtime,
-                                      const fr_tagged_t *args,
-                                      uint8_t arg_count, fr_tagged_t *out) {
-  fr_object_id_t object_id = 0;
-  uint16_t index = 0;
-
-  if (args == NULL || arg_count != 3 || out == NULL) {
-    return FR_ERR_INVALID;
-  }
-  FR_TRY(fr_tagged_decode_object_id(args[0], &object_id));
-  FR_TRY(fr_native_decode_u16(args, arg_count, 1, &index));
-  FR_TRY(fr_cells_write(runtime, object_id, index, args[2]));
-  *out = fr_tagged_nil();
-  return FR_OK;
-}
-#endif
-
 #if FR_FEATURE_RANDOM
 static fr_err_t fr_native_random_next(fr_runtime_t *runtime,
                                       const fr_tagged_t *args,
@@ -3404,31 +3372,6 @@ static const fr_native_signature_t fr_native_sqrt_signature = {
 };
 #endif
 
-#if FR_FEATURE_CELLS
-static const fr_native_param_t fr_native_cells_read_params[] = {
-    {"cells", FR_NATIVE_VALUE_ANY},
-    {"index", FR_NATIVE_VALUE_INT},
-};
-static const fr_native_signature_t fr_native_cells_read_signature = {
-    .params = fr_native_cells_read_params,
-    .arg_count = 2,
-    .result = FR_NATIVE_VALUE_ANY,
-    .help = "read a value from cells passed to a word",
-};
-
-static const fr_native_param_t fr_native_cells_write_params[] = {
-    {"cells", FR_NATIVE_VALUE_ANY},
-    {"index", FR_NATIVE_VALUE_INT},
-    {"value", FR_NATIVE_VALUE_ANY},
-};
-static const fr_native_signature_t fr_native_cells_write_signature = {
-    .params = fr_native_cells_write_params,
-    .arg_count = 3,
-    .result = FR_NATIVE_VALUE_NIL,
-    .help = "write a value to cells passed to a word",
-};
-#endif
-
 #if FR_FEATURE_RANDOM
 static const fr_native_signature_t fr_native_random_next_signature = {
     .params = NULL,
@@ -4675,32 +4618,6 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 0,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_console_info_signature,
-#endif
-    },
-#endif
-#if FR_FEATURE_CELLS
-    {
-        .slot_id = FR_SLOT_CELLS_READ,
-#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
-        .name = "cells.read",
-#endif
-        .kind = FR_BASE_DEF_NATIVE,
-        .native_fn = fr_native_cells_read,
-        .native_arity = 2,
-#if FR_FEATURE_NATIVE_SIGNATURES
-        .native_signature = &fr_native_cells_read_signature,
-#endif
-    },
-    {
-        .slot_id = FR_SLOT_CELLS_WRITE,
-#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
-        .name = "cells.write",
-#endif
-        .kind = FR_BASE_DEF_NATIVE,
-        .native_fn = fr_native_cells_write,
-        .native_arity = 3,
-#if FR_FEATURE_NATIVE_SIGNATURES
-        .native_signature = &fr_native_cells_write_signature,
 #endif
     },
 #endif
