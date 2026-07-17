@@ -1353,6 +1353,11 @@ fr_err_t fr_platform_ble_on(fr_runtime_t *runtime) {
 #if FR_BLE_ENABLE_GATT_SERVER
   fr_host_ble_gatt_radio_on();
 #endif
+#if FR_BLE_ENABLE_GATT_CLIENT
+  if (fr_host_ble.remote_gatt.value_handle == 0) {
+    fr_host_ble_remote_gatt_init();
+  }
+#endif
   fr_host_ble.radio_state = FR_BLE_RADIO_READY;
   fr_host_ble_record(FR_BLE_OP_ON, FR_OK, 0, 0);
   return FR_OK;

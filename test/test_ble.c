@@ -902,27 +902,58 @@ static void test_central_connection_owns_one_inspectable_handle(void) {
 }
 
 static void test_gatt_client_keeps_remote_handles_connection_scoped(void) {
-  const fr_ble_uuid_t service_uuid = {
-      .kind = FR_BLE_UUID_16, .bytes = {0x18, 0x0f}};
-  const fr_ble_uuid_t characteristic_uuid = {
-      .kind = FR_BLE_UUID_16, .bytes = {0x2a, 0x19}};
   const fr_base_def_t *connect = NULL;
+  const fr_base_def_t *find = NULL;
+  const fr_base_def_t *read = NULL;
+  const fr_base_def_t *write = NULL;
+  const fr_base_def_t *subscribe = NULL;
+  const fr_base_def_t *unsubscribe = NULL;
+  const fr_base_def_t *next_notification = NULL;
+  const fr_base_def_t *notification_attribute = NULL;
+  const fr_base_def_t *notification_data = NULL;
   fr_tagged_t connect_args[2] = {0};
+  fr_tagged_t find_args[4] = {0};
+  fr_tagged_t read_args[3] = {0};
+  fr_tagged_t write_args[5] = {0};
+  fr_tagged_t subscribe_args[4] = {0};
+  fr_tagged_t unsubscribe_args[3] = {0};
   fr_tagged_t connection = fr_tagged_nil();
+  fr_tagged_t result = fr_tagged_nil();
   fr_handle_ref_t connection_ref = {0};
   fr_handle_ref_t notification_ref = {0};
-  fr_ble_gatt_notification_t notification = {0};
+  fr_bytes_ref_t bytes_ref = {0};
+  fr_object_id_t service_uuid_id = 0;
+  fr_object_id_t characteristic_uuid_id = 0;
   fr_ble_gatt_client_status_t client_status = {0};
-  uint8_t bytes[FR_BLE_GATT_CLIENT_DATA_BYTES] = {0};
+  const uint8_t *bytes = NULL;
   uint8_t written[] = {7, 8};
   uint8_t noticed[] = {9, 10, 11};
-  uint16_t platform_index = FR_HANDLE_PLATFORM_NONE;
-  uint16_t attribute_handle = 0;
+  fr_slot_id_t notifications_slot = 0;
+  fr_int_t attribute_handle = 0;
   uint16_t length = 0;
-  bool has_notification = false;
 
   TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
   read_native_def("ble.connect", FR_SLOT_BLE_CONNECT, 2, &connect);
+  read_native_def("ble.gatt.find", FR_SLOT_BLE_GATT_FIND, 4, &find);
+  read_native_def("ble.gatt.read", FR_SLOT_BLE_GATT_CLIENT_READ, 3, &read);
+  read_native_def("ble.gatt.write", FR_SLOT_BLE_GATT_CLIENT_WRITE, 5, &write);
+  read_native_def("ble.gatt.subscribe", FR_SLOT_BLE_GATT_SUBSCRIBE, 4,
+                  &subscribe);
+  read_native_def("ble.gatt.unsubscribe", FR_SLOT_BLE_GATT_UNSUBSCRIBE, 3,
+                  &unsubscribe);
+  read_native_def("ble.gatt.next-notification",
+                  FR_SLOT_BLE_GATT_NEXT_NOTIFICATION, 0, &next_notification);
+  read_native_def("ble.gatt.notification-attribute",
+                  FR_SLOT_BLE_GATT_NOTIFICATION_ATTRIBUTE, 0,
+                  &notification_attribute);
+  read_native_def("ble.gatt.notification-data",
+                  FR_SLOT_BLE_GATT_NOTIFICATION_DATA, 0, &notification_data);
+#if FR_FEATURE_NATIVE_SIGNATURES
+  TEST_ASSERT_EQUAL_STRING("service_uuid",
+                           find->native_signature->params[1].name);
+  TEST_ASSERT_EQUAL_STRING("with_response",
+                           write->native_signature->params[3].name);
+#endif
   TEST_ASSERT_EQUAL(FR_OK, fr_platform_ble_on(&s_runtime));
   connect_args[0] = install_peer(FR_BLE_ADDRESS_PUBLIC, 0x61);
   TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1000, &connect_args[1]));
@@ -931,79 +962,117 @@ static void test_gatt_client_keeps_remote_handles_connection_scoped(void) {
       connect->native_fn(&s_runtime, connect_args, 2, &connection));
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_tagged_decode_handle_ref(connection, &connection_ref));
-  TEST_ASSERT_EQUAL(FR_OK,
-                    fr_handle_lookup(&s_runtime, connection_ref,
-                                     FR_HANDLE_KIND_BLE_CONNECTION, NULL,
-                                     &platform_index));
 
+  find_args[0] = connection;
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_text_install(&s_runtime, (const uint8_t *)"180f", 4,
+                                    &service_uuid_id));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_encode_object_id(service_uuid_id,
+                                               &find_args[1]));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_text_install(&s_runtime, (const uint8_t *)"2a19", 4,
+                                    &characteristic_uuid_id));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_encode_object_id(characteristic_uuid_id,
+                                               &find_args[2]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1000, &find_args[3]));
   TEST_ASSERT_EQUAL(
-      FR_OK, fr_platform_ble_gatt_client_find(
-                 &s_runtime, platform_index, &service_uuid,
-                 &characteristic_uuid, 1000, &attribute_handle));
-  TEST_ASSERT_EQUAL_UINT16(3, attribute_handle);
+      FR_OK, find->native_fn(&s_runtime, find_args, 4, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(result, &attribute_handle));
+  TEST_ASSERT_EQUAL_INT(3, attribute_handle);
   TEST_ASSERT_EQUAL(
       FR_OK, fr_platform_ble_gatt_client_status(&client_status));
   TEST_ASSERT_EQUAL_UINT8(1, client_status.cache_count);
   TEST_ASSERT_EQUAL_UINT16(1, client_status.service_match_count);
   TEST_ASSERT_EQUAL_UINT16(1, client_status.characteristic_match_count);
 
-  TEST_ASSERT_EQUAL(
-      FR_OK, fr_platform_ble_gatt_client_read(
-                 &s_runtime, platform_index, attribute_handle, 1000, bytes,
-                 sizeof(bytes), &length));
+  read_args[0] = connection;
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_encode_int(attribute_handle, &read_args[1]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1000, &read_args[2]));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    read->native_fn(&s_runtime, read_args, 3, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_bytes_ref(result, &bytes_ref));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_bytes_view(&s_runtime, bytes_ref, &bytes, &length));
   TEST_ASSERT_EQUAL_UINT16(1, length);
   TEST_ASSERT_EQUAL_UINT8(42, bytes[0]);
-  TEST_ASSERT_EQUAL(
-      FR_OK, fr_platform_ble_gatt_client_write(
-                 &s_runtime, platform_index, attribute_handle, written,
-                 sizeof(written), true, 1000));
-  TEST_ASSERT_EQUAL(
-      FR_OK, fr_platform_ble_gatt_client_read(
-                 &s_runtime, platform_index, attribute_handle, 1000, bytes,
-                 sizeof(bytes), &length));
+
+  write_args[0] = connection;
+  write_args[1] = read_args[1];
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_bytes_install(&s_runtime, written, sizeof(written),
+                                     &write_args[2]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1, &write_args[3]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1000, &write_args[4]));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    write->native_fn(&s_runtime, write_args, 5, &result));
+  TEST_ASSERT_TRUE(fr_tagged_is_nil(result));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    read->native_fn(&s_runtime, read_args, 3, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_bytes_ref(result, &bytes_ref));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_bytes_view(&s_runtime, bytes_ref, &bytes, &length));
   TEST_ASSERT_EQUAL_UINT16(sizeof(written), length);
   TEST_ASSERT_EQUAL_UINT8_ARRAY(written, bytes, sizeof(written));
 
+  subscribe_args[0] = connection;
+  subscribe_args[1] = read_args[1];
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_base_slot_id_for_name("$ble.gatt.notifications",
+                                             &notifications_slot));
+  TEST_ASSERT_EQUAL_UINT16(FR_SLOT_BLE_GATT_NOTIFICATIONS,
+                           notifications_slot);
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_slot_read(&s_runtime, notifications_slot,
+                                 &subscribe_args[2]));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_encode_int(1000, &subscribe_args[3]));
   TEST_ASSERT_EQUAL(
-      FR_OK, fr_platform_ble_gatt_client_subscribe(
-                 &s_runtime, platform_index, attribute_handle,
-                 FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS, 1000));
+      FR_OK, subscribe->native_fn(&s_runtime, subscribe_args, 4, &result));
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_host_ble_gatt_client_notify(
-                        attribute_handle, noticed, sizeof(noticed), false));
-  TEST_ASSERT_EQUAL(
-      FR_OK, fr_platform_ble_gatt_notification_next(
-                 &has_notification, &notification_ref));
-  TEST_ASSERT_TRUE(has_notification);
+                        (uint16_t)attribute_handle, noticed, sizeof(noticed),
+                        false));
+  TEST_ASSERT_EQUAL(FR_OK, next_notification->native_fn(
+                               &s_runtime, NULL, 0, &result));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_tagged_decode_handle_ref(result, &notification_ref));
   TEST_ASSERT_EQUAL_UINT8(connection_ref.id, notification_ref.id);
   TEST_ASSERT_EQUAL_UINT8(connection_ref.generation,
                           notification_ref.generation);
-  TEST_ASSERT_EQUAL(
-      FR_OK, fr_platform_ble_gatt_notification_current(&notification));
-  TEST_ASSERT_EQUAL_UINT16(attribute_handle, notification.attribute_handle);
-  TEST_ASSERT_EQUAL_UINT8(sizeof(noticed), notification.data_length);
-  TEST_ASSERT_EQUAL_UINT8_ARRAY(noticed, notification.data, sizeof(noticed));
-  TEST_ASSERT_FALSE(notification.indication);
+  TEST_ASSERT_EQUAL(FR_OK, notification_attribute->native_fn(
+                               &s_runtime, NULL, 0, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_int(result, &attribute_handle));
+  TEST_ASSERT_EQUAL_INT(3, attribute_handle);
+  TEST_ASSERT_EQUAL(FR_OK, notification_data->native_fn(
+                               &s_runtime, NULL, 0, &result));
+  TEST_ASSERT_EQUAL(FR_OK, fr_tagged_decode_bytes_ref(result, &bytes_ref));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_bytes_view(&s_runtime, bytes_ref, &bytes, &length));
+  TEST_ASSERT_EQUAL_UINT16(sizeof(noticed), length);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(noticed, bytes, sizeof(noticed));
 
-  TEST_ASSERT_EQUAL(
-      FR_OK, fr_platform_ble_gatt_client_unsubscribe(
-                 &s_runtime, platform_index, attribute_handle, 1000));
+  unsubscribe_args[0] = connection;
+  unsubscribe_args[1] = read_args[1];
+  unsubscribe_args[2] = read_args[2];
+  TEST_ASSERT_EQUAL(FR_OK, unsubscribe->native_fn(
+                               &s_runtime, unsubscribe_args, 3, &result));
   TEST_ASSERT_EQUAL(FR_ERR_BLE_NOT_READY,
                     fr_host_ble_gatt_client_notify(
-                        attribute_handle, noticed, sizeof(noticed), false));
+                        (uint16_t)attribute_handle, noticed, sizeof(noticed),
+                        false));
 
   TEST_ASSERT_EQUAL(
-      FR_OK, fr_platform_ble_gatt_client_subscribe(
-                 &s_runtime, platform_index, attribute_handle,
-                 FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS, 1000));
+      FR_OK, subscribe->native_fn(&s_runtime, subscribe_args, 4, &result));
   TEST_ASSERT_EQUAL(FR_OK,
                     fr_host_ble_gatt_client_notify(
-                        attribute_handle, noticed, sizeof(noticed), false));
+                        (uint16_t)attribute_handle, noticed, sizeof(noticed),
+                        false));
   TEST_ASSERT_EQUAL(FR_OK, fr_handle_close(&s_runtime, connection_ref));
-  TEST_ASSERT_EQUAL(
-      FR_OK, fr_platform_ble_gatt_notification_next(
-                 &has_notification, &notification_ref));
-  TEST_ASSERT_FALSE(has_notification);
+  TEST_ASSERT_EQUAL(FR_OK, next_notification->native_fn(
+                               &s_runtime, NULL, 0, &result));
+  TEST_ASSERT_TRUE(fr_tagged_is_nil(result));
   TEST_ASSERT_EQUAL(
       FR_OK, fr_platform_ble_gatt_client_status(&client_status));
   TEST_ASSERT_EQUAL_UINT8(0, client_status.cache_count);
