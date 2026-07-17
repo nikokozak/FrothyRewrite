@@ -6,7 +6,7 @@
 #if FR_FEATURE_HANDLES
 static const char *const fr_handle_kind_names[FR_HANDLE_KIND_COUNT] = {
     "none", "uart", "pwm", "i2c-bus", "i2c-device",
-    "spi",  "tcp",  "trace", "pulse",
+    "spi",  "tcp",  "trace", "pulse", "ble-connection",
 };
 typedef char
     fr_handle_kind_names_match_count[(sizeof(fr_handle_kind_names) /
@@ -69,6 +69,35 @@ void fr_handle_close_all(fr_runtime_t *runtime) {
   }
 #else
   (void)runtime;
+#endif
+}
+
+fr_err_t fr_handle_close_kind(fr_runtime_t *runtime, fr_handle_kind_t kind) {
+#if FR_FEATURE_HANDLES
+  fr_err_t first_error = FR_OK;
+
+  if (runtime == NULL || !fr_handle_kind_is_known(kind)) {
+    return FR_ERR_INVALID;
+  }
+  for (fr_handle_id_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
+    fr_handle_entry_t *entry = &runtime->handles.entries[i];
+
+    if (entry->kind != kind) {
+      continue;
+    }
+    if (entry->platform_index != FR_HANDLE_PLATFORM_NONE) {
+      fr_err_t err = fr_platform_handle_close(kind, entry->platform_index);
+      if (first_error == FR_OK) {
+        first_error = err;
+      }
+    }
+    fr_handle_clear_entry(entry);
+  }
+  return first_error;
+#else
+  (void)runtime;
+  (void)kind;
+  return FR_ERR_UNSUPPORTED;
 #endif
 }
 

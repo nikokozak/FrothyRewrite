@@ -50,6 +50,8 @@ const char *fr_err_name(fr_err_t err) {
     return "ble busy";
   case FR_ERR_BLE_TIMEOUT:
     return "ble timed out";
+  case FR_ERR_BLE_DISCONNECTED:
+    return "ble disconnected";
   case FR_OK:
   default:
     return NULL;

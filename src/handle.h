@@ -22,7 +22,8 @@ enum {
   FR_HANDLE_KIND_TCP = 6,
   FR_HANDLE_KIND_TRACE = 7,
   FR_HANDLE_KIND_PULSE = 8,
-  FR_HANDLE_KIND_COUNT = 9,
+  FR_HANDLE_KIND_BLE_CONNECTION = 9,
+  FR_HANDLE_KIND_COUNT = 10,
 };
 
 typedef struct fr_handle_entry_t {
@@ -38,6 +39,7 @@ typedef struct fr_handle_table_t {
 
 void fr_handle_reset(fr_runtime_t *runtime);
 void fr_handle_close_all(fr_runtime_t *runtime);
+fr_err_t fr_handle_close_kind(fr_runtime_t *runtime, fr_handle_kind_t kind);
 
 fr_err_t fr_handle_reserve(fr_runtime_t *runtime, fr_handle_kind_t kind,
                            fr_handle_ref_t *out_ref,

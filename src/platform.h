@@ -321,6 +321,12 @@ typedef enum fr_ble_operation_t {
   FR_BLE_OP_SCAN_NEXT = 4,
   FR_BLE_OP_ADVERTISE_START = 5,
   FR_BLE_OP_ADVERTISE_STOP = 6,
+  FR_BLE_OP_OFF = 7,
+  FR_BLE_OP_CONNECT = 8,
+  FR_BLE_OP_ACCEPT = 9,
+  FR_BLE_OP_CONNECTION_CLOSE = 10,
+  FR_BLE_OP_CONNECTION_PARAMS = 11,
+  FR_BLE_OP_CONNECTION_MTU = 12,
 } fr_ble_operation_t;
 
 typedef enum fr_ble_scan_state_t {
@@ -334,6 +340,41 @@ typedef enum fr_ble_advertise_state_t {
   FR_BLE_ADVERTISE_ACTIVE = 1,
   FR_BLE_ADVERTISE_STOPPING = 2,
 } fr_ble_advertise_state_t;
+
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+typedef enum fr_ble_connection_state_t {
+  FR_BLE_CONNECTION_FREE = 0,
+  FR_BLE_CONNECTION_CONNECTING = 1,
+  FR_BLE_CONNECTION_PENDING = 2,
+  FR_BLE_CONNECTION_LIVE = 3,
+  FR_BLE_CONNECTION_DISCONNECTED = 4,
+  FR_BLE_CONNECTION_CLOSING = 5,
+} fr_ble_connection_state_t;
+
+typedef enum fr_ble_connection_role_t {
+  FR_BLE_CONNECTION_ROLE_CENTRAL = 0,
+  FR_BLE_CONNECTION_ROLE_PERIPHERAL = 1,
+} fr_ble_connection_role_t;
+
+typedef struct fr_ble_connection_info_t {
+  fr_ble_connection_state_t state;
+  fr_ble_connection_role_t role;
+  fr_ble_address_type_t peer_address_type;
+  uint8_t peer_address[6];
+  uint32_t interval_us;
+  uint16_t latency;
+  uint32_t supervision_timeout_us;
+  uint16_t mtu;
+  bool encrypted;
+  bool authenticated;
+  bool bonded;
+  bool rssi_valid;
+  int8_t last_rssi;
+  int32_t last_reason;
+  uint32_t connected_at_ms;
+  uint32_t disconnected_at_ms;
+} fr_ble_connection_info_t;
+#endif
 
 typedef struct fr_ble_status_t {
   /* One copied snapshot. Mutable queues and target stack types stay behind
@@ -371,6 +412,16 @@ typedef struct fr_ble_status_t {
   uint32_t advertise_starts;
   uint32_t advertise_stops;
 
+  uint8_t connection_count;
+  uint8_t connection_capacity;
+  uint8_t pending_connection_count;
+  uint8_t connection_notice_count;
+  uint8_t connection_notice_capacity;
+  uint32_t connection_connects;
+  uint32_t connection_accepts;
+  uint32_t connection_disconnects;
+  uint32_t incoming_rejected;
+
   uint8_t queue_count;
   uint8_t queue_capacity;
   uint8_t queue_high_water;
@@ -401,6 +452,9 @@ const char *fr_platform_ble_backend_name(void);
 /* These calls can wait, so they receive the runtime only to poll its
  * interrupt path. scan_start returns after the target accepts the start. */
 fr_err_t fr_platform_ble_on(fr_runtime_t *runtime);
+/* Stop scans, advertising, pending links, and live links, then shut down the
+ * radio. The common native closes runtime BLE handles before this call. */
+fr_err_t fr_platform_ble_off(fr_runtime_t *runtime);
 /* Clear the queue and cursor and shut the singleton radio down with its fixed
  * cleanup timeout. Project teardown is already in progress, so this call does
  * not poll the runtime interrupt path. */
@@ -434,6 +488,39 @@ fr_err_t fr_platform_ble_advertise_start(
     uint16_t interval_ms, bool connectable);
 fr_err_t fr_platform_ble_advertise_stop(void);
 #endif
+#if FR_BLE_ENABLE_CENTRAL
+/* peer is address type followed by six address bytes in display order. */
+fr_err_t fr_platform_ble_connect(const uint8_t peer[7], uint16_t timeout_ms,
+                                 fr_handle_ref_t runtime_ref,
+                                 uint16_t *out_platform_index);
+#endif
+#if FR_BLE_ENABLE_PERIPHERAL
+/* pending drains stale target notices but never creates a runtime handle.
+ * accept claims one pending link for an already-reserved runtime ref. */
+fr_err_t fr_platform_ble_connection_pending(bool *out_pending);
+fr_err_t fr_platform_ble_accept(fr_handle_ref_t runtime_ref,
+                                uint16_t *out_platform_index,
+                                bool *out_accepted);
+fr_err_t fr_platform_ble_reject_pending(void);
+#endif
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+fr_err_t fr_platform_ble_connection_ready(uint16_t platform_index,
+                                          bool *out_ready);
+fr_err_t fr_platform_ble_connection_close(uint16_t platform_index);
+fr_err_t fr_platform_ble_connection_info(
+    uint16_t platform_index, fr_ble_connection_info_t *out_info);
+fr_err_t fr_platform_ble_connection_rssi(uint16_t platform_index,
+                                         int8_t *out_rssi);
+fr_err_t fr_platform_ble_connection_params(
+    uint16_t platform_index, uint16_t minimum_interval_ms,
+    uint16_t maximum_interval_ms, uint16_t latency,
+    uint16_t supervision_timeout_ms);
+fr_err_t fr_platform_ble_connection_mtu(fr_runtime_t *runtime,
+                                        uint16_t platform_index,
+                                        uint16_t requested_mtu,
+                                        uint16_t timeout_ms,
+                                        uint16_t *out_actual_mtu);
+#endif
 #ifdef FR_HOST_TEST_HELPERS
 void fr_host_ble_reset(void);
 #if FR_BLE_ENABLE_OBSERVER
@@ -448,6 +535,12 @@ void fr_host_ble_timeout_next_on(void);
 void fr_host_ble_timeout_next_scan_stop(void);
 #endif
 void fr_host_ble_post_reset(int32_t raw_reason);
+#if FR_BLE_ENABLE_PERIPHERAL
+fr_err_t fr_host_ble_queue_incoming(const uint8_t peer[7]);
+#endif
+#if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
+fr_err_t fr_host_ble_disconnect(uint16_t platform_index, int32_t reason);
+#endif
 #endif
 #endif
 

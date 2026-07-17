@@ -151,6 +151,22 @@
 #define FR_BLE_ADVERTISEMENT_DATA_BYTES 0
 #endif
 
+#ifndef FR_BLE_CONNECTION_COUNT
+#define FR_BLE_CONNECTION_COUNT 0
+#endif
+
+#ifndef FR_BLE_PENDING_CONNECTION_COUNT
+#define FR_BLE_PENDING_CONNECTION_COUNT 0
+#endif
+
+#ifndef FR_BLE_CONNECTION_NOTICE_COUNT
+#define FR_BLE_CONNECTION_NOTICE_COUNT 0
+#endif
+
+#ifndef FR_BLE_CONNECT_TIMEOUT_MAX_MS
+#define FR_BLE_CONNECT_TIMEOUT_MAX_MS 0
+#endif
+
 #ifndef FR_BLE_START_TIMEOUT_MS
 #define FR_BLE_START_TIMEOUT_MS 0
 #endif
@@ -647,6 +663,39 @@
 
 #if !FR_BLE_ENABLE_BROADCASTER && FR_BLE_ADVERTISEMENT_DATA_BYTES != 0
 #error "BLE advertising limits require the broadcaster role"
+#endif
+
+#if (FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL) &&                  \
+    FR_BLE_CONNECTION_COUNT != 1
+#error "the first connected BLE profile requires one connection slot"
+#endif
+
+#if FR_BLE_ENABLE_PERIPHERAL &&                                             \
+    (FR_BLE_PENDING_CONNECTION_COUNT != 1 ||                               \
+     FR_BLE_CONNECTION_NOTICE_COUNT < 1 ||                                 \
+     FR_BLE_CONNECTION_NOTICE_COUNT > 255)
+#error "the first BLE peripheral requires one pending slot and bounded notices"
+#endif
+
+#if !FR_BLE_ENABLE_PERIPHERAL &&                                            \
+    (FR_BLE_PENDING_CONNECTION_COUNT != 0 ||                               \
+     FR_BLE_CONNECTION_NOTICE_COUNT != 0)
+#error "pending BLE connection limits require the peripheral role"
+#endif
+
+#if FR_BLE_ENABLE_CENTRAL &&                                                \
+    (FR_BLE_CONNECT_TIMEOUT_MAX_MS < 1 ||                                  \
+     FR_BLE_CONNECT_TIMEOUT_MAX_MS > 60000)
+#error "BLE central connect timeout must fit the foreground wait contract"
+#endif
+
+#if !FR_BLE_ENABLE_CENTRAL && FR_BLE_CONNECT_TIMEOUT_MAX_MS != 0
+#error "BLE connect timeout requires the central role"
+#endif
+
+#if !(FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL) &&                 \
+    FR_BLE_CONNECTION_COUNT != 0
+#error "BLE connection slots require a connected role"
 #endif
 
 #if FR_FEATURE_BLE &&                                                      \

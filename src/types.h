@@ -32,6 +32,7 @@ typedef enum fr_err_t {
   FR_ERR_BLE_NOT_READY,
   FR_ERR_BLE_BUSY,
   FR_ERR_BLE_TIMEOUT,
+  FR_ERR_BLE_DISCONNECTED,
 } fr_err_t;
 
 const char *fr_err_name(fr_err_t err);
