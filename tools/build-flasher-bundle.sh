@@ -19,6 +19,7 @@ repl_dest="$(dirname "$dest")/vendor/frothy-repl/$repl_version"
 
 node - "$here" "$dest" "$version" <<'NODE'
 const childProcess = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -98,7 +99,8 @@ for (const entry of fs.readdirSync(boardsDir, { withFileTypes: true })
     const file = `${prefix}0x${address.toString(16).padStart(8, "0")}.bin`;
     if (outputFiles.has(file)) throw new Error(`duplicate output file: ${file}`);
     outputFiles.add(file);
-    return { address, file, source };
+    const md5 = crypto.createHash("md5").update(fs.readFileSync(source)).digest("hex");
+    return { address, file, md5, source };
   }).sort((a, b) => a.address - b.address);
 
   if (segments.length === 0) {
@@ -115,7 +117,7 @@ const manifest = builds.map(({ boardId, board, segments }) => ({
   profile: board.profile,
   label: board.name,
   version,
-  segments: segments.map(({ address, file }) => ({ address, file })),
+  segments: segments.map(({ address, file, md5 }) => ({ address, file, md5 })),
 }));
 
 const parent = path.dirname(destination);
