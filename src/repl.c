@@ -1233,8 +1233,11 @@ static fr_err_t fr_repl_append_error_suffix(char *out, uint16_t out_cap,
 
 static bool fr_repl_diag_is_notice(fr_err_t err, const fr_diagnostic_t *diag,
                                    bool notice_allowed) {
+  /* A span-carrying diagnostic must render a source line. Only an error
+   * headline makes that body opaque, so such a diagnostic cannot be a notice. */
   return err == FR_ERR_VOLATILE && notice_allowed && diag != NULL &&
-         diag->presentation == FR_DIAG_PRESENT_NOTICE;
+         diag->presentation == FR_DIAG_PRESENT_NOTICE &&
+         diag->span_start == NULL;
 }
 
 static fr_err_t fr_repl_write_error(fr_runtime_t *runtime, char *out,
@@ -1332,16 +1335,24 @@ static fr_err_t fr_repl_write_error(fr_runtime_t *runtime, char *out,
   }
 
   if (line != NULL) {
+    static const char source_prefix[] = "source: ";
     uint16_t detail_used = used;
     uint16_t source_used = used;
     const char *source_start = line;
     uint16_t source_length = (uint16_t)strlen(line);
     uint16_t column = 0;
+    uint16_t display_column = 0;
     uint16_t caret_length = diag->span_length;
     bool has_caret = fr_repl_diagnostic_source_line(
         line, diag, &source_start, &source_length, &column);
+    bool escape_wire_source = source_length >= 2 &&
+                              (source_start[0] == '!' ||
+                               source_start[0] == '>') &&
+                              source_start[1] == ' ';
 
-    if (fr_repl_append_span(out, out_cap, &used, source_start, source_length) !=
+    if ((escape_wire_source &&
+         fr_repl_append(out, out_cap, &used, source_prefix) != FR_OK) ||
+        fr_repl_append_span(out, out_cap, &used, source_start, source_length) !=
             FR_OK ||
         fr_repl_append_char(out, out_cap, &used, '\n') != FR_OK) {
       fr_repl_truncate(out, &used, detail_used);
@@ -1356,9 +1367,14 @@ static fr_err_t fr_repl_write_error(fr_runtime_t *runtime, char *out,
         caret_length > (uint16_t)(source_length - column)) {
       caret_length = (uint16_t)(source_length - column);
     }
+    display_column = column;
+    if (escape_wire_source) {
+      display_column =
+          (uint16_t)(display_column + sizeof(source_prefix) - 1u);
+    }
     if (has_caret &&
-        fr_repl_append_caret_line(out, out_cap, &used, column, caret_length) !=
-            FR_OK) {
+        fr_repl_append_caret_line(out, out_cap, &used, display_column,
+                                  caret_length) != FR_OK) {
       fr_repl_truncate(out, &used, source_used);
     }
   }

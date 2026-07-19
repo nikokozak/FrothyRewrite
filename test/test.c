@@ -14070,6 +14070,9 @@ static void test_repl_error_diagnostics(void) {
   fr_runtime_t runtime;
   char out[512] = {0};
   const char *lines[] = {"1 + nope"};
+  const char *async_shaped_source_lines[] = {"! missing"};
+  const char *bang_source_lines[] = {"!missing"};
+  const char *prompt_shaped_source_lines[] = {"> missing"};
 #if FR_FEATURE_TEXT && FR_FEATURE_REPL
   const char *base_suggestion_lines[] = {"print: text.from"};
   const char *text_prefix_lines[] = {"print: text."};
@@ -14237,6 +14240,42 @@ static void test_repl_error_diagnostics(void) {
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "name: nope\n") != NULL &&
             strstr(out, "1 + nope\n    ^^^^\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic escapes async-shaped source line",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, async_shaped_source_lines,
+                (uint8_t)(sizeof(async_shaped_source_lines) /
+                          sizeof(async_shaped_source_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "source: ! missing\n          ^^^^^^^\n") != NULL &&
+            strstr(out, "\n! missing\n") == NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic preserves non-async bang source line",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, bang_source_lines,
+                (uint8_t)(sizeof(bang_source_lines) /
+                          sizeof(bang_source_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "\n!missing\n") != NULL &&
+            strstr(out, "source: !missing\n") == NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic escapes prompt-shaped source line",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, prompt_shaped_source_lines,
+                (uint8_t)(sizeof(prompt_shaped_source_lines) /
+                          sizeof(prompt_shaped_source_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "source: > missing\n        ^\n") != NULL &&
+            strstr(out, "\n> missing\n") == NULL);
 
 #if FR_FEATURE_TEXT && FR_FEATURE_REPL
   memset(out, 0, sizeof(out));

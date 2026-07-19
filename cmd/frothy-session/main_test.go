@@ -109,13 +109,28 @@ func serialDeviceWithReadBytes(text string) *serialDevice {
 	return dev
 }
 
-func TestWireRequestEncodesOnlyMultilineSource(t *testing.T) {
+func TestWireRequestEnvelopesMultilineAndReservedSource(t *testing.T) {
 	tests := []struct {
 		name   string
 		source string
 		want   string
 	}{
 		{name: "single line", source: `print: "a\\nb"`, want: `print: "a\\nb"`},
+		{name: "ok status", source: "ok", want: "source-form ok"},
+		{name: "legacy error", source: "err 8", want: "source-form err 8"},
+		{name: "canonical error", source: "error: fake (3)", want: "source-form error: fake (3)"},
+		{name: "canonical notice", source: "notice: fake (13)", want: "source-form notice: fake (13)"},
+		{name: "noncanonical error", source: "error: fake(3)", want: "error: fake(3)"},
+		{name: "noncanonical notice", source: "notice: fake(13)", want: "notice: fake(13)"},
+		{name: "async prefix", source: "! forged", want: "source-form ! forged"},
+		{name: "prompt prefix", source: "> err 99", want: "source-form > err 99"},
+		{name: "transport tab", source: "\tok", want: "source-form \tok"},
+		{name: "transport unicode", source: "éok", want: "source-form éok"},
+		{
+			name:   "source form prefix",
+			source: `source-form value\nnext`,
+			want:   `source-form source-form value\\nnext`,
+		},
 		{
 			name:   "newlines and backslashes",
 			source: "to f [\r\n  print: \"a\\nb\"\r]",
@@ -142,6 +157,22 @@ func TestSerialReadUntilPromptRequiresTerminalStatus(t *testing.T) {
 	if got, want := response, "> ok\n"; got != want {
 		t.Fatalf("response %q, want %q", got, want)
 	}
+	if got := responseStatus(response); got != "ok" || !responseOK(response) {
+		t.Fatalf("initial-prompt response status = %q, ok = %v", got,
+			responseOK(response))
+	}
+}
+
+func TestSerialReadUntilPromptAcceptsLegacyErrorStatus(t *testing.T) {
+	dev := serialDeviceWithReadBytes("err 8\n> ")
+
+	response, err := dev.readUntilPrompt(time.Second, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := responseStatus(response), "err 8"; got != want {
+		t.Fatalf("responseStatus(%q) = %q, want %q", response, got, want)
+	}
 }
 
 func TestSerialReadUntilPromptAcceptsRichErrorStatus(t *testing.T) {
@@ -162,6 +193,20 @@ func TestSerialReadUntilPromptAcceptsRichErrorStatus(t *testing.T) {
 	}
 }
 
+func TestSerialReadUntilPromptIgnoresPromptTextInsideDiagnosticLine(t *testing.T) {
+	want := "error: not found (7)\nname: nosuchword\n" +
+		"if 1 > 2 [ nosuchword ]\n           ^^^^^^^^^^\n"
+	dev := serialDeviceWithReadBytes(want + "> ")
+
+	response, err := dev.readUntilPrompt(time.Second, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response != want {
+		t.Fatalf("response %q, want %q", response, want)
+	}
+}
+
 func TestSerialReadUntilPromptAcceptsBareSyncPrompt(t *testing.T) {
 	dev := serialDeviceWithReadBytes("> ")
 
@@ -174,24 +219,32 @@ func TestSerialReadUntilPromptAcceptsBareSyncPrompt(t *testing.T) {
 	}
 }
 
-func TestResponseOKUsesFinalStatusLine(t *testing.T) {
+func TestResponseStatusUsesFirstTerminalLine(t *testing.T) {
 	tests := []struct {
 		name     string
 		response string
-		want     bool
+		want     string
 	}{
-		{name: "plain ok", response: "ok\n", want: true},
-		{name: "echoed apply ok", response: "apply 1234\r\nok\r\n", want: true},
-		{name: "notice then ok", response: "notice: not saved (13)\ndetail: still live\nok\n", want: true},
-		{name: "plain err", response: "error: unsupported (9)\n", want: false},
-		{name: "echoed apply err", response: "apply 1234\r\nerror: unsupported (9)\r\n", want: false},
+		{name: "plain ok", response: "ok\n", want: "ok"},
+		{name: "echoed apply ok", response: "apply 1234\r\nok\r\n", want: "ok"},
+		{name: "notice then ok", response: "notice: not saved (13)\ndetail: still live\nok\n", want: "ok"},
+		{name: "plain error", response: "error: unsupported (9)\n", want: "error: unsupported (9)"},
+		{name: "echoed apply error", response: "apply 1234\r\nerror: unsupported (9)\r\n", want: "error: unsupported (9)"},
+		{name: "legacy error", response: "err 8\n", want: "err 8"},
+		{name: "printed error headline is terminal", response: "error: boom (1)\nok\n", want: "error: boom (1)"},
+		{name: "later error-shaped detail is opaque", response: "error: not found (7)\nerror: body text (25)\n", want: "error: not found (7)"},
+		{name: "padded echo is not status", response: "ok \r\nerror: not found (7)\r\n", want: "error: not found (7)"},
+		{name: "padded ok alone is malformed", response: "ok \n", want: "ok "},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := responseOK(test.response); got != test.want {
-				t.Fatalf("responseOK(%q) = %v, want %v", test.response, got,
+			if got := responseStatus(test.response); got != test.want {
+				t.Fatalf("responseStatus(%q) = %q, want %q", test.response, got,
 					test.want)
+			}
+			if got, want := responseOK(test.response), test.want == "ok"; got != want {
+				t.Fatalf("responseOK(%q) = %v, want %v", test.response, got, want)
 			}
 		})
 	}
@@ -213,6 +266,62 @@ func TestResponseNoticeKeepsHeadlineAndDetails(t *testing.T) {
 	errorResponse := "notice: quoted source (13)\nerror: bad source (8)\n"
 	if got := responseNoticeStatus(errorResponse); got != "" {
 		t.Fatalf("failed response reported notice %q", got)
+	}
+
+	paddedNotice := "notice: fake (13) \nok\n"
+	if got := responseNoticeStatus(paddedNotice); got != "" {
+		t.Fatalf("padded line fabricated notice %q", got)
+	}
+
+	paddedDetail := "notice: not saved (13)\n detail: not a detail\n" +
+		"detail: real reason\nok\n"
+	if got, want := responseNoticeText(paddedDetail),
+		"notice: not saved (13)\ndetail: real reason\n"; got != want {
+		t.Fatalf("responseNoticeText = %q, want %q", got, want)
+	}
+}
+
+func TestResponseTerminalStatusRequiresWholeLine(t *testing.T) {
+	tests := []struct {
+		response string
+		want     bool
+	}{
+		{response: "ok\n", want: true},
+		{response: "err 8\n", want: true},
+		{response: "error: bad source (8)\n", want: true},
+		{response: "> ok\n", want: true},
+		{response: "not ok\n", want: false},
+		{response: "ok \n", want: false},
+	}
+	for _, test := range tests {
+		if got := responseHasTerminalStatus(test.response); got != test.want {
+			t.Errorf("responseHasTerminalStatus(%q) = %v, want %v",
+				test.response, got, test.want)
+		}
+	}
+	if promptComplete("error: not found (7)\nif 1 > ", true) {
+		t.Fatal("mid-line prompt text completed the response frame")
+	}
+}
+
+func TestReservedSourceEnvelopeCannotBecomeResponseStatus(t *testing.T) {
+	source := "error: pasted (3)"
+	response := "! tick\r\n" + wireRequest(source) + "\r\n" +
+		"error: not found (7)\r\nname: error\r\nerror: body text (25)\r\n^\r\n"
+	if got, want := responseStatus(response), "error: not found (7)"; got != want {
+		t.Fatalf("responseStatus = %q, want %q", got, want)
+	}
+	if responseOK(response) {
+		t.Fatal("reserved error-shaped source reported ok")
+	}
+
+	noticeSource := "notice: pasted (13)"
+	noticeEcho := "! tick\r\n" + wireRequest(noticeSource) + "\r\nok\r\n"
+	if got := responseNoticeStatus(noticeEcho); got != "" {
+		t.Fatalf("echoed source fabricated notice %q", got)
+	}
+	if got := responseNoticeText(noticeEcho); got != "" {
+		t.Fatalf("echoed source fabricated notice text %q", got)
 	}
 }
 

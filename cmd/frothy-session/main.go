@@ -52,8 +52,9 @@ const (
 	promptContinuation      = ".. "
 )
 
-var canonicalErrorStatusPattern = regexp.MustCompile(`^error: .+\([0-9]+\)$`)
-var canonicalNoticeStatusPattern = regexp.MustCompile(`^notice: .+\([0-9]+\)$`)
+var canonicalErrorStatusPattern = regexp.MustCompile(`^error: .+ \([0-9]+\)$`)
+var canonicalNoticeStatusPattern = regexp.MustCompile(`^notice: .+ \([0-9]+\)$`)
+var legacyErrorStatusPattern = regexp.MustCompile(`^err [0-9]+$`)
 
 type serialDevice struct {
 	file    *os.File
@@ -128,19 +129,14 @@ func (d *serialDevice) readLoop() {
 }
 
 func responseHasTerminalStatus(response string) bool {
-	text := normalizeResponseText(response)
-	if strings.HasSuffix(text, "ok\n") {
-		return true
-	}
-	if canonicalErrorStatusInResponse(text) != "" {
-		return true
-	}
-	status := responseStatus(response)
-	return strings.HasPrefix(status, "error: ")
+	return isResponseStatus(responseStatus(response))
 }
 
 func promptComplete(text string, requireStatus bool) bool {
 	if !strings.HasSuffix(text, "> ") {
+		return false
+	}
+	if len(text) > len("> ") && text[len(text)-len("> ")-1] != '\n' {
 		return false
 	}
 	if !requireStatus {
@@ -183,7 +179,7 @@ func (d *serialDevice) sendLine(line string, timeout time.Duration, promptSeen f
 func wireRequest(source string) string {
 	normalized := strings.ReplaceAll(source, "\r\n", "\n")
 	normalized = strings.ReplaceAll(normalized, "\r", "\n")
-	if !strings.Contains(normalized, "\n") {
+	if !sourceNeedsEnvelope(normalized) {
 		return normalized
 	}
 
@@ -201,6 +197,22 @@ func wireRequest(source string) string {
 		}
 	}
 	return request.String()
+}
+
+func sourceNeedsEnvelope(source string) bool {
+	// The ESP console drops bytes outside printable ASCII. Keep any such source
+	// behind the source-form prefix so its transformed echo cannot become wire
+	// syntax (for example, a dropped tab turning "\tok" into "ok").
+	for i := 0; i < len(source); i++ {
+		if source[i] < 32 || source[i] > 126 {
+			return true
+		}
+	}
+	return strings.HasPrefix(source, "! ") ||
+		strings.HasPrefix(source, "> ") ||
+		strings.HasPrefix(source, "source-form ") ||
+		canonicalNoticeStatusPattern.MatchString(source) ||
+		isResponseStatus(source)
 }
 
 func (d *serialDevice) writeBytes(bytes []byte) error {
@@ -234,14 +246,27 @@ func (d *serialDevice) syncPrompt(timeout time.Duration) error {
 
 func responseStatus(response string) string {
 	text := normalizeResponseText(response)
-	status := lastResponseStatusLine(text)
-	if status == "ok" || canonicalErrorStatusPattern.MatchString(status) {
-		return status
+	initialPromptStatus := ""
+	for index, line := range strings.Split(text, "\n") {
+		if isResponseStatus(line) {
+			return line
+		}
+		if index == 0 && strings.HasPrefix(line, "> ") {
+			candidate := strings.TrimPrefix(line, "> ")
+			if isResponseStatus(candidate) {
+				initialPromptStatus = candidate
+			}
+		}
 	}
-	if errorStatus := canonicalErrorStatusInResponse(text); errorStatus != "" {
-		return errorStatus
+	if initialPromptStatus != "" {
+		return initialPromptStatus
 	}
-	return status
+	return lastResponseStatusLine(text)
+}
+
+func isResponseStatus(line string) bool {
+	return line == "ok" || canonicalErrorStatusPattern.MatchString(line) ||
+		legacyErrorStatusPattern.MatchString(line)
 }
 
 func normalizeResponseText(response string) string {
@@ -252,23 +277,11 @@ func normalizeResponseText(response string) string {
 func lastResponseStatusLine(text string) string {
 	lines := strings.Split(text, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line != "" {
-			return line
+		if strings.TrimSpace(lines[i]) != "" {
+			return lines[i]
 		}
 	}
 	return ""
-}
-
-func canonicalErrorStatusInResponse(text string) string {
-	status := ""
-	for _, rawLine := range strings.Split(text, "\n") {
-		line := strings.TrimSpace(rawLine)
-		if canonicalErrorStatusPattern.MatchString(line) {
-			status = line
-		}
-	}
-	return status
 }
 
 func responseOK(response string) bool {
@@ -281,8 +294,7 @@ func responseNoticeStatus(response string) string {
 	}
 
 	status := ""
-	for _, rawLine := range strings.Split(normalizeResponseText(response), "\n") {
-		line := strings.TrimSpace(rawLine)
+	for _, line := range strings.Split(normalizeResponseText(response), "\n") {
 		if canonicalNoticeStatusPattern.MatchString(line) {
 			status = line
 		}
@@ -298,12 +310,11 @@ func responseNoticeText(response string) string {
 
 	var lines []string
 	for _, rawLine := range strings.Split(normalizeResponseText(response), "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == status {
+		if rawLine == status {
 			lines = []string{rawLine}
 			continue
 		}
-		if len(lines) > 0 && strings.HasPrefix(line, "detail:") {
+		if len(lines) > 0 && strings.HasPrefix(rawLine, "detail:") {
 			lines = append(lines, rawLine)
 		}
 	}
