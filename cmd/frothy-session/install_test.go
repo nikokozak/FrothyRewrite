@@ -125,6 +125,37 @@ func TestRunInstallSurfacesDeviceErrorMidPipe(t *testing.T) {
 	}
 }
 
+func TestRunInstallReportsNoticeAndContinues(t *testing.T) {
+	projectDir := t.TempDir()
+	writeFrothyToml(t, projectDir, "esp32_devkit_v1")
+	writeLibraryFr(t, projectDir, "esp32_devkit_v1",
+		"save\nlib_word is fn [ 42 ]\n")
+
+	notice := "notice: not saved (13)\n" +
+		"detail: cannot save slot 'appuart' - bound to a live handle or buffer\n" +
+		"ok\n"
+	dev := &fakeDevice{responses: []string{"ok\n", notice, "ok\n"}}
+	var stderr bytes.Buffer
+
+	code := runInstallCommand(
+		[]string{"--port", "/dev/cu.usbserial-0001", "--project", projectDir},
+		io.Discard, &stderr, singlePortLister("/dev/cu.usbserial-0001"), fakeInstallFactory(dev),
+		115200, time.Second, 0,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d (stderr=%q)", code, stderr.String())
+	}
+	if got, want := stderr.String(),
+		"notice: not saved (13)\n"+
+			"detail: cannot save slot 'appuart' - bound to a live handle or buffer\n"; got != want {
+		t.Fatalf("stderr = %q, want raw notice %q", got, want)
+	}
+	if got, want := strings.Join(dev.sent, "\n"),
+		"install-library\nsave\nlib_word is fn [ 42 ]"; got != want {
+		t.Fatalf("sent forms = %q, want %q", got, want)
+	}
+}
+
 func TestRunInstallReportsOpenFailure(t *testing.T) {
 	projectDir := t.TempDir()
 	writeFrothyToml(t, projectDir, "esp32_devkit_v1")

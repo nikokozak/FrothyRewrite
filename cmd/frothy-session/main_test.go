@@ -182,6 +182,7 @@ func TestResponseOKUsesFinalStatusLine(t *testing.T) {
 	}{
 		{name: "plain ok", response: "ok\n", want: true},
 		{name: "echoed apply ok", response: "apply 1234\r\nok\r\n", want: true},
+		{name: "notice then ok", response: "notice: not saved (13)\ndetail: still live\nok\n", want: true},
 		{name: "plain err", response: "error: unsupported (9)\n", want: false},
 		{name: "echoed apply err", response: "apply 1234\r\nerror: unsupported (9)\r\n", want: false},
 	}
@@ -193,6 +194,25 @@ func TestResponseOKUsesFinalStatusLine(t *testing.T) {
 					test.want)
 			}
 		})
+	}
+}
+
+func TestResponseNoticeKeepsHeadlineAndDetails(t *testing.T) {
+	response := "save\r\nnotice: not saved (13)\r\n" +
+		"detail: first reason\r\n! tick\r\ndetail: second reason\r\nok\r\n"
+	if got, want := responseNoticeStatus(response), "notice: not saved (13)"; got != want {
+		t.Fatalf("responseNoticeStatus = %q, want %q", got, want)
+	}
+	if got, want := responseNoticeText(response),
+		"notice: not saved (13)\n"+
+			"detail: first reason\n"+
+			"detail: second reason\n"; got != want {
+		t.Fatalf("responseNoticeText = %q, want %q", got, want)
+	}
+
+	errorResponse := "notice: quoted source (13)\nerror: bad source (8)\n"
+	if got := responseNoticeStatus(errorResponse); got != "" {
+		t.Fatalf("failed response reported notice %q", got)
 	}
 }
 
@@ -1769,7 +1789,7 @@ func TestReplayLinesFromTranscriptRejectsBadRecords(t *testing.T) {
 	}
 }
 
-func TestReplayLinesFromWrittenRecords(t *testing.T) {
+func TestReplayLinesFromNoticeResponseKeepsAcceptedSource(t *testing.T) {
 	var out strings.Builder
 	records := newRecordWriter(&out, "s1")
 	if err := records.sessionStart(); err != nil {
@@ -1785,7 +1805,10 @@ func TestReplayLinesFromWrittenRecords(t *testing.T) {
 	if err := records.send("words"); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.response("ok\n"); err != nil {
+	noticeResponse := "notice: not saved (13)\n" +
+		"detail: cannot save a live handle\n" +
+		"ok\n"
+	if err := records.response(noticeResponse); err != nil {
 		t.Fatal(err)
 	}
 	if err := records.sessionEnd(); err != nil {
@@ -1798,6 +1821,11 @@ func TestReplayLinesFromWrittenRecords(t *testing.T) {
 	}
 	if got, want := strings.Join(lines, "\n"), "words"; got != want {
 		t.Fatalf("replay lines %q, want %q", got, want)
+	}
+	response := recordWithKind(decodeRecords(t, out.String()), "response")
+	if response["ok"] != true || response["notice"] != "notice: not saved (13)" ||
+		response["text"] != noticeResponse {
+		t.Fatalf("notice response record = %#v", response)
 	}
 }
 
@@ -1975,7 +2003,11 @@ func TestRecordsSourceBlockEndsAfterAllExpandedForms(t *testing.T) {
 		".end-source",
 		"",
 	}, "\n"))
-	dev := &fakeDevice{responses: []string{statusResponse("device"), "ok\n", "ok\n"}}
+	dev := &fakeDevice{responses: []string{
+		statusResponse("device"),
+		"notice: not saved (13)\ndetail: still live\nok\n",
+		"ok\n",
+	}}
 	var out strings.Builder
 
 	if err := runRecordsTestSession(t, input, &out, dev, time.Second, &interruptTracker{}); err != nil {
@@ -1988,6 +2020,10 @@ func TestRecordsSourceBlockEndsAfterAllExpandedForms(t *testing.T) {
 	end := recordWithKind(records, "source_end")
 	if end["state"] != "idle" || end["mirror"] != "none" {
 		t.Fatalf("source_end record = %#v", end)
+	}
+	response := recordWithKind(records, "response")
+	if response["ok"] != true || response["notice"] != "notice: not saved (13)" {
+		t.Fatalf("notice stopped or was lost from source block: %#v", response)
 	}
 }
 

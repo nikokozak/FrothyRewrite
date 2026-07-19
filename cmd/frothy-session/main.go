@@ -53,6 +53,7 @@ const (
 )
 
 var canonicalErrorStatusPattern = regexp.MustCompile(`^error: .+\([0-9]+\)$`)
+var canonicalNoticeStatusPattern = regexp.MustCompile(`^notice: .+\([0-9]+\)$`)
 
 type serialDevice struct {
 	file    *os.File
@@ -272,6 +273,41 @@ func canonicalErrorStatusInResponse(text string) string {
 
 func responseOK(response string) bool {
 	return responseStatus(response) == "ok"
+}
+
+func responseNoticeStatus(response string) string {
+	if !responseOK(response) {
+		return ""
+	}
+
+	status := ""
+	for _, rawLine := range strings.Split(normalizeResponseText(response), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if canonicalNoticeStatusPattern.MatchString(line) {
+			status = line
+		}
+	}
+	return status
+}
+
+func responseNoticeText(response string) string {
+	status := responseNoticeStatus(response)
+	if status == "" {
+		return ""
+	}
+
+	var lines []string
+	for _, rawLine := range strings.Split(normalizeResponseText(response), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == status {
+			lines = []string{rawLine}
+			continue
+		}
+		if len(lines) > 0 && strings.HasPrefix(line, "detail:") {
+			lines = append(lines, rawLine)
+		}
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func responseSettledAfterInterrupt(response string) bool {
@@ -1232,11 +1268,15 @@ func (w *recordWriter) send(source string) error {
 }
 
 func (w *recordWriter) response(response string) error {
-	return w.write(recordResponse, recordStateIdle, recordMirrorNone, map[string]any{
+	fields := map[string]any{
 		"status": responseStatus(response),
 		"ok":     responseOK(response),
 		"text":   response,
-	})
+	}
+	if notice := responseNoticeStatus(response); notice != "" {
+		fields["notice"] = notice
+	}
+	return w.write(recordResponse, recordStateIdle, recordMirrorNone, fields)
 }
 
 func (w *recordWriter) interrupt(state recordState, settled bool, text string, code string) error {

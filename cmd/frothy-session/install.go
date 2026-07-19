@@ -117,6 +117,7 @@ func runInstallCommand(args []string, stdout io.Writer, stderr io.Writer, list p
 		fmt.Fprintf(stderr, "error: device returned %s\n", responseStatus(response))
 		return 1
 	}
+	printDeviceResponse(stderr, responseNoticeText(response))
 
 	for _, line := range lines {
 		response, err := dev.sendLine(line, timeout, nil)
@@ -128,6 +129,7 @@ func runInstallCommand(args []string, stdout io.Writer, stderr io.Writer, list p
 			fmt.Fprintf(stderr, "error: device returned %s\n", responseStatus(response))
 			return 1
 		}
+		printDeviceResponse(stderr, responseNoticeText(response))
 	}
 	return 0
 }
