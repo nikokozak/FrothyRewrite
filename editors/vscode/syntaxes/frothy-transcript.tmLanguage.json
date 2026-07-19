@@ -7,6 +7,7 @@
     { "include": "#sent-line" },
     { "include": "#error-line" },
     { "include": "#legacy-error-line" },
+    { "include": "#notice-line" },
     { "include": "#ok-line" },
     { "include": "#status-line" },
     { "include": "#mem-pair" },
@@ -30,6 +31,10 @@
     "legacy-error-line": {
       "name": "invalid.illegal.frothy-transcript",
       "match": "^err\\s+\\d+\\s*$"
+    },
+    "notice-line": {
+      "name": "token.warn-token.frothy-transcript",
+      "match": "^notice: .+\\(\\d+\\)\\s*$"
     },
     "ok-line": {
       "name": "support.constant.ok.frothy-transcript",

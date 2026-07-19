@@ -7,6 +7,7 @@ import {
   reduceSessionRecord,
   SessionSnapshot,
 } from '../src/session-records';
+import transcriptGrammar from '../syntaxes/frothy-transcript.tmLanguage.json';
 
 function record(fields: Record<string, unknown>) {
   return parseSessionRecord(JSON.stringify(fields));
@@ -118,6 +119,45 @@ test('failed device responses and legacy compile errors reject editor requests',
   assert.equal(recordFailed(record({
     v: 1, session: 's1', seq: 3, kind: 'compile_error', state: 'idle', mirror: 'clean',
   })), true);
+});
+
+test('device notices remain successful results and warning-colored output', () => {
+  const noticeText = 'notice: not saved (13)\ndetail: still live\nok\n';
+  const notice = record({
+    v: 1,
+    session: 's1',
+    seq: 2,
+    kind: 'response',
+    state: 'idle',
+    mirror: 'none',
+    status: 'ok',
+    ok: true,
+    notice: 'notice: not saved (13)',
+    text: noticeText,
+  });
+
+  const before = reduceSessionRecord(emptySessionSnapshot(), record({
+    v: 1,
+    session: 's1',
+    seq: 1,
+    kind: 'compile_error',
+    state: 'idle',
+    mirror: 'none',
+    status: 'error: bad source (8)',
+  }));
+  const after = reduceSessionRecord(before, notice);
+
+  assert.equal(recordFailed(notice), false);
+  assert.equal(notice.notice, 'notice: not saved (13)');
+  assert.equal(after.lastError, undefined);
+  assert.equal(after.lastResultText, noticeText);
+
+  assert.ok(transcriptGrammar.patterns.some((pattern) => pattern.include === '#notice-line'));
+  const noticeRule = transcriptGrammar.repository['notice-line'];
+  assert.equal(noticeRule.name, 'token.warn-token.frothy-transcript');
+  // Keep this canonical shape aligned with cmd/frothy-session/main.go.
+  assert.match('notice: not saved (13)', new RegExp(noticeRule.match));
+  assert.doesNotMatch('notice: malformed', new RegExp(noticeRule.match));
 });
 
 test('stale state stays visible through unknown records and the terminal error', () => {

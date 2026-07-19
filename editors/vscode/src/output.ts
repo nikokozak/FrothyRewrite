@@ -14,8 +14,9 @@ export function getChannel(): vscode.OutputChannel {
   if (!channel) {
     // The "frothy-transcript" language ID + the matching TextMate grammar
     // (syntaxes/frothy-transcript.tmLanguage.json) drive the colors: errors
-    // red, `ok` green, status lines italic-grey, echoed input bold blue,
-    // bare prompts dim. No work in TS — the user's theme styles all of it.
+    // red, notices warning-colored, `ok` green, status lines italic-grey,
+    // echoed input bold blue, bare prompts dim. No work in TS — the user's
+    // theme styles all of it.
     channel = vscode.window.createOutputChannel('Frothy', 'frothy-transcript');
   }
   return channel;
