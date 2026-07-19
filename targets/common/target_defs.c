@@ -249,7 +249,7 @@ static fr_err_t fr_native_uart_open(fr_runtime_t *runtime,
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
     if (err == FR_ERR_BUSY) {
-      fr_native_diag_note_actual(runtime, args[0], FR_DIAG_ACTUAL_VALUE);
+      fr_native_diag_note_rejected_arg(runtime, args, arg_count, 0);
     }
     return err;
   }
@@ -296,7 +296,7 @@ static fr_err_t fr_native_uart_open_on(fr_runtime_t *runtime,
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
     if (err == FR_ERR_BUSY) {
-      fr_native_diag_note_actual(runtime, args[0], FR_DIAG_ACTUAL_VALUE);
+      fr_native_diag_note_rejected_arg(runtime, args, arg_count, 0);
     }
     return err;
   }
@@ -771,7 +771,7 @@ static fr_err_t fr_native_decode_text_view(const fr_runtime_t *runtime,
 }
 
 /* cap counts the NUL slot; the caller's text must fit in cap - 1 bytes. */
-static fr_err_t fr_native_copy_text_cstring(const fr_runtime_t *runtime,
+static fr_err_t fr_native_copy_text_cstring(fr_runtime_t *runtime,
                                             const fr_tagged_t *args,
                                             uint8_t arg_count, uint8_t index,
                                             char *out_buf, uint16_t cap) {
@@ -785,6 +785,7 @@ static fr_err_t fr_native_copy_text_cstring(const fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_text_view(runtime, args, arg_count, index, &bytes,
                                     &length));
   if ((uint32_t)length + 1u > cap) {
+    fr_native_diag_note_rejected_arg(runtime, args, arg_count, index);
     return FR_ERR_DOMAIN;
   }
   if (length > 0) {

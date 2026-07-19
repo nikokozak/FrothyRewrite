@@ -1101,6 +1101,17 @@ static fr_err_t fr_repl_append_runtime_context_line(
     return fr_repl_append_arity_line(out, out_cap, used, diag);
   }
 
+  if (diag->message_id == FR_DIAG_MSG_RUNTIME_REJECTED_ARGUMENT &&
+      diag->context_name != NULL) {
+    *out_wrote = true;
+    FR_TRY(fr_repl_append(out, out_cap, used, "detail: "));
+    FR_TRY(fr_repl_append(out, out_cap, used, diag->context_name));
+    FR_TRY(fr_repl_append(out, out_cap, used, " argument "));
+    FR_TRY(fr_repl_append_u16(out, out_cap, used,
+                              (uint16_t)(diag->index + 1u)));
+    return fr_repl_append(out, out_cap, used, " was rejected\n");
+  }
+
   switch ((fr_diag_message_id_t)diag->message_id) {
   case FR_DIAG_MSG_RUNTIME_CELL_INDEX_OOB:
     *out_wrote = true;

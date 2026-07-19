@@ -88,6 +88,7 @@ typedef enum fr_diag_message_id_t {
   FR_DIAG_MSG_RUNTIME_TOO_FEW_ARGS,
   FR_DIAG_MSG_RUNTIME_INTEGER_OVERFLOW,
   FR_DIAG_MSG_RUNTIME_SLOT_UNPERSISTABLE,
+  FR_DIAG_MSG_RUNTIME_REJECTED_ARGUMENT,
 } fr_diag_message_id_t;
 
 const char *fr_diag_message(uint16_t message_id);

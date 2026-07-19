@@ -595,6 +595,7 @@ test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 		| build/host/frothy-host-normal); \
 	notice_expected=$$(printf '%s\n' \
 		'> error: busy: 0 (25)' \
+		'detail: uart.open argument 1 was rejected' \
 		'> notice: not saved (13)' \
 		"detail: cannot save slot 'appuart' - bound to a live handle or buffer" \
 		'ok' \
@@ -612,6 +613,29 @@ host-normal-events:
 	$(MAKE) BOARD=host PROFILE=host_normal \
 		FROTHY_BINARY=build/host/frothy-host-normal-events \
 		CFLAGS=-DFR_INCLUDE_TEST_NATIVES=1 frothy
+
+host-normal-no-native-signatures:
+	$(MAKE) BOARD=host PROFILE=host_normal \
+		FROTHY_BINARY=build/host/frothy-host-no-native-signatures \
+		CFLAGS=-DFR_FEATURE_NATIVE_SIGNATURES=0 frothy
+
+test-host-normal-no-native-signatures-transcript: host-normal-no-native-signatures
+	@out=$$(printf '%s\n' \
+		'wifi.save: "ssid", "012345678901234567890123456789012345678901234567890123456789abcde"' \
+		| build/host/frothy-host-no-native-signatures); \
+	if printf '%s\n' "$$out" | grep -qF '0123456789'; then \
+		printf '%s\nsecret argument leaked without native signatures\n' "$$out"; \
+		exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$out" | grep -qF 'error: bad value (3)'; then \
+		printf '%s\nmissing signature-off domain error\n' "$$out"; \
+		exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$out" | grep -qF 'detail: wifi.save argument 2 was rejected'; then \
+		printf '%s\nmissing signature-off argument context\n' "$$out"; \
+		exit 1; \
+	fi; \
+	printf 'host_normal signature-off transcript ok\n'
 
 # Exercises the T11a save -> reinstall-base -> restore -> fire-event
 # round-trip through the CLI. Needs FR_INCLUDE_TEST_NATIVES so
@@ -689,7 +713,7 @@ test-host-normal-pulse-transcript: host-normal ## Replay the bounded pulse trans
 	done; \
 	printf 'host_normal pulse transcript ok\n'
 
-test-host-normal-profile: test-host-normal test-host-normal-transcript test-host-normal-event-transcript test-host-normal-trace-transcript test-host-normal-pulse-transcript
+test-host-normal-profile: test-host-normal test-host-normal-transcript test-host-normal-event-transcript test-host-normal-trace-transcript test-host-normal-pulse-transcript test-host-normal-no-native-signatures-transcript
 
 test-lib-e2e: frothy-host-command ## Build and run the library extension e2e fixture.
 	BUILD_DIR="$(abspath $(LIB_E2E_BUILD_DIR))" "$(abspath $(FROTHY_HOST_COMMAND_BINARY))" build --project "$(abspath $(LIB_E2E_PROJECT))"
@@ -927,4 +951,4 @@ vsix: ## Build the VS Code extension package.
 clean: ## Remove generated build outputs.
 	rm -rf build frothy test/test test/test-host-normal test/fixtures/projects/*/.frothy
 
-.PHONY: test test-esp-idf-console-boundary test-unity test-ble-host _test-ble-host-run help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events test-host-normal-transcript test-host-normal-event-transcript test-host-normal-trace-transcript test-host-normal-pulse-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript seeed-xiao-host test-seeed-xiao-host-transcript frothy-host-command cli install-host test-install-host print-config vsix clean
+.PHONY: test test-esp-idf-console-boundary test-unity test-ble-host _test-ble-host-run help artifacts flash wipe-persist test-host-normal host-normal examples examples-manifest check-examples-manifest host-normal-events host-normal-no-native-signatures test-host-normal-transcript test-host-normal-event-transcript test-host-normal-trace-transcript test-host-normal-pulse-transcript test-host-normal-no-native-signatures-transcript test-host-normal-profile test-lib-e2e esp32-plain-host test-esp32-plain-host-transcript seeed-xiao-host test-seeed-xiao-host-transcript frothy-host-command cli install-host test-install-host print-config vsix clean

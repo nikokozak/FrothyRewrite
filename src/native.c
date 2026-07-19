@@ -5,6 +5,7 @@
 
 #include <string.h>
 
+#if FR_FEATURE_NATIVE_SIGNATURES
 static fr_diag_value_kind_t
 fr_native_value_diag_kind(fr_native_value_kind_t kind) {
   switch (kind) {
@@ -25,6 +26,7 @@ fr_native_value_diag_kind(fr_native_value_kind_t kind) {
     return FR_DIAG_VALUE_NONE;
   }
 }
+#endif
 
 void fr_native_reset(fr_runtime_t *runtime) {
   if (runtime == NULL) {
@@ -140,16 +142,20 @@ static bool fr_native_diag_empty(const fr_runtime_t *runtime) {
          runtime->diag->kind == FR_DIAG_NONE;
 }
 
-void fr_native_diag_note_actual(fr_runtime_t *runtime, fr_tagged_t actual,
-                                fr_diag_actual_state_t state) {
-  if (!fr_native_diag_empty(runtime) || state == FR_DIAG_ACTUAL_NONE) {
+void fr_native_diag_note_rejected_arg(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, uint8_t index) {
+  if (!fr_native_diag_empty(runtime) || args == NULL || index >= arg_count) {
     return;
   }
 
   runtime->diag->kind = FR_DIAG_NOTE;
-  runtime->diag->got = fr_tagged_diag_value_kind(actual);
-  runtime->diag->actual = actual;
-  runtime->diag->actual_state = state;
+  runtime->diag->message_id = FR_DIAG_MSG_RUNTIME_REJECTED_ARGUMENT;
+  runtime->diag->got = fr_tagged_diag_value_kind(args[index]);
+  runtime->diag->actual = args[index];
+  /* Default closed. The dispatcher below reveals only declared public args. */
+  runtime->diag->actual_state = FR_DIAG_ACTUAL_REDACTED;
+  runtime->diag->index = index;
 }
 
 static const char *fr_native_diag_context_name(fr_diagnostic_t *diag,
@@ -173,6 +179,7 @@ static const char *fr_native_diag_context_name(fr_diagnostic_t *diag,
   return diag->suggestion_text;
 }
 
+#if FR_FEATURE_NATIVE_SIGNATURES
 static void fr_native_note_arg_type(fr_runtime_t *runtime,
                                     const char *context_name, uint8_t index,
                                     fr_native_value_kind_t expected,
@@ -192,6 +199,7 @@ static void fr_native_note_arg_type(fr_runtime_t *runtime,
   runtime->diag->context_name =
       fr_native_diag_context_name(runtime->diag, context_name);
 }
+#endif
 
 fr_err_t fr_native_install(fr_runtime_t *runtime, fr_native_fn_t fn,
                            uint8_t arity,
@@ -249,6 +257,8 @@ fr_err_t fr_native_call_named(fr_runtime_t *runtime,
                               const char *context_name,
                               const fr_tagged_t *args, uint8_t arg_count,
                               fr_tagged_t *out) {
+  fr_err_t err = FR_OK;
+
   if (runtime == NULL || entry == NULL || out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -273,7 +283,35 @@ fr_err_t fr_native_call_named(fr_runtime_t *runtime,
 
 #endif
 
-  FR_TRY(entry->fn(runtime, args, arg_count, out));
+  err = entry->fn(runtime, args, arg_count, out);
+  if (err != FR_OK) {
+    if (runtime->diag != NULL &&
+        runtime->diag->kind == FR_DIAG_NOTE &&
+        runtime->diag->message_id == FR_DIAG_MSG_RUNTIME_REJECTED_ARGUMENT &&
+        runtime->diag->index < arg_count) {
+      runtime->diag->context_name =
+          fr_native_diag_context_name(runtime->diag, context_name);
+#if FR_FEATURE_NATIVE_SIGNATURES
+      if (entry->signature != NULL &&
+          runtime->diag->index < entry->signature->arg_count) {
+        runtime->diag->actual_state =
+            entry->signature->params[runtime->diag->index].type ==
+                    FR_NATIVE_VALUE_SECRET_TEXT
+                ? FR_DIAG_ACTUAL_REDACTED
+                : FR_DIAG_ACTUAL_VALUE;
+      } else {
+        runtime->diag->actual_state = FR_DIAG_ACTUAL_NONE;
+      }
+#else
+      runtime->diag->actual_state = FR_DIAG_ACTUAL_NONE;
+#endif
+    }
+    return err;
+  }
+  if (runtime->diag != NULL && runtime->diag->kind == FR_DIAG_NOTE &&
+      runtime->diag->message_id == FR_DIAG_MSG_RUNTIME_REJECTED_ARGUMENT) {
+    memset(runtime->diag, 0, sizeof(*runtime->diag));
+  }
 
 #if FR_FEATURE_NATIVE_SIGNATURES
   if (entry->signature != NULL &&

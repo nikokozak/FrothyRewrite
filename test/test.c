@@ -3046,7 +3046,9 @@ static void test_uart(void) {
   CHECK("uart busy report includes the occupied port",
         fr_repl_eval_line(&runtime, "uart.open: 0, 9600", out, sizeof(out)) ==
                 FR_ERR_BUSY &&
-            strcmp(out, "error: busy: 0 (25)\n") == 0);
+            strcmp(out,
+                   "error: busy: 0 (25)\n"
+                   "detail: uart.open argument 1 was rejected\n") == 0);
   CHECK("uart available starts with host script",
         test_uart_one_handle_call(&runtime, available_entry, handle, &result) ==
                 FR_OK &&
@@ -4969,6 +4971,23 @@ static fr_err_t test_native_error(fr_runtime_t *runtime,
   return FR_ERR_IO;
 }
 
+static fr_err_t test_native_reject_arg(fr_runtime_t *runtime,
+                                       const fr_tagged_t *args,
+                                       uint8_t arg_count, fr_tagged_t *out) {
+  (void)out;
+  fr_native_diag_note_rejected_arg(runtime, args, arg_count, 0);
+  return FR_ERR_DOMAIN;
+}
+
+static fr_err_t test_native_note_then_succeed(fr_runtime_t *runtime,
+                                              const fr_tagged_t *args,
+                                              uint8_t arg_count,
+                                              fr_tagged_t *out) {
+  fr_native_diag_note_rejected_arg(runtime, args, arg_count, 0);
+  *out = fr_tagged_nil();
+  return FR_OK;
+}
+
 static fr_err_t test_native_interrupt(fr_runtime_t *runtime,
                                       const fr_tagged_t *args,
                                       uint8_t arg_count, fr_tagged_t *out) {
@@ -5002,6 +5021,14 @@ static void test_natives(void) {
   fr_tagged_t args[2];
   fr_tagged_t result = 0;
   fr_diagnostic_t diag = {0};
+  const fr_native_entry_t unsigned_reject_entry = {
+      .fn = test_native_reject_arg,
+      .arity = 1,
+  };
+  const fr_native_entry_t stale_note_entry = {
+      .fn = test_native_note_then_succeed,
+      .arity = 1,
+  };
 
   CHECK("native runtime init", fr_runtime_init(&runtime) == FR_OK);
   CHECK("native add",
@@ -5036,6 +5063,22 @@ static void test_natives(void) {
   CHECK("native keeps first diagnostic",
         fr_native_call(&runtime, entry, args, 2, &result) == FR_ERR_TYPE &&
             diag.kind == FR_DIAG_NOTE && diag.actual == 123u);
+  diag = (fr_diagnostic_t){0};
+  CHECK("unsigned native rejection suppresses the actual",
+        fr_tagged_encode_int(42, &args[0]) == FR_OK &&
+            fr_native_call_named(&runtime, &unsigned_reject_entry, "unsigned",
+                                 args, 1, &result) == FR_ERR_DOMAIN &&
+            diag.kind == FR_DIAG_NOTE &&
+            diag.message_id == FR_DIAG_MSG_RUNTIME_REJECTED_ARGUMENT &&
+            diag.actual_state == FR_DIAG_ACTUAL_NONE &&
+            diag.context_name != NULL &&
+            strcmp(diag.context_name, "unsigned") == 0);
+  diag = (fr_diagnostic_t){0};
+  CHECK("successful native cannot leave a rejected argument armed",
+        fr_native_call_named(&runtime, &stale_note_entry, "stale", args, 1,
+                             &result) == FR_OK &&
+            diag.kind == FR_DIAG_NONE &&
+            diag.actual_state == FR_DIAG_ACTUAL_NONE);
   runtime.diag = NULL;
   for (uint16_t i = 2; i < FR_PROFILE_NATIVE_TABLE_SIZE; i++) {
     CHECK("native fill",
@@ -14153,6 +14196,35 @@ static void test_repl_error_diagnostics(void) {
             test_error_line_equals(
                 out, "error: wrong type: <redacted> (2)") &&
             strstr(out, "ssid") == NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("native rejection reports a public argument and context",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "wifi.save: \"abcdefghijklmnopqrstuvwxyzABCDEFG\", \"pass\"",
+                out, (uint16_t)sizeof(out)) == FR_ERR_DOMAIN &&
+            test_error_line_equals(
+                out,
+                "error: bad value: \"abcdefghijklmnopqrstuvwxyzABCDEFG\" "
+                "(3)") &&
+            strstr(out,
+                   "detail: wifi.save argument 1 was rejected\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("native rejection keeps a secret argument redacted",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(
+                &runtime,
+                "wifi.save: \"ssid\", "
+                "\"012345678901234567890123456789012345678901234567890123456789"
+                "abcde\"",
+                out, (uint16_t)sizeof(out)) == FR_ERR_DOMAIN &&
+            test_error_line_equals(out,
+                                   "error: bad value: <redacted> (3)") &&
+            strstr(out,
+                   "detail: wifi.save argument 2 was rejected\n") != NULL &&
+            strstr(out, "0123456789") == NULL);
 #endif
 
 #if FR_FEATURE_BYTES

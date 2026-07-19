@@ -46,8 +46,11 @@ typedef struct fr_native_table_t {
 void fr_native_reset(fr_runtime_t *runtime);
 void fr_native_mark_base(fr_runtime_t *runtime);
 void fr_native_restore_base(fr_runtime_t *runtime);
-void fr_native_diag_note_actual(fr_runtime_t *runtime, fr_tagged_t actual,
-                                fr_diag_actual_state_t state);
+/* Record which native argument was rejected. fr_native_call_named applies the
+ * signature-owned display/redaction policy before the diagnostic is exposed. */
+void fr_native_diag_note_rejected_arg(fr_runtime_t *runtime,
+                                      const fr_tagged_t *args,
+                                      uint8_t arg_count, uint8_t index);
 fr_err_t fr_native_install(fr_runtime_t *runtime, fr_native_fn_t fn,
                            uint8_t arity,
                            const fr_native_signature_t *signature,
