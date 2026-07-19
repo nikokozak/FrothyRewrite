@@ -15,6 +15,7 @@ typedef enum fr_native_value_kind_t {
   FR_NATIVE_VALUE_TEXT,
   FR_NATIVE_VALUE_SECRET_TEXT,
   FR_NATIVE_VALUE_TEXT_OR_BYTES,
+  FR_NATIVE_VALUE_BYTES,
 } fr_native_value_kind_t;
 
 typedef struct fr_native_param_t {
@@ -46,11 +47,12 @@ typedef struct fr_native_table_t {
 void fr_native_reset(fr_runtime_t *runtime);
 void fr_native_mark_base(fr_runtime_t *runtime);
 void fr_native_restore_base(fr_runtime_t *runtime);
-/* Record which native argument was rejected. fr_native_call_named applies the
- * signature-owned display/redaction policy before the diagnostic is exposed. */
-void fr_native_diag_note_rejected_arg(fr_runtime_t *runtime,
-                                      const fr_tagged_t *args,
-                                      uint8_t arg_count, uint8_t index);
+/* Return err after recording which argument caused a user-facing rejection.
+ * For a relation failure, pass the later argument whose value would restore
+ * the declared constraint; leave genuinely inseparable failures bare.
+ * fr_native_call_named applies signature-owned display/redaction policy. */
+fr_err_t fr_native_reject_arg(fr_runtime_t *runtime, const fr_tagged_t *args,
+                              uint8_t arg_count, uint8_t index, fr_err_t err);
 fr_err_t fr_native_install(fr_runtime_t *runtime, fr_native_fn_t fn,
                            uint8_t arity,
                            const fr_native_signature_t *signature,

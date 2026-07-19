@@ -54,6 +54,13 @@ static void eval_expect(const char *line, const char *expected) {
   TEST_ASSERT_EQUAL_STRING(expected, out);
 }
 
+static void eval_error_expect(const char *line, fr_err_t err,
+                              const char *expected) {
+  char out[256];
+  TEST_ASSERT_EQUAL(err, fr_repl_eval_line(&s_runtime, line, out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING(expected, out);
+}
+
 /* --- 7 natives happy path --- */
 
 static void test_bytes_from_text(void) {
@@ -76,12 +83,19 @@ static void test_bytes_from_int(void) {
 static void test_bytes_length(void) {
   install_base();
   eval_expect("bytes.length: bytes.from-text: \"abc\"", "3\nok\n");
+  eval_error_expect("bytes.length: 5", FR_ERR_TYPE,
+                    "error: wrong type: 5 (2)\n"
+                    "bytes.length argument 1 expects bytes, got an int\n");
 }
 
 static void test_bytes_at(void) {
   install_base();
   eval_ok("to at-test [ here b is bytes.from-text: \"A\"; bytes.at: b, 0 ]");
   eval_expect("at-test:", "65\nok\n");
+  eval_ok("to at-oob [ here b is bytes.from-text: \"A\"; bytes.at: b, 1 ]");
+  eval_error_expect("at-oob:", FR_ERR_RANGE,
+                    "error: out of range: 1 (1)\n"
+                    "detail: bytes.at argument 2 was rejected\n");
 }
 
 static void test_bytes_equals_p(void) {

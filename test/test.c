@@ -3235,6 +3235,11 @@ static void test_console_routing(void) {
             route.rx == 35 && route.baud == 9600);
 
   before = route;
+  CHECK("console reports rejected zero baud",
+        fr_repl_eval_line(&runtime, "console.uart: 8, 9, 0", out,
+                          sizeof(out)) == FR_ERR_DOMAIN &&
+            strcmp(out, "error: bad value: 0 (3)\n"
+                        "detail: console.uart argument 3 was rejected\n") == 0);
   CHECK("console rejects invalid route without changing current route",
         fr_repl_eval_line(&runtime, "console.uart: 7, 7, 1200", out,
                           sizeof(out)) == FR_ERR_DOMAIN &&
@@ -3397,6 +3402,17 @@ static void test_pwm(void) {
             test_pwm_write_call(&runtime, write_entry, handle, 10001,
                                 &result) == FR_ERR_DOMAIN &&
             test_pwm_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK);
+  CHECK("pwm reports the rejected duty",
+        fr_repl_eval_line(&runtime, "diagpwm is pwm.open: 6, 1000", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "pwm.write: diagpwm, 10001", out,
+                              sizeof(out)) == FR_ERR_DOMAIN &&
+            strcmp(out, "error: bad value: 10001 (3)\n"
+                        "detail: pwm.write argument 2 was rejected\n") == 0 &&
+            fr_repl_eval_line(&runtime, "pwm.close: diagpwm", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "diagpwm is nil", out, sizeof(out)) ==
                 FR_OK);
 
   CHECK("pwm rejects write after close",
@@ -4084,7 +4100,9 @@ static void test_math(void) {
   /* FR_TAGGED_INT_MIN on the 32-bit profile; magnitude exceeds MAX. */
   CHECK("abs of tagged-int-min rejects",
         fr_repl_eval_line(&runtime, "abs: -1073741824", out, sizeof(out)) ==
-            FR_ERR_RANGE);
+                FR_ERR_RANGE &&
+            strcmp(out, "error: out of range: -1073741824 (1)\n"
+                        "detail: abs argument 1 was rejected\n") == 0);
 
   CHECK("min picks the smaller",
         fr_repl_eval_line(&runtime, "min: 3, 7", out, sizeof(out)) == FR_OK &&
@@ -4109,7 +4127,9 @@ static void test_math(void) {
             strcmp(out, "32767\nok\n") == 0);
   CHECK("sqrt rejects negative input",
         fr_repl_eval_line(&runtime, "sqrt: -1", out, sizeof(out)) ==
-            FR_ERR_DOMAIN);
+                FR_ERR_DOMAIN &&
+            strcmp(out, "error: bad value: -1 (3)\n"
+                        "detail: sqrt argument 1 was rejected\n") == 0);
 
   CHECK("clamp inside passes through",
         fr_repl_eval_line(&runtime, "clamp: 5, 0, 10", out, sizeof(out)) ==
@@ -4125,7 +4145,9 @@ static void test_math(void) {
             strcmp(out, "10\nok\n") == 0);
   CHECK("clamp with lo > hi rejects",
         fr_repl_eval_line(&runtime, "clamp: 5, 10, 0", out, sizeof(out)) ==
-            FR_ERR_DOMAIN);
+                FR_ERR_DOMAIN &&
+            strcmp(out, "error: bad value: 0 (3)\n"
+                        "detail: clamp argument 3 was rejected\n") == 0);
 
   /* map's five args exceed the REPL parser's per-call child cap, so its
    * behavior cases run as direct native calls. (50-0)*(1023-0)/(100-0) =
@@ -4161,7 +4183,9 @@ static void test_math(void) {
             strcmp(out, "1\nok\n") == 0);
   CHECK("mod by zero rejects",
         fr_repl_eval_line(&runtime, "mod: 5, 0", out, sizeof(out)) ==
-            FR_ERR_DOMAIN);
+                FR_ERR_DOMAIN &&
+            strcmp(out, "error: bad value: 0 (3)\n"
+                        "detail: mod argument 2 was rejected\n") == 0);
   CHECK("percent infix positive remainder",
         fr_repl_eval_line(&runtime, "7 % 3", out, sizeof(out)) == FR_OK &&
             strcmp(out, "1\nok\n") == 0);
@@ -5007,15 +5031,14 @@ static fr_err_t test_native_reject_arg(fr_runtime_t *runtime,
                                        const fr_tagged_t *args,
                                        uint8_t arg_count, fr_tagged_t *out) {
   (void)out;
-  fr_native_diag_note_rejected_arg(runtime, args, arg_count, 0);
-  return FR_ERR_DOMAIN;
+  return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_DOMAIN);
 }
 
 static fr_err_t test_native_note_then_succeed(fr_runtime_t *runtime,
                                               const fr_tagged_t *args,
                                               uint8_t arg_count,
                                               fr_tagged_t *out) {
-  fr_native_diag_note_rejected_arg(runtime, args, arg_count, 0);
+  (void)fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_DOMAIN);
   *out = fr_tagged_nil();
   return FR_OK;
 }
@@ -5061,6 +5084,13 @@ static void test_natives(void) {
       .fn = test_native_note_then_succeed,
       .arity = 1,
   };
+  const fr_err_t rejected_arg_errors[] = {
+      FR_ERR_RANGE,     FR_ERR_TYPE,     FR_ERR_DOMAIN,
+      FR_ERR_CAPACITY,  FR_ERR_OVERFLOW, FR_ERR_UNDERFLOW,
+      FR_ERR_NOT_FOUND, FR_ERR_INVALID,  FR_ERR_UNSUPPORTED,
+      FR_ERR_HANDLE,    FR_ERR_VOLATILE, FR_ERR_NET_TOO_LARGE,
+      FR_ERR_BUSY,
+  };
 
   CHECK("native runtime init", fr_runtime_init(&runtime) == FR_OK);
   CHECK("native add",
@@ -5095,6 +5125,29 @@ static void test_natives(void) {
   CHECK("native keeps first diagnostic",
         fr_native_call(&runtime, entry, args, 2, &result) == FR_ERR_TYPE &&
             diag.kind == FR_DIAG_NOTE && diag.actual == 123u);
+  diag = (fr_diagnostic_t){0};
+  CHECK("native rejection helper ignores non-argument failures",
+        fr_tagged_encode_int(42, &args[0]) == FR_OK &&
+            fr_native_reject_arg(&runtime, args, 1, 0, FR_OK) == FR_OK &&
+            fr_native_reject_arg(&runtime, args, 1, 0, FR_ERR_IO) ==
+                FR_ERR_IO &&
+            fr_native_reject_arg(&runtime, args, 1, 0, FR_ERR_CORRUPT) ==
+                FR_ERR_CORRUPT &&
+            fr_native_reject_arg(&runtime, args, 1, 0, FR_ERR_INTERRUPTED) ==
+                FR_ERR_INTERRUPTED &&
+            diag.kind == FR_DIAG_NONE);
+  for (size_t i = 0;
+       i < sizeof(rejected_arg_errors) / sizeof(rejected_arg_errors[0]); i++) {
+    diag = (fr_diagnostic_t){0};
+    CHECK("native rejection helper records argument failures",
+          fr_native_reject_arg(&runtime, args, 1, 0, rejected_arg_errors[i]) ==
+                  rejected_arg_errors[i] &&
+              diag.kind == FR_DIAG_NOTE &&
+              diag.message_id == FR_DIAG_MSG_RUNTIME_REJECTED_ARGUMENT &&
+              diag.got == FR_DIAG_VALUE_INT && diag.actual == args[0] &&
+              diag.actual_state == FR_DIAG_ACTUAL_REDACTED &&
+              diag.presentation == FR_DIAG_PRESENT_ERROR && diag.index == 0);
+  }
   diag = (fr_diagnostic_t){0};
   CHECK("unsigned native rejection suppresses the actual",
         fr_tagged_encode_int(42, &args[0]) == FR_OK &&
@@ -13113,6 +13166,11 @@ static void test_repl(void) {
         fr_repl_eval_line(&runtime, "gpio.mode: $led_builtin, 1", out,
                           sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
+  CHECK("repl reports rejected gpio mode",
+        fr_repl_eval_line(&runtime, "gpio.mode: $led_builtin, 3", out,
+                          sizeof(out)) == FR_ERR_DOMAIN &&
+            strcmp(out, "error: bad value: 3 (3)\n"
+                        "detail: gpio.mode argument 2 was rejected\n") == 0);
   CHECK("repl reads gpio value",
         fr_repl_eval_line(&runtime, "gpio.read: $led_builtin", out,
                           sizeof(out)) == FR_OK &&

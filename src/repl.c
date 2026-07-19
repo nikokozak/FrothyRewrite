@@ -1763,6 +1763,8 @@ static fr_err_t fr_repl_write_value_kind(const fr_repl_writer_t *writer,
     return fr_repl_writer_write(writer, "text");
   case FR_NATIVE_VALUE_TEXT_OR_BYTES:
     return fr_repl_writer_write(writer, "text|bytes");
+  case FR_NATIVE_VALUE_BYTES:
+    return fr_repl_writer_write(writer, "bytes");
   }
   return FR_ERR_INVALID;
 }

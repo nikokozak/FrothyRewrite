@@ -38,9 +38,9 @@ static fr_err_t fr_native_decode_int_arg(fr_runtime_t *runtime,
 
   err = fr_tagged_decode_int(args[index], out_value);
   if (err != FR_OK) {
-    fr_native_diag_note_rejected_arg(runtime, args, arg_count, index);
+    return fr_native_reject_arg(runtime, args, arg_count, index, err);
   }
-  return err;
+  return FR_OK;
 }
 
 static fr_err_t fr_native_decode_nonnegative_int(
@@ -48,8 +48,7 @@ static fr_err_t fr_native_decode_nonnegative_int(
     uint8_t index, fr_int_t *out_value) {
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, index, out_value));
   if (*out_value < 0) {
-    fr_native_diag_note_rejected_arg(runtime, args, arg_count, index);
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, index, FR_ERR_DOMAIN);
   }
   return FR_OK;
 }
@@ -67,8 +66,7 @@ static fr_err_t fr_native_decode_u16(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_nonnegative_int(runtime, args, arg_count, index,
                                           &value));
   if ((uint32_t)value > UINT16_MAX) {
-    fr_native_diag_note_rejected_arg(runtime, args, arg_count, index);
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, index, FR_ERR_DOMAIN);
   }
 
   *out_value = (uint16_t)value;
@@ -95,8 +93,7 @@ static fr_err_t fr_native_decode_handle_arg(
                            out_platform_index);
   }
   if (err != FR_OK) {
-    fr_native_diag_note_rejected_arg(runtime, args, arg_count, index);
-    return err;
+    return fr_native_reject_arg(runtime, args, arg_count, index, err);
   }
   if (out_ref != NULL) {
     *out_ref = ref;
@@ -168,10 +165,18 @@ static fr_err_t fr_native_gpio_mode(fr_runtime_t *runtime,
                                     uint8_t arg_count, fr_tagged_t *out) {
   uint16_t pin = 0;
   uint16_t mode = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 0, &pin));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &mode));
-  FR_TRY(fr_platform_gpio_mode(pin, mode));
+  if (mode > 2) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
+  }
+  err = fr_platform_gpio_mode(pin, mode);
+  if (err == FR_ERR_DOMAIN) {
+    return fr_native_reject_arg(runtime, args, arg_count, 0, err);
+  }
+  FR_TRY(err);
   *out = fr_tagged_nil();
   return FR_OK;
 }
@@ -181,10 +186,15 @@ static fr_err_t fr_native_gpio_write(fr_runtime_t *runtime,
                                      uint8_t arg_count, fr_tagged_t *out) {
   uint16_t pin = 0;
   uint16_t value = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 0, &pin));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &value));
-  FR_TRY(fr_platform_gpio_write(pin, value));
+  err = fr_platform_gpio_write(pin, value);
+  if (err == FR_ERR_DOMAIN) {
+    return fr_native_reject_arg(runtime, args, arg_count, 0, err);
+  }
+  FR_TRY(err);
   *out = fr_tagged_nil();
   return FR_OK;
 }
@@ -194,9 +204,14 @@ static fr_err_t fr_native_gpio_read(fr_runtime_t *runtime,
                                     fr_tagged_t *out) {
   uint16_t pin = 0;
   uint16_t value = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 0, &pin));
-  FR_TRY(fr_platform_gpio_read(pin, &value));
+  err = fr_platform_gpio_read(pin, &value);
+  if (err == FR_ERR_DOMAIN) {
+    return fr_native_reject_arg(runtime, args, arg_count, 0, err);
+  }
+  FR_TRY(err);
   return fr_tagged_encode_int((int32_t)value, out);
 }
 
@@ -205,9 +220,14 @@ static fr_err_t fr_native_adc_read(fr_runtime_t *runtime,
                                    fr_tagged_t *out) {
   uint16_t pin = 0;
   uint16_t value = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 0, &pin));
-  FR_TRY(fr_platform_adc_read(pin, &value));
+  err = fr_platform_adc_read(pin, &value);
+  if (err == FR_ERR_DOMAIN) {
+    return fr_native_reject_arg(runtime, args, arg_count, 0, err);
+  }
+  FR_TRY(err);
   return fr_tagged_encode_int((int32_t)value, out);
 }
 
@@ -217,10 +237,15 @@ static fr_err_t fr_native_adc_above(fr_runtime_t *runtime,
   uint16_t pin = 0;
   uint16_t threshold = 0;
   uint16_t value = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 0, &pin));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &threshold));
-  FR_TRY(fr_platform_adc_read(pin, &value));
+  err = fr_platform_adc_read(pin, &value);
+  if (err == FR_ERR_DOMAIN) {
+    return fr_native_reject_arg(runtime, args, arg_count, 0, err);
+  }
+  FR_TRY(err);
   *out = value > threshold ? fr_tagged_true() : fr_tagged_false();
   return FR_OK;
 }
@@ -239,8 +264,7 @@ static fr_err_t fr_native_decode_byte(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_nonnegative_int(runtime, args, arg_count, index,
                                           &value));
   if (value > 255) {
-    fr_native_diag_note_rejected_arg(runtime, args, arg_count, index);
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, index, FR_ERR_DOMAIN);
   }
 
   *out_byte = (uint8_t)value;
@@ -275,13 +299,16 @@ static fr_err_t fr_native_uart_open(fr_runtime_t *runtime,
 
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 0, &port));
   FR_TRY(fr_native_decode_nonnegative_int(runtime, args, arg_count, 1, &baud));
+  if (baud == 0) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
+  }
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_UART, &ref, &handle));
   err = fr_platform_uart_open(port, (uint32_t)baud, &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
     if (err == FR_ERR_BUSY) {
-      fr_native_diag_note_rejected_arg(runtime, args, arg_count, 0);
+      err = fr_native_reject_arg(runtime, args, arg_count, 0, err);
     }
     return err;
   }
@@ -321,6 +348,12 @@ static fr_err_t fr_native_uart_open_on(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &tx));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 2, &rx));
   FR_TRY(fr_native_decode_nonnegative_int(runtime, args, arg_count, 3, &baud));
+  if (tx == rx) {
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
+  }
+  if (baud == 0) {
+    return fr_native_reject_arg(runtime, args, arg_count, 3, FR_ERR_DOMAIN);
+  }
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_UART, &ref, &handle));
   err = fr_platform_uart_open_on(port, tx, rx, (uint32_t)baud,
@@ -328,7 +361,7 @@ static fr_err_t fr_native_uart_open_on(fr_runtime_t *runtime,
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
     if (err == FR_ERR_BUSY) {
-      fr_native_diag_note_rejected_arg(runtime, args, arg_count, 0);
+      err = fr_native_reject_arg(runtime, args, arg_count, 0, err);
     }
     return err;
   }
@@ -431,11 +464,17 @@ static fr_err_t fr_native_pwm_open(fr_runtime_t *runtime,
 
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 0, &pin));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &freq));
+  if (freq == 0) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
+  }
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_PWM, &ref, &handle));
   err = fr_platform_pwm_open(pin, freq, &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
+    if (err == FR_ERR_DOMAIN) {
+      err = fr_native_reject_arg(runtime, args, arg_count, 0, err);
+    }
     return err;
   }
 
@@ -464,7 +503,7 @@ static fr_err_t fr_native_pwm_write(fr_runtime_t *runtime,
                                      &platform_index));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 1, &duty));
   if (duty < 0 || duty > FR_NATIVE_PWM_DUTY_MAX) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
   }
   FR_TRY(fr_platform_pwm_write(platform_index, (uint16_t)duty));
   *out = fr_tagged_nil();
@@ -488,20 +527,57 @@ static fr_err_t fr_native_pwm_close(fr_runtime_t *runtime,
 }
 #endif
 
-#if FR_FEATURE_TEXT || FR_FEATURE_I2C || FR_FEATURE_NET
+#if FR_FEATURE_TEXT || FR_FEATURE_I2C || FR_FEATURE_NET || FR_FEATURE_BLE
 static fr_err_t fr_native_decode_text_or_bytes_view(
-    const fr_runtime_t *runtime, fr_tagged_t tagged, const uint8_t **out_bytes,
-    uint16_t *out_length) {
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    uint8_t index, const uint8_t **out_bytes, uint16_t *out_length) {
   fr_object_id_t object_id = 0;
+  fr_err_t err = FR_OK;
 
-  if (fr_tagged_decode_object_id(tagged, &object_id) == FR_OK) {
-    return fr_text_view(runtime, object_id, out_bytes, out_length);
+  if (args == NULL || index >= arg_count || out_bytes == NULL ||
+      out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  if (fr_tagged_decode_object_id(args[index], &object_id) == FR_OK) {
+    err = fr_text_view(runtime, object_id, out_bytes, out_length);
+    return err == FR_OK
+               ? FR_OK
+               : fr_native_reject_arg(runtime, args, arg_count, index, err);
   }
   {
     fr_bytes_ref_t ref = {0};
-    FR_TRY(fr_tagged_decode_bytes_ref(tagged, &ref));
-    return fr_bytes_view(runtime, ref, out_bytes, out_length);
+    err = fr_tagged_decode_bytes_ref(args[index], &ref);
+    if (err == FR_OK) {
+      err = fr_bytes_view(runtime, ref, out_bytes, out_length);
+    }
   }
+  return err == FR_OK
+             ? FR_OK
+             : fr_native_reject_arg(runtime, args, arg_count, index, err);
+}
+#endif
+
+#if FR_FEATURE_NET || FR_FEATURE_BYTES
+static fr_err_t fr_native_decode_text_view(fr_runtime_t *runtime,
+                                           const fr_tagged_t *args,
+                                           uint8_t arg_count, uint8_t index,
+                                           const uint8_t **out_bytes,
+                                           uint16_t *out_length) {
+  fr_object_id_t object_id = 0;
+  fr_err_t err = FR_OK;
+
+  if (args == NULL || index >= arg_count || out_bytes == NULL ||
+      out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+
+  err = fr_tagged_decode_object_id(args[index], &object_id);
+  if (err == FR_OK) {
+    err = fr_text_view(runtime, object_id, out_bytes, out_length);
+  }
+  return err == FR_OK
+             ? FR_OK
+             : fr_native_reject_arg(runtime, args, arg_count, index, err);
 }
 #endif
 
@@ -531,8 +607,7 @@ static fr_err_t fr_native_decode_i2c_addr(fr_runtime_t *runtime,
 
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, index, &addr));
   if (addr < 0 || addr > FR_NATIVE_I2C_ADDR_MAX) {
-    fr_native_diag_note_rejected_arg(runtime, args, arg_count, index);
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, index, FR_ERR_DOMAIN);
   }
   *out_addr = (uint8_t)addr;
   return FR_OK;
@@ -559,7 +634,7 @@ static fr_err_t fr_native_i2c_open(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 2, &scl));
   FR_TRY(fr_native_decode_nonnegative_int(runtime, args, arg_count, 3, &freq));
   if (freq == 0) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 3, FR_ERR_DOMAIN);
   }
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_I2C_BUS, &ref, &handle));
@@ -595,10 +670,10 @@ static fr_err_t fr_native_i2c_write(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_i2c_handle(runtime, args, arg_count, 0,
                                      &platform_index));
   FR_TRY(fr_native_decode_i2c_addr(runtime, args, arg_count, 1, &addr));
-  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
-                                             &length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args, arg_count, 2,
+                                             &bytes, &length));
   if (length == 0) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
   }
   FR_TRY(fr_platform_i2c_write(platform_index, addr, bytes, length));
   *out = fr_tagged_nil();
@@ -622,7 +697,7 @@ static fr_err_t fr_native_i2c_read(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_i2c_addr(runtime, args, arg_count, 1, &addr));
   FR_TRY(fr_native_decode_nonnegative_int(runtime, args, arg_count, 2, &count));
   if (count > FR_PROFILE_MAX_TEXT_LENGTH) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_RANGE);
   }
   if (count > 0) {
     FR_TRY(fr_platform_i2c_read(platform_index, addr, buffer, (uint16_t)count));
@@ -664,7 +739,7 @@ static fr_err_t fr_native_i2c_read_reg(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_i2c_addr(runtime, args, arg_count, 1, &addr));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 2, &reg));
   if (reg > 0xFF) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
   }
   wbytes[0] = (uint8_t)reg;
   FR_TRY(fr_platform_i2c_write_read(platform_index, addr, wbytes, 1, rbytes,
@@ -690,7 +765,7 @@ static fr_err_t fr_native_i2c_read_reg16(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_i2c_addr(runtime, args, arg_count, 1, &addr));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 2, &reg));
   if (reg > 0xFF) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
   }
   wbytes[0] = (uint8_t)reg;
   FR_TRY(fr_platform_i2c_write_read(platform_index, addr, wbytes, 1, rbytes,
@@ -718,8 +793,11 @@ static fr_err_t fr_native_i2c_write_reg(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_i2c_addr(runtime, args, arg_count, 1, &addr));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 2, &reg));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 3, &value));
-  if (reg > 0xFF || value > 0xFF) {
-    return FR_ERR_DOMAIN;
+  if (reg > 0xFF) {
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
+  }
+  if (value > 0xFF) {
+    return fr_native_reject_arg(runtime, args, arg_count, 3, FR_ERR_DOMAIN);
   }
   wbytes[0] = (uint8_t)reg;
   wbytes[1] = (uint8_t)value;
@@ -748,7 +826,7 @@ static fr_err_t fr_native_i2c_write_reg16(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 2, &reg));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 3, &value));
   if (reg > 0xFF) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
   }
   wbytes[0] = (uint8_t)reg;
   /* D3 — 16-bit register writes clock MSB first on the wire. */
@@ -769,22 +847,6 @@ enum {
   FR_NATIVE_TCP_HOST_MAX = 255,
 };
 
-static fr_err_t fr_native_decode_text_view(const fr_runtime_t *runtime,
-                                           const fr_tagged_t *args,
-                                           uint8_t arg_count, uint8_t index,
-                                           const uint8_t **out_bytes,
-                                           uint16_t *out_length) {
-  fr_object_id_t object_id = 0;
-
-  if (args == NULL || index >= arg_count || out_bytes == NULL ||
-      out_length == NULL) {
-    return FR_ERR_INVALID;
-  }
-
-  FR_TRY(fr_tagged_decode_object_id(args[index], &object_id));
-  return fr_text_view(runtime, object_id, out_bytes, out_length);
-}
-
 /* cap counts the NUL slot; the caller's text must fit in cap - 1 bytes. */
 static fr_err_t fr_native_copy_text_cstring(fr_runtime_t *runtime,
                                             const fr_tagged_t *args,
@@ -800,8 +862,7 @@ static fr_err_t fr_native_copy_text_cstring(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_text_view(runtime, args, arg_count, index, &bytes,
                                     &length));
   if ((uint32_t)length + 1u > cap) {
-    fr_native_diag_note_rejected_arg(runtime, args, arg_count, index);
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, index, FR_ERR_DOMAIN);
   }
   if (length > 0) {
     memcpy(out_buf, bytes, length);
@@ -901,8 +962,11 @@ static fr_err_t fr_native_tcp_open(fr_runtime_t *runtime,
                                      sizeof host));
   FR_TRY(fr_native_decode_nonnegative_int(runtime, args, arg_count, 1,
                                           &port_in));
-  if (host[0] == '\0' || port_in == 0 || port_in > 0xFFFF) {
-    return FR_ERR_DOMAIN;
+  if (host[0] == '\0') {
+    return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_DOMAIN);
+  }
+  if (port_in == 0 || port_in > 0xFFFF) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
   }
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_TCP, &ref, &handle));
@@ -939,10 +1003,10 @@ static fr_err_t fr_native_tcp_read(fr_runtime_t *runtime,
                                      &platform_index));
   FR_TRY(fr_native_decode_nonnegative_int(runtime, args, arg_count, 1, &count));
   if (count == 0) {
-    return FR_ERR_INVALID;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_INVALID);
   }
   if (count > FR_PROFILE_MAX_TEXT_LENGTH) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
   }
   FR_TRY(fr_platform_tcp_read(runtime, platform_index, buffer, (uint16_t)count,
                               &length));
@@ -961,8 +1025,8 @@ static fr_err_t fr_native_tcp_write(fr_runtime_t *runtime,
   }
   FR_TRY(fr_native_decode_tcp_handle(runtime, args, arg_count, 0,
                                      &platform_index));
-  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[1], &bytes,
-                                             &length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args, arg_count, 1,
+                                             &bytes, &length));
   FR_TRY(fr_platform_tcp_write(runtime, platform_index, bytes, length));
   *out = fr_tagged_nil();
   return FR_OK;
@@ -1021,7 +1085,6 @@ static fr_err_t fr_native_watchdog_arm(fr_runtime_t *runtime,
                                        uint8_t arg_count, fr_tagged_t *out) {
   fr_int_t timeout = 0;
 
-  (void)runtime;
   if (out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -1029,7 +1092,7 @@ static fr_err_t fr_native_watchdog_arm(fr_runtime_t *runtime,
                                           &timeout));
   if (timeout < FR_NATIVE_WATCHDOG_TIMEOUT_MIN_MS ||
       timeout > FR_NATIVE_WATCHDOG_TIMEOUT_MAX_MS) {
-    return FR_ERR_INVALID;
+    return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_INVALID);
   }
   FR_TRY(fr_platform_watchdog_arm((uint32_t)timeout));
   fr_native_watchdog_armed = true;
@@ -1058,7 +1121,6 @@ static fr_err_t fr_native_sleep_deep(fr_runtime_t *runtime,
                                      uint8_t arg_count, fr_tagged_t *out) {
   fr_int_t ms = 0;
 
-  (void)runtime;
   if (out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -1075,7 +1137,6 @@ static fr_err_t fr_native_sleep_wake_on_gpio(fr_runtime_t *runtime,
   uint16_t pin = 0;
   uint16_t level = 0;
 
-  (void)runtime;
   if (out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -1100,19 +1161,37 @@ void fr_host_watchdog_force_timeout(void) {
 #endif
 
 #if FR_FEATURE_BYTES
+static fr_err_t fr_native_decode_bytes_view(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    uint8_t index, const uint8_t **out_bytes, uint16_t *out_length) {
+  fr_bytes_ref_t ref = {0};
+  fr_err_t err = FR_OK;
+
+  if (runtime == NULL || args == NULL || index >= arg_count ||
+      out_bytes == NULL || out_length == NULL) {
+    return FR_ERR_INVALID;
+  }
+  err = fr_tagged_decode_bytes_ref(args[index], &ref);
+  if (err == FR_OK) {
+    err = fr_bytes_view(runtime, ref, out_bytes, out_length);
+  }
+  return err == FR_OK
+             ? FR_OK
+             : fr_native_reject_arg(runtime, args, arg_count, index, err);
+}
+
 static fr_err_t fr_native_bytes_from_text(fr_runtime_t *runtime,
                                           const fr_tagged_t *args,
                                           uint8_t arg_count,
                                           fr_tagged_t *out) {
-  fr_object_id_t object_id = 0;
   const uint8_t *bytes = NULL;
   uint16_t length = 0;
 
   if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_tagged_decode_object_id(args[0], &object_id));
-  FR_TRY(fr_text_view(runtime, object_id, &bytes, &length));
+  FR_TRY(fr_native_decode_text_view(runtime, args, arg_count, 0, &bytes,
+                                    &length));
   return fr_bytes_install(runtime, bytes, length, out);
 }
 
@@ -1151,22 +1230,20 @@ static fr_err_t fr_native_bytes_from_int(fr_runtime_t *runtime,
 static fr_err_t fr_native_bytes_length(fr_runtime_t *runtime,
                                        const fr_tagged_t *args,
                                        uint8_t arg_count, fr_tagged_t *out) {
-  fr_bytes_ref_t ref = {0};
   const uint8_t *bytes = NULL;
   uint16_t length = 0;
 
   if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &ref));
-  FR_TRY(fr_bytes_view(runtime, ref, &bytes, &length));
+  FR_TRY(fr_native_decode_bytes_view(runtime, args, arg_count, 0, &bytes,
+                                     &length));
   return fr_tagged_encode_int((int32_t)length, out);
 }
 
 static fr_err_t fr_native_bytes_at(fr_runtime_t *runtime,
                                    const fr_tagged_t *args, uint8_t arg_count,
                                    fr_tagged_t *out) {
-  fr_bytes_ref_t ref = {0};
   const uint8_t *bytes = NULL;
   uint16_t length = 0;
   fr_int_t index = 0;
@@ -1174,11 +1251,11 @@ static fr_err_t fr_native_bytes_at(fr_runtime_t *runtime,
   if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &ref));
-  FR_TRY(fr_bytes_view(runtime, ref, &bytes, &length));
+  FR_TRY(fr_native_decode_bytes_view(runtime, args, arg_count, 0, &bytes,
+                                     &length));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 1, &index));
   if (index < 0 || (uint32_t)index >= length) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_RANGE);
   }
   return fr_tagged_encode_int((int32_t)bytes[index], out);
 }
@@ -1186,8 +1263,6 @@ static fr_err_t fr_native_bytes_at(fr_runtime_t *runtime,
 static fr_err_t fr_native_bytes_equals_p(fr_runtime_t *runtime,
                                          const fr_tagged_t *args,
                                          uint8_t arg_count, fr_tagged_t *out) {
-  fr_bytes_ref_t a_ref = {0};
-  fr_bytes_ref_t b_ref = {0};
   const uint8_t *a_bytes = NULL;
   const uint8_t *b_bytes = NULL;
   uint16_t a_length = 0;
@@ -1196,10 +1271,10 @@ static fr_err_t fr_native_bytes_equals_p(fr_runtime_t *runtime,
   if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &a_ref));
-  FR_TRY(fr_tagged_decode_bytes_ref(args[1], &b_ref));
-  FR_TRY(fr_bytes_view(runtime, a_ref, &a_bytes, &a_length));
-  FR_TRY(fr_bytes_view(runtime, b_ref, &b_bytes, &b_length));
+  FR_TRY(fr_native_decode_bytes_view(runtime, args, arg_count, 0, &a_bytes,
+                                     &a_length));
+  FR_TRY(fr_native_decode_bytes_view(runtime, args, arg_count, 1, &b_bytes,
+                                     &b_length));
   return fr_tagged_encode_bool(
       a_length == b_length && memcmp(a_bytes, b_bytes, a_length) == 0, out);
 }
@@ -1207,8 +1282,6 @@ static fr_err_t fr_native_bytes_equals_p(fr_runtime_t *runtime,
 static fr_err_t fr_native_bytes_concat(fr_runtime_t *runtime,
                                        const fr_tagged_t *args,
                                        uint8_t arg_count, fr_tagged_t *out) {
-  fr_bytes_ref_t a_ref = {0};
-  fr_bytes_ref_t b_ref = {0};
   const uint8_t *a_bytes = NULL;
   const uint8_t *b_bytes = NULL;
   uint16_t a_length = 0;
@@ -1218,12 +1291,12 @@ static fr_err_t fr_native_bytes_concat(fr_runtime_t *runtime,
   if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &a_ref));
-  FR_TRY(fr_tagged_decode_bytes_ref(args[1], &b_ref));
-  FR_TRY(fr_bytes_view(runtime, a_ref, &a_bytes, &a_length));
-  FR_TRY(fr_bytes_view(runtime, b_ref, &b_bytes, &b_length));
+  FR_TRY(fr_native_decode_bytes_view(runtime, args, arg_count, 0, &a_bytes,
+                                     &a_length));
+  FR_TRY(fr_native_decode_bytes_view(runtime, args, arg_count, 1, &b_bytes,
+                                     &b_length));
   if ((uint32_t)a_length + (uint32_t)b_length > FR_PROFILE_MAX_TEXT_LENGTH) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_RANGE);
   }
   if (a_length > 0) {
     memcpy(joined, a_bytes, a_length);
@@ -1238,7 +1311,6 @@ static fr_err_t fr_native_bytes_concat(fr_runtime_t *runtime,
 static fr_err_t fr_native_text_pack(fr_runtime_t *runtime,
                                     const fr_tagged_t *args, uint8_t arg_count,
                                     fr_tagged_t *out) {
-  fr_bytes_ref_t ref = {0};
   const uint8_t *bytes = NULL;
   uint16_t length = 0;
   fr_object_id_t object_id = 0;
@@ -1246,8 +1318,8 @@ static fr_err_t fr_native_text_pack(fr_runtime_t *runtime,
   if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &ref));
-  FR_TRY(fr_bytes_view(runtime, ref, &bytes, &length));
+  FR_TRY(fr_native_decode_bytes_view(runtime, args, arg_count, 0, &bytes,
+                                     &length));
   FR_TRY(fr_text_install(runtime, bytes, length, &object_id));
   return fr_tagged_encode_object_id(object_id, out);
 }
@@ -1261,7 +1333,6 @@ static fr_err_t fr_native_console_uart(fr_runtime_t *runtime,
   uint16_t rx = 0;
   fr_int_t baud = 0;
 
-  (void)runtime;
   if (out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -1269,7 +1340,7 @@ static fr_err_t fr_native_console_uart(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &rx));
   FR_TRY(fr_native_decode_nonnegative_int(runtime, args, arg_count, 2, &baud));
   if (baud == 0) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
   }
   FR_TRY(fr_platform_console_set_uart(tx, rx, (uint32_t)baud));
   *out = fr_tagged_nil();
@@ -2019,11 +2090,15 @@ static fr_err_t fr_native_ble_gatt_install(fr_runtime_t *runtime,
                                            uint8_t arg_count,
                                            fr_tagged_t *out) {
   fr_ble_gatt_table_t table;
+  fr_err_t err = FR_OK;
 
   if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_gatt_parse_table(runtime, args[0], &table));
+  err = fr_native_ble_gatt_parse_table(runtime, args[0], &table);
+  if (err != FR_OK) {
+    return fr_native_reject_arg(runtime, args, arg_count, 0, err);
+  }
   FR_TRY(fr_platform_ble_gatt_install(&table));
   *out = fr_tagged_nil();
   return FR_OK;
@@ -2204,8 +2279,8 @@ static fr_err_t fr_native_ble_gatt_set(fr_runtime_t *runtime,
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 0, &attribute_id));
-  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[1], &bytes,
-                                             &length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args, arg_count, 1,
+                                             &bytes, &length));
   FR_TRY(fr_platform_ble_gatt_set(attribute_id, bytes, length));
   *out = fr_tagged_nil();
   return FR_OK;
@@ -2242,8 +2317,8 @@ static fr_err_t fr_native_ble_gatt_notify(fr_runtime_t *runtime,
   FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &connection_index));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &attribute_id));
-  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
-                                             &length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args, arg_count, 2,
+                                             &bytes, &length));
   FR_TRY(fr_platform_ble_gatt_notify(connection_index, attribute_id, bytes,
                                      length));
   *out = fr_tagged_nil();
@@ -2266,11 +2341,11 @@ static fr_err_t fr_native_ble_gatt_indicate(fr_runtime_t *runtime,
   FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &connection_index));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &attribute_id));
-  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
-                                             &length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args, arg_count, 2,
+                                             &bytes, &length));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 3, &timeout_ms));
   if (timeout_ms == 0) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 3, FR_ERR_RANGE);
   }
   FR_TRY(fr_platform_ble_gatt_indicate(runtime, connection_index,
                                        attribute_id, bytes, length,
@@ -2329,19 +2404,29 @@ static fr_err_t fr_native_ble_gatt_write_data(fr_runtime_t *runtime,
 #endif
 
 #if FR_BLE_ENABLE_GATT_CLIENT
-static fr_err_t fr_native_ble_gatt_uuid_arg(const fr_runtime_t *runtime,
-                                            fr_tagged_t tagged,
+static fr_err_t fr_native_ble_gatt_uuid_arg(fr_runtime_t *runtime,
+                                            const fr_tagged_t *args,
+                                            uint8_t arg_count, uint8_t index,
                                             fr_ble_uuid_t *out_uuid) {
   fr_object_id_t object_id = 0;
   const uint8_t *text = NULL;
   uint16_t length = 0;
+  fr_err_t err = FR_OK;
 
-  if (runtime == NULL || out_uuid == NULL) {
+  if (runtime == NULL || args == NULL || index >= arg_count ||
+      out_uuid == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_tagged_decode_object_id(tagged, &object_id));
-  FR_TRY(fr_text_view(runtime, object_id, &text, &length));
-  return fr_native_ble_gatt_uuid_parse(text, length, out_uuid);
+  err = fr_tagged_decode_object_id(args[index], &object_id);
+  if (err == FR_OK) {
+    err = fr_text_view(runtime, object_id, &text, &length);
+  }
+  if (err == FR_OK) {
+    err = fr_native_ble_gatt_uuid_parse(text, length, out_uuid);
+  }
+  return err == FR_OK
+             ? FR_OK
+             : fr_native_reject_arg(runtime, args, arg_count, index, err);
 }
 
 static fr_err_t fr_native_ble_gatt_client_find(
@@ -2358,12 +2443,13 @@ static fr_err_t fr_native_ble_gatt_client_find(
   }
   FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &connection_index));
-  FR_TRY(fr_native_ble_gatt_uuid_arg(runtime, args[1], &service_uuid));
-  FR_TRY(fr_native_ble_gatt_uuid_arg(runtime, args[2],
-                                    &characteristic_uuid));
+  FR_TRY(fr_native_ble_gatt_uuid_arg(runtime, args, arg_count, 1,
+                                     &service_uuid));
+  FR_TRY(fr_native_ble_gatt_uuid_arg(runtime, args, arg_count, 2,
+                                     &characteristic_uuid));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 3, &timeout_ms));
   if (timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 3, FR_ERR_RANGE);
   }
   FR_TRY(fr_platform_ble_gatt_client_find(
       runtime, connection_index, &service_uuid, &characteristic_uuid,
@@ -2388,7 +2474,7 @@ static fr_err_t fr_native_ble_gatt_client_read(
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &attribute_handle));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 2, &timeout_ms));
   if (timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_RANGE);
   }
   FR_TRY(fr_platform_ble_gatt_client_read(
       runtime, connection_index, attribute_handle, timeout_ms, bytes,
@@ -2412,13 +2498,18 @@ static fr_err_t fr_native_ble_gatt_client_write(
   FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &connection_index));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &attribute_handle));
-  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
-                                             &length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args, arg_count, 2,
+                                             &bytes, &length));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 3, &with_response));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 4, &timeout_ms));
-  if (length > FR_BLE_GATT_CLIENT_DATA_BYTES || with_response > 1 ||
-      timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
-    return FR_ERR_RANGE;
+  if (length > FR_BLE_GATT_CLIENT_DATA_BYTES) {
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_RANGE);
+  }
+  if (with_response > 1) {
+    return fr_native_reject_arg(runtime, args, arg_count, 3, FR_ERR_RANGE);
+  }
+  if (timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
+    return fr_native_reject_arg(runtime, args, arg_count, 4, FR_ERR_RANGE);
   }
   FR_TRY(fr_platform_ble_gatt_client_write(
       runtime, connection_index, attribute_handle, bytes, length,
@@ -2443,10 +2534,12 @@ static fr_err_t fr_native_ble_gatt_client_subscribe(
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &attribute_handle));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 2, &mode));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 3, &timeout_ms));
-  if ((mode != FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS &&
-       mode != FR_BLE_GATT_SUBSCRIBE_INDICATIONS) ||
-      timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
-    return FR_ERR_RANGE;
+  if (mode != FR_BLE_GATT_SUBSCRIBE_NOTIFICATIONS &&
+      mode != FR_BLE_GATT_SUBSCRIBE_INDICATIONS) {
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_RANGE);
+  }
+  if (timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
+    return fr_native_reject_arg(runtime, args, arg_count, 3, FR_ERR_RANGE);
   }
   FR_TRY(fr_platform_ble_gatt_client_subscribe(
       runtime, connection_index, attribute_handle,
@@ -2470,7 +2563,7 @@ static fr_err_t fr_native_ble_gatt_client_unsubscribe(
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &attribute_handle));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 2, &timeout_ms));
   if (timeout_ms == 0 || timeout_ms > FR_BLE_GATT_CLIENT_TIMEOUT_MAX_MS) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_RANGE);
   }
   FR_TRY(fr_platform_ble_gatt_client_unsubscribe(
       runtime, connection_index, attribute_handle, timeout_ms));
@@ -2543,20 +2636,30 @@ static fr_err_t fr_native_ble_scan_start(fr_runtime_t *runtime,
   if (runtime == NULL || args == NULL || arg_count != 5 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  if (fr_tagged_is_bool(args[0]) || fr_tagged_is_bool(args[1]) ||
-      fr_tagged_is_bool(args[2]) || fr_tagged_is_bool(args[3]) ||
-      fr_tagged_is_bool(args[4])) {
-    return FR_ERR_INVALID;
+  for (uint8_t i = 0; i < arg_count; i++) {
+    if (fr_tagged_is_bool(args[i])) {
+      return fr_native_reject_arg(runtime, args, arg_count, i, FR_ERR_INVALID);
+    }
   }
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 0, &interval_ms));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 1, &window_ms));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 2, &active));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 3, &repeats));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 4, &minimum_rssi));
-  if (interval_ms < 0 || interval_ms > UINT16_MAX || window_ms < 0 ||
-      window_ms > UINT16_MAX || active < 0 || active > 1 || repeats < 0 ||
-      repeats > 1 || minimum_rssi < INT8_MIN || minimum_rssi > INT8_MAX) {
-    return FR_ERR_RANGE;
+  if (interval_ms < 0 || interval_ms > UINT16_MAX) {
+    return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_RANGE);
+  }
+  if (window_ms < 0 || window_ms > UINT16_MAX) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_RANGE);
+  }
+  if (active < 0 || active > 1) {
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_RANGE);
+  }
+  if (repeats < 0 || repeats > 1) {
+    return fr_native_reject_arg(runtime, args, arg_count, 3, FR_ERR_RANGE);
+  }
+  if (minimum_rssi < INT8_MIN || minimum_rssi > INT8_MAX) {
+    return fr_native_reject_arg(runtime, args, arg_count, 4, FR_ERR_RANGE);
   }
   FR_TRY(fr_platform_ble_scan_start(
       (uint16_t)interval_ms, (uint16_t)window_ms, active == 1, repeats == 1,
@@ -2682,26 +2785,40 @@ static fr_err_t fr_native_ble_advertise_start(
   uint16_t scan_response_data_length = 0;
   fr_int_t interval_ms = 0;
   fr_int_t connectable = 0;
+  fr_err_t err = FR_OK;
 
   if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_decode_text_or_bytes_view(
-      runtime, args[0], &advertising_data, &advertising_data_length));
-  FR_TRY(fr_native_decode_text_or_bytes_view(
-      runtime, args[1], &scan_response_data, &scan_response_data_length));
-  FR_TRY(fr_native_ble_validate_ad_data(advertising_data,
-                                       advertising_data_length));
-  FR_TRY(fr_native_ble_validate_ad_data(scan_response_data,
-                                       scan_response_data_length));
-  if (fr_tagged_is_bool(args[2]) || fr_tagged_is_bool(args[3])) {
-    return FR_ERR_INVALID;
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args, arg_count, 0,
+                                             &advertising_data,
+                                             &advertising_data_length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args, arg_count, 1,
+                                             &scan_response_data,
+                                             &scan_response_data_length));
+  err =
+      fr_native_ble_validate_ad_data(advertising_data, advertising_data_length);
+  if (err != FR_OK) {
+    return fr_native_reject_arg(runtime, args, arg_count, 0, err);
+  }
+  err = fr_native_ble_validate_ad_data(scan_response_data,
+                                       scan_response_data_length);
+  if (err != FR_OK) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, err);
+  }
+  if (fr_tagged_is_bool(args[2])) {
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_INVALID);
+  }
+  if (fr_tagged_is_bool(args[3])) {
+    return fr_native_reject_arg(runtime, args, arg_count, 3, FR_ERR_INVALID);
   }
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 2, &interval_ms));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 3, &connectable));
-  if (interval_ms < 20 || interval_ms > 10240 || connectable < 0 ||
-      connectable > 1) {
-    return FR_ERR_RANGE;
+  if (interval_ms < 20 || interval_ms > 10240) {
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_RANGE);
+  }
+  if (connectable < 0 || connectable > 1) {
+    return fr_native_reject_arg(runtime, args, arg_count, 3, FR_ERR_RANGE);
   }
   FR_TRY(fr_platform_ble_advertise_start(
       advertising_data, (uint8_t)advertising_data_length, scan_response_data,
@@ -2749,18 +2866,25 @@ static fr_err_t fr_native_ble_connect(fr_runtime_t *runtime,
   uint16_t platform_index = 0;
   fr_err_t err = FR_OK;
 
-  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL ||
-      fr_tagged_is_bool(args[1])) {
+  if (runtime == NULL || args == NULL || arg_count != 2 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_tagged_decode_bytes_ref(args[0], &peer_ref));
-  FR_TRY(fr_bytes_view(runtime, peer_ref, &peer_bytes, &peer_length));
+  if (fr_tagged_is_bool(args[1])) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_INVALID);
+  }
+  err = fr_tagged_decode_bytes_ref(args[0], &peer_ref);
+  if (err == FR_OK) {
+    err = fr_bytes_view(runtime, peer_ref, &peer_bytes, &peer_length);
+  }
+  if (err != FR_OK) {
+    return fr_native_reject_arg(runtime, args, arg_count, 0, err);
+  }
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 1, &timeout_ms));
   if (peer_length != sizeof(peer) || peer_bytes[0] > FR_BLE_ADDRESS_RANDOM_ID) {
-    return FR_ERR_INVALID;
+    return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_INVALID);
   }
   if (timeout_ms < 1 || timeout_ms > FR_BLE_CONNECT_TIMEOUT_MAX_MS) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_RANGE);
   }
   memcpy(peer, peer_bytes, sizeof(peer));
 
@@ -2941,7 +3065,7 @@ static fr_err_t fr_native_ble_connection_params(
   }
   for (uint8_t i = 1; i < arg_count; i++) {
     if (fr_tagged_is_bool(args[i])) {
-      return FR_ERR_INVALID;
+      return fr_native_reject_arg(runtime, args, arg_count, i, FR_ERR_INVALID);
     }
   }
   FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
@@ -2953,10 +3077,17 @@ static fr_err_t fr_native_ble_connection_params(
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 3, &latency));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 4,
                                   &supervision_timeout_ms));
-  if (minimum_interval_ms < 8 || maximum_interval_ms < minimum_interval_ms ||
-      maximum_interval_ms > 4000 || latency < 0 || latency > 499 ||
-      supervision_timeout_ms < 100 || supervision_timeout_ms > 32000) {
-    return FR_ERR_RANGE;
+  if (minimum_interval_ms < 8) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_RANGE);
+  }
+  if (maximum_interval_ms < minimum_interval_ms || maximum_interval_ms > 4000) {
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_RANGE);
+  }
+  if (latency < 0 || latency > 499) {
+    return fr_native_reject_arg(runtime, args, arg_count, 3, FR_ERR_RANGE);
+  }
+  if (supervision_timeout_ms < 100 || supervision_timeout_ms > 32000) {
+    return fr_native_reject_arg(runtime, args, arg_count, 4, FR_ERR_RANGE);
   }
   FR_TRY(fr_platform_ble_connection_params(
       platform_index, (uint16_t)minimum_interval_ms,
@@ -2974,17 +3105,24 @@ static fr_err_t fr_native_ble_connection_mtu(
   fr_int_t requested_mtu = 0;
   fr_int_t timeout_ms = 0;
 
-  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL ||
-      fr_tagged_is_bool(args[1]) || fr_tagged_is_bool(args[2])) {
+  if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
     return FR_ERR_INVALID;
+  }
+  if (fr_tagged_is_bool(args[1])) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_INVALID);
+  }
+  if (fr_tagged_is_bool(args[2])) {
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_INVALID);
   }
   FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &platform_index));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 1, &requested_mtu));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 2, &timeout_ms));
-  if (requested_mtu < 23 || requested_mtu > 517 || timeout_ms < 1 ||
-      timeout_ms > 60000) {
-    return FR_ERR_RANGE;
+  if (requested_mtu < 23 || requested_mtu > 517) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_RANGE);
+  }
+  if (timeout_ms < 1 || timeout_ms > 60000) {
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_RANGE);
   }
   FR_TRY(fr_platform_ble_connection_mtu(
       runtime, platform_index, (uint16_t)requested_mtu,
@@ -3203,8 +3341,8 @@ static fr_err_t fr_native_print(fr_runtime_t *runtime, const fr_tagged_t *args,
   if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[0], &bytes,
-                                             &length));
+  FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args, arg_count, 0,
+                                             &bytes, &length));
   if (runtime->dispatching_event) {
     FR_TRY(fr_native_print_async(bytes, length));
   } else {
@@ -3221,7 +3359,6 @@ static fr_err_t fr_native_abs(fr_runtime_t *runtime, const fr_tagged_t *args,
   fr_int_t x = 0;
   int32_t result = 0;
 
-  (void)runtime;
   if (args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -3229,7 +3366,7 @@ static fr_err_t fr_native_abs(fr_runtime_t *runtime, const fr_tagged_t *args,
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 0, &x));
   result = x < 0 ? -(int32_t)x : (int32_t)x;
   if (result > FR_TAGGED_INT_MAX) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_RANGE);
   }
   return fr_tagged_encode_int(result, out);
 }
@@ -3239,7 +3376,6 @@ static fr_err_t fr_native_min(fr_runtime_t *runtime, const fr_tagged_t *args,
   fr_int_t a = 0;
   fr_int_t b = 0;
 
-  (void)runtime;
   if (args == NULL || arg_count != 2 || out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -3254,7 +3390,6 @@ static fr_err_t fr_native_max(fr_runtime_t *runtime, const fr_tagged_t *args,
   fr_int_t a = 0;
   fr_int_t b = 0;
 
-  (void)runtime;
   if (args == NULL || arg_count != 2 || out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -3271,7 +3406,6 @@ static fr_err_t fr_native_clamp(fr_runtime_t *runtime,
   fr_int_t lo = 0;
   fr_int_t hi = 0;
 
-  (void)runtime;
   if (args == NULL || arg_count != 3 || out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -3280,7 +3414,7 @@ static fr_err_t fr_native_clamp(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 1, &lo));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 2, &hi));
   if (lo > hi) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
   }
   return fr_tagged_encode_int(x < lo ? lo : (x > hi ? hi : x), out);
 }
@@ -3304,7 +3438,6 @@ static fr_err_t fr_native_map(fr_runtime_t *runtime, const fr_tagged_t *args,
   fr_int_t out_hi = 0;
   int64_t result = 0;
 
-  (void)runtime;
   if (args == NULL || arg_count != 5 || out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -3315,7 +3448,7 @@ static fr_err_t fr_native_map(fr_runtime_t *runtime, const fr_tagged_t *args,
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 3, &out_lo));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 4, &out_hi));
   if (in_hi == in_lo) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
   }
   result = (int64_t)out_lo +
            ((int64_t)x - (int64_t)in_lo) *
@@ -3333,7 +3466,6 @@ static fr_err_t fr_native_mod(fr_runtime_t *runtime, const fr_tagged_t *args,
   fr_int_t a = 0;
   fr_int_t b = 0;
 
-  (void)runtime;
   if (args == NULL || arg_count != 2 || out == NULL) {
     return FR_ERR_INVALID;
   }
@@ -3341,7 +3473,7 @@ static fr_err_t fr_native_mod(fr_runtime_t *runtime, const fr_tagged_t *args,
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 0, &a));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 1, &b));
   if (b == 0) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
   }
   return fr_tagged_encode_int(a % b, out);
 }
@@ -3353,14 +3485,13 @@ static fr_err_t fr_native_sqrt(fr_runtime_t *runtime, const fr_tagged_t *args,
   uint32_t root = 0;
   uint32_t bit = UINT32_C(1) << 30;
 
-  (void)runtime;
   if (args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
   }
 
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 0, &x));
   if (x < 0) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_DOMAIN);
   }
 
   remainder = (uint32_t)x;
@@ -3404,14 +3535,13 @@ static fr_err_t fr_native_random_below(fr_runtime_t *runtime,
                                        uint8_t arg_count, fr_tagged_t *out) {
   fr_int_t limit = 0;
 
-  (void)runtime;
   if (args == NULL || arg_count != 1) {
     return FR_ERR_INVALID;
   }
 
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 0, &limit));
   if (limit <= 0) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_DOMAIN);
   }
 
   /* `% limit` accepts a small modulo bias; a reject-and-retry uniform
@@ -3425,7 +3555,6 @@ static fr_err_t fr_native_random_seed(fr_runtime_t *runtime,
                                       uint8_t arg_count, fr_tagged_t *out) {
   fr_int_t seed = 0;
 
-  (void)runtime;
   if (args == NULL || arg_count != 1) {
     return FR_ERR_INVALID;
   }
@@ -3511,7 +3640,7 @@ static fr_err_t fr_native_pad_peek_byte(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 0, &index));
   FR_TRY(fr_pad_view(runtime, &bytes, &length));
   if (index >= length) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_RANGE);
   }
   return fr_tagged_encode_int((int32_t)bytes[index], out);
 }
@@ -3593,7 +3722,7 @@ static fr_err_t fr_native_text_at(fr_runtime_t *runtime,
   FR_TRY(fr_text_view(runtime, object_id, &bytes, &length));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 1, &index));
   if (index < 0 || (uint32_t)index >= length) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_RANGE);
   }
   return fr_tagged_encode_int((int32_t)bytes[index], out);
 }
@@ -3619,7 +3748,7 @@ static fr_err_t fr_native_text_concat(fr_runtime_t *runtime,
   FR_TRY(fr_text_view(runtime, a_id, &a_bytes, &a_length));
   FR_TRY(fr_text_view(runtime, b_id, &b_bytes, &b_length));
   if ((uint32_t)a_length + (uint32_t)b_length > FR_PROFILE_MAX_TEXT_LENGTH) {
-    return FR_ERR_RANGE;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_RANGE);
   }
   if (a_length > 0) {
     memcpy(joined, a_bytes, a_length);
@@ -3672,7 +3801,7 @@ static fr_err_t fr_native_event_register(fr_runtime_t *runtime,
                                           &kind_int));
   if (kind_int < FR_EVENT_KIND_GPIO_RISING ||
       kind_int > FR_EVENT_KIND_WIFI_RECONNECTED) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_DOMAIN);
   }
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &source));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 2, &debounce_ms));
@@ -3680,8 +3809,13 @@ static fr_err_t fr_native_event_register(fr_runtime_t *runtime,
   /* The body is a code object id; reject anything that does not resolve to a
      real code object so a stray int or text id cannot install a binding the
      dispatcher would fail to fire. */
-  FR_TRY(fr_code_get_instructions(runtime, (fr_code_object_id_t)body_int,
-                                  &body_view));
+  {
+    fr_err_t err = fr_code_get_instructions(
+        runtime, (fr_code_object_id_t)body_int, &body_view);
+    if (err != FR_OK) {
+      return fr_native_reject_arg(runtime, args, arg_count, 3, err);
+    }
+  }
   FR_TRY(fr_event_register(runtime, (fr_event_kind_t)kind_int, source,
                            debounce_ms, (fr_code_object_id_t)body_int));
   *out = fr_tagged_nil();
@@ -3701,7 +3835,7 @@ static fr_err_t fr_native_event_cancel(fr_runtime_t *runtime,
                                           &kind_int));
   if (kind_int < FR_EVENT_KIND_GPIO_RISING ||
       kind_int > FR_EVENT_KIND_WIFI_RECONNECTED) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_DOMAIN);
   }
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &source));
   FR_TRY(fr_event_cancel(runtime, (fr_event_kind_t)kind_int, source));
@@ -3747,14 +3881,14 @@ static fr_err_t fr_native_fire_event(fr_runtime_t *runtime,
                                         &kind_length));
   FR_TRY(fr_native_decode_int_arg(runtime, args, arg_count, 1, &source_int));
   if (source_int < 0 || source_int > 0xFFFF) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
   }
   source = (uint16_t)source_int;
 
   if (fr_native_fire_event_text_equals(kind_bytes, kind_length, "on")) {
     kind_is_on = true;
     if (fr_tagged_is_nil(args[2])) {
-      return FR_ERR_DOMAIN;
+      return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
     }
     FR_TRY(fr_native_fire_event_view_text(runtime, args[2], &edge_bytes,
                                           &edge_length));
@@ -3764,22 +3898,22 @@ static fr_err_t fr_native_fire_event(fr_runtime_t *runtime,
                                                 "falling")) {
       edge_is_falling = true;
     } else {
-      return FR_ERR_DOMAIN;
+      return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
     }
   } else if (fr_native_fire_event_text_equals(kind_bytes, kind_length,
                                               "every")) {
     timer_kind = FR_EVENT_KIND_EVERY;
     if (!fr_tagged_is_nil(args[2])) {
-      return FR_ERR_DOMAIN;
+      return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
     }
   } else if (fr_native_fire_event_text_equals(kind_bytes, kind_length,
                                               "after")) {
     timer_kind = FR_EVENT_KIND_AFTER;
     if (!fr_tagged_is_nil(args[2])) {
-      return FR_ERR_DOMAIN;
+      return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
     }
   } else {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 0, FR_ERR_DOMAIN);
   }
 
   for (uint16_t i = 0; i < FR_EVENT_BINDING_COUNT; i++) {
@@ -3919,7 +4053,7 @@ static fr_err_t fr_native_trace_wait(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_nonnegative_int(runtime, args, arg_count, 1,
                                           &timeout_ms));
   if (timeout_ms > FR_TRACE_WAIT_MAX_MS) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
   }
   FR_TRY(fr_platform_millis(&start_ms));
 
@@ -3984,6 +4118,7 @@ static fr_err_t fr_native_trace_event_field(fr_runtime_t *runtime,
                                             fr_trace_event_t *out_event) {
   uint16_t platform_index = 0;
   uint16_t event_index = 0;
+  fr_err_t err = FR_OK;
 
   if (out_event == NULL) {
     return FR_ERR_INVALID;
@@ -3991,7 +4126,11 @@ static fr_err_t fr_native_trace_event_field(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_trace_handle(runtime, args, arg_count, 0,
                                        &platform_index));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &event_index));
-  return fr_platform_trace_event(platform_index, event_index, out_event);
+  err = fr_platform_trace_event(platform_index, event_index, out_event);
+  if (err == FR_ERR_RANGE) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, err);
+  }
+  return err;
 }
 
 static fr_err_t fr_native_trace_channel(fr_runtime_t *runtime,
@@ -4138,13 +4277,16 @@ static fr_err_t fr_native_pulse_open(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 0, &pin));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &idle));
   if (idle > 1) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
   }
 
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_PULSE, &ref, &handle));
   err = fr_platform_pulse_open(pin, (uint8_t)idle, &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
+    if (err == FR_ERR_DOMAIN) {
+      err = fr_native_reject_arg(runtime, args, arg_count, 0, err);
+    }
     return err;
   }
   err = fr_handle_activate(runtime, ref, platform_index);
@@ -4175,9 +4317,12 @@ static fr_err_t fr_native_pulse_add(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &level));
   FR_TRY(fr_native_decode_nonnegative_int(runtime, args, arg_count, 2,
                                           &requested_ns));
-  if (level > 1 || requested_ns < FR_SIGNAL_TICK_NS ||
+  if (level > 1) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
+  }
+  if (requested_ns < FR_SIGNAL_TICK_NS ||
       requested_ns > FR_SIGNAL_MAX_SPAN_NS) {
-    return FR_ERR_DOMAIN;
+    return fr_native_reject_arg(runtime, args, arg_count, 2, FR_ERR_DOMAIN);
   }
   actual_ns = (((uint32_t)requested_ns + FR_SIGNAL_TICK_NS / 2u) /
                FR_SIGNAL_TICK_NS) *
@@ -4223,6 +4368,7 @@ static fr_err_t fr_native_pulse_segment_field(fr_runtime_t *runtime,
                                               fr_pulse_segment_t *out_segment) {
   uint16_t platform_index = 0;
   uint16_t segment_index = 0;
+  fr_err_t err = FR_OK;
 
   if (out_segment == NULL) {
     return FR_ERR_INVALID;
@@ -4230,7 +4376,11 @@ static fr_err_t fr_native_pulse_segment_field(fr_runtime_t *runtime,
   FR_TRY(fr_native_decode_pulse_handle(runtime, args, arg_count, 0,
                                        &platform_index));
   FR_TRY(fr_native_decode_u16(runtime, args, arg_count, 1, &segment_index));
-  return fr_platform_pulse_segment(platform_index, segment_index, out_segment);
+  err = fr_platform_pulse_segment(platform_index, segment_index, out_segment);
+  if (err == FR_ERR_RANGE) {
+    return fr_native_reject_arg(runtime, args, arg_count, 1, err);
+  }
+  return err;
 }
 
 static fr_err_t fr_native_pulse_level(fr_runtime_t *runtime,
@@ -5263,7 +5413,7 @@ static const fr_native_param_t fr_native_bytes_from_text_params[] = {
 static const fr_native_signature_t fr_native_bytes_from_text_signature = {
     .params = fr_native_bytes_from_text_params,
     .arg_count = 1,
-    .result = FR_NATIVE_VALUE_ANY,
+    .result = FR_NATIVE_VALUE_BYTES,
     .help = "copy a text value into a transient bytes buffer",
 };
 
@@ -5273,7 +5423,7 @@ static const fr_native_param_t fr_native_bytes_from_byte_params[] = {
 static const fr_native_signature_t fr_native_bytes_from_byte_signature = {
     .params = fr_native_bytes_from_byte_params,
     .arg_count = 1,
-    .result = FR_NATIVE_VALUE_ANY,
+    .result = FR_NATIVE_VALUE_BYTES,
     .help = "create a single-byte bytes buffer from a 0-255 int",
 };
 
@@ -5283,12 +5433,12 @@ static const fr_native_param_t fr_native_bytes_from_int_params[] = {
 static const fr_native_signature_t fr_native_bytes_from_int_signature = {
     .params = fr_native_bytes_from_int_params,
     .arg_count = 1,
-    .result = FR_NATIVE_VALUE_ANY,
+    .result = FR_NATIVE_VALUE_BYTES,
     .help = "convert an int to its ASCII decimal representation as bytes",
 };
 
 static const fr_native_param_t fr_native_bytes_length_params[] = {
-    {"buf", FR_NATIVE_VALUE_ANY},
+    {"buf", FR_NATIVE_VALUE_BYTES},
 };
 static const fr_native_signature_t fr_native_bytes_length_signature = {
     .params = fr_native_bytes_length_params,
@@ -5298,7 +5448,7 @@ static const fr_native_signature_t fr_native_bytes_length_signature = {
 };
 
 static const fr_native_param_t fr_native_bytes_at_params[] = {
-    {"buf", FR_NATIVE_VALUE_ANY},
+    {"buf", FR_NATIVE_VALUE_BYTES},
     {"index", FR_NATIVE_VALUE_INT},
 };
 static const fr_native_signature_t fr_native_bytes_at_signature = {
@@ -5309,8 +5459,8 @@ static const fr_native_signature_t fr_native_bytes_at_signature = {
 };
 
 static const fr_native_param_t fr_native_bytes_equals_p_params[] = {
-    {"a", FR_NATIVE_VALUE_ANY},
-    {"b", FR_NATIVE_VALUE_ANY},
+    {"a", FR_NATIVE_VALUE_BYTES},
+    {"b", FR_NATIVE_VALUE_BYTES},
 };
 static const fr_native_signature_t fr_native_bytes_equals_p_signature = {
     .params = fr_native_bytes_equals_p_params,
@@ -5320,18 +5470,18 @@ static const fr_native_signature_t fr_native_bytes_equals_p_signature = {
 };
 
 static const fr_native_param_t fr_native_bytes_concat_params[] = {
-    {"a", FR_NATIVE_VALUE_ANY},
-    {"b", FR_NATIVE_VALUE_ANY},
+    {"a", FR_NATIVE_VALUE_BYTES},
+    {"b", FR_NATIVE_VALUE_BYTES},
 };
 static const fr_native_signature_t fr_native_bytes_concat_signature = {
     .params = fr_native_bytes_concat_params,
     .arg_count = 2,
-    .result = FR_NATIVE_VALUE_ANY,
+    .result = FR_NATIVE_VALUE_BYTES,
     .help = "concatenate two bytes buffers into a new bytes buffer",
 };
 
 static const fr_native_param_t fr_native_text_pack_params[] = {
-    {"buf", FR_NATIVE_VALUE_ANY},
+    {"buf", FR_NATIVE_VALUE_BYTES},
 };
 static const fr_native_signature_t fr_native_text_pack_signature = {
     .params = fr_native_text_pack_params,

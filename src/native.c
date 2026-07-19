@@ -22,6 +22,8 @@ fr_native_value_diag_kind(fr_native_value_kind_t kind) {
     return FR_DIAG_VALUE_TEXT;
   case FR_NATIVE_VALUE_TEXT_OR_BYTES:
     return FR_DIAG_VALUE_TEXT_OR_BYTES;
+  case FR_NATIVE_VALUE_BYTES:
+    return FR_DIAG_VALUE_BYTES;
   default:
     return FR_DIAG_VALUE_NONE;
   }
@@ -116,6 +118,12 @@ static bool fr_native_value_matches(const fr_runtime_t *runtime,
     return false;
 #endif
   }
+  case FR_NATIVE_VALUE_BYTES:
+#if FR_FEATURE_BYTES
+    return fr_tagged_kind(value) == FR_TAGGED_BYTES;
+#else
+    return false;
+#endif
   }
 
   return false;
@@ -142,11 +150,42 @@ static bool fr_native_diag_empty(const fr_runtime_t *runtime) {
          runtime->diag->kind == FR_DIAG_NONE;
 }
 
-void fr_native_diag_note_rejected_arg(fr_runtime_t *runtime,
-                                      const fr_tagged_t *args,
-                                      uint8_t arg_count, uint8_t index) {
+fr_err_t fr_native_reject_arg(fr_runtime_t *runtime, const fr_tagged_t *args,
+                              uint8_t arg_count, uint8_t index, fr_err_t err) {
+  switch (err) {
+  case FR_ERR_RANGE:
+  case FR_ERR_TYPE:
+  case FR_ERR_DOMAIN:
+  case FR_ERR_CAPACITY:
+  case FR_ERR_OVERFLOW:
+  case FR_ERR_UNDERFLOW:
+  case FR_ERR_NOT_FOUND:
+  case FR_ERR_INVALID:
+  case FR_ERR_UNSUPPORTED:
+  case FR_ERR_HANDLE:
+  case FR_ERR_VOLATILE:
+  case FR_ERR_NET_TOO_LARGE:
+  case FR_ERR_BUSY:
+    break;
+  case FR_OK:
+  case FR_ERR_INTERRUPTED:
+  case FR_ERR_CORRUPT:
+  case FR_ERR_IO:
+  case FR_ERR_NET_DISCONNECTED:
+  case FR_ERR_NET_TIMEOUT:
+  case FR_ERR_NET_DNS:
+  case FR_ERR_NET_REFUSED:
+  case FR_ERR_NET_PROTOCOL:
+  case FR_ERR_BLE_NOT_READY:
+  case FR_ERR_BLE_BUSY:
+  case FR_ERR_BLE_TIMEOUT:
+  case FR_ERR_BLE_DISCONNECTED:
+  default:
+    return err;
+  }
+
   if (!fr_native_diag_empty(runtime) || args == NULL || index >= arg_count) {
-    return;
+    return err;
   }
 
   runtime->diag->kind = FR_DIAG_NOTE;
@@ -156,6 +195,7 @@ void fr_native_diag_note_rejected_arg(fr_runtime_t *runtime,
   /* Default closed. The dispatcher below reveals only declared public args. */
   runtime->diag->actual_state = FR_DIAG_ACTUAL_REDACTED;
   runtime->diag->index = index;
+  return err;
 }
 
 static const char *fr_native_diag_context_name(fr_diagnostic_t *diag,

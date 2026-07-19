@@ -135,7 +135,7 @@ static void test_addr_above_127_rejects(void) {
 }
 
 static void test_reg_above_255_rejects(void) {
-  char out[64];
+  char out[128];
 
   open_bus();
   TEST_ASSERT_EQUAL(FR_ERR_DOMAIN,
@@ -146,16 +146,22 @@ static void test_reg_above_255_rejects(void) {
                     fr_repl_eval_line(&s_runtime,
                                       "i2c.write-reg: bus, 0x76, 0x100, 0x00",
                                       out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("error: bad value: 256 (3)\n"
+                           "detail: i2c.write-reg argument 3 was rejected\n",
+                           out);
 }
 
 static void test_write_value_out_of_range_rejects(void) {
-  char out[64];
+  char out[128];
 
   open_bus();
   TEST_ASSERT_EQUAL(FR_ERR_DOMAIN,
                     fr_repl_eval_line(&s_runtime,
                                       "i2c.write-reg: bus, 0x76, 0x10, 0x100",
                                       out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("error: bad value: 256 (3)\n"
+                           "detail: i2c.write-reg argument 4 was rejected\n",
+                           out);
   TEST_ASSERT_EQUAL(
       FR_ERR_DOMAIN,
       fr_repl_eval_line(&s_runtime,
