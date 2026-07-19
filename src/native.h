@@ -46,6 +46,8 @@ typedef struct fr_native_table_t {
 void fr_native_reset(fr_runtime_t *runtime);
 void fr_native_mark_base(fr_runtime_t *runtime);
 void fr_native_restore_base(fr_runtime_t *runtime);
+void fr_native_diag_note_actual(fr_runtime_t *runtime, fr_tagged_t actual,
+                                fr_diag_actual_state_t state);
 fr_err_t fr_native_install(fr_runtime_t *runtime, fr_native_fn_t fn,
                            uint8_t arity,
                            const fr_native_signature_t *signature,

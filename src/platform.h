@@ -141,6 +141,8 @@ void fr_host_event_debug_fail_next_timer_install(void);
 #endif
 
 #if FR_FEATURE_UART
+/* Invalid arguments return DOMAIN. An already-owned port returns BUSY; pin
+ * conflicts in open_on remain DOMAIN until the platform can name the pin. */
 fr_err_t fr_platform_uart_open(uint16_t port, uint32_t baud,
                                uint16_t *out_platform_index);
 fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,

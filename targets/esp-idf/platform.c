@@ -1815,7 +1815,7 @@ fr_err_t fr_platform_uart_open(uint16_t port, uint32_t baud,
   target_port = fr_esp_app_uart_ports[port];
   uart = &fr_esp_app_uarts[port];
   if (uart->in_use) {
-    return FR_ERR_DOMAIN;
+    return FR_ERR_BUSY;
   }
   if (!fr_esp_uart_baud_valid(baud)) {
     return FR_ERR_DOMAIN;
@@ -1825,7 +1825,7 @@ fr_err_t fr_platform_uart_open(uint16_t port, uint32_t baud,
   err = uart_driver_install(target_port, FR_ESP_APP_UART_RX_BYTES,
                             FR_ESP_APP_UART_TX_BYTES, 0, NULL, 0);
   if (err != ESP_OK) {
-    return fr_esp_err(err);
+    return err == ESP_ERR_INVALID_STATE ? FR_ERR_BUSY : fr_esp_err(err);
   }
   err = uart_param_config(target_port, &config);
   if (err == ESP_OK) {
@@ -1882,7 +1882,7 @@ fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
   target_port = fr_esp_app_uart_ports[port];
   uart = &fr_esp_app_uarts[port];
   if (uart->in_use) {
-    return FR_ERR_DOMAIN;
+    return FR_ERR_BUSY;
   }
   if (!fr_esp_uart_baud_valid(baud)) {
     return FR_ERR_DOMAIN;
@@ -1892,7 +1892,7 @@ fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
   err = uart_driver_install(target_port, FR_ESP_APP_UART_RX_BYTES,
                             FR_ESP_APP_UART_TX_BYTES, 0, NULL, 0);
   if (err != ESP_OK) {
-    return fr_esp_err(err);
+    return err == ESP_ERR_INVALID_STATE ? FR_ERR_BUSY : fr_esp_err(err);
   }
   err = uart_param_config(target_port, &config);
   if (err == ESP_OK) {

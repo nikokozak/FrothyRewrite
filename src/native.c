@@ -140,6 +140,18 @@ static bool fr_native_diag_empty(const fr_runtime_t *runtime) {
          runtime->diag->kind == FR_DIAG_NONE;
 }
 
+void fr_native_diag_note_actual(fr_runtime_t *runtime, fr_tagged_t actual,
+                                fr_diag_actual_state_t state) {
+  if (!fr_native_diag_empty(runtime) || state == FR_DIAG_ACTUAL_NONE) {
+    return;
+  }
+
+  runtime->diag->kind = FR_DIAG_NOTE;
+  runtime->diag->got = fr_tagged_diag_value_kind(actual);
+  runtime->diag->actual = actual;
+  runtime->diag->actual_state = state;
+}
+
 static const char *fr_native_diag_context_name(fr_diagnostic_t *diag,
                                                const char *context_name) {
   uint16_t length = 0;

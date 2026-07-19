@@ -1259,7 +1259,7 @@ static void fr_persist_note_unpersistable_slot(const fr_runtime_t *runtime,
   size_t name_length = 0;
 
   if ((err != FR_ERR_UNSUPPORTED && err != FR_ERR_VOLATILE) ||
-      runtime->diag == NULL) {
+      runtime->diag == NULL || runtime->diag->kind != FR_DIAG_NONE) {
     return;
   }
 
@@ -1267,11 +1267,11 @@ static void fr_persist_note_unpersistable_slot(const fr_runtime_t *runtime,
   runtime->diag->message_id = FR_DIAG_MSG_RUNTIME_SLOT_UNPERSISTABLE;
   if (fr_tagged_decode_native_id(value, &native_id) == FR_OK &&
       native_id >= runtime->natives.base_count) {
-    runtime->diag->got = 0;
+    runtime->diag->got = FR_DIAG_UNPERSISTABLE_MISSING_NATIVE;
   } else if (err == FR_ERR_VOLATILE) {
-    runtime->diag->got = 2;
+    runtime->diag->got = FR_DIAG_UNPERSISTABLE_VOLATILE_VALUE;
   } else {
-    runtime->diag->got = 1;
+    runtime->diag->got = FR_DIAG_UNPERSISTABLE_UNSUPPORTED_VALUE;
   }
 
   runtime->diag->context_name = NULL;
@@ -1303,6 +1303,8 @@ static fr_err_t fr_persist_check_no_volatile_handles(
     }
     if (fr_tagged_decode_handle_ref(runtime->slots.current[slot_id],
                                     &handle_ref) == FR_OK) {
+      fr_persist_note_unpersistable_slot(
+          runtime, slot_id, runtime->slots.current[slot_id], FR_ERR_VOLATILE);
       return FR_ERR_VOLATILE;
     }
   }
@@ -1316,6 +1318,8 @@ static fr_err_t fr_persist_check_no_volatile_handles(
     }
     if (fr_tagged_decode_bytes_ref(runtime->slots.current[slot_id],
                                    &bytes_ref) == FR_OK) {
+      fr_persist_note_unpersistable_slot(
+          runtime, slot_id, runtime->slots.current[slot_id], FR_ERR_VOLATILE);
       return FR_ERR_VOLATILE;
     }
   }

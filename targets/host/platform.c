@@ -2867,9 +2867,11 @@ fr_err_t fr_platform_uart_open(uint16_t port, uint32_t baud,
   if (out_platform_index == NULL) {
     return FR_ERR_INVALID;
   }
-  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_baud_valid(baud) ||
-      fr_host_uart_port_in_use(port)) {
+  if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_baud_valid(baud)) {
     return FR_ERR_DOMAIN;
+  }
+  if (fr_host_uart_port_in_use(port)) {
+    return FR_ERR_BUSY;
   }
 
   for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
@@ -2917,8 +2919,7 @@ fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
     return FR_ERR_INVALID;
   }
   if (port > FR_HOST_UART_MAX_PORT || !fr_host_uart_baud_valid(baud) ||
-      fr_host_uart_port_in_use(port) || tx == rx ||
-      fr_host_uart_pin_conflict(tx, rx)) {
+      tx == rx || fr_host_uart_pin_conflict(tx, rx)) {
     return FR_ERR_DOMAIN;
   }
 #if FR_FEATURE_CONSOLE_ROUTING
@@ -2926,6 +2927,9 @@ fr_err_t fr_platform_uart_open_on(uint16_t port, uint16_t tx, uint16_t rx,
     return FR_ERR_DOMAIN;
   }
 #endif
+  if (fr_host_uart_port_in_use(port)) {
+    return FR_ERR_BUSY;
+  }
 
   for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
     fr_host_uart_t *uart = &fr_host_uarts[i];

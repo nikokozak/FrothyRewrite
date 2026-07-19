@@ -16,6 +16,8 @@ enum {
 #if FR_FEATURE_PERSISTENCE
 static fr_err_t fr_native_save(fr_runtime_t *runtime, const fr_tagged_t *args,
                                uint8_t arg_count, fr_tagged_t *out) {
+  fr_err_t err = FR_OK;
+
   if (args == NULL && arg_count > 0) {
     return FR_ERR_INVALID;
   }
@@ -23,7 +25,16 @@ static fr_err_t fr_native_save(fr_runtime_t *runtime, const fr_tagged_t *args,
     return FR_ERR_INVALID;
   }
 
-  FR_TRY(fr_persist_save(runtime));
+  err = fr_persist_save(runtime);
+  if (err == FR_ERR_VOLATILE && runtime != NULL && runtime->diag != NULL) {
+    if (runtime->diag->kind == FR_DIAG_NONE) {
+      runtime->diag->kind = FR_DIAG_NOTE;
+      runtime->diag->message_id = FR_DIAG_MSG_RUNTIME_SLOT_UNPERSISTABLE;
+      runtime->diag->got = FR_DIAG_UNPERSISTABLE_UNSUPPORTED_VALUE;
+    }
+    runtime->diag->presentation = FR_DIAG_PRESENT_NOTICE;
+  }
+  FR_TRY(err);
   *out = fr_tagged_nil();
   return FR_OK;
 }

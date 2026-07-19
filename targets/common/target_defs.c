@@ -248,6 +248,9 @@ static fr_err_t fr_native_uart_open(fr_runtime_t *runtime,
   err = fr_platform_uart_open(port, (uint32_t)baud, &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
+    if (err == FR_ERR_BUSY) {
+      fr_native_diag_note_actual(runtime, args[0], FR_DIAG_ACTUAL_VALUE);
+    }
     return err;
   }
 
@@ -292,6 +295,9 @@ static fr_err_t fr_native_uart_open_on(fr_runtime_t *runtime,
                                  &platform_index);
   if (err != FR_OK) {
     (void)fr_handle_release_reserved(runtime, ref);
+    if (err == FR_ERR_BUSY) {
+      fr_native_diag_note_actual(runtime, args[0], FR_DIAG_ACTUAL_VALUE);
+    }
     return err;
   }
 

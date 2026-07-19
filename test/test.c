@@ -2929,6 +2929,42 @@ static void test_uart(void) {
             fr_repl_eval_line(&runtime, "uart.write-byte: appuart, 65", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
+#if FR_FEATURE_PERSISTENCE
+  CHECK("bare save reports volatile state as a notice",
+        fr_repl_eval_line(&runtime, "save", out, sizeof(out)) ==
+                FR_ERR_VOLATILE &&
+            strcmp(out,
+                   "notice: not saved (13)\n"
+                   "detail: cannot save slot 'appuart' - bound to a live "
+                   "handle or buffer\n"
+                   "ok\n") == 0);
+  CHECK("top-level save call reports volatile state as a notice",
+        fr_repl_eval_line(&runtime, "save:", out, sizeof(out)) ==
+                FR_ERR_VOLATILE &&
+            strcmp(out,
+                   "notice: not saved (13)\n"
+                   "detail: cannot save slot 'appuart' - bound to a live "
+                   "handle or buffer\n"
+                   "ok\n") == 0);
+  CHECK("programming continues after a save notice",
+        fr_repl_eval_line(&runtime, "2 + 2", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "4\nok\n") == 0);
+  CHECK("nested save remains an error and aborts its form",
+        fr_repl_eval_line(&runtime,
+                          "save-more is fn [ save: ; 9 ]", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "save-more:", out, sizeof(out)) ==
+                FR_ERR_VOLATILE &&
+            strcmp(out,
+                   "error: not saved (13)\n"
+                   "detail: cannot save slot 'appuart' - bound to a live "
+                   "handle or buffer\n") == 0);
+  CHECK("caught save keeps code 13 and emits no notice",
+        fr_repl_eval_line(&runtime,
+                          "attempt [ save: ] rescue [ error.code ]", out,
+                          sizeof(out)) == FR_OK &&
+            strcmp(out, "13\nok\n") == 0);
+#endif
   CHECK("uart repl close invalidates bound handle",
         fr_repl_eval_line(&runtime, "uart.close: appuart", out, sizeof(out)) ==
                 FR_OK &&
@@ -3006,7 +3042,11 @@ static void test_uart(void) {
             kind == FR_HANDLE_KIND_UART);
   CHECK("uart rejects double open on same port",
         test_uart_open_call(&runtime, open_entry, 0, FR_UART_BAUD_9600,
-                            &second_handle) == FR_ERR_DOMAIN);
+                            &second_handle) == FR_ERR_BUSY);
+  CHECK("uart busy report includes the occupied port",
+        fr_repl_eval_line(&runtime, "uart.open: 0, 9600", out, sizeof(out)) ==
+                FR_ERR_BUSY &&
+            strcmp(out, "error: busy: 0 (25)\n") == 0);
   CHECK("uart available starts with host script",
         test_uart_one_handle_call(&runtime, available_entry, handle, &result) ==
                 FR_OK &&
@@ -14772,11 +14812,13 @@ static void test_err_name(void) {
       {FR_ERR_BLE_NOT_READY, "ble not ready"},
       {FR_ERR_BLE_BUSY, "ble busy"},
       {FR_ERR_BLE_TIMEOUT, "ble timed out"},
+      {FR_ERR_BUSY, "busy"},
   };
 
   CHECK("ble errors keep their serial ids",
         FR_ERR_BLE_NOT_READY == 21 && FR_ERR_BLE_BUSY == 22 &&
-            FR_ERR_BLE_TIMEOUT == 23);
+            FR_ERR_BLE_TIMEOUT == 23 && FR_ERR_BLE_DISCONNECTED == 24 &&
+            FR_ERR_BUSY == 25);
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
     const char *got = fr_err_name(cases[i].err);
     if (cases[i].name == NULL) {

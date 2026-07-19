@@ -587,6 +587,25 @@ test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 		printf '%s\nmissing recovery command output\n' "$$err_out"; \
 		exit 1; \
 	fi; \
+	notice_out=$$(printf '%s\n' \
+		'appuart is uart.open: 0, 9600' \
+		'uart.open: 0, 9600' \
+		'save' \
+		'2 + 2' \
+		| build/host/frothy-host-normal); \
+	notice_expected=$$(printf '%s\n' \
+		'> error: busy: 0 (25)' \
+		'> notice: not saved (13)' \
+		"detail: cannot save slot 'appuart' - bound to a live handle or buffer" \
+		'ok' \
+		'> 4' \
+		'ok'); \
+	notice_out_flat=$$(printf '%s\n' "$$notice_out" | tr '\n' '|'); \
+	notice_expected_flat=$$(printf '%s\n' "$$notice_expected" | tr '\n' '|'); \
+	if ! printf '%s\n' "$$notice_out_flat" | grep -qF "$$notice_expected_flat"; then \
+		printf '%s\nmissing contiguous error-notice transcript:\n%s\n' "$$notice_out" "$$notice_expected"; \
+		exit 1; \
+	fi; \
 	printf 'host_normal transcript ok\n'
 
 host-normal-events:

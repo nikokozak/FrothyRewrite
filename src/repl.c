@@ -1120,6 +1120,7 @@ static fr_err_t fr_repl_append_runtime_context_line(
     return FR_OK;
   case FR_DIAG_MSG_RUNTIME_SLOT_UNPERSISTABLE:
     *out_wrote = true;
+    FR_TRY(fr_repl_append(out, out_cap, used, "detail: "));
     if (diag->context_name != NULL) {
       FR_TRY(fr_repl_append(out, out_cap, used, "cannot save slot '"));
       FR_TRY(fr_repl_append(out, out_cap, used, diag->context_name));
@@ -1128,13 +1129,13 @@ static fr_err_t fr_repl_append_runtime_context_line(
       FR_TRY(fr_repl_append(out, out_cap, used, "cannot save - "));
     }
     switch (diag->got) {
-    case 0:
+    case FR_DIAG_UNPERSISTABLE_MISSING_NATIVE:
       message = "bound to a word this firmware does not provide";
       break;
-    case 2:
+    case FR_DIAG_UNPERSISTABLE_VOLATILE_VALUE:
       message = "bound to a live handle or buffer";
       break;
-    case 1:
+    case FR_DIAG_UNPERSISTABLE_UNSUPPORTED_VALUE:
     default:
       message = "bound to a value this firmware cannot save";
       break;
@@ -1180,16 +1181,24 @@ static fr_err_t fr_repl_append_error_suffix(char *out, uint16_t out_cap,
   return fr_repl_append(out, out_cap, used, ")\n");
 }
 
+static bool fr_repl_diag_is_notice(fr_err_t err, const fr_diagnostic_t *diag,
+                                   bool notice_allowed) {
+  return err == FR_ERR_VOLATILE && notice_allowed && diag != NULL &&
+         diag->presentation == FR_DIAG_PRESENT_NOTICE;
+}
+
 static fr_err_t fr_repl_write_error(fr_runtime_t *runtime, char *out,
                                     uint16_t out_cap, fr_err_t err,
                                     const char *line,
-                                    const fr_diagnostic_t *diag) {
+                                    const fr_diagnostic_t *diag,
+                                    bool notice_allowed) {
   const char *name = fr_err_name(err);
   const char *message = NULL;
   uint16_t used = 0;
   uint16_t base_used = 0;
   uint16_t name_used = 0;
   bool source_visible = line == NULL;
+  bool notice = fr_repl_diag_is_notice(err, diag, notice_allowed);
 
   if (out == NULL || out_cap == 0) {
     return FR_ERR_INVALID;
@@ -1199,7 +1208,8 @@ static fr_err_t fr_repl_write_error(fr_runtime_t *runtime, char *out,
     FR_TRY(fr_repl_append_u16(out, out_cap, &used, (uint16_t)err));
     return fr_repl_append(out, out_cap, &used, "\n");
   }
-  FR_TRY(fr_repl_append(out, out_cap, &used, "error: "));
+  FR_TRY(fr_repl_append(out, out_cap, &used,
+                        notice ? "notice: " : "error: "));
   FR_TRY(fr_repl_append(out, out_cap, &used, name));
   name_used = used;
   if (diag != NULL && diag->actual_state != FR_DIAG_ACTUAL_NONE) {
@@ -1330,7 +1340,7 @@ static void fr_repl_write_startup_error(fr_err_t err) {
   char response[FR_REPL_OUTPUT_BYTES];
 
   if (fr_repl_write_error(NULL, response, (uint16_t)sizeof(response), err,
-                          NULL, NULL) == FR_OK) {
+                          NULL, NULL, false) == FR_OK) {
     (void)fr_platform_write_text(response);
   }
 }
@@ -2064,7 +2074,8 @@ static fr_err_t fr_repl_zero_arg_call_slot(fr_runtime_t *runtime,
 static fr_err_t fr_repl_eval_zero_arg_call(fr_runtime_t *runtime,
                                            const char *line,
                                            fr_tagged_t *out,
-                                           bool *out_matched) {
+                                           bool *out_matched,
+                                           bool *out_ran_command) {
   const fr_native_entry_t *entry = NULL;
   fr_code_object_id_t code_object_id = 0;
   fr_native_id_t native_id = 0;
@@ -2072,10 +2083,11 @@ static fr_err_t fr_repl_eval_zero_arg_call(fr_runtime_t *runtime,
   fr_tagged_t tagged = 0;
   fr_err_t err = FR_OK;
 
-  if (out_matched == NULL) {
+  if (out_matched == NULL || out_ran_command == NULL) {
     return FR_ERR_INVALID;
   }
   *out_matched = false;
+  *out_ran_command = false;
 
   err = fr_repl_zero_arg_call_slot(runtime, line, &slot_id);
   if (err == FR_ERR_NOT_FOUND) {
@@ -2102,6 +2114,7 @@ static fr_err_t fr_repl_eval_zero_arg_call(fr_runtime_t *runtime,
   if (entry->arity != 0) {
     return FR_ERR_INVALID;
   }
+  *out_ran_command = true;
   return fr_native_call(runtime, entry, NULL, 0, out);
 }
 
@@ -2190,15 +2203,19 @@ fr_repl_eval_value_binding(fr_runtime_t *runtime,
 static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
                                                   const char *line,
                                                   const fr_repl_writer_t *writer,
-                                                  fr_diagnostic_t *diag) {
+                                                  fr_diagnostic_t *diag,
+                                                  bool *out_notice_allowed) {
   fr_repl_command_t command = {0};
   fr_tagged_t result = 0;
+  fr_err_t err = FR_OK;
   bool matched = false;
   bool ran_command = false;
 
-  if (runtime == NULL || line == NULL || writer == NULL) {
+  if (runtime == NULL || line == NULL || writer == NULL ||
+      out_notice_allowed == NULL) {
     return FR_ERR_INVALID;
   }
+  *out_notice_allowed = false;
 
   fr_runtime_clear_interrupt(runtime);
 
@@ -2283,19 +2300,26 @@ static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
     return fr_repl_write_mem(runtime, command.arg, command.arg_len, writer);
   }
 
-  FR_TRY(fr_repl_eval_zero_arg_call(runtime, line, &result, &matched));
+  err = fr_repl_eval_zero_arg_call(runtime, line, &result, &matched,
+                                   &ran_command);
   if (matched) {
+    *out_notice_allowed = ran_command;
+    FR_TRY(err);
     return fr_repl_writer_write_eval_response(writer, runtime, result);
   }
+  FR_TRY(err);
 
-  FR_TRY(fr_repl_eval_bare_word(runtime, line, &result, &matched,
-                                &ran_command));
+  err = fr_repl_eval_bare_word(runtime, line, &result, &matched,
+                               &ran_command);
   if (matched) {
+    *out_notice_allowed = ran_command;
+    FR_TRY(err);
     if (ran_command) {
       return fr_repl_writer_write(writer, "ok\n");
     }
     return fr_repl_writer_write_tagged_response(writer, runtime, result);
   }
+  FR_TRY(err);
 
 #if FR_FEATURE_COMPILER
   {
@@ -2385,6 +2409,7 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
   fr_diagnostic_t *previous_diag = NULL;
   fr_err_t err = FR_OK;
   fr_err_t report_err = FR_OK;
+  bool notice_allowed = false;
 
   if (runtime == NULL || out_reported == NULL) {
     return FR_ERR_INVALID;
@@ -2395,15 +2420,20 @@ static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
   }
   previous_diag = runtime->diag;
   runtime->diag = diag;
-  err = fr_repl_eval_line_to_writer_inner(runtime, line, writer, diag);
+  err = fr_repl_eval_line_to_writer_inner(runtime, line, writer, diag,
+                                           &notice_allowed);
   if (err != FR_OK && err != FR_ERR_INTERRUPTED) {
     char response[FR_REPL_OUTPUT_BYTES];
 
     report_err = fr_repl_write_error(runtime, response,
                                      (uint16_t)sizeof(response), err, line,
-                                     diag);
+                                     diag, notice_allowed);
     if (report_err == FR_OK) {
       report_err = fr_repl_writer_write(writer, response);
+    }
+    if (report_err == FR_OK &&
+        fr_repl_diag_is_notice(err, diag, notice_allowed)) {
+      report_err = fr_repl_writer_write(writer, "ok\n");
     }
     if (report_err == FR_OK) {
       *out_reported = true;
@@ -2459,7 +2489,7 @@ static fr_err_t fr_repl_service_events(void *ctx) {
   if (err != FR_OK && err != FR_ERR_INTERRUPTED) {
     char response[FR_REPL_OUTPUT_BYTES];
     if (fr_repl_write_error(runtime, response, (uint16_t)sizeof(response), err,
-                            NULL, NULL) == FR_OK) {
+                            NULL, NULL, false) == FR_OK) {
       (void)fr_platform_write_text("! ");
       (void)fr_platform_write_text(response);
     }
@@ -2510,7 +2540,7 @@ fr_err_t fr_repl_run(fr_runtime_t *runtime, const fr_repl_io_t *io) {
 
       FR_TRY(fr_repl_write_error(runtime, response,
                                  (uint16_t)sizeof(response), err, line,
-                                 &diag));
+                                 &diag, false));
       FR_TRY(io->write_text(response));
     }
   }

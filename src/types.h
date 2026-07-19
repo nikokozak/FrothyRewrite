@@ -33,6 +33,7 @@ typedef enum fr_err_t {
   FR_ERR_BLE_BUSY,
   FR_ERR_BLE_TIMEOUT,
   FR_ERR_BLE_DISCONNECTED,
+  FR_ERR_BUSY,
 } fr_err_t;
 
 const char *fr_err_name(fr_err_t err);
@@ -129,6 +130,18 @@ typedef enum fr_diag_actual_state_t {
   FR_DIAG_ACTUAL_REDACTED,
 } fr_diag_actual_state_t;
 
+typedef uint8_t fr_diag_presentation_t;
+enum {
+  FR_DIAG_PRESENT_ERROR = 0,
+  FR_DIAG_PRESENT_NOTICE,
+};
+
+typedef enum fr_diag_unpersistable_reason_t {
+  FR_DIAG_UNPERSISTABLE_MISSING_NATIVE = 0,
+  FR_DIAG_UNPERSISTABLE_UNSUPPORTED_VALUE,
+  FR_DIAG_UNPERSISTABLE_VOLATILE_VALUE,
+} fr_diag_unpersistable_reason_t;
+
 typedef struct fr_diagnostic_t {
   fr_diag_kind_t kind;
   const char *span_start;
@@ -139,6 +152,7 @@ typedef struct fr_diagnostic_t {
   uint32_t actual;
   fr_diag_actual_state_t actual_state;
   uint16_t index;
+  fr_diag_presentation_t presentation;
   /* May point into suggestion_text; do not copy a populated diagnostic. */
   const char *context_name;
   const char *suggestion_start;
