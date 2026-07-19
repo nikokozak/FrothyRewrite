@@ -1281,7 +1281,15 @@ static void fr_persist_note_unpersistable_slot(const fr_runtime_t *runtime,
   }
   while (name[name_length] != '\0' &&
          name_length + 1u < sizeof(runtime->diag->suggestion_text)) {
+    uint8_t byte = (uint8_t)name[name_length];
+
+    if (byte < 0x20u || byte > 0x7eu || byte == '\'') {
+      return;
+    }
     name_length++;
+  }
+  if (name[name_length] != '\0') {
+    return;
   }
   memcpy(runtime->diag->suggestion_text, name, name_length);
   runtime->diag->suggestion_text[name_length] = '\0';

@@ -89,6 +89,8 @@ typedef enum fr_diag_message_id_t {
   FR_DIAG_MSG_RUNTIME_INTEGER_OVERFLOW,
   FR_DIAG_MSG_RUNTIME_SLOT_UNPERSISTABLE,
   FR_DIAG_MSG_RUNTIME_REJECTED_ARGUMENT,
+  FR_DIAG_MSG_RUNTIME_RECORD_FIELD_NOT_FOUND,
+  FR_DIAG_MSG_RUNTIME_VALUE_NOT_STORABLE,
 } fr_diag_message_id_t;
 
 const char *fr_diag_message(uint16_t message_id);
@@ -121,6 +123,9 @@ typedef enum fr_diag_value_kind_t {
   FR_DIAG_VALUE_ANY,
   FR_DIAG_VALUE_TEXT,
   FR_DIAG_VALUE_TEXT_OR_BYTES,
+  FR_DIAG_VALUE_CELLS,
+  FR_DIAG_VALUE_RECORD,
+  FR_DIAG_VALUE_RECORD_SHAPE,
 } fr_diag_value_kind_t;
 
 const char *fr_diag_value_kind_name(uint16_t value_kind);

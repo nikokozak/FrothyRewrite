@@ -25,6 +25,9 @@ static fr_err_t fr_native_save(fr_runtime_t *runtime, const fr_tagged_t *args,
     return FR_ERR_INVALID;
   }
 
+  if (runtime != NULL && runtime->diag != NULL) {
+    *runtime->diag = (fr_diagnostic_t){0};
+  }
   err = fr_persist_save(runtime);
   if (err == FR_ERR_VOLATILE && runtime != NULL && runtime->diag != NULL) {
     if (runtime->diag->kind == FR_DIAG_NONE) {
@@ -48,6 +51,9 @@ static fr_err_t fr_native_restore(fr_runtime_t *runtime, const fr_tagged_t *args
     return FR_ERR_INVALID;
   }
 
+  if (runtime != NULL && runtime->diag != NULL) {
+    *runtime->diag = (fr_diagnostic_t){0};
+  }
   FR_TRY(fr_persist_restore(runtime));
   *out = fr_tagged_nil();
   return FR_OK;
@@ -62,6 +68,9 @@ static fr_err_t fr_native_wipe(fr_runtime_t *runtime, const fr_tagged_t *args,
     return FR_ERR_INVALID;
   }
 
+  if (runtime != NULL && runtime->diag != NULL) {
+    *runtime->diag = (fr_diagnostic_t){0};
+  }
   FR_TRY(fr_persist_wipe(runtime));
   *out = fr_tagged_nil();
   return FR_OK;

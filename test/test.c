@@ -926,8 +926,9 @@ static void test_persist_mmap_event_body_survives_remount(void) {
 }
 #endif
 
-#if FR_FEATURE_COMPILER && FR_FEATURE_PERSISTENCE && FR_BASE_IMAGE_INCLUDE_SYMBOLS && \
-    FR_HOST_TEST_HELPERS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+#if FR_FEATURE_COMPILER && FR_FEATURE_PERSISTENCE &&                         \
+    FR_BASE_IMAGE_INCLUDE_SYMBOLS && FR_HOST_TEST_HELPERS &&                 \
+    FR_PROFILE_MAX_OVERLAY_NAMES >= 6
 static void test_persist_fake_non_xip_code_reader(void) {
   fr_runtime_t saved;
   fr_runtime_t direct;
@@ -949,6 +950,20 @@ static void test_persist_fake_non_xip_code_reader(void) {
   char fake_top[64];
   char fake_depth[64];
   char fake_safe[64];
+#if FR_PROFILE_MAX_OVERLAY_NAMES >= 14
+  char direct_division[64];
+  char direct_repeat[64];
+  char fake_division[64];
+  char fake_repeat[64];
+#if FR_FEATURE_CELLS
+  char direct_cell[128];
+  char fake_cell[128];
+#endif
+#if FR_FEATURE_RECORDS
+  char direct_field[128];
+  char fake_field[128];
+#endif
+#endif
 
   fr_platform_persist_clear();
   CHECK("nonxip reader base", fr_base_image_install(&saved) == FR_OK);
@@ -979,6 +994,36 @@ static void test_persist_fake_non_xip_code_reader(void) {
             &saved, "safe-div is fn [ attempt [ 2 / 0 ] rescue [ 9 ] ]",
             out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
+#if FR_PROFILE_MAX_OVERLAY_NAMES >= 14
+  CHECK("nonxip reader numeric rejection words",
+        fr_repl_eval_line(&saved, "reader-count is -1", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(
+                &saved,
+                "bad-repeat is fn [ repeat reader-count [ 1 ] ]", out,
+                sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&saved, "bad-div is fn [ 2 / 0 ]", out,
+                              sizeof(out)) == FR_OK);
+#if FR_FEATURE_CELLS
+  CHECK("nonxip reader cell rejection words",
+        fr_repl_eval_line(&saved, "reader-cell is cells(1)", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&saved,
+                              "bad-cell is fn [ reader-cell[9] ]", out,
+                              sizeof(out)) == FR_OK);
+#endif
+#if FR_FEATURE_RECORDS
+  CHECK("nonxip reader missing-field word",
+        fr_repl_eval_line(&saved, "record ReaderPoint [ x ]", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&saved,
+                              "reader-point is ReaderPoint: 1", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&saved,
+                              "bad-field is fn [ reader-point->z ]", out,
+                              sizeof(out)) == FR_OK);
+#endif
+#endif
   CHECK("nonxip reader save", fr_persist_save(&saved) == FR_OK);
 
   fr_host_persist_debug_direct_code_pointers(true);
@@ -997,6 +1042,31 @@ static void test_persist_fake_non_xip_code_reader(void) {
         fr_repl_eval_line(&direct, "safe-div:", direct_safe,
                           (uint16_t)sizeof(direct_safe)) == FR_OK &&
             strcmp(direct_safe, "9\nok\n") == 0);
+#if FR_PROFILE_MAX_OVERLAY_NAMES >= 14
+  CHECK("nonxip direct numeric rejected values",
+        fr_repl_eval_line(&direct, "bad-div:", direct_division,
+                          (uint16_t)sizeof(direct_division)) == FR_ERR_DOMAIN &&
+            strcmp(direct_division, "error: bad value: 0 (3)\n") == 0 &&
+            fr_repl_eval_line(&direct, "bad-repeat:", direct_repeat,
+                              (uint16_t)sizeof(direct_repeat)) == FR_ERR_RANGE &&
+            strcmp(direct_repeat, "error: out of range: -1 (1)\n") == 0);
+#if FR_FEATURE_CELLS
+  CHECK("nonxip direct rejected cell index",
+        fr_repl_eval_line(&direct, "bad-cell:", direct_cell,
+                          (uint16_t)sizeof(direct_cell)) == FR_ERR_RANGE &&
+            strcmp(direct_cell,
+                   "error: out of range: 9 (1)\n"
+                   "cell index 9 is past the end (length 1)\n") == 0);
+#endif
+#if FR_FEATURE_RECORDS
+  CHECK("nonxip direct missing field",
+        fr_repl_eval_line(&direct, "bad-field:", direct_field,
+                          (uint16_t)sizeof(direct_field)) == FR_ERR_NOT_FOUND &&
+            strcmp(direct_field,
+                   "error: not found (7)\n"
+                   "detail: record has no field 'z'\n") == 0);
+#endif
+#endif
 
   fr_host_persist_debug_direct_code_pointers(false);
   CHECK("nonxip fake restore",
@@ -1020,9 +1090,39 @@ static void test_persist_fake_non_xip_code_reader(void) {
         fr_repl_eval_line(&fake, "safe-div:", fake_safe,
                           (uint16_t)sizeof(fake_safe)) == FR_OK &&
             strcmp(fake_safe, "9\nok\n") == 0);
+#if FR_PROFILE_MAX_OVERLAY_NAMES >= 14
+  CHECK("nonxip fake numeric rejected values",
+        fr_repl_eval_line(&fake, "bad-div:", fake_division,
+                          (uint16_t)sizeof(fake_division)) == FR_ERR_DOMAIN &&
+            fr_repl_eval_line(&fake, "bad-repeat:", fake_repeat,
+                              (uint16_t)sizeof(fake_repeat)) == FR_ERR_RANGE);
+#if FR_FEATURE_CELLS
+  CHECK("nonxip fake rejected cell index",
+        fr_repl_eval_line(&fake, "bad-cell:", fake_cell,
+                          (uint16_t)sizeof(fake_cell)) == FR_ERR_RANGE);
+#endif
+#if FR_FEATURE_RECORDS
+  CHECK("nonxip fake missing field",
+        fr_repl_eval_line(&fake, "bad-field:", fake_field,
+                          (uint16_t)sizeof(fake_field)) == FR_ERR_NOT_FOUND);
+#endif
+#endif
   CHECK("nonxip parity top", strcmp(direct_top, fake_top) == 0);
   CHECK("nonxip parity depth", strcmp(direct_depth, fake_depth) == 0);
   CHECK("nonxip parity attempt", strcmp(direct_safe, fake_safe) == 0);
+#if FR_PROFILE_MAX_OVERLAY_NAMES >= 14
+  CHECK("nonxip parity numeric rejected values",
+        strcmp(direct_division, fake_division) == 0 &&
+            strcmp(direct_repeat, fake_repeat) == 0);
+#if FR_FEATURE_CELLS
+  CHECK("nonxip parity rejected cell index",
+        strcmp(direct_cell, fake_cell) == 0);
+#endif
+#if FR_FEATURE_RECORDS
+  CHECK("nonxip parity missing field",
+        strcmp(direct_field, fake_field) == 0);
+#endif
+#endif
   CHECK("nonxip direct depth code id",
         fr_slot_id_for_name(&direct, "depth", &direct_depth_slot) == FR_OK &&
             fr_slot_read(&direct, direct_depth_slot, &tagged) == FR_OK &&
@@ -1061,8 +1161,162 @@ static void test_persist_fake_non_xip_code_reader(void) {
 }
 #endif
 
+#if FR_FEATURE_COMPILER && FR_FEATURE_PERSISTENCE &&                         \
+    FR_BASE_IMAGE_INCLUDE_SYMBOLS && FR_HOST_TEST_HELPERS &&                 \
+    FR_PROFILE_MAX_OVERLAY_NAMES >= 11 && FR_FEATURE_CELLS &&               \
+    FR_FEATURE_RECORDS && FR_FEATURE_BYTES
+static void test_persist_fake_non_xip_store_diagnostics(void) {
+  fr_runtime_t saved;
+  fr_runtime_t direct;
+  fr_runtime_t fake;
+  fr_slot_id_t slot_id = 0;
+  fr_tagged_t tagged = 0;
+  fr_code_object_id_t code_id = 0;
+  fr_instruction_stream_t view;
+  char out[256];
+  char direct_store_cell[128];
+  char direct_store_cell_dynamic[128];
+  char direct_cell_value[160];
+  char direct_store_field[128];
+  char direct_field_value[160];
+  char direct_store_slot[128];
+  char fake_store_cell[128];
+  char fake_store_cell_dynamic[128];
+  char fake_cell_value[160];
+  char fake_store_field[128];
+  char fake_field_value[160];
+  char fake_store_slot[128];
+
+  fr_platform_persist_clear();
+  CHECK("nonxip store base", fr_base_image_install(&saved) == FR_OK);
+  CHECK("nonxip store fixtures",
+        fr_repl_eval_line(&saved, "reader-cell is cells(1)", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&saved, "reader-index is 9", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&saved, "record ReaderPoint [ x ]", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&saved, "reader-point is ReaderPoint: 1", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&saved, "reader-slot is 1", out, sizeof(out)) ==
+                FR_OK);
+  CHECK("nonxip store words",
+        fr_repl_eval_line(
+            &saved, "bad-store-cell is fn [ set reader-cell[9] to 1 ]", out,
+            sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(
+                &saved,
+                "bad-store-dynamic-cell is fn [ set "
+                "reader-cell[reader-index] to 1 ]",
+                out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(
+                &saved,
+                "bad-cell-value is fn [ set reader-cell[0] to reader-cell ]",
+                out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(
+                &saved,
+                "bad-store-field is fn [ set reader-point->z to 1 ]", out,
+                sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(
+                &saved,
+                "bad-field-value is fn [ set reader-point->x to reader-cell ]",
+                out, sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(
+                &saved,
+                "bad-store-slot is fn [ set reader-slot to "
+                "bytes.from-text: \"hi\" ]",
+                out, sizeof(out)) == FR_OK);
+  CHECK("nonxip store save", fr_persist_save(&saved) == FR_OK);
+
+  fr_host_persist_debug_direct_code_pointers(true);
+  CHECK("nonxip store direct restore",
+        fr_base_image_install(&direct) == FR_OK &&
+            fr_persist_restore(&direct) == FR_OK);
+  CHECK("nonxip direct store diagnostics",
+        fr_repl_eval_line(&direct, "bad-store-cell:", direct_store_cell,
+                          (uint16_t)sizeof(direct_store_cell)) ==
+                FR_ERR_RANGE &&
+            strcmp(direct_store_cell,
+                   "error: out of range: 9 (1)\n"
+                   "cell index 9 is past the end (length 1)\n") == 0 &&
+            fr_repl_eval_line(&direct, "bad-store-dynamic-cell:",
+                              direct_store_cell_dynamic,
+                              (uint16_t)sizeof(direct_store_cell_dynamic)) ==
+                FR_ERR_RANGE &&
+            strcmp(direct_store_cell_dynamic, direct_store_cell) == 0 &&
+            fr_repl_eval_line(&direct, "bad-cell-value:", direct_cell_value,
+                              (uint16_t)sizeof(direct_cell_value)) ==
+                FR_ERR_TYPE &&
+            strcmp(direct_cell_value,
+                   "error: wrong type: cells 1 (2)\n"
+                   "detail: value cannot be stored in cells\n") == 0 &&
+            fr_repl_eval_line(&direct, "bad-store-field:",
+                              direct_store_field,
+                              (uint16_t)sizeof(direct_store_field)) ==
+                FR_ERR_NOT_FOUND &&
+            strcmp(direct_store_field,
+                   "error: not found (7)\n"
+                   "detail: record has no field 'z'\n") == 0 &&
+            fr_repl_eval_line(&direct, "bad-field-value:", direct_field_value,
+                              (uint16_t)sizeof(direct_field_value)) ==
+                FR_ERR_TYPE &&
+            strcmp(direct_field_value,
+                   "error: wrong type: cells 1 (2)\n"
+                   "detail: value cannot be stored in record fields\n") == 0 &&
+            fr_repl_eval_line(&direct, "bad-store-slot:", direct_store_slot,
+                              (uint16_t)sizeof(direct_store_slot)) ==
+                FR_ERR_VOLATILE &&
+            strcmp(direct_store_slot,
+                   "error: not saved: bytes 2 (13)\n"
+                   "detail: value cannot be stored in a slot\n") == 0);
+
+  fr_host_persist_debug_direct_code_pointers(false);
+  CHECK("nonxip store fake restore",
+        fr_base_image_install(&fake) == FR_OK &&
+            fr_persist_restore(&fake) == FR_OK);
+  CHECK("nonxip store fake has no direct code pointer",
+        fr_slot_id_for_name(&fake, "bad-store-cell", &slot_id) == FR_OK &&
+            fr_slot_read(&fake, slot_id, &tagged) == FR_OK &&
+            fr_tagged_decode_code_object_id(tagged, &code_id) == FR_OK &&
+            fr_code_get_instructions(&fake, code_id, &view) == FR_OK &&
+            view.bytes == NULL && view.length > 0);
+  CHECK("nonxip fake store diagnostics",
+        fr_repl_eval_line(&fake, "bad-store-cell:", fake_store_cell,
+                          (uint16_t)sizeof(fake_store_cell)) == FR_ERR_RANGE &&
+            fr_repl_eval_line(&fake, "bad-store-dynamic-cell:",
+                              fake_store_cell_dynamic,
+                              (uint16_t)sizeof(fake_store_cell_dynamic)) ==
+                FR_ERR_RANGE &&
+            fr_repl_eval_line(&fake, "bad-cell-value:", fake_cell_value,
+                              (uint16_t)sizeof(fake_cell_value)) ==
+                FR_ERR_TYPE &&
+            fr_repl_eval_line(&fake, "bad-store-field:", fake_store_field,
+                              (uint16_t)sizeof(fake_store_field)) ==
+                FR_ERR_NOT_FOUND &&
+            fr_repl_eval_line(&fake, "bad-field-value:", fake_field_value,
+                              (uint16_t)sizeof(fake_field_value)) ==
+                FR_ERR_TYPE &&
+            fr_repl_eval_line(&fake, "bad-store-slot:", fake_store_slot,
+                              (uint16_t)sizeof(fake_store_slot)) ==
+                FR_ERR_VOLATILE);
+  CHECK("nonxip store diagnostic parity",
+        strcmp(direct_store_cell, fake_store_cell) == 0 &&
+            strcmp(direct_store_cell_dynamic, fake_store_cell_dynamic) == 0 &&
+            strcmp(direct_cell_value, fake_cell_value) == 0 &&
+            strcmp(direct_store_field, fake_store_field) == 0 &&
+            strcmp(direct_field_value, fake_field_value) == 0 &&
+            strcmp(direct_store_slot, fake_store_slot) == 0);
+  fr_host_persist_debug_direct_code_pointers(true);
+}
+#endif
+
 static void test_persist_repl_contract_proof(void) {
   fr_runtime_t runtime;
+  const fr_native_entry_t *entry = NULL;
+  fr_diagnostic_t diag = {0};
+  fr_tagged_t native = 0;
+  fr_tagged_t result = 0;
+  fr_native_id_t native_id = 0;
   char out[128];
 
   fr_platform_persist_clear();
@@ -1114,6 +1368,29 @@ static void test_persist_repl_contract_proof(void) {
             fr_repl_eval_line(&runtime, "answer", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "3\nok\n") == 0);
+  diag.kind = FR_DIAG_TYPE;
+  diag.presentation = FR_DIAG_PRESENT_NOTICE;
+  diag.context_name = "stale";
+  runtime.diag = &diag;
+  CHECK("restore clears caller-owned stale diagnostics",
+        fr_slot_read(&runtime, FR_SLOT_RESTORE, &native) == FR_OK &&
+            fr_tagged_decode_native_id(native, &native_id) == FR_OK &&
+            fr_native_get(&runtime, native_id, &entry) == FR_OK &&
+            fr_native_call(&runtime, entry, NULL, 0, &result) == FR_OK &&
+            diag.kind == FR_DIAG_NONE && diag.context_name == NULL &&
+            diag.presentation == FR_DIAG_PRESENT_ERROR);
+  diag = (fr_diagnostic_t){.kind = FR_DIAG_TYPE,
+                           .presentation = FR_DIAG_PRESENT_NOTICE,
+                           .context_name = "stale"};
+  runtime.diag = &diag;
+  CHECK("wipe clears caller-owned stale diagnostics",
+        fr_slot_read(&runtime, FR_SLOT_WIPE, &native) == FR_OK &&
+            fr_tagged_decode_native_id(native, &native_id) == FR_OK &&
+            fr_native_get(&runtime, native_id, &entry) == FR_OK &&
+            fr_native_call(&runtime, entry, NULL, 0, &result) == FR_OK &&
+            diag.kind == FR_DIAG_NONE && diag.context_name == NULL &&
+            diag.presentation == FR_DIAG_PRESENT_ERROR);
+  runtime.diag = NULL;
 }
 
 static void test_persist_round_trip_payload_identity(void) {
@@ -2857,6 +3134,12 @@ static void test_uart(void) {
   fr_int_t decoded = 0;
   char out[128];
 #if FR_FEATURE_PERSISTENCE
+  const fr_native_entry_t *save_entry = NULL;
+  fr_diagnostic_t save_diag = {0};
+  fr_tagged_t save_result = 0;
+  fr_tagged_t unsafe_name_handle = 0;
+  fr_slot_id_t appuart_slot_id = 0;
+  fr_slot_id_t unsafe_name_slot_id = 0;
   char compact_notice_out[27];
   char short_notice_out[26];
 #endif
@@ -2934,6 +3217,21 @@ static void test_uart(void) {
                               sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
 #if FR_FEATURE_PERSISTENCE
+  save_diag.kind = FR_DIAG_TYPE;
+  save_diag.presentation = FR_DIAG_PRESENT_ERROR;
+  save_diag.context_name = "stale";
+  runtime.diag = &save_diag;
+  CHECK("save replaces stale diagnostics before marking its notice",
+        test_uart_entry(&runtime, FR_SLOT_SAVE, &save_entry) == FR_OK &&
+            fr_native_call(&runtime, save_entry, NULL, 0, &save_result) ==
+                FR_ERR_VOLATILE &&
+            save_diag.kind == FR_DIAG_LIMIT &&
+            save_diag.message_id == FR_DIAG_MSG_RUNTIME_SLOT_UNPERSISTABLE &&
+            save_diag.got == FR_DIAG_UNPERSISTABLE_VOLATILE_VALUE &&
+            save_diag.presentation == FR_DIAG_PRESENT_NOTICE &&
+            save_diag.context_name != NULL &&
+            strcmp(save_diag.context_name, "appuart") == 0);
+  runtime.diag = NULL;
   CHECK("bare save reports volatile state as a notice",
         fr_repl_eval_line(&runtime, "save", out, sizeof(out)) ==
                 FR_ERR_VOLATILE &&
@@ -2963,6 +3261,28 @@ static void test_uart(void) {
   CHECK("programming continues after a save notice",
         fr_repl_eval_line(&runtime, "2 + 2", out, sizeof(out)) == FR_OK &&
             strcmp(out, "4\nok\n") == 0);
+  CHECK("unsafe slot names cannot inject save notice syntax",
+        fr_slot_id_for_name(&runtime, "appuart", &appuart_slot_id) == FR_OK &&
+            fr_slot_read(&runtime, appuart_slot_id, &unsafe_name_handle) ==
+                FR_OK &&
+            fr_slot_prepare_project_name(&runtime, "bad'name",
+                                         &unsafe_name_slot_id) == FR_OK &&
+            fr_slot_write(&runtime, unsafe_name_slot_id,
+                          unsafe_name_handle) == FR_OK &&
+            fr_slot_bind_project_name(&runtime, "bad'name",
+                                      unsafe_name_slot_id) == FR_OK &&
+            fr_repl_eval_line(&runtime, "appuart is nil", out, sizeof(out)) ==
+                FR_OK &&
+            fr_repl_eval_line(&runtime, "save", out, sizeof(out)) ==
+                FR_ERR_VOLATILE &&
+            strcmp(out,
+                   "notice: not saved (13)\n"
+                   "detail: cannot save - bound to a live handle or buffer\n"
+                   "ok\n") == 0 &&
+            fr_slot_write(&runtime, appuart_slot_id, unsafe_name_handle) ==
+                FR_OK &&
+            fr_slot_write(&runtime, unsafe_name_slot_id, fr_tagged_nil()) ==
+                FR_OK);
   CHECK("nested save remains an error and aborts its form",
         fr_repl_eval_line(&runtime,
                           "save-more is fn [ save: ; 9 ]", out,
@@ -5114,11 +5434,18 @@ static void test_natives(void) {
             fr_native_get(&runtime, add_native_id, &entry) == FR_OK &&
             fr_native_call(&runtime, entry, args, 2, &result) == FR_OK &&
             fr_tagged_encode_int(5, &tagged) == FR_OK && result == tagged);
+  diag.presentation = FR_DIAG_PRESENT_NOTICE;
+  diag.message_id = FR_DIAG_MSG_RUNTIME_RECORD_FIELD_NOT_FOUND;
+  diag.context_name = "stale";
   CHECK("native signature rejects arg type",
         (runtime.diag = &diag, args[0] = fr_tagged_nil(), true) &&
             fr_native_call(&runtime, entry, args, 2, &result) == FR_ERR_TYPE &&
             diag.actual_state == FR_DIAG_ACTUAL_VALUE &&
-            diag.actual == fr_tagged_nil() && diag.got == FR_DIAG_VALUE_NIL);
+            diag.actual == fr_tagged_nil() && diag.got == FR_DIAG_VALUE_NIL &&
+            diag.presentation == FR_DIAG_PRESENT_ERROR &&
+            diag.message_id == FR_DIAG_MSG_NONE &&
+            diag.context_name != NULL &&
+            strcmp(diag.context_name, "native") == 0);
   diag = (fr_diagnostic_t){0};
   diag.kind = FR_DIAG_NOTE;
   diag.actual = 123u;
@@ -5139,6 +5466,8 @@ static void test_natives(void) {
   for (size_t i = 0;
        i < sizeof(rejected_arg_errors) / sizeof(rejected_arg_errors[0]); i++) {
     diag = (fr_diagnostic_t){0};
+    diag.presentation = FR_DIAG_PRESENT_NOTICE;
+    diag.context_name = "stale";
     CHECK("native rejection helper records argument failures",
           fr_native_reject_arg(&runtime, args, 1, 0, rejected_arg_errors[i]) ==
                   rejected_arg_errors[i] &&
@@ -5146,7 +5475,8 @@ static void test_natives(void) {
               diag.message_id == FR_DIAG_MSG_RUNTIME_REJECTED_ARGUMENT &&
               diag.got == FR_DIAG_VALUE_INT && diag.actual == args[0] &&
               diag.actual_state == FR_DIAG_ACTUAL_REDACTED &&
-              diag.presentation == FR_DIAG_PRESENT_ERROR && diag.index == 0);
+              diag.presentation == FR_DIAG_PRESENT_ERROR &&
+              diag.context_name == NULL && diag.index == 0);
   }
   diag = (fr_diagnostic_t){0};
   CHECK("unsigned native rejection suppresses the actual",
@@ -8479,6 +8809,7 @@ static void test_compile(void) {
   fr_compile_overlay_update_t update;
   fr_compile_expression_t expression;
   fr_compile_value_binding_t binding;
+  fr_diagnostic_t stale_diag = {0};
   fr_tagged_t tagged = 0;
   fr_int_t decoded = 0;
   fr_native_id_t native_id = 0;
@@ -9661,11 +9992,21 @@ static void test_compile(void) {
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_ERR_TYPE);
   CHECK("compiled division by zero rejects",
-        fr_runtime_init(&runtime) == FR_OK &&
+        ((stale_diag = (fr_diagnostic_t){0},
+          stale_diag.presentation = FR_DIAG_PRESENT_NOTICE,
+          stale_diag.context_name = "stale"),
+         fr_runtime_init(&runtime) == FR_OK &&
+            (runtime.diag = &stale_diag, true) &&
             fr_compile_overlay_update("boot is fn [ 1 / 0 ]", &update) ==
                 FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
-            fr_vm_run_boot(&runtime, &tagged) == FR_ERR_DOMAIN);
+            fr_vm_run_boot(&runtime, &tagged) == FR_ERR_DOMAIN &&
+            fr_tagged_encode_int(0, &tagged) == FR_OK &&
+            stale_diag.kind == FR_DIAG_NOTE &&
+            stale_diag.actual_state == FR_DIAG_ACTUAL_VALUE &&
+            stale_diag.actual == tagged &&
+            stale_diag.presentation == FR_DIAG_PRESENT_ERROR &&
+            stale_diag.context_name == NULL));
   CHECK("compiled subtraction below min rejects",
         ((void)snprintf(line, sizeof(line),
                         "boot is fn [ %" PRId32 " - 1 ]",
@@ -10871,19 +11212,13 @@ static void test_attempt_rescue(void) {
   runtime.diag = NULL;
 #endif
 
-  diag = (fr_diagnostic_t){0};
-  runtime.diag = &diag;
   CHECK("attempt clears caught diagnostic",
         fr_repl_eval_line(&runtime, "attempt [ true + 1 ] rescue [ 9 ]",
                           out, sizeof(out)) == FR_OK &&
-            strcmp(out, "9\nok\n") == 0 && diag.kind == FR_DIAG_NONE);
+            strcmp(out, "9\nok\n") == 0);
   err = fr_repl_eval_line(&runtime, "2 / 0", out, sizeof(out));
-  CHECK("attempt later error is its own domain error", err == FR_ERR_DOMAIN);
-  CHECK("attempt later domain error has no stale diagnostic",
-        diag.kind == FR_DIAG_NONE);
-  CHECK("attempt caught diagnostic does not leak to later error",
-        diag.kind != FR_DIAG_TYPE);
-  runtime.diag = NULL;
+  CHECK("attempt later error is its own domain error",
+        err == FR_ERR_DOMAIN && strcmp(out, "error: bad value: 0 (3)\n") == 0);
 
   CHECK("attempt compiles dedicated opcodes",
         fr_compile_expression("attempt [ 2 / 0 ] rescue [ error.code ]",
@@ -13802,7 +14137,22 @@ static void test_repl_error_diagnostics(void) {
 #endif
   const char *set_target_lines[] = {"set missing to 1"};
   const char *native_type_lines[] = {"gpio.write: 2, true"};
+#if FR_FEATURE_CELLS && FR_FEATURE_TEXT && FR_FEATURE_NATIVE_SIGNATURES &&   \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  const char *native_cells_type_lines[] = {
+      "nottext is cells(1)",
+      "print: nottext",
+  };
+#endif
   const char *arith_type_lines[] = {"true + 1"};
+  const char *division_zero_lines[] = {"2 / 0"};
+#if FR_PROFILE_MAX_OVERLAY_NAMES >= 2
+  const char *negative_repeat_lines[] = {
+      "count is -1",
+      "bad-repeat is fn [ repeat count [ 1 ] ]",
+      "bad-repeat:",
+  };
+#endif
 #if FR_FEATURE_TEXT && FR_PROFILE_MAX_TEXT_LENGTH >= 240 &&                  \
     FR_PROFILE_MAX_OVERLAY_TEXT_BYTES >= 420 &&                              \
     FR_PROFILE_MAX_OVERLAY_NAMES >= 3
@@ -13818,6 +14168,44 @@ static void test_repl_error_diagnostics(void) {
       "c is cells(4)",
       "c[99]",
   };
+  const char *wrong_cell_lines[] = {
+      "notcells is 5",
+      "notcells[0]",
+  };
+#if FR_FEATURE_TEXT
+  const char *wrong_cell_text_lines[] = {
+      "notcells is \"hi\"",
+      "notcells[0]",
+  };
+#endif
+#endif
+#if FR_FEATURE_RECORDS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  const char *wrong_record_lines[] = {
+      "notrecord is 5",
+      "notrecord->x",
+  };
+  const char *wrong_record_shape_lines[] = {
+      "record Point [ x ]",
+      "Point->x",
+  };
+#if FR_FEATURE_CELLS
+  const char *wrong_record_cells_lines[] = {
+      "notrecord is cells(1)",
+      "notrecord->x",
+  };
+#endif
+#if FR_PROFILE_MAX_OVERLAY_NAMES >= 2
+  const char *missing_record_field_lines[] = {
+      "record Point [ x ]",
+      "point is Point: 1",
+      "point->z",
+  };
+  const char *unsafe_record_field_lines[] = {
+      "record Point [ x ]",
+      "point is Point: 1",
+      "point->don't",
+  };
+#endif
 #endif
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
   const char *call_depth_lines[] = {
@@ -14238,6 +14626,23 @@ static void test_repl_error_diagnostics(void) {
             strstr(out, "gpio.write: 2, true\n") == NULL &&
             test_error_has_no_caret(out));
 
+#if FR_FEATURE_CELLS && FR_FEATURE_TEXT && FR_FEATURE_NATIVE_SIGNATURES &&   \
+    FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  memset(out, 0, sizeof(out));
+  CHECK("native diagnostic identifies an object-backed argument kind",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, native_cells_type_lines,
+                (uint8_t)(sizeof(native_cells_type_lines) /
+                          sizeof(native_cells_type_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out,
+                                   "error: wrong type: cells 1 (2)") &&
+            strstr(out,
+                   "print argument 1 expects text or bytes, got cells\n") !=
+                NULL);
+#endif
+
   memset(out, 0, sizeof(out));
   CHECK("native negative argument reports the rejected value",
         fr_base_image_install(&runtime) == FR_OK &&
@@ -14282,6 +14687,30 @@ static void test_repl_error_diagnostics(void) {
             strstr(out, "expected an int, got a bool\n") != NULL &&
             strstr(out, "true + 1\n") == NULL &&
             test_error_has_no_caret(out));
+
+  memset(out, 0, sizeof(out));
+  CHECK("division by zero reports the rejected denominator",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, division_zero_lines,
+                (uint8_t)(sizeof(division_zero_lines) /
+                          sizeof(division_zero_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: bad value: 0 (3)") &&
+            test_error_line_matches_wire_shape(out));
+
+#if FR_PROFILE_MAX_OVERLAY_NAMES >= 2
+  memset(out, 0, sizeof(out));
+  CHECK("negative repeat reports the rejected count",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, negative_repeat_lines,
+                (uint8_t)(sizeof(negative_repeat_lines) /
+                          sizeof(negative_repeat_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: out of range: -1 (1)") &&
+            test_error_line_matches_wire_shape(out));
+#endif
 
 #if FR_FEATURE_TEXT
   memset(out, 0, sizeof(out));
@@ -14370,12 +14799,135 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(cell_oob_lines) /
                           sizeof(cell_oob_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: out of range (1)") &&
+            test_error_line_equals(out, "error: out of range: 99 (1)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out,
                    "cell index 99 is past the end (length 4)\n") != NULL &&
             strstr(out, "c[99]\n") == NULL &&
             test_error_has_no_caret(out));
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic identifies a non-cell target",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, wrong_cell_lines,
+                (uint8_t)(sizeof(wrong_cell_lines) /
+                          sizeof(wrong_cell_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: wrong type: 5 (2)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "expected cells, got an int\n") != NULL);
+
+#if FR_FEATURE_TEXT
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic identifies a text target as text",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, wrong_cell_text_lines,
+                (uint8_t)(sizeof(wrong_cell_text_lines) /
+                          sizeof(wrong_cell_text_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: wrong type: \"hi\" (2)") &&
+            strstr(out, "expected cells, got text\n") != NULL);
+#endif
+#endif
+
+#if FR_FEATURE_RECORDS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic identifies a non-record target",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, wrong_record_lines,
+                (uint8_t)(sizeof(wrong_record_lines) /
+                          sizeof(wrong_record_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: wrong type: 5 (2)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "expected a record, got an int\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic identifies a record shape target",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, wrong_record_shape_lines,
+                (uint8_t)(sizeof(wrong_record_shape_lines) /
+                          sizeof(wrong_record_shape_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "error: wrong type: record-shape ") != NULL &&
+            strstr(out, "expected a record, got a record shape\n") != NULL);
+
+#if FR_FEATURE_CELLS
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic identifies a cells target as cells",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, wrong_record_cells_lines,
+                (uint8_t)(sizeof(wrong_record_cells_lines) /
+                          sizeof(wrong_record_cells_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out,
+                                   "error: wrong type: cells 1 (2)") &&
+            strstr(out, "expected a record, got cells\n") != NULL);
+#endif
+
+#if FR_PROFILE_MAX_OVERLAY_NAMES >= 2
+  memset(out, 0, sizeof(out));
+  CHECK("repl diagnostic names a missing record field",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, missing_record_field_lines,
+                (uint8_t)(sizeof(missing_record_field_lines) /
+                          sizeof(missing_record_field_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "detail: record has no field 'z'\n") != NULL);
+
+  memset(out, 0, sizeof(out));
+  CHECK("record field detail cannot inject wire syntax",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, unsafe_record_field_lines,
+                (uint8_t)(sizeof(unsafe_record_field_lines) /
+                          sizeof(unsafe_record_field_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out, "error: not found (7)") &&
+            test_error_line_matches_wire_shape(out) &&
+            strstr(out, "detail: record has no field") == NULL);
+
+#if FR_FEATURE_TEXT && FR_PROFILE_MAX_OVERLAY_NAMES >= 3
+  {
+    fr_slot_id_t point_slot = 0;
+    fr_slot_id_t text_slot = 0;
+    fr_tagged_t point = 0;
+    fr_tagged_t text = 0;
+    fr_object_id_t point_id = 0;
+    fr_object_id_t text_id = 0;
+
+    memset(out, 0, sizeof(out));
+    CHECK("corrupt record shape does not blame the stored value",
+          fr_base_image_install(&runtime) == FR_OK &&
+              fr_repl_eval_line(&runtime, "record Point [ x ]", out,
+                                (uint16_t)sizeof(out)) == FR_OK &&
+              fr_repl_eval_line(&runtime, "point is Point: 1", out,
+                                (uint16_t)sizeof(out)) == FR_OK &&
+              fr_repl_eval_line(&runtime, "notshape is \"hi\"", out,
+                                (uint16_t)sizeof(out)) == FR_OK &&
+              fr_slot_id_for_name(&runtime, "point", &point_slot) == FR_OK &&
+              fr_slot_id_for_name(&runtime, "notshape", &text_slot) == FR_OK &&
+              fr_slot_read(&runtime, point_slot, &point) == FR_OK &&
+              fr_slot_read(&runtime, text_slot, &text) == FR_OK &&
+              fr_tagged_decode_object_id(point, &point_id) == FR_OK &&
+              fr_tagged_decode_object_id(text, &text_id) == FR_OK &&
+              (runtime.objects.entries[point_id].aux = text_id, true) &&
+              fr_repl_eval_line(&runtime, "set point->x to 1", out,
+                                (uint16_t)sizeof(out)) == FR_ERR_TYPE &&
+              strcmp(out, "error: wrong type (2)\n") == 0 &&
+              strstr(out, "value cannot be stored") == NULL);
+  }
+#endif
+#endif
 #endif
 
 #if FR_PROFILE_MAX_OVERLAY_NAMES > 0
@@ -15565,8 +16117,13 @@ int main(void) {
   test_persist_mmap_event_body_survives_remount();
 #endif
 #if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&                  \
-    FR_HOST_TEST_HELPERS && FR_PROFILE_MAX_OVERLAY_NAMES > 0
+    FR_HOST_TEST_HELPERS && FR_PROFILE_MAX_OVERLAY_NAMES >= 6
   test_persist_fake_non_xip_code_reader();
+#endif
+#if FR_FEATURE_COMPILER && FR_BASE_IMAGE_INCLUDE_SYMBOLS &&                  \
+    FR_HOST_TEST_HELPERS && FR_PROFILE_MAX_OVERLAY_NAMES >= 11 &&           \
+    FR_FEATURE_CELLS && FR_FEATURE_RECORDS && FR_FEATURE_BYTES
+  test_persist_fake_non_xip_store_diagnostics();
 #endif
 #endif
   test_vm();

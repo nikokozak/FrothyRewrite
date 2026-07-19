@@ -1045,12 +1045,15 @@ static const char *fr_repl_diag_value_article(uint16_t value_kind) {
   case FR_DIAG_VALUE_OBJECT:
   case FR_DIAG_VALUE_HANDLE:
   case FR_DIAG_VALUE_RESERVED:
+  case FR_DIAG_VALUE_RECORD:
+  case FR_DIAG_VALUE_RECORD_SHAPE:
     return "a ";
   case FR_DIAG_VALUE_NIL:
   case FR_DIAG_VALUE_BYTES:
   case FR_DIAG_VALUE_ANY:
   case FR_DIAG_VALUE_TEXT:
   case FR_DIAG_VALUE_TEXT_OR_BYTES:
+  case FR_DIAG_VALUE_CELLS:
   case FR_DIAG_VALUE_NONE:
   default:
     return "";
@@ -1170,6 +1173,24 @@ static fr_err_t fr_repl_append_runtime_context_line(
       break;
     }
     FR_TRY(fr_repl_append(out, out_cap, used, message));
+    return fr_repl_append_char(out, out_cap, used, '\n');
+  case FR_DIAG_MSG_RUNTIME_RECORD_FIELD_NOT_FOUND:
+    if (diag->context_name == NULL) {
+      return FR_OK;
+    }
+    *out_wrote = true;
+    FR_TRY(fr_repl_append(out, out_cap, used,
+                          "detail: record has no field '"));
+    FR_TRY(fr_repl_append(out, out_cap, used, diag->context_name));
+    return fr_repl_append(out, out_cap, used, "'\n");
+  case FR_DIAG_MSG_RUNTIME_VALUE_NOT_STORABLE:
+    if (diag->context_name == NULL) {
+      return FR_OK;
+    }
+    *out_wrote = true;
+    FR_TRY(fr_repl_append(out, out_cap, used,
+                          "detail: value cannot be stored in "));
+    FR_TRY(fr_repl_append(out, out_cap, used, diag->context_name));
     return fr_repl_append_char(out, out_cap, used, '\n');
   case FR_DIAG_MSG_RUNTIME_STACK_OVERFLOW:
   case FR_DIAG_MSG_RUNTIME_STACK_UNDERFLOW:

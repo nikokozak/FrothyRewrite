@@ -144,8 +144,9 @@ static void test_text_pack_capacity(void) {
 
 static void test_slot_rejects_bytes(void) {
   install_base();
-  TEST_ASSERT_EQUAL(FR_ERR_VOLATILE,
-                    eval_err("x is bytes.from-text: \"hi\""));
+  eval_error_expect("x is bytes.from-text: \"hi\"", FR_ERR_VOLATILE,
+                    "error: not saved: bytes 2 (13)\n"
+                    "detail: value cannot be stored in a slot\n");
 }
 
 /* --- cell + record reject --- */
@@ -153,9 +154,23 @@ static void test_slot_rejects_bytes(void) {
 static void test_cell_rejects_bytes(void) {
   install_base();
   eval_ok("c is cells(1)");
-  TEST_ASSERT_EQUAL(FR_ERR_VOLATILE,
-                    eval_err("set c[0] to bytes.from-text: \"hi\""));
+  eval_error_expect("set c[0] to bytes.from-text: \"hi\"", FR_ERR_VOLATILE,
+                    "error: not saved: bytes 2 (13)\n"
+                    "detail: value cannot be stored in cells\n");
 }
+
+#if FR_FEATURE_RECORDS
+static void test_record_field_reject_reports_bytes(void) {
+  install_base();
+  eval_ok("record Point [ x ]");
+  eval_ok("point is Point: 1");
+  eval_error_expect("set point->x to bytes.from-text: \"secret\"",
+                    FR_ERR_VOLATILE,
+                    "error: not saved: bytes 6 (13)\n"
+                    "detail: value cannot be stored in record fields\n");
+  eval_expect("point->x", "1\nok\n");
+}
+#endif
 
 static void test_record_field_rejects_bytes(void) {
   const uint8_t data[2] = {'h', 'i'};
@@ -251,6 +266,9 @@ int main(void) {
   RUN_TEST(test_text_pack_capacity);
   RUN_TEST(test_slot_rejects_bytes);
   RUN_TEST(test_cell_rejects_bytes);
+#if FR_FEATURE_RECORDS
+  RUN_TEST(test_record_field_reject_reports_bytes);
+#endif
   RUN_TEST(test_record_field_rejects_bytes);
   RUN_TEST(test_generation_bump_invalidates_old_ref);
   RUN_TEST(test_generation_exhaust_retires_entry);

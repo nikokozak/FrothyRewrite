@@ -123,6 +123,9 @@ const char *fr_diag_message(uint16_t message_id) {
       [FR_DIAG_MSG_RUNTIME_STACK_OVERFLOW] = "stack overflow",
       [FR_DIAG_MSG_RUNTIME_STACK_UNDERFLOW] = "stack underflow",
       [FR_DIAG_MSG_RUNTIME_INTEGER_OVERFLOW] = "integer overflow",
+      [FR_DIAG_MSG_RUNTIME_RECORD_FIELD_NOT_FOUND] =
+          "record field was not found",
+      [FR_DIAG_MSG_RUNTIME_VALUE_NOT_STORABLE] = "value cannot be stored",
   };
 
   if (message_id >= (uint16_t)(sizeof(messages) / sizeof(messages[0]))) {
@@ -161,6 +164,12 @@ const char *fr_diag_value_kind_name(uint16_t value_kind) {
     return "text";
   case FR_DIAG_VALUE_TEXT_OR_BYTES:
     return "text or bytes";
+  case FR_DIAG_VALUE_CELLS:
+    return "cells";
+  case FR_DIAG_VALUE_RECORD:
+    return "record";
+  case FR_DIAG_VALUE_RECORD_SHAPE:
+    return "record shape";
   case FR_DIAG_VALUE_NONE:
   default:
     return NULL;

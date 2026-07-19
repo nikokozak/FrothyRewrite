@@ -188,9 +188,10 @@ fr_err_t fr_native_reject_arg(fr_runtime_t *runtime, const fr_tagged_t *args,
     return err;
   }
 
+  *runtime->diag = (fr_diagnostic_t){0};
   runtime->diag->kind = FR_DIAG_NOTE;
   runtime->diag->message_id = FR_DIAG_MSG_RUNTIME_REJECTED_ARGUMENT;
-  runtime->diag->got = fr_tagged_diag_value_kind(args[index]);
+  runtime->diag->got = fr_runtime_diag_value_kind(runtime, args[index]);
   runtime->diag->actual = args[index];
   /* Default closed. The dispatcher below reveals only declared public args. */
   runtime->diag->actual_state = FR_DIAG_ACTUAL_REDACTED;
@@ -228,9 +229,10 @@ static void fr_native_note_arg_type(fr_runtime_t *runtime,
     return;
   }
 
+  *runtime->diag = (fr_diagnostic_t){0};
   runtime->diag->kind = FR_DIAG_TYPE;
   runtime->diag->expected = fr_native_value_diag_kind(expected);
-  runtime->diag->got = fr_tagged_diag_value_kind(got);
+  runtime->diag->got = fr_runtime_diag_value_kind(runtime, got);
   runtime->diag->actual = got;
   runtime->diag->actual_state = expected == FR_NATIVE_VALUE_SECRET_TEXT
                                     ? FR_DIAG_ACTUAL_REDACTED

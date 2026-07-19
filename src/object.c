@@ -519,6 +519,32 @@ static fr_err_t fr_object_entry_of_kind(const fr_runtime_t *runtime,
 #endif
 }
 
+fr_diag_value_kind_t fr_runtime_diag_value_kind(const fr_runtime_t *runtime,
+                                                fr_tagged_t tagged) {
+  fr_diag_value_kind_t tagged_kind = fr_tagged_diag_value_kind(tagged);
+  fr_object_id_t object_id = 0;
+
+  if (tagged_kind != FR_DIAG_VALUE_OBJECT || runtime == NULL ||
+      fr_tagged_decode_object_id(tagged, &object_id) != FR_OK ||
+      object_id >= runtime->objects.count) {
+    return tagged_kind;
+  }
+
+  switch (runtime->objects.entries[object_id].kind) {
+  case FR_OBJECT_CELLS:
+    return FR_DIAG_VALUE_CELLS;
+  case FR_OBJECT_TEXT:
+    return FR_DIAG_VALUE_TEXT;
+  case FR_OBJECT_RECORD_SHAPE:
+    return FR_DIAG_VALUE_RECORD_SHAPE;
+  case FR_OBJECT_RECORD:
+    return FR_DIAG_VALUE_RECORD;
+  case FR_OBJECT_NONE:
+  default:
+    return tagged_kind;
+  }
+}
+
 bool fr_cells_value_allowed(const fr_runtime_t *runtime, fr_tagged_t tagged) {
   fr_int_t ignored_int = 0;
   fr_object_id_t object_id = 0;

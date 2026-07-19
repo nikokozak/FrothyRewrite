@@ -131,6 +131,9 @@ void fr_object_clear_overlay(fr_runtime_t *runtime);
 void fr_object_rebase_ram_pointers(fr_runtime_t *runtime,
                                    const fr_runtime_t *source);
 
+fr_diag_value_kind_t fr_runtime_diag_value_kind(const fr_runtime_t *runtime,
+                                                fr_tagged_t tagged);
+
 bool fr_cells_value_allowed(const fr_runtime_t *runtime, fr_tagged_t tagged);
 fr_err_t fr_cells_check_install(const fr_runtime_t *runtime, uint16_t length,
                                 const fr_tagged_t initial_values[]);

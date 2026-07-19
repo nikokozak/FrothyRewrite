@@ -17,6 +17,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #ifndef FR_VM_YIELD_SAFE_POINTS
 #define FR_VM_YIELD_SAFE_POINTS 4096u
@@ -97,6 +98,14 @@ static bool fr_vm_diag_empty(const fr_runtime_t *runtime) {
          runtime->diag->kind == FR_DIAG_NONE;
 }
 
+static fr_diagnostic_t *fr_vm_begin_diag(fr_runtime_t *runtime) {
+  if (!fr_vm_diag_empty(runtime)) {
+    return NULL;
+  }
+  *runtime->diag = (fr_diagnostic_t){0};
+  return runtime->diag;
+}
+
 static void fr_vm_clear_diag(fr_runtime_t *runtime) {
   if (runtime != NULL && runtime->diag != NULL) {
     *runtime->diag = (fr_diagnostic_t){0};
@@ -135,28 +144,63 @@ static void fr_vm_rescue_discard_through(fr_runtime_t *runtime,
 static void fr_vm_note_message(fr_runtime_t *runtime, fr_diag_kind_t kind,
                                uint16_t message_id, fr_int_t expected,
                                fr_int_t got) {
-  if (!fr_vm_diag_empty(runtime)) {
+  fr_diagnostic_t *diag = fr_vm_begin_diag(runtime);
+
+  if (diag == NULL) {
     return;
   }
 
-  runtime->diag->kind = kind;
-  runtime->diag->message_id = message_id;
-  runtime->diag->expected = expected;
-  runtime->diag->got = got;
+  diag->kind = kind;
+  diag->message_id = message_id;
+  diag->expected = expected;
+  diag->got = got;
 }
 
 static void fr_vm_note_type(fr_runtime_t *runtime,
                             fr_diag_value_kind_t expected,
                             fr_tagged_t got) {
-  if (!fr_vm_diag_empty(runtime)) {
+  fr_diagnostic_t *diag = fr_vm_begin_diag(runtime);
+
+  if (diag == NULL) {
     return;
   }
 
-  runtime->diag->kind = FR_DIAG_TYPE;
-  runtime->diag->expected = expected;
-  runtime->diag->got = fr_tagged_diag_value_kind(got);
-  runtime->diag->actual = got;
-  runtime->diag->actual_state = FR_DIAG_ACTUAL_VALUE;
+  diag->kind = FR_DIAG_TYPE;
+  diag->expected = expected;
+  diag->got = fr_runtime_diag_value_kind(runtime, got);
+  diag->actual = got;
+  diag->actual_state = FR_DIAG_ACTUAL_VALUE;
+}
+
+static void fr_vm_note_value_rejection(fr_runtime_t *runtime,
+                                       fr_tagged_t actual) {
+  fr_diagnostic_t *diag = fr_vm_begin_diag(runtime);
+
+  if (diag == NULL) {
+    return;
+  }
+
+  diag->kind = FR_DIAG_NOTE;
+  diag->got = fr_runtime_diag_value_kind(runtime, actual);
+  diag->actual = actual;
+  diag->actual_state = FR_DIAG_ACTUAL_VALUE;
+}
+
+static void fr_vm_note_store_rejection(fr_runtime_t *runtime,
+                                       fr_tagged_t actual,
+                                       const char *container_name) {
+  fr_diagnostic_t *diag = fr_vm_begin_diag(runtime);
+
+  if (diag == NULL) {
+    return;
+  }
+
+  diag->kind = FR_DIAG_NOTE;
+  diag->message_id = FR_DIAG_MSG_RUNTIME_VALUE_NOT_STORABLE;
+  diag->got = fr_runtime_diag_value_kind(runtime, actual);
+  diag->actual = actual;
+  diag->actual_state = FR_DIAG_ACTUAL_VALUE;
+  diag->context_name = container_name;
 }
 
 static void fr_vm_note_too_few_args(fr_runtime_t *runtime, uint8_t expected,
@@ -199,10 +243,21 @@ static fr_err_t fr_vm_decode_int(fr_runtime_t *runtime, fr_tagged_t tagged,
 }
 
 #if FR_FEATURE_CELLS
-static void fr_vm_note_cell_index(fr_runtime_t *runtime, fr_int_t index,
+static void fr_vm_note_cell_index(fr_runtime_t *runtime,
+                                  fr_tagged_t tagged_index, fr_int_t index,
                                   uint16_t length) {
-  fr_vm_note_message(runtime, FR_DIAG_LIMIT,
-                     FR_DIAG_MSG_RUNTIME_CELL_INDEX_OOB, length, index);
+  fr_diagnostic_t *diag = fr_vm_begin_diag(runtime);
+
+  if (diag == NULL) {
+    return;
+  }
+
+  diag->kind = FR_DIAG_LIMIT;
+  diag->message_id = FR_DIAG_MSG_RUNTIME_CELL_INDEX_OOB;
+  diag->expected = length;
+  diag->got = index;
+  diag->actual = tagged_index;
+  diag->actual_state = FR_DIAG_ACTUAL_VALUE;
 }
 #endif
 
@@ -260,10 +315,15 @@ static fr_err_t fr_vm_store_slot(fr_runtime_t *runtime,
                                  fr_vm_state_t *state) {
   fr_slot_id_t slot_id = 0;
   fr_tagged_t tagged = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_instruction_read_slot_operand(view, state->ip, &slot_id));
   FR_TRY(fr_vm_pop(runtime, state, &tagged));
-  FR_TRY(fr_slot_write(runtime, slot_id, tagged));
+  err = fr_slot_write(runtime, slot_id, tagged);
+  if (err == FR_ERR_VOLATILE) {
+    fr_vm_note_store_rejection(runtime, tagged, "a slot");
+  }
+  FR_TRY(err);
 
   state->ip += 3;
   return fr_vm_push(runtime, state, fr_tagged_nil());
@@ -476,6 +536,7 @@ static fr_err_t fr_vm_repeat_begin_as(fr_runtime_t *runtime,
   tagged = state->stack[state->depth - 1];
   FR_TRY(fr_vm_decode_int(runtime, tagged, &count));
   if (count < 0) {
+    fr_vm_note_value_rejection(runtime, tagged);
     return FR_ERR_RANGE;
   }
   if (count == 0) {
@@ -535,30 +596,39 @@ static fr_err_t fr_vm_repeat_next_as(fr_runtime_t *runtime,
 }
 
 #if FR_FEATURE_CELLS
-static fr_err_t fr_vm_cell_object_for_slot(fr_runtime_t *runtime,
-                                           fr_slot_id_t slot_id,
-                                           fr_object_id_t *out_object_id) {
+static fr_err_t fr_vm_cell_for_slot(fr_runtime_t *runtime,
+                                    fr_slot_id_t slot_id,
+                                    fr_object_id_t *out_object_id,
+                                    uint16_t *out_length) {
   fr_tagged_t tagged = 0;
+  fr_err_t err = FR_OK;
 
-  if (out_object_id == NULL) {
+  if (out_object_id == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
   FR_TRY(fr_slot_read(runtime, slot_id, &tagged));
-  return fr_tagged_decode_object_id(tagged, out_object_id);
+  err = fr_tagged_decode_object_id(tagged, out_object_id);
+  if (err == FR_OK) {
+    err = fr_cells_length(runtime, *out_object_id, out_length);
+  }
+  if (err == FR_ERR_TYPE) {
+    fr_vm_note_type(runtime, FR_DIAG_VALUE_CELLS, tagged);
+  }
+  return err;
 }
 
 static fr_err_t fr_vm_cell_index_in_bounds(fr_runtime_t *runtime,
-                                           fr_object_id_t object_id,
                                            fr_int_t raw_index,
+                                           uint16_t length,
                                            uint16_t *out_index) {
-  uint16_t length = 0;
+  fr_tagged_t tagged_index = 0;
 
   if (out_index == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_cells_length(runtime, object_id, &length));
   if (raw_index < 0 || (uint32_t)raw_index >= length) {
-    fr_vm_note_cell_index(runtime, raw_index, length);
+    FR_TRY(fr_tagged_encode_int(raw_index, &tagged_index));
+    fr_vm_note_cell_index(runtime, tagged_index, raw_index, length);
     return FR_ERR_RANGE;
   }
   *out_index = (uint16_t)raw_index;
@@ -567,14 +637,14 @@ static fr_err_t fr_vm_cell_index_in_bounds(fr_runtime_t *runtime,
 
 static fr_err_t fr_vm_pop_cell_index(fr_runtime_t *runtime,
                                      fr_vm_state_t *state,
-                                     fr_object_id_t object_id,
+                                     uint16_t length,
                                      uint16_t *out_index) {
   fr_tagged_t tagged = 0;
   fr_int_t raw_index = 0;
 
   FR_TRY(fr_vm_pop(runtime, state, &tagged));
   FR_TRY(fr_vm_decode_int(runtime, tagged, &raw_index));
-  return fr_vm_cell_index_in_bounds(runtime, object_id, raw_index, out_index);
+  return fr_vm_cell_index_in_bounds(runtime, raw_index, length, out_index);
 }
 
 static fr_err_t fr_vm_load_cell(fr_runtime_t *runtime,
@@ -582,12 +652,13 @@ static fr_err_t fr_vm_load_cell(fr_runtime_t *runtime,
                                 fr_vm_state_t *state) {
   fr_slot_id_t slot_id = 0;
   uint16_t index = 0;
+  uint16_t cell_length = 0;
   fr_tagged_t tagged = 0;
   fr_object_id_t object_id = 0;
 
   FR_TRY(fr_instruction_read_cell_operands(view, state->ip, &slot_id, &index));
-  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
-  FR_TRY(fr_vm_cell_index_in_bounds(runtime, object_id, index, &index));
+  FR_TRY(fr_vm_cell_for_slot(runtime, slot_id, &object_id, &cell_length));
+  FR_TRY(fr_vm_cell_index_in_bounds(runtime, index, cell_length, &index));
   FR_TRY(fr_cells_read(runtime, object_id, index, &tagged));
 
   state->ip += 5;
@@ -599,14 +670,20 @@ static fr_err_t fr_vm_store_cell(fr_runtime_t *runtime,
                                  fr_vm_state_t *state) {
   fr_slot_id_t slot_id = 0;
   uint16_t index = 0;
+  uint16_t cell_length = 0;
   fr_tagged_t value = 0;
   fr_object_id_t object_id = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_instruction_read_cell_operands(view, state->ip, &slot_id, &index));
   FR_TRY(fr_vm_pop(runtime, state, &value));
-  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
-  FR_TRY(fr_vm_cell_index_in_bounds(runtime, object_id, index, &index));
-  FR_TRY(fr_cells_write(runtime, object_id, index, value));
+  FR_TRY(fr_vm_cell_for_slot(runtime, slot_id, &object_id, &cell_length));
+  FR_TRY(fr_vm_cell_index_in_bounds(runtime, index, cell_length, &index));
+  err = fr_cells_write(runtime, object_id, index, value);
+  if (err == FR_ERR_TYPE || err == FR_ERR_VOLATILE) {
+    fr_vm_note_store_rejection(runtime, value, "cells");
+  }
+  FR_TRY(err);
 
   state->ip += 5;
   return fr_vm_push(runtime, state, fr_tagged_nil());
@@ -617,12 +694,13 @@ static fr_err_t fr_vm_load_cell_dynamic(fr_runtime_t *runtime,
                                         fr_vm_state_t *state) {
   fr_slot_id_t slot_id = 0;
   uint16_t index = 0;
+  uint16_t cell_length = 0;
   fr_tagged_t tagged = 0;
   fr_object_id_t object_id = 0;
 
   FR_TRY(fr_instruction_read_slot_operand(view, state->ip, &slot_id));
-  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
-  FR_TRY(fr_vm_pop_cell_index(runtime, state, object_id, &index));
+  FR_TRY(fr_vm_cell_for_slot(runtime, slot_id, &object_id, &cell_length));
+  FR_TRY(fr_vm_pop_cell_index(runtime, state, cell_length, &index));
   FR_TRY(fr_cells_read(runtime, object_id, index, &tagged));
 
   state->ip += 3;
@@ -634,14 +712,20 @@ static fr_err_t fr_vm_store_cell_dynamic(fr_runtime_t *runtime,
                                          fr_vm_state_t *state) {
   fr_slot_id_t slot_id = 0;
   uint16_t index = 0;
+  uint16_t cell_length = 0;
   fr_tagged_t value = 0;
   fr_object_id_t object_id = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_instruction_read_slot_operand(view, state->ip, &slot_id));
-  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
-  FR_TRY(fr_vm_pop_cell_index(runtime, state, object_id, &index));
+  FR_TRY(fr_vm_cell_for_slot(runtime, slot_id, &object_id, &cell_length));
+  FR_TRY(fr_vm_pop_cell_index(runtime, state, cell_length, &index));
   FR_TRY(fr_vm_pop(runtime, state, &value));
-  FR_TRY(fr_cells_write(runtime, object_id, index, value));
+  err = fr_cells_write(runtime, object_id, index, value);
+  if (err == FR_ERR_TYPE || err == FR_ERR_VOLATILE) {
+    fr_vm_note_store_rejection(runtime, value, "cells");
+  }
+  FR_TRY(err);
 
   state->ip += 3;
   return fr_vm_push(runtime, state, fr_tagged_nil());
@@ -649,6 +733,67 @@ static fr_err_t fr_vm_store_cell_dynamic(fr_runtime_t *runtime,
 #endif
 
 #if FR_FEATURE_RECORDS
+static void fr_vm_note_record_field_not_found(fr_runtime_t *runtime,
+                                              const uint8_t *field_name,
+                                              uint8_t field_length) {
+  fr_diagnostic_t *diag = NULL;
+
+  if (field_name == NULL || field_length == 0 ||
+      field_length >=
+          sizeof(((fr_diagnostic_t *)0)->suggestion_text)) {
+    return;
+  }
+  for (uint16_t i = 0; i < field_length; i++) {
+    if (field_name[i] < 0x20u || field_name[i] > 0x7eu ||
+        field_name[i] == '\'') {
+      return;
+    }
+  }
+  diag = fr_vm_begin_diag(runtime);
+  if (diag == NULL) {
+    return;
+  }
+
+  diag->kind = FR_DIAG_NOTE;
+  diag->message_id = FR_DIAG_MSG_RUNTIME_RECORD_FIELD_NOT_FOUND;
+  memcpy(diag->suggestion_text, field_name, field_length);
+  diag->suggestion_text[field_length] = '\0';
+  diag->context_name = diag->suggestion_text;
+}
+
+static bool fr_vm_record_shape_valid(const fr_runtime_t *runtime,
+                                     fr_object_id_t record_object_id) {
+  fr_object_id_t shape_object_id = 0;
+  fr_record_name_t shape_name = {0};
+  uint16_t field_count = 0;
+
+  return fr_record_view(runtime, record_object_id, &shape_object_id,
+                        &field_count) == FR_OK &&
+         fr_record_shape_view(runtime, shape_object_id, &shape_name,
+                              &field_count) == FR_OK;
+}
+
+static fr_err_t fr_vm_decode_record(fr_runtime_t *runtime,
+                                    fr_tagged_t tagged,
+                                    fr_object_id_t *out_object_id) {
+  fr_object_id_t shape_object_id = 0;
+  uint16_t field_count = 0;
+  fr_err_t err = FR_OK;
+
+  if (out_object_id == NULL) {
+    return FR_ERR_INVALID;
+  }
+  err = fr_tagged_decode_object_id(tagged, out_object_id);
+  if (err == FR_OK) {
+    err = fr_record_view(runtime, *out_object_id, &shape_object_id,
+                         &field_count);
+  }
+  if (err == FR_ERR_TYPE) {
+    fr_vm_note_type(runtime, FR_DIAG_VALUE_RECORD, tagged);
+  }
+  return err;
+}
+
 static fr_err_t fr_vm_load_field(fr_runtime_t *runtime,
                                  const fr_instruction_stream_t *view,
                                  fr_vm_state_t *state) {
@@ -656,15 +801,21 @@ static fr_err_t fr_vm_load_field(fr_runtime_t *runtime,
   uint8_t field_length = 0;
   fr_tagged_t tagged = 0;
   fr_object_id_t object_id = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_instruction_read_field_operand(view, state->ip, &field_name,
                                            &field_length));
   FR_TRY(fr_vm_pop(runtime, state, &tagged));
-  FR_TRY(fr_tagged_decode_object_id(tagged, &object_id));
-  FR_TRY(fr_record_read_field(
+  FR_TRY(fr_vm_decode_record(runtime, tagged, &object_id));
+  err = fr_record_read_field(
       runtime, object_id,
       (fr_record_name_t){.bytes = field_name, .length = field_length},
-      &tagged));
+      &tagged);
+  if (err == FR_ERR_NOT_FOUND &&
+      fr_vm_record_shape_valid(runtime, object_id)) {
+    fr_vm_note_record_field_not_found(runtime, field_name, field_length);
+  }
+  FR_TRY(err);
 
   state->ip = (fr_code_offset_t)(state->ip + 2u + field_length);
   return fr_vm_push(runtime, state, tagged);
@@ -678,15 +829,25 @@ static fr_err_t fr_vm_store_field(fr_runtime_t *runtime,
   fr_tagged_t value = 0;
   fr_tagged_t record = 0;
   fr_object_id_t object_id = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_instruction_read_field_operand(view, state->ip, &field_name,
                                            &field_length));
   FR_TRY(fr_vm_pop(runtime, state, &value));
   FR_TRY(fr_vm_pop(runtime, state, &record));
-  FR_TRY(fr_tagged_decode_object_id(record, &object_id));
-  FR_TRY(fr_record_write_field(
+  FR_TRY(fr_vm_decode_record(runtime, record, &object_id));
+  err = fr_record_write_field(
       runtime, object_id,
-      (fr_record_name_t){.bytes = field_name, .length = field_length}, value));
+      (fr_record_name_t){.bytes = field_name, .length = field_length}, value);
+  if (err == FR_ERR_NOT_FOUND &&
+      fr_vm_record_shape_valid(runtime, object_id)) {
+    fr_vm_note_record_field_not_found(runtime, field_name, field_length);
+  } else if (err == FR_ERR_VOLATILE ||
+             (err == FR_ERR_TYPE &&
+              fr_vm_record_shape_valid(runtime, object_id))) {
+    fr_vm_note_store_rejection(runtime, value, "record fields");
+  }
+  FR_TRY(err);
 
   state->ip = (fr_code_offset_t)(state->ip + 2u + field_length);
   return fr_vm_push(runtime, state, fr_tagged_nil());
@@ -894,6 +1055,7 @@ static fr_err_t fr_vm_arith_int(fr_runtime_t *runtime, fr_vm_state_t *state,
     break;
   case FR_OP_DIV_INT:
     if (rhs == 0) {
+      fr_vm_note_value_rejection(runtime, rhs_tagged);
       return FR_ERR_DOMAIN;
     }
     result = (int64_t)lhs / (int64_t)rhs;
@@ -982,6 +1144,7 @@ static fr_err_t fr_vm_repeat_begin(fr_runtime_t *runtime,
   tagged = state->stack[state->depth - 1];
   FR_TRY(fr_vm_decode_int(runtime, tagged, &count));
   if (count < 0) {
+    fr_vm_note_value_rejection(runtime, tagged);
     return FR_ERR_RANGE;
   }
   if (count == 0) {
@@ -1318,11 +1481,16 @@ static fr_err_t fr_vm_reader_store_slot(fr_runtime_t *runtime,
                                         fr_vm_state_t *state) {
   fr_slot_id_t slot_id = 0;
   fr_tagged_t tagged = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_vm_reader_read_slot_operand(runtime, code_object_id, length,
                                         state->ip, &slot_id));
   FR_TRY(fr_vm_pop(runtime, state, &tagged));
-  FR_TRY(fr_slot_write(runtime, slot_id, tagged));
+  err = fr_slot_write(runtime, slot_id, tagged);
+  if (err == FR_ERR_VOLATILE) {
+    fr_vm_note_store_rejection(runtime, tagged, "a slot");
+  }
+  FR_TRY(err);
 
   state->ip += 3;
   return fr_vm_push(runtime, state, fr_tagged_nil());
@@ -1488,12 +1656,14 @@ static fr_err_t fr_vm_reader_load_cell(fr_runtime_t *runtime,
                                        fr_vm_state_t *state) {
   fr_slot_id_t slot_id = 0;
   uint16_t index = 0;
+  uint16_t cell_length = 0;
   fr_tagged_t tagged = 0;
   fr_object_id_t object_id = 0;
 
   FR_TRY(fr_vm_reader_read_cell_operands(runtime, code_object_id, length,
                                          state->ip, &slot_id, &index));
-  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
+  FR_TRY(fr_vm_cell_for_slot(runtime, slot_id, &object_id, &cell_length));
+  FR_TRY(fr_vm_cell_index_in_bounds(runtime, index, cell_length, &index));
   FR_TRY(fr_cells_read(runtime, object_id, index, &tagged));
 
   state->ip += 5;
@@ -1506,14 +1676,21 @@ static fr_err_t fr_vm_reader_store_cell(fr_runtime_t *runtime,
                                         fr_vm_state_t *state) {
   fr_slot_id_t slot_id = 0;
   uint16_t index = 0;
+  uint16_t cell_length = 0;
   fr_tagged_t value = 0;
   fr_object_id_t object_id = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_vm_reader_read_cell_operands(runtime, code_object_id, length,
                                          state->ip, &slot_id, &index));
   FR_TRY(fr_vm_pop(runtime, state, &value));
-  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
-  FR_TRY(fr_cells_write(runtime, object_id, index, value));
+  FR_TRY(fr_vm_cell_for_slot(runtime, slot_id, &object_id, &cell_length));
+  FR_TRY(fr_vm_cell_index_in_bounds(runtime, index, cell_length, &index));
+  err = fr_cells_write(runtime, object_id, index, value);
+  if (err == FR_ERR_TYPE || err == FR_ERR_VOLATILE) {
+    fr_vm_note_store_rejection(runtime, value, "cells");
+  }
+  FR_TRY(err);
 
   state->ip += 5;
   return fr_vm_push(runtime, state, fr_tagged_nil());
@@ -1524,13 +1701,14 @@ static fr_err_t fr_vm_reader_load_cell_dynamic(
     fr_vm_state_t *state) {
   fr_slot_id_t slot_id = 0;
   uint16_t index = 0;
+  uint16_t cell_length = 0;
   fr_tagged_t tagged = 0;
   fr_object_id_t object_id = 0;
 
   FR_TRY(fr_vm_reader_read_slot_operand(runtime, code_object_id, length,
                                         state->ip, &slot_id));
-  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
-  FR_TRY(fr_vm_pop_cell_index(runtime, state, object_id, &index));
+  FR_TRY(fr_vm_cell_for_slot(runtime, slot_id, &object_id, &cell_length));
+  FR_TRY(fr_vm_pop_cell_index(runtime, state, cell_length, &index));
   FR_TRY(fr_cells_read(runtime, object_id, index, &tagged));
 
   state->ip += 3;
@@ -1542,15 +1720,21 @@ static fr_err_t fr_vm_reader_store_cell_dynamic(
     fr_vm_state_t *state) {
   fr_slot_id_t slot_id = 0;
   uint16_t index = 0;
+  uint16_t cell_length = 0;
   fr_tagged_t value = 0;
   fr_object_id_t object_id = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_vm_reader_read_slot_operand(runtime, code_object_id, length,
                                         state->ip, &slot_id));
-  FR_TRY(fr_vm_cell_object_for_slot(runtime, slot_id, &object_id));
-  FR_TRY(fr_vm_pop_cell_index(runtime, state, object_id, &index));
+  FR_TRY(fr_vm_cell_for_slot(runtime, slot_id, &object_id, &cell_length));
+  FR_TRY(fr_vm_pop_cell_index(runtime, state, cell_length, &index));
   FR_TRY(fr_vm_pop(runtime, state, &value));
-  FR_TRY(fr_cells_write(runtime, object_id, index, value));
+  err = fr_cells_write(runtime, object_id, index, value);
+  if (err == FR_ERR_TYPE || err == FR_ERR_VOLATILE) {
+    fr_vm_note_store_rejection(runtime, value, "cells");
+  }
+  FR_TRY(err);
 
   state->ip += 3;
   return fr_vm_push(runtime, state, fr_tagged_nil());
@@ -1566,16 +1750,22 @@ static fr_err_t fr_vm_reader_load_field(fr_runtime_t *runtime,
   uint8_t field_length = 0;
   fr_tagged_t tagged = 0;
   fr_object_id_t object_id = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_vm_reader_read_field_operand(runtime, code_object_id, length,
                                          state->ip, field_name,
                                          &field_length));
   FR_TRY(fr_vm_pop(runtime, state, &tagged));
-  FR_TRY(fr_tagged_decode_object_id(tagged, &object_id));
-  FR_TRY(fr_record_read_field(
+  FR_TRY(fr_vm_decode_record(runtime, tagged, &object_id));
+  err = fr_record_read_field(
       runtime, object_id,
       (fr_record_name_t){.bytes = field_name, .length = field_length},
-      &tagged));
+      &tagged);
+  if (err == FR_ERR_NOT_FOUND &&
+      fr_vm_record_shape_valid(runtime, object_id)) {
+    fr_vm_note_record_field_not_found(runtime, field_name, field_length);
+  }
+  FR_TRY(err);
 
   state->ip = (fr_code_offset_t)(state->ip + 2u + field_length);
   return fr_vm_push(runtime, state, tagged);
@@ -1590,16 +1780,26 @@ static fr_err_t fr_vm_reader_store_field(fr_runtime_t *runtime,
   fr_tagged_t value = 0;
   fr_tagged_t record = 0;
   fr_object_id_t object_id = 0;
+  fr_err_t err = FR_OK;
 
   FR_TRY(fr_vm_reader_read_field_operand(runtime, code_object_id, length,
                                          state->ip, field_name,
                                          &field_length));
   FR_TRY(fr_vm_pop(runtime, state, &value));
   FR_TRY(fr_vm_pop(runtime, state, &record));
-  FR_TRY(fr_tagged_decode_object_id(record, &object_id));
-  FR_TRY(fr_record_write_field(
+  FR_TRY(fr_vm_decode_record(runtime, record, &object_id));
+  err = fr_record_write_field(
       runtime, object_id,
-      (fr_record_name_t){.bytes = field_name, .length = field_length}, value));
+      (fr_record_name_t){.bytes = field_name, .length = field_length}, value);
+  if (err == FR_ERR_NOT_FOUND &&
+      fr_vm_record_shape_valid(runtime, object_id)) {
+    fr_vm_note_record_field_not_found(runtime, field_name, field_length);
+  } else if (err == FR_ERR_VOLATILE ||
+             (err == FR_ERR_TYPE &&
+              fr_vm_record_shape_valid(runtime, object_id))) {
+    fr_vm_note_store_rejection(runtime, value, "record fields");
+  }
+  FR_TRY(err);
 
   state->ip = (fr_code_offset_t)(state->ip + 2u + field_length);
   return fr_vm_push(runtime, state, fr_tagged_nil());
@@ -1724,6 +1924,7 @@ static fr_err_t fr_vm_reader_repeat_begin(fr_runtime_t *runtime,
   tagged = state->stack[state->depth - 1];
   FR_TRY(fr_vm_decode_int(runtime, tagged, &count));
   if (count < 0) {
+    fr_vm_note_value_rejection(runtime, tagged);
     return FR_ERR_RANGE;
   }
   if (count == 0) {
@@ -1788,6 +1989,7 @@ static fr_err_t fr_vm_reader_repeat_begin_as(
   tagged = state->stack[state->depth - 1];
   FR_TRY(fr_vm_decode_int(runtime, tagged, &count));
   if (count < 0) {
+    fr_vm_note_value_rejection(runtime, tagged);
     return FR_ERR_RANGE;
   }
   if (count == 0) {
