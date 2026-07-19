@@ -644,11 +644,16 @@ static fr_err_t fr_repl_write_status(const fr_repl_writer_t *writer) {
   return fr_repl_writer_write(writer, "\nok\n");
 }
 
-static fr_err_t fr_repl_write_tagged_value(fr_runtime_t *runtime, char *out,
-                                           uint16_t out_cap,
-                                           fr_tagged_t tagged, bool inspect) {
+typedef enum fr_repl_value_mode_t {
+  FR_REPL_VALUE_DISPLAY,
+  FR_REPL_VALUE_INSPECT,
+  FR_REPL_VALUE_DIAGNOSTIC,
+} fr_repl_value_mode_t;
+
+static fr_err_t fr_repl_write_tagged_value(
+    fr_runtime_t *runtime, char *out, uint16_t out_cap, uint16_t *used,
+    fr_tagged_t tagged, fr_repl_value_mode_t mode) {
   const fr_native_entry_t *entry = NULL;
-  uint16_t used = 0;
   fr_int_t int_value = 0;
   fr_slot_id_t slot_id = 0;
   fr_code_object_id_t code_object_id = 0;
@@ -656,43 +661,43 @@ static fr_err_t fr_repl_write_tagged_value(fr_runtime_t *runtime, char *out,
   fr_object_id_t object_id = 0;
   fr_handle_ref_t handle_ref = {0};
 
-  if (out == NULL || out_cap == 0 || (inspect && runtime == NULL)) {
+  if (out == NULL || used == NULL || *used >= out_cap ||
+      (mode != FR_REPL_VALUE_DISPLAY && runtime == NULL)) {
     return FR_ERR_INVALID;
   }
-  out[0] = '\0';
 
   if (fr_tagged_is_nil(tagged)) {
-    return fr_repl_append(out, out_cap, &used, "nil");
+    return fr_repl_append(out, out_cap, used, "nil");
   }
   if (fr_tagged_is_false(tagged)) {
-    return fr_repl_append(out, out_cap, &used, "false");
+    return fr_repl_append(out, out_cap, used, "false");
   }
   if (fr_tagged_is_true(tagged)) {
-    return fr_repl_append(out, out_cap, &used, "true");
+    return fr_repl_append(out, out_cap, used, "true");
   }
   if (fr_tagged_decode_int(tagged, &int_value) == FR_OK) {
-    return fr_repl_append_int(out, out_cap, &used, int_value);
+    return fr_repl_append_int(out, out_cap, used, int_value);
   }
   if (fr_tagged_decode_slot_id(tagged, &slot_id) == FR_OK) {
-    FR_TRY(fr_repl_append(out, out_cap, &used, "slot "));
-    return fr_repl_append_u16(out, out_cap, &used, slot_id);
+    FR_TRY(fr_repl_append(out, out_cap, used, "slot "));
+    return fr_repl_append_u16(out, out_cap, used, slot_id);
   }
   if (fr_tagged_decode_code_object_id(tagged, &code_object_id) == FR_OK) {
-    if (inspect) {
+    if (mode != FR_REPL_VALUE_DISPLAY) {
       (void)code_object_id;
-      return fr_repl_append(out, out_cap, &used, "code");
+      return fr_repl_append(out, out_cap, used, "code");
     }
-    FR_TRY(fr_repl_append(out, out_cap, &used, "code "));
-    return fr_repl_append_u16(out, out_cap, &used, code_object_id);
+    FR_TRY(fr_repl_append(out, out_cap, used, "code "));
+    return fr_repl_append_u16(out, out_cap, used, code_object_id);
   }
   if (fr_tagged_decode_native_id(tagged, &native_id) == FR_OK) {
-    if (inspect) {
+    if (mode == FR_REPL_VALUE_INSPECT) {
       FR_TRY(fr_native_get(runtime, native_id, &entry));
-      FR_TRY(fr_repl_append(out, out_cap, &used, "native arity "));
-      return fr_repl_append_u16(out, out_cap, &used, entry->arity);
+      FR_TRY(fr_repl_append(out, out_cap, used, "native arity "));
+      return fr_repl_append_u16(out, out_cap, used, entry->arity);
     }
-    FR_TRY(fr_repl_append(out, out_cap, &used, "native "));
-    return fr_repl_append_u16(out, out_cap, &used, native_id);
+    FR_TRY(fr_repl_append(out, out_cap, used, "native "));
+    return fr_repl_append_u16(out, out_cap, used, native_id);
   }
   if (fr_tagged_decode_handle_ref(tagged, &handle_ref) == FR_OK) {
     fr_handle_kind_t handle_kind = FR_HANDLE_KIND_NONE;
@@ -704,13 +709,15 @@ static fr_err_t fr_repl_write_tagged_value(fr_runtime_t *runtime, char *out,
     err = fr_handle_lookup(runtime, handle_ref, FR_HANDLE_KIND_NONE,
                            &handle_kind, NULL);
     if (err == FR_ERR_HANDLE) {
-      return fr_repl_append(out, out_cap, &used,
-                            inspect ? "volatile closed" : "handle closed");
+      return fr_repl_append(
+          out, out_cap, used,
+          mode == FR_REPL_VALUE_INSPECT ? "volatile closed" : "handle closed");
     }
     FR_TRY(err);
-    FR_TRY(fr_repl_append(out, out_cap, &used,
-                          inspect ? "volatile " : "handle "));
-    return fr_repl_append(out, out_cap, &used,
+    FR_TRY(fr_repl_append(
+        out, out_cap, used,
+        mode == FR_REPL_VALUE_INSPECT ? "volatile " : "handle "));
+    return fr_repl_append(out, out_cap, used,
                           fr_handle_kind_name(handle_kind));
   }
 #if FR_FEATURE_BYTES
@@ -723,10 +730,10 @@ static fr_err_t fr_repl_write_tagged_value(fr_runtime_t *runtime, char *out,
       if (runtime != NULL &&
           fr_bytes_view(runtime, bytes_ref, &bytes_data, &bytes_length) ==
               FR_OK) {
-        FR_TRY(fr_repl_append(out, out_cap, &used, "bytes "));
-        return fr_repl_append_u16(out, out_cap, &used, bytes_length);
+        FR_TRY(fr_repl_append(out, out_cap, used, "bytes "));
+        return fr_repl_append_u16(out, out_cap, used, bytes_length);
       }
-      return fr_repl_append(out, out_cap, &used, "bytes stale");
+      return fr_repl_append(out, out_cap, used, "bytes stale");
     }
   }
 #endif
@@ -741,53 +748,70 @@ static fr_err_t fr_repl_write_tagged_value(fr_runtime_t *runtime, char *out,
 #endif
 
     if (fr_text_view(runtime, object_id, &text_bytes, &text_length) == FR_OK) {
-      if (inspect) {
-        FR_TRY(fr_repl_append(out, out_cap, &used, "text "));
-        return fr_repl_append_u16(out, out_cap, &used, text_length);
+      if (mode == FR_REPL_VALUE_INSPECT) {
+        FR_TRY(fr_repl_append(out, out_cap, used, "text "));
+        return fr_repl_append_u16(out, out_cap, used, text_length);
       }
-      return fr_repl_append_quoted_text(out, out_cap, &used, text_bytes,
+      if (mode == FR_REPL_VALUE_DIAGNOSTIC) {
+        uint16_t keep = *used;
+        fr_err_t err = fr_repl_append_quoted_text(out, out_cap, used,
+                                                  text_bytes, text_length);
+
+        if (err == FR_OK) {
+          return FR_OK;
+        }
+        *used = keep;
+        out[*used] = '\0';
+        FR_TRY(fr_repl_append(out, out_cap, used, "text "));
+        return fr_repl_append_u16(out, out_cap, used, text_length);
+      }
+      return fr_repl_append_quoted_text(out, out_cap, used, text_bytes,
                                         text_length);
     }
 #if FR_FEATURE_RECORDS
     if (fr_record_shape_view(runtime, object_id, &shape_name, &field_count) ==
         FR_OK) {
-      return fr_repl_append_record_shape(runtime, out, out_cap, &used,
+      return fr_repl_append_record_shape(runtime, out, out_cap, used,
                                          object_id,
-                                         inspect ? "record-shape "
-                                                 : "record ");
+                                         mode == FR_REPL_VALUE_DISPLAY
+                                             ? "record "
+                                             : "record-shape ");
     }
     if (fr_record_view(runtime, object_id, &shape_object_id, &field_count) ==
         FR_OK) {
       FR_TRY(fr_record_shape_view(runtime, shape_object_id, &shape_name,
                                   &field_count));
-      if (inspect) {
-        return fr_repl_append_record_shape(runtime, out, out_cap, &used,
+      if (mode != FR_REPL_VALUE_DISPLAY) {
+        return fr_repl_append_record_shape(runtime, out, out_cap, used,
                                            shape_object_id, "record ");
       }
-      FR_TRY(fr_repl_append_record_name(out, out_cap, &used, shape_name));
-      FR_TRY(fr_repl_append(out, out_cap, &used, ": "));
+      FR_TRY(fr_repl_append_record_name(out, out_cap, used, shape_name));
+      FR_TRY(fr_repl_append(out, out_cap, used, ": "));
       for (uint16_t i = 0; i < field_count; i++) {
         fr_tagged_t field_value = 0;
         char value_out[FR_REPL_OUTPUT_BYTES];
+        uint16_t value_used = 0;
 
         if (i > 0) {
-          FR_TRY(fr_repl_append(out, out_cap, &used, ", "));
+          FR_TRY(fr_repl_append(out, out_cap, used, ", "));
         }
+        value_out[0] = '\0';
         FR_TRY(fr_record_read_index(runtime, object_id, i, &field_value));
         FR_TRY(fr_repl_write_tagged_value(runtime, value_out,
                                           (uint16_t)sizeof(value_out),
-                                          field_value, false));
-        FR_TRY(fr_repl_append(out, out_cap, &used, value_out));
+                                          &value_used, field_value,
+                                          FR_REPL_VALUE_DISPLAY));
+        FR_TRY(fr_repl_append(out, out_cap, used, value_out));
       }
       return FR_OK;
     }
 #endif
     if (fr_cells_length(runtime, object_id, &cell_length) == FR_OK) {
-      FR_TRY(fr_repl_append(out, out_cap, &used, "cells "));
-      return fr_repl_append_u16(out, out_cap, &used, cell_length);
+      FR_TRY(fr_repl_append(out, out_cap, used, "cells "));
+      return fr_repl_append_u16(out, out_cap, used, cell_length);
     }
-    FR_TRY(fr_repl_append(out, out_cap, &used, "object "));
-    return fr_repl_append_u16(out, out_cap, &used, object_id);
+    FR_TRY(fr_repl_append(out, out_cap, used, "object "));
+    return fr_repl_append_u16(out, out_cap, used, object_id);
   }
   return FR_ERR_UNSUPPORTED;
 }
@@ -857,6 +881,7 @@ fr_repl_writer_write_tagged_value(const fr_repl_writer_t *writer,
   const uint8_t *text_bytes = NULL;
   uint16_t text_length = 0;
   char buf[FR_REPL_OUTPUT_BYTES];
+  uint16_t used = 0;
 
   if (writer == NULL) {
     return FR_ERR_INVALID;
@@ -865,8 +890,9 @@ fr_repl_writer_write_tagged_value(const fr_repl_writer_t *writer,
       fr_text_view(runtime, object_id, &text_bytes, &text_length) == FR_OK) {
     return fr_repl_writer_write_quoted_text(writer, text_bytes, text_length);
   }
+  buf[0] = '\0';
   FR_TRY(fr_repl_write_tagged_value(runtime, buf, (uint16_t)sizeof(buf),
-                                    tagged, false));
+                                    &used, tagged, FR_REPL_VALUE_DISPLAY));
   return fr_repl_writer_write(writer, buf);
 }
 
@@ -1147,16 +1173,25 @@ static fr_err_t fr_repl_append_suggestion_line(char *out, uint16_t out_cap,
   return fr_repl_append(out, out_cap, used, "\"?\n");
 }
 
-static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
+static fr_err_t fr_repl_append_error_suffix(char *out, uint16_t out_cap,
+                                            uint16_t *used, fr_err_t err) {
+  FR_TRY(fr_repl_append(out, out_cap, used, " ("));
+  FR_TRY(fr_repl_append_u16(out, out_cap, used, (uint16_t)err));
+  return fr_repl_append(out, out_cap, used, ")\n");
+}
+
+static fr_err_t fr_repl_write_error(fr_runtime_t *runtime, char *out,
+                                    uint16_t out_cap, fr_err_t err,
                                     const char *line,
                                     const fr_diagnostic_t *diag) {
   const char *name = fr_err_name(err);
   const char *message = NULL;
   uint16_t used = 0;
   uint16_t base_used = 0;
+  uint16_t name_used = 0;
   bool source_visible = line == NULL;
 
-  if (out == NULL) {
+  if (out == NULL || out_cap == 0) {
     return FR_ERR_INVALID;
   }
   if (name == NULL) {
@@ -1166,9 +1201,34 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
   }
   FR_TRY(fr_repl_append(out, out_cap, &used, "error: "));
   FR_TRY(fr_repl_append(out, out_cap, &used, name));
-  FR_TRY(fr_repl_append(out, out_cap, &used, " ("));
-  FR_TRY(fr_repl_append_u16(out, out_cap, &used, (uint16_t)err));
-  FR_TRY(fr_repl_append(out, out_cap, &used, ")\n"));
+  name_used = used;
+  if (diag != NULL && diag->actual_state != FR_DIAG_ACTUAL_NONE) {
+    fr_err_t actual_err = fr_repl_append(out, out_cap, &used, ": ");
+
+    if (actual_err == FR_OK &&
+        diag->actual_state == FR_DIAG_ACTUAL_REDACTED) {
+      actual_err = fr_repl_append(out, out_cap, &used, "<redacted>");
+    } else if (actual_err == FR_OK && runtime != NULL) {
+      actual_err = fr_repl_write_tagged_value(
+          runtime, out, out_cap, &used, (fr_tagged_t)diag->actual,
+          FR_REPL_VALUE_DIAGNOSTIC);
+    } else if (actual_err == FR_OK) {
+      actual_err = FR_ERR_INVALID;
+    }
+    if (actual_err != FR_OK) {
+      const char *kind = fr_diag_value_kind_name((uint16_t)diag->got);
+
+      fr_repl_truncate(out, &used, name_used);
+      if (kind == NULL || fr_repl_append(out, out_cap, &used, ": ") != FR_OK ||
+          fr_repl_append(out, out_cap, &used, kind) != FR_OK) {
+        fr_repl_truncate(out, &used, name_used);
+      }
+    }
+  }
+  if (fr_repl_append_error_suffix(out, out_cap, &used, err) != FR_OK) {
+    fr_repl_truncate(out, &used, name_used);
+    FR_TRY(fr_repl_append_error_suffix(out, out_cap, &used, err));
+  }
   base_used = used;
 
   if (diag == NULL) {
@@ -1269,8 +1329,8 @@ static fr_err_t fr_repl_write_error(char *out, uint16_t out_cap, fr_err_t err,
 static void fr_repl_write_startup_error(fr_err_t err) {
   char response[FR_REPL_OUTPUT_BYTES];
 
-  if (fr_repl_write_error(response, (uint16_t)sizeof(response), err, NULL,
-                          NULL) == FR_OK) {
+  if (fr_repl_write_error(NULL, response, (uint16_t)sizeof(response), err,
+                          NULL, NULL) == FR_OK) {
     (void)fr_platform_write_text(response);
   }
 }
@@ -1637,7 +1697,14 @@ static const char *fr_repl_base_layer_name(fr_base_layer_t layer) {
 static fr_err_t fr_repl_write_see_tagged(fr_runtime_t *runtime, char *out,
                                          uint16_t out_cap,
                                          fr_tagged_t tagged) {
-  return fr_repl_write_tagged_value(runtime, out, out_cap, tagged, true);
+  uint16_t used = 0;
+
+  if (out == NULL || out_cap == 0) {
+    return FR_ERR_INVALID;
+  }
+  out[0] = '\0';
+  return fr_repl_write_tagged_value(runtime, out, out_cap, &used, tagged,
+                                    FR_REPL_VALUE_INSPECT);
 }
 
 #if FR_FEATURE_NATIVE_SIGNATURES
@@ -1653,6 +1720,7 @@ static fr_err_t fr_repl_write_value_kind(const fr_repl_writer_t *writer,
   case FR_NATIVE_VALUE_NIL:
     return fr_repl_writer_write(writer, "nil");
   case FR_NATIVE_VALUE_TEXT:
+  case FR_NATIVE_VALUE_SECRET_TEXT:
     return fr_repl_writer_write(writer, "text");
   case FR_NATIVE_VALUE_TEXT_OR_BYTES:
     return fr_repl_writer_write(writer, "text|bytes");
@@ -2312,24 +2380,40 @@ static fr_err_t fr_repl_eval_line_to_writer_inner(fr_runtime_t *runtime,
 static fr_err_t fr_repl_eval_line_to_writer(fr_runtime_t *runtime,
                                             const char *line,
                                             const fr_repl_writer_t *writer,
-                                            fr_diagnostic_t *diag) {
+                                            fr_diagnostic_t *diag,
+                                            bool *out_reported) {
   fr_diagnostic_t *previous_diag = NULL;
   fr_err_t err = FR_OK;
+  fr_err_t report_err = FR_OK;
 
-  if (runtime == NULL) {
+  if (runtime == NULL || out_reported == NULL) {
     return FR_ERR_INVALID;
   }
+  *out_reported = false;
   if (diag != NULL) {
     *diag = (fr_diagnostic_t){0};
   }
   previous_diag = runtime->diag;
   runtime->diag = diag;
   err = fr_repl_eval_line_to_writer_inner(runtime, line, writer, diag);
+  if (err != FR_OK && err != FR_ERR_INTERRUPTED) {
+    char response[FR_REPL_OUTPUT_BYTES];
+
+    report_err = fr_repl_write_error(runtime, response,
+                                     (uint16_t)sizeof(response), err, line,
+                                     diag);
+    if (report_err == FR_OK) {
+      report_err = fr_repl_writer_write(writer, response);
+    }
+    if (report_err == FR_OK) {
+      *out_reported = true;
+    }
+  }
   runtime->diag = previous_diag;
 #if FR_FEATURE_BYTES
   fr_bytes_reset_if_outermost(runtime);
 #endif
-  return err;
+  return report_err == FR_OK ? err : report_err;
 }
 
 fr_err_t fr_repl_eval_line(fr_runtime_t *runtime, const char *line, char *out,
@@ -2343,12 +2427,14 @@ fr_err_t fr_repl_eval_line(fr_runtime_t *runtime, const char *line, char *out,
       .write = fr_repl_buffer_writer_write,
   };
   fr_diagnostic_t diag = {0};
+  bool reported = false;
 
   if (runtime == NULL || line == NULL || out == NULL || out_cap == 0) {
     return FR_ERR_INVALID;
   }
   out[0] = '\0';
-  return fr_repl_eval_line_to_writer(runtime, line, &writer, &diag);
+  return fr_repl_eval_line_to_writer(runtime, line, &writer, &diag,
+                                     &reported);
 }
 
 /* Idle-servicing body: drain queued interrupt/timer candidates and run any
@@ -2372,8 +2458,8 @@ static fr_err_t fr_repl_service_events(void *ctx) {
   err = fr_event_dispatch(runtime);
   if (err != FR_OK && err != FR_ERR_INTERRUPTED) {
     char response[FR_REPL_OUTPUT_BYTES];
-    if (fr_repl_write_error(response, (uint16_t)sizeof(response), err, NULL,
-                            NULL) == FR_OK) {
+    if (fr_repl_write_error(runtime, response, (uint16_t)sizeof(response), err,
+                            NULL, NULL) == FR_OK) {
       (void)fr_platform_write_text("! ");
       (void)fr_platform_write_text(response);
     }
@@ -2408,16 +2494,23 @@ fr_err_t fr_repl_run(fr_runtime_t *runtime, const fr_repl_io_t *io) {
 
     fr_diagnostic_t diag = {0};
     fr_err_t err = fr_repl_decode_source_form_request(line);
+    bool evaluated = false;
+    bool reported = false;
     if (err == FR_OK) {
-      err = fr_repl_eval_line_to_writer(runtime, line, &writer, &diag);
+      evaluated = true;
+      err = fr_repl_eval_line_to_writer(runtime, line, &writer, &diag,
+                                        &reported);
     }
     if (err == FR_ERR_INTERRUPTED) {
       FR_TRY(io->write_text("interrupted\nok\n"));
-    } else if (err != FR_OK) {
+    } else if (err != FR_OK && evaluated && !reported) {
+      return err;
+    } else if (err != FR_OK && !evaluated) {
       char response[FR_REPL_OUTPUT_BYTES];
 
-      FR_TRY(fr_repl_write_error(response, (uint16_t)sizeof(response), err,
-                                 line, &diag));
+      FR_TRY(fr_repl_write_error(runtime, response,
+                                 (uint16_t)sizeof(response), err, line,
+                                 &diag));
       FR_TRY(io->write_text(response));
     }
   }

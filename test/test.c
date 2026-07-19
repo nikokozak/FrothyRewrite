@@ -4961,6 +4961,7 @@ static void test_natives(void) {
   fr_tagged_t tagged = 0;
   fr_tagged_t args[2];
   fr_tagged_t result = 0;
+  fr_diagnostic_t diag = {0};
 
   CHECK("native runtime init", fr_runtime_init(&runtime) == FR_OK);
   CHECK("native add",
@@ -4985,8 +4986,17 @@ static void test_natives(void) {
             fr_native_call(&runtime, entry, args, 2, &result) == FR_OK &&
             fr_tagged_encode_int(5, &tagged) == FR_OK && result == tagged);
   CHECK("native signature rejects arg type",
-        (args[0] = fr_tagged_nil(), true) &&
-            fr_native_call(&runtime, entry, args, 2, &result) == FR_ERR_TYPE);
+        (runtime.diag = &diag, args[0] = fr_tagged_nil(), true) &&
+            fr_native_call(&runtime, entry, args, 2, &result) == FR_ERR_TYPE &&
+            diag.actual_state == FR_DIAG_ACTUAL_VALUE &&
+            diag.actual == fr_tagged_nil() && diag.got == FR_DIAG_VALUE_NIL);
+  diag = (fr_diagnostic_t){0};
+  diag.kind = FR_DIAG_NOTE;
+  diag.actual = 123u;
+  CHECK("native keeps first diagnostic",
+        fr_native_call(&runtime, entry, args, 2, &result) == FR_ERR_TYPE &&
+            diag.kind == FR_DIAG_NOTE && diag.actual == 123u);
+  runtime.diag = NULL;
   for (uint16_t i = 2; i < FR_PROFILE_NATIVE_TABLE_SIZE; i++) {
     CHECK("native fill",
           fr_native_install(&runtime, test_native_one, 0, NULL, &native_id) == FR_OK);
@@ -13620,6 +13630,16 @@ static void test_repl_error_diagnostics(void) {
   const char *set_target_lines[] = {"set missing to 1"};
   const char *native_type_lines[] = {"gpio.write: 2, true"};
   const char *arith_type_lines[] = {"true + 1"};
+#if FR_FEATURE_TEXT && FR_PROFILE_MAX_TEXT_LENGTH >= 240 &&                  \
+    FR_PROFILE_MAX_OVERLAY_TEXT_BYTES >= 420 &&                              \
+    FR_PROFILE_MAX_OVERLAY_NAMES >= 3
+  const char *long_actual_lines[] = {
+      "chunk is \"012345678901234567890123456789012345678901234567890123456789\"",
+      "twice is text.concat: chunk, chunk",
+      "four is text.concat: twice, twice",
+      "four + 1",
+  };
+#endif
 #if FR_FEATURE_CELLS
   const char *cell_oob_lines[] = {
       "c is cells(4)",
@@ -14035,7 +14055,7 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(native_type_lines) /
                           sizeof(native_type_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: wrong type (2)") &&
+            test_error_line_equals(out, "error: wrong type: true (2)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out,
                    "gpio.write argument 2 expects an int, got a bool\n") !=
@@ -14051,11 +14071,60 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(arith_type_lines) /
                           sizeof(arith_type_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: wrong type (2)") &&
+            test_error_line_equals(out, "error: wrong type: true (2)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "expected an int, got a bool\n") != NULL &&
             strstr(out, "true + 1\n") == NULL &&
             test_error_has_no_caret(out));
+
+#if FR_FEATURE_TEXT
+  memset(out, 0, sizeof(out));
+  CHECK("public eval renders and escapes rejected text",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "\"str\\ning\" + 5", out,
+                              (uint16_t)sizeof(out)) == FR_ERR_TYPE &&
+            test_error_line_equals(
+                out, "error: wrong type: \"str\\ning\" (2)") &&
+            strchr(out, '\n') != NULL && strstr(out, "str\ning") == NULL);
+#endif
+
+#if FR_FEATURE_TEXT && FR_PROFILE_MAX_TEXT_LENGTH >= 240 &&                  \
+    FR_PROFILE_MAX_OVERLAY_TEXT_BYTES >= 420 &&                              \
+    FR_PROFILE_MAX_OVERLAY_NAMES >= 3
+  memset(out, 0, sizeof(out));
+  CHECK("rejected text falls back without truncation",
+        fr_base_image_install(&runtime) == FR_OK &&
+            test_repl_run_lines(
+                &runtime, long_actual_lines,
+                (uint8_t)(sizeof(long_actual_lines) /
+                          sizeof(long_actual_lines[0])),
+                out, (uint16_t)sizeof(out)) &&
+            test_error_line_equals(out,
+                                   "error: wrong type: text 240 (2)") &&
+            strstr(out, "01234567890123456789") == NULL);
+#endif
+
+#if FR_FEATURE_NET
+  memset(out, 0, sizeof(out));
+  CHECK("native signature redacts rejected secret",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "wifi.save: \"ssid\", true", out,
+                              (uint16_t)sizeof(out)) == FR_ERR_TYPE &&
+            test_error_line_equals(
+                out, "error: wrong type: <redacted> (2)") &&
+            strstr(out, "ssid") == NULL);
+#endif
+
+#if FR_FEATURE_BYTES
+  memset(out, 0, sizeof(out));
+  CHECK("public eval renders rejected bytes before reset",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "(bytes.from-text: \"abc\") + 1", out,
+                              (uint16_t)sizeof(out)) == FR_ERR_TYPE &&
+            test_error_line_equals(out,
+                                   "error: wrong type: bytes 3 (2)") &&
+            strstr(out, "bytes stale") == NULL);
+#endif
 
 #if FR_FEATURE_CELLS
   memset(out, 0, sizeof(out));

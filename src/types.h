@@ -123,6 +123,12 @@ typedef enum fr_diag_value_kind_t {
 
 const char *fr_diag_value_kind_name(uint16_t value_kind);
 
+typedef enum fr_diag_actual_state_t {
+  FR_DIAG_ACTUAL_NONE = 0,
+  FR_DIAG_ACTUAL_VALUE,
+  FR_DIAG_ACTUAL_REDACTED,
+} fr_diag_actual_state_t;
+
 typedef struct fr_diagnostic_t {
   fr_diag_kind_t kind;
   const char *span_start;
@@ -130,7 +136,10 @@ typedef struct fr_diagnostic_t {
   uint16_t message_id;
   fr_int_t expected;
   fr_int_t got;
+  uint32_t actual;
+  fr_diag_actual_state_t actual_state;
   uint16_t index;
+  /* May point into suggestion_text; do not copy a populated diagnostic. */
   const char *context_name;
   const char *suggestion_start;
   uint16_t suggestion_length;

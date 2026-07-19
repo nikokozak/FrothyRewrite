@@ -17,6 +17,7 @@ fr_native_value_diag_kind(fr_native_value_kind_t kind) {
   case FR_NATIVE_VALUE_NIL:
     return FR_DIAG_VALUE_NIL;
   case FR_NATIVE_VALUE_TEXT:
+  case FR_NATIVE_VALUE_SECRET_TEXT:
     return FR_DIAG_VALUE_TEXT;
   case FR_NATIVE_VALUE_TEXT_OR_BYTES:
     return FR_DIAG_VALUE_TEXT_OR_BYTES;
@@ -74,6 +75,7 @@ static bool fr_native_value_matches(const fr_runtime_t *runtime,
     return false;
 #endif
   case FR_NATIVE_VALUE_TEXT:
+  case FR_NATIVE_VALUE_SECRET_TEXT:
 #if FR_FEATURE_TEXT
   {
     fr_object_id_t object_id = 0;
@@ -170,6 +172,10 @@ static void fr_native_note_arg_type(fr_runtime_t *runtime,
   runtime->diag->kind = FR_DIAG_TYPE;
   runtime->diag->expected = fr_native_value_diag_kind(expected);
   runtime->diag->got = fr_tagged_diag_value_kind(got);
+  runtime->diag->actual = got;
+  runtime->diag->actual_state = expected == FR_NATIVE_VALUE_SECRET_TEXT
+                                    ? FR_DIAG_ACTUAL_REDACTED
+                                    : FR_DIAG_ACTUAL_VALUE;
   runtime->diag->index = index;
   runtime->diag->context_name =
       fr_native_diag_context_name(runtime->diag, context_name);

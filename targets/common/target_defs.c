@@ -5128,7 +5128,7 @@ static const fr_native_signature_t fr_native_i2c_write_reg16_signature = {
 #if FR_FEATURE_NET
 static const fr_native_param_t fr_native_wifi_save_params[] = {
     {"ssid", FR_NATIVE_VALUE_TEXT},
-    {"pass", FR_NATIVE_VALUE_TEXT},
+    {"pass", FR_NATIVE_VALUE_SECRET_TEXT},
 };
 static const fr_native_signature_t fr_native_wifi_save_signature = {
     .params = fr_native_wifi_save_params,

@@ -155,6 +155,8 @@ static void fr_vm_note_type(fr_runtime_t *runtime,
   runtime->diag->kind = FR_DIAG_TYPE;
   runtime->diag->expected = expected;
   runtime->diag->got = fr_tagged_diag_value_kind(got);
+  runtime->diag->actual = got;
+  runtime->diag->actual_state = FR_DIAG_ACTUAL_VALUE;
 }
 
 static void fr_vm_note_too_few_args(fr_runtime_t *runtime, uint8_t expected,
