@@ -4,10 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const examplesDir = path.join(root, "examples");
-const outputs = [
-  path.join(root, "libs/frothy-editor/src/examples.generated.ts"),
-  path.join(root, "editors/vscode/src/examples.generated.ts"),
-];
+const output = path.join(root, "editors/vscode/src/examples.generated.ts");
 
 export function parseExample(name, text) {
   let title;
@@ -76,10 +73,8 @@ export const FROTHY_EXAMPLES: readonly FrothyExample[] = ${JSON.stringify(exampl
 
 function main() {
   const text = moduleText(readExamples());
-  for (const out of outputs) {
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out, text);
-  }
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  fs.writeFileSync(output, text);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

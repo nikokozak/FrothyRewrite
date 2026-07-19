@@ -481,7 +481,8 @@ examples-manifest: ## Regenerate the editor example manifests from examples/.
 	node tools/gen-examples-manifest.mjs
 
 check-examples-manifest: examples-manifest ## Fail if the manifests are stale.
-	git diff --exit-code -- libs/frothy-editor/src/examples.generated.ts editors/vscode/src/examples.generated.ts
+	node --test tools/gen-examples-manifest.test.mjs
+	git diff --exit-code -- editors/vscode/src/examples.generated.ts
 
 test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 	@out=$$(printf '%s\n' \

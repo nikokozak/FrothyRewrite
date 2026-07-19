@@ -139,10 +139,9 @@ Frothy's runtime stays small enough to read end to end:
 - `boards/`: board definitions (`esp32_devkit_v1`, `host`).
 - `targets/`: host and ESP-IDF platform glue.
 - `cmd/frothy-session/`: the `frothy` CLI (Go).
-- `libs/frothy-repl/`, `libs/frothy-editor/`: ESM libraries that wrap
-  the wire protocol for browser and Node consumers.
-- `tools/build-editor-bundle.sh`, `tools/build-flasher-bundle.sh`: build the
-  browser artifacts vendored into FrothySite.
+- `editors/vscode/`: the VS Code extension for serial sessions and source tools.
+- `tools/build-flasher-bundle.sh`: builds firmware segments and their browser
+  manifest; the browser flasher itself belongs to Frothy App.
 - `test/`: core C tests, Unity tests, transcript replays, and library e2e fixtures.
 
 The first interface is a human serial session — `cat`, `screen`,
@@ -153,7 +152,7 @@ the web tools are conveniences, not a private control plane.
 
 Run `make help` to see the common make targets.
 The check surface is the core C suite, 10 Unity binaries, transcript replays,
-the library e2e fixture, Go packages, and the TypeScript library suites.
+the library e2e fixture, Go packages, and the VS Code TypeScript suite.
 
 ```sh
 make test                                # core C suite
@@ -162,8 +161,7 @@ make test-host-normal                    # roomy host profile
 make test-esp32-plain-host-transcript    # ESP32 transcript replay
 make test-lib-e2e                        # library extension e2e fixture
 go test ./cmd/... ./internal/...         # Go packages
-(cd libs/frothy-repl && npm test)        # @frothy/repl
-(cd libs/frothy-editor && npm test)      # @frothy/editor
+(cd editors/vscode && npm test)          # VS Code extension
 ```
 
 ## Status

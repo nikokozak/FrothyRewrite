@@ -34,8 +34,7 @@ make test-host-normal-transcript
 make test-esp32-plain-host-transcript
 make test-lib-e2e
 go test ./cmd/... ./internal/...
-(cd libs/frothy-repl && npm test)
-(cd libs/frothy-editor && npm test)
+(cd editors/vscode && npm test)
 ```
 
 CI runs all of these on every pull request, plus both official ESP-IDF board
@@ -51,18 +50,17 @@ shape before behavior, and names a stranger can read without project history.
 If a change touches hardware behavior, say which board you used and how you
 verified it.
 
-## Releasing And Vendored Bundles
+## Releasing And Firmware Bundles
 
-The website (frothy.dev) serves two things built from this repo: the web
-flasher's firmware segments and the browser editor bundle. Both are vendored —
-built here, copied into the site — so the site stays self-contained and works
-offline. Firmware files carry embedded build timestamps and are never
+The website and Frothy App consume the web flasher's firmware segments from
+this repo. Firmware files carry embedded build timestamps and are never
 byte-identical between builds, so "update it" always means "rebuild and
-re-vendor", never "diff the bytes".
+re-vendor", never "diff the bytes". Browser editor and serial-client source
+belong to Frothy App; its package builds produce the standalone bundles still
+vendored by frothy.dev.
 
-**Version scheme.** `vX.Y.Z` git tags are the project release. Components keep
-their own versions (the VS Code extension and `@frothy/editor` each have their
-own `package.json` version); a release bundles a coherent set of them.
+**Version scheme.** `vX.Y.Z` git tags are the project release. The VS Code
+extension keeps its own `package.json` version.
 
 **Update the flasher firmware** on a site checkout (needs ESP-IDF once, via
 `frothy bootstrap`):
@@ -76,14 +74,8 @@ the files listed by ESP-IDF's generated `flasher_args.json`, and writes their
 addresses plus the build version (from `git describe`) to one flasher
 `manifest.json`.
 
-**Update the editor bundle** the same way:
-
-```sh
-tools/build-editor-bundle.sh ~/Developer/frothy-site/static/test/editor
-```
-
-Then point the page's import at the printed version and drop the old vendored
-directory.
+This command writes firmware only. Refresh frothy.dev's serial-client bundle
+from Frothy App as documented beside the site's flasher assets.
 
 **Cut a release.** Update `CHANGELOG.md`, then tag and push:
 

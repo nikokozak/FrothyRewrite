@@ -24,10 +24,7 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
-          cache-dependency-path: |
-            libs/frothy-repl/package-lock.json
-            libs/frothy-editor/package-lock.json
-            editors/vscode/package-lock.json
+          cache-dependency-path: editors/vscode/package-lock.json
 
       - run: make test
       - run: make test-unity
@@ -41,19 +38,6 @@ jobs:
         run: |
           go list ./cmd/... ./internal/...
           go test ./cmd/... ./internal/...
-
-      - name: frothy-repl npm tests
-        working-directory: libs/frothy-repl
-        run: |
-          npm ci
-          npm test
-          npm run build
-
-      - name: frothy-editor npm tests
-        working-directory: libs/frothy-editor
-        run: |
-          npm ci
-          npm test
 
       - name: VS Code extension npm tests
         working-directory: editors/vscode

@@ -31,10 +31,6 @@ jobs:
         with:
           node-version: lts/*
 
-      - name: Install web REPL dependencies
-        working-directory: libs/frothy-repl
-        run: npm ci
-
       - name: Build web flasher bundle
         run: tools/build-flasher-bundle.sh dist-release
 

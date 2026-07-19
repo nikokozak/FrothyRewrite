@@ -12,10 +12,6 @@ set -euo pipefail
 dest="${1:?usage: build-flasher-bundle.sh <dest-firmware-dir>}"
 here="$(cd "$(dirname "$0")/.." && pwd)"
 version="$(git -C "$here" describe --tags --always --dirty 2>/dev/null || echo unknown)"
-repl_version="$(node -p "require('$here/libs/frothy-repl/package.json').version")"
-
-npm --prefix "$here/libs/frothy-repl" run build >/dev/null
-repl_dest="$(dirname "$dest")/vendor/frothy-repl/$repl_version"
 
 node - "$here" "$dest" "$version" <<'NODE'
 const childProcess = require("child_process");
@@ -172,7 +168,3 @@ try {
 const segmentCount = builds.reduce((count, build) => count + build.segments.length, 0);
 console.log(`built ${segmentCount} segments for ${builds.length} boards @ ${version} -> ${destination}`);
 NODE
-
-mkdir -p "$repl_dest"
-cp "$here/libs/frothy-repl/dist/browser/index.js" "$repl_dest/index.js"
-echo "vendored @frothy/repl $repl_version -> $repl_dest/index.js"
