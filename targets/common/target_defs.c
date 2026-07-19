@@ -59,6 +59,36 @@ static fr_err_t fr_native_decode_u16(const fr_tagged_t *args,
   return FR_OK;
 }
 
+#if FR_FEATURE_UART || FR_FEATURE_PWM || FR_FEATURE_I2C || FR_FEATURE_NET ||   \
+    FR_FEATURE_TRACE || FR_FEATURE_PULSE || FR_BLE_ENABLE_CENTRAL ||          \
+    FR_BLE_ENABLE_PERIPHERAL
+static fr_err_t fr_native_decode_handle_arg(
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    uint8_t index, fr_handle_kind_t expected_kind, fr_handle_ref_t *out_ref,
+    uint16_t *out_platform_index) {
+  fr_handle_ref_t ref = {0};
+  fr_err_t err = FR_OK;
+
+  if (runtime == NULL || args == NULL || index >= arg_count) {
+    return FR_ERR_INVALID;
+  }
+
+  err = fr_tagged_decode_handle_ref(args[index], &ref);
+  if (err == FR_OK) {
+    err = fr_handle_lookup(runtime, ref, expected_kind, NULL,
+                           out_platform_index);
+  }
+  if (err != FR_OK) {
+    fr_native_diag_note_rejected_arg(runtime, args, arg_count, index);
+    return err;
+  }
+  if (out_ref != NULL) {
+    *out_ref = ref;
+  }
+  return FR_OK;
+}
+#endif
+
 static fr_err_t fr_native_ms(fr_runtime_t *runtime, const fr_tagged_t *args,
                              uint8_t arg_count, fr_tagged_t *out) {
   fr_int_t ms = 0;
@@ -215,16 +245,9 @@ static fr_err_t fr_native_decode_uart_handle(fr_runtime_t *runtime,
                                              uint8_t arg_count,
                                              uint8_t index,
                                              uint16_t *out_platform_index) {
-  fr_handle_ref_t ref = {0};
-
-  if (runtime == NULL || args == NULL || index >= arg_count ||
-      out_platform_index == NULL) {
-    return FR_ERR_INVALID;
-  }
-
-  FR_TRY(fr_tagged_decode_handle_ref(args[index], &ref));
-  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_UART, NULL,
-                          out_platform_index);
+  return fr_native_decode_handle_arg(runtime, args, arg_count, index,
+                                     FR_HANDLE_KIND_UART, NULL,
+                                     out_platform_index);
 }
 
 static fr_err_t fr_native_uart_open(fr_runtime_t *runtime,
@@ -356,18 +379,13 @@ static fr_err_t fr_native_uart_close(fr_runtime_t *runtime,
                                      const fr_tagged_t *args,
                                      uint8_t arg_count, fr_tagged_t *out) {
   fr_handle_ref_t ref = {0};
-  fr_handle_kind_t kind = FR_HANDLE_KIND_NONE;
-  uint16_t platform_index = 0;
 
   if (runtime == NULL || args == NULL || arg_count == 0 || out == NULL) {
     return FR_ERR_INVALID;
   }
 
-  FR_TRY(fr_tagged_decode_handle_ref(args[0], &ref));
-  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_UART, &kind,
-                          &platform_index));
-  (void)kind;
-  (void)platform_index;
+  FR_TRY(fr_native_decode_handle_arg(runtime, args, arg_count, 0,
+                                     FR_HANDLE_KIND_UART, &ref, NULL));
   FR_TRY(fr_handle_close(runtime, ref));
   *out = fr_tagged_nil();
   return FR_OK;
@@ -383,16 +401,9 @@ static fr_err_t fr_native_decode_pwm_handle(fr_runtime_t *runtime,
                                             const fr_tagged_t *args,
                                             uint8_t arg_count, uint8_t index,
                                             uint16_t *out_platform_index) {
-  fr_handle_ref_t ref = {0};
-
-  if (runtime == NULL || args == NULL || index >= arg_count ||
-      out_platform_index == NULL) {
-    return FR_ERR_INVALID;
-  }
-
-  FR_TRY(fr_tagged_decode_handle_ref(args[index], &ref));
-  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_PWM, NULL,
-                          out_platform_index);
+  return fr_native_decode_handle_arg(runtime, args, arg_count, index,
+                                     FR_HANDLE_KIND_PWM, NULL,
+                                     out_platform_index);
 }
 
 static fr_err_t fr_native_pwm_open(fr_runtime_t *runtime,
@@ -460,8 +471,8 @@ static fr_err_t fr_native_pwm_close(fr_runtime_t *runtime,
     return FR_ERR_INVALID;
   }
 
-  FR_TRY(fr_tagged_decode_handle_ref(args[0], &ref));
-  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_PWM, NULL, NULL));
+  FR_TRY(fr_native_decode_handle_arg(runtime, args, arg_count, 0,
+                                     FR_HANDLE_KIND_PWM, &ref, NULL));
   FR_TRY(fr_handle_close(runtime, ref));
   *out = fr_tagged_nil();
   return FR_OK;
@@ -494,16 +505,9 @@ static fr_err_t fr_native_decode_i2c_handle(fr_runtime_t *runtime,
                                             const fr_tagged_t *args,
                                             uint8_t arg_count, uint8_t index,
                                             uint16_t *out_platform_index) {
-  fr_handle_ref_t ref = {0};
-
-  if (runtime == NULL || args == NULL || index >= arg_count ||
-      out_platform_index == NULL) {
-    return FR_ERR_INVALID;
-  }
-
-  FR_TRY(fr_tagged_decode_handle_ref(args[index], &ref));
-  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_I2C_BUS, NULL,
-                          out_platform_index);
+  return fr_native_decode_handle_arg(runtime, args, arg_count, index,
+                                     FR_HANDLE_KIND_I2C_BUS, NULL,
+                                     out_platform_index);
 }
 
 static fr_err_t fr_native_decode_i2c_addr(const fr_tagged_t *args,
@@ -624,8 +628,8 @@ static fr_err_t fr_native_i2c_close(fr_runtime_t *runtime,
     return FR_ERR_INVALID;
   }
 
-  FR_TRY(fr_tagged_decode_handle_ref(args[0], &ref));
-  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_I2C_BUS, NULL, NULL));
+  FR_TRY(fr_native_decode_handle_arg(runtime, args, arg_count, 0,
+                                     FR_HANDLE_KIND_I2C_BUS, &ref, NULL));
   FR_TRY(fr_handle_close(runtime, ref));
   *out = fr_tagged_nil();
   return FR_OK;
@@ -863,16 +867,9 @@ static fr_err_t fr_native_decode_tcp_handle(fr_runtime_t *runtime,
                                             const fr_tagged_t *args,
                                             uint8_t arg_count, uint8_t index,
                                             uint16_t *out_platform_index) {
-  fr_handle_ref_t ref = {0};
-
-  if (runtime == NULL || args == NULL || index >= arg_count ||
-      out_platform_index == NULL) {
-    return FR_ERR_INVALID;
-  }
-
-  FR_TRY(fr_tagged_decode_handle_ref(args[index], &ref));
-  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_TCP, NULL,
-                          out_platform_index);
+  return fr_native_decode_handle_arg(runtime, args, arg_count, index,
+                                     FR_HANDLE_KIND_TCP, NULL,
+                                     out_platform_index);
 }
 
 static fr_err_t fr_native_tcp_open(fr_runtime_t *runtime,
@@ -968,8 +965,8 @@ static fr_err_t fr_native_tcp_close(fr_runtime_t *runtime,
     return FR_ERR_INVALID;
   }
 
-  FR_TRY(fr_tagged_decode_handle_ref(args[0], &ref));
-  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_TCP, NULL, NULL));
+  FR_TRY(fr_native_decode_handle_arg(runtime, args, arg_count, 0,
+                                     FR_HANDLE_KIND_TCP, &ref, NULL));
   FR_TRY(fr_handle_close(runtime, ref));
   *out = fr_tagged_nil();
   return FR_OK;
@@ -1709,8 +1706,8 @@ static fr_err_t fr_native_ble_info(fr_runtime_t *runtime,
 
 #if FR_BLE_ENABLE_GATT_SERVER || FR_BLE_ENABLE_GATT_CLIENT
 static fr_err_t fr_native_ble_connection_handle(
-    fr_runtime_t *runtime, fr_tagged_t tagged, fr_handle_ref_t *out_ref,
-    uint16_t *out_platform_index);
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    uint8_t index, fr_handle_ref_t *out_ref, uint16_t *out_platform_index);
 
 #if FR_BLE_ENABLE_GATT_SERVER
 static const fr_record_name_t fr_native_ble_gatt_kind_field = {
@@ -2229,7 +2226,7 @@ static fr_err_t fr_native_ble_gatt_notify(fr_runtime_t *runtime,
   if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &connection_index));
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_id));
   FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
@@ -2253,7 +2250,7 @@ static fr_err_t fr_native_ble_gatt_indicate(fr_runtime_t *runtime,
   if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &connection_index));
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_id));
   FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
@@ -2346,7 +2343,7 @@ static fr_err_t fr_native_ble_gatt_client_find(
   if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &connection_index));
   FR_TRY(fr_native_ble_gatt_uuid_arg(runtime, args[1], &service_uuid));
   FR_TRY(fr_native_ble_gatt_uuid_arg(runtime, args[2],
@@ -2373,7 +2370,7 @@ static fr_err_t fr_native_ble_gatt_client_read(
   if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &connection_index));
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_handle));
   FR_TRY(fr_native_decode_u16(args, arg_count, 2, &timeout_ms));
@@ -2399,7 +2396,7 @@ static fr_err_t fr_native_ble_gatt_client_write(
   if (runtime == NULL || args == NULL || arg_count != 5 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &connection_index));
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_handle));
   FR_TRY(fr_native_decode_text_or_bytes_view(runtime, args[2], &bytes,
@@ -2428,7 +2425,7 @@ static fr_err_t fr_native_ble_gatt_client_subscribe(
   if (runtime == NULL || args == NULL || arg_count != 4 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &connection_index));
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_handle));
   FR_TRY(fr_native_decode_u16(args, arg_count, 2, &mode));
@@ -2455,7 +2452,7 @@ static fr_err_t fr_native_ble_gatt_client_unsubscribe(
   if (runtime == NULL || args == NULL || arg_count != 3 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &connection_index));
   FR_TRY(fr_native_decode_u16(args, arg_count, 1, &attribute_handle));
   FR_TRY(fr_native_decode_u16(args, arg_count, 2, &timeout_ms));
@@ -2717,20 +2714,11 @@ static fr_err_t fr_native_ble_advertise_stop(fr_runtime_t *runtime,
 
 #if FR_BLE_ENABLE_CENTRAL || FR_BLE_ENABLE_PERIPHERAL
 static fr_err_t fr_native_ble_connection_handle(
-    fr_runtime_t *runtime, fr_tagged_t tagged, fr_handle_ref_t *out_ref,
-    uint16_t *out_platform_index) {
-  fr_handle_ref_t ref = {0};
-
-  if (runtime == NULL || out_platform_index == NULL) {
-    return FR_ERR_INVALID;
-  }
-  FR_TRY(fr_tagged_decode_handle_ref(tagged, &ref));
-  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_BLE_CONNECTION, NULL,
-                          out_platform_index));
-  if (out_ref != NULL) {
-    *out_ref = ref;
-  }
-  return FR_OK;
+    fr_runtime_t *runtime, const fr_tagged_t *args, uint8_t arg_count,
+    uint8_t index, fr_handle_ref_t *out_ref, uint16_t *out_platform_index) {
+  return fr_native_decode_handle_arg(
+      runtime, args, arg_count, index, FR_HANDLE_KIND_BLE_CONNECTION, out_ref,
+      out_platform_index);
 }
 #endif
 
@@ -2839,7 +2827,7 @@ static fr_err_t fr_native_ble_connection_ready(
   if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &platform_index));
   FR_TRY(fr_platform_ble_connection_ready(platform_index, &ready));
   return fr_tagged_encode_bool(ready, out);
@@ -2854,8 +2842,8 @@ static fr_err_t fr_native_ble_connection_close(
   if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], &handle_ref,
-                                          &platform_index));
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0,
+                                          &handle_ref, &platform_index));
   (void)platform_index;
   FR_TRY(fr_handle_close(runtime, handle_ref));
   *out = fr_tagged_nil();
@@ -2873,7 +2861,7 @@ static fr_err_t fr_native_ble_connection_info(
   if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &platform_index));
   FR_TRY(fr_platform_ble_connection_info(platform_index, &info));
 
@@ -2920,7 +2908,7 @@ static fr_err_t fr_native_ble_connection_rssi(
   if (runtime == NULL || args == NULL || arg_count != 1 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &platform_index));
   FR_TRY(fr_platform_ble_connection_rssi(platform_index, &rssi));
   return fr_tagged_encode_int(rssi, out);
@@ -2943,7 +2931,7 @@ static fr_err_t fr_native_ble_connection_params(
       return FR_ERR_INVALID;
     }
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &platform_index));
   FR_TRY(fr_tagged_decode_int(args[1], &minimum_interval_ms));
   FR_TRY(fr_tagged_decode_int(args[2], &maximum_interval_ms));
@@ -2974,7 +2962,7 @@ static fr_err_t fr_native_ble_connection_mtu(
       fr_tagged_is_bool(args[1]) || fr_tagged_is_bool(args[2])) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_native_ble_connection_handle(runtime, args[0], NULL,
+  FR_TRY(fr_native_ble_connection_handle(runtime, args, arg_count, 0, NULL,
                                           &platform_index));
   FR_TRY(fr_tagged_decode_int(args[1], &requested_mtu));
   FR_TRY(fr_tagged_decode_int(args[2], &timeout_ms));
@@ -3831,16 +3819,9 @@ static fr_err_t fr_native_decode_trace_handle(fr_runtime_t *runtime,
                                               uint8_t arg_count,
                                               uint8_t index,
                                               uint16_t *out_platform_index) {
-  fr_handle_ref_t ref = {0};
-
-  if (runtime == NULL || args == NULL || index >= arg_count ||
-      out_platform_index == NULL) {
-    return FR_ERR_INVALID;
-  }
-
-  FR_TRY(fr_tagged_decode_handle_ref(args[index], &ref));
-  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_TRACE, NULL,
-                          out_platform_index);
+  return fr_native_decode_handle_arg(runtime, args, arg_count, index,
+                                     FR_HANDLE_KIND_TRACE, NULL,
+                                     out_platform_index);
 }
 
 static fr_err_t fr_native_trace_open(fr_runtime_t *runtime,
@@ -4103,8 +4084,8 @@ static fr_err_t fr_native_trace_close(fr_runtime_t *runtime,
   if (runtime == NULL || args == NULL || arg_count == 0 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_tagged_decode_handle_ref(args[0], &ref));
-  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_TRACE, NULL, NULL));
+  FR_TRY(fr_native_decode_handle_arg(runtime, args, arg_count, 0,
+                                     FR_HANDLE_KIND_TRACE, &ref, NULL));
   FR_TRY(fr_handle_close(runtime, ref));
   *out = fr_tagged_nil();
   return FR_OK;
@@ -4117,16 +4098,9 @@ static fr_err_t fr_native_decode_pulse_handle(fr_runtime_t *runtime,
                                               uint8_t arg_count,
                                               uint8_t index,
                                               uint16_t *out_platform_index) {
-  fr_handle_ref_t ref = {0};
-
-  if (runtime == NULL || args == NULL || index >= arg_count ||
-      out_platform_index == NULL) {
-    return FR_ERR_INVALID;
-  }
-
-  FR_TRY(fr_tagged_decode_handle_ref(args[index], &ref));
-  return fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_PULSE, NULL,
-                          out_platform_index);
+  return fr_native_decode_handle_arg(runtime, args, arg_count, index,
+                                     FR_HANDLE_KIND_PULSE, NULL,
+                                     out_platform_index);
 }
 
 static fr_err_t fr_native_pulse_open(fr_runtime_t *runtime,
@@ -4324,8 +4298,8 @@ static fr_err_t fr_native_pulse_close(fr_runtime_t *runtime,
   if (runtime == NULL || args == NULL || arg_count == 0 || out == NULL) {
     return FR_ERR_INVALID;
   }
-  FR_TRY(fr_tagged_decode_handle_ref(args[0], &ref));
-  FR_TRY(fr_handle_lookup(runtime, ref, FR_HANDLE_KIND_PULSE, NULL, NULL));
+  FR_TRY(fr_native_decode_handle_arg(runtime, args, arg_count, 0,
+                                     FR_HANDLE_KIND_PULSE, &ref, NULL));
   FR_TRY(fr_handle_close(runtime, ref));
   *out = fr_tagged_nil();
   return FR_OK;

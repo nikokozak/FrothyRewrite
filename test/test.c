@@ -2970,7 +2970,10 @@ static void test_uart(void) {
                 FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "uart.read-byte: appuart", out,
-                              sizeof(out)) == FR_ERR_HANDLE);
+                              sizeof(out)) == FR_ERR_HANDLE &&
+            strcmp(out,
+                   "error: bad handle: handle closed (14)\n"
+                   "detail: uart.read-byte argument 1 was rejected\n") == 0);
   CHECK("uart repl can rebind volatile handle slot",
         fr_repl_eval_line(&runtime, "appuart is nil", out, sizeof(out)) ==
                 FR_OK &&
@@ -3109,6 +3112,21 @@ static void test_uart(void) {
             test_uart_one_handle_call(&runtime, close_entry, wrong_handle,
                                       &result) == FR_ERR_TYPE &&
             fr_handle_close(&runtime, wrong_ref) == FR_OK);
+#if FR_FEATURE_PWM
+  CHECK("uart reports the wrong live handle kind",
+        fr_repl_eval_line(&runtime,
+                          "wrong-kind is pwm.open: 10, 1000", out,
+                          sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "uart.read-byte: wrong-kind", out,
+                              sizeof(out)) == FR_ERR_TYPE &&
+            strcmp(out,
+                   "error: wrong type: handle pwm (2)\n"
+                   "detail: uart.read-byte argument 1 was rejected\n") == 0 &&
+            fr_repl_eval_line(&runtime, "pwm.close: wrong-kind", out,
+                              sizeof(out)) == FR_OK &&
+            fr_repl_eval_line(&runtime, "wrong-kind is nil", out,
+                              sizeof(out)) == FR_OK);
+#endif
 
 #if FR_FEATURE_PERSISTENCE
   CHECK("uart save rejects live handle",
