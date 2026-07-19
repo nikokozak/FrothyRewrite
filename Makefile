@@ -622,6 +622,7 @@ host-normal-no-native-signatures:
 test-host-normal-no-native-signatures-transcript: host-normal-no-native-signatures
 	@out=$$(printf '%s\n' \
 		'wifi.save: "ssid", "012345678901234567890123456789012345678901234567890123456789abcde"' \
+		'ms: true' \
 		| build/host/frothy-host-no-native-signatures); \
 	if printf '%s\n' "$$out" | grep -qF '0123456789'; then \
 		printf '%s\nsecret argument leaked without native signatures\n' "$$out"; \
@@ -633,6 +634,14 @@ test-host-normal-no-native-signatures-transcript: host-normal-no-native-signatur
 	fi; \
 	if ! printf '%s\n' "$$out" | grep -qF 'detail: wifi.save argument 2 was rejected'; then \
 		printf '%s\nmissing signature-off argument context\n' "$$out"; \
+		exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$out" | grep -qF 'error: wrong type (2)'; then \
+		printf '%s\nmissing signature-off type error\n' "$$out"; \
+		exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$out" | grep -qF 'detail: ms argument 1 was rejected'; then \
+		printf '%s\nmissing signature-off numeric argument context\n' "$$out"; \
 		exit 1; \
 	fi; \
 	printf 'host_normal signature-off transcript ok\n'

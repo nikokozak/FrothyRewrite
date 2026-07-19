@@ -2856,6 +2856,10 @@ static void test_uart(void) {
   uint16_t platform_index = 0;
   fr_int_t decoded = 0;
   char out[128];
+#if FR_FEATURE_PERSISTENCE
+  char compact_notice_out[27];
+  char short_notice_out[26];
+#endif
 
   CHECK("uart installs base image", fr_base_image_install(&runtime) == FR_OK);
   CHECK("uart finds native entries",
@@ -2946,6 +2950,16 @@ static void test_uart(void) {
                    "detail: cannot save slot 'appuart' - bound to a live "
                    "handle or buffer\n"
                    "ok\n") == 0);
+  CHECK("small public buffer keeps notice headline and prompt completion",
+        fr_repl_eval_line(&runtime, "save", compact_notice_out,
+                          sizeof(compact_notice_out)) == FR_ERR_VOLATILE &&
+            strcmp(compact_notice_out,
+                   "notice: not saved (13)\n"
+                   "ok\n") == 0);
+  CHECK("too-small public buffer does not emit a partial notice",
+        fr_repl_eval_line(&runtime, "save", short_notice_out,
+                          sizeof(short_notice_out)) == FR_ERR_RANGE &&
+            strcmp(short_notice_out, "") == 0);
   CHECK("programming continues after a save notice",
         fr_repl_eval_line(&runtime, "2 + 2", out, sizeof(out)) == FR_OK &&
             strcmp(out, "4\nok\n") == 0);
@@ -13756,6 +13770,8 @@ static void test_repl_error_diagnostics(void) {
 #endif
   const char *int_overflow_lines[] = {"1073741823 + 1"};
   char long_line[FR_REPL_LINE_BYTES];
+  char compact_out[29];
+  char short_error_out[28];
   const char *long_lines[] = {long_line};
   uint16_t spaces = FR_REPL_OUTPUT_BYTES;
 
@@ -14163,6 +14179,37 @@ static void test_repl_error_diagnostics(void) {
                 NULL &&
             strstr(out, "gpio.write: 2, true\n") == NULL &&
             test_error_has_no_caret(out));
+
+  memset(out, 0, sizeof(out));
+  CHECK("native negative argument reports the rejected value",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "ms: -1", out,
+                              (uint16_t)sizeof(out)) == FR_ERR_DOMAIN &&
+            strcmp(out,
+                   "error: bad value: -1 (3)\n"
+                   "detail: ms argument 1 was rejected\n") == 0);
+
+#if FR_TAGGED_INT_MAX > UINT16_MAX
+  memset(out, 0, sizeof(out));
+  CHECK("native u16 argument reports the rejected value",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "gpio.read: 65536", out,
+                              (uint16_t)sizeof(out)) == FR_ERR_DOMAIN &&
+            strcmp(out,
+                   "error: bad value: 65536 (3)\n"
+                   "detail: gpio.read argument 1 was rejected\n") == 0);
+  CHECK("small public buffer keeps the self-contained error headline",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "gpio.read: 65536", compact_out,
+                              (uint16_t)sizeof(compact_out)) == FR_ERR_DOMAIN &&
+            strcmp(compact_out, "error: bad value: 65536 (3)\n") == 0);
+  CHECK("too-small public buffer does not emit a partial error",
+        fr_base_image_install(&runtime) == FR_OK &&
+            fr_repl_eval_line(&runtime, "gpio.read: 65536", short_error_out,
+                              (uint16_t)sizeof(short_error_out)) ==
+                FR_ERR_RANGE &&
+            strcmp(short_error_out, "") == 0);
+#endif
 
   memset(out, 0, sizeof(out));
   CHECK("repl diagnostic renders arithmetic type context without caret",

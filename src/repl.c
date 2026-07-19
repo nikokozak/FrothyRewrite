@@ -335,6 +335,7 @@ static fr_err_t fr_repl_writer_write(const fr_repl_writer_t *writer,
 
 static fr_err_t fr_repl_buffer_writer_write(void *ctx, const char *text) {
   fr_repl_buffer_writer_t *writer = (fr_repl_buffer_writer_t *)ctx;
+  const char *newline = NULL;
   uint16_t text_len = 0;
 
   if (writer == NULL || writer->out == NULL || text == NULL ||
@@ -344,6 +345,23 @@ static fr_err_t fr_repl_buffer_writer_write(void *ctx, const char *text) {
 
   text_len = (uint16_t)strlen(text);
   if ((uint32_t)writer->used + text_len + 1 > writer->out_cap) {
+    /* Error headlines are self-contained. Preserve the evaluation error for
+     * fixed-buffer embedders when only optional diagnostic detail is too big. */
+    newline = strchr(text, '\n');
+    if (writer->used == 0 && newline != NULL &&
+        (strncmp(text, "error: ", 7) == 0 ||
+         strncmp(text, "notice: ", 8) == 0)) {
+      uint32_t first_line_len = (uint32_t)(newline - text) + 1u;
+      uint32_t required = first_line_len +
+                          (strncmp(text, "notice: ", 8) == 0 ? 4u : 1u);
+
+      if (required <= writer->out_cap) {
+        memcpy(writer->out, text, first_line_len);
+        writer->used = (uint16_t)first_line_len;
+        writer->out[writer->used] = '\0';
+        return FR_OK;
+      }
+    }
     return FR_ERR_RANGE;
   }
   memcpy(&writer->out[writer->used], text, text_len);
