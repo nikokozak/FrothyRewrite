@@ -74,6 +74,9 @@ func runBuild(opts buildOptions, stdout io.Writer, stderr io.Writer) error {
 	if err := boardGateLibraries(proj.Board, libs); err != nil {
 		return err
 	}
+	if err := capabilityGateLibraries(proj.Capabilities, libs); err != nil {
+		return err
+	}
 	if err := emitCompositionFiles(opts.projectDir, proj.Board, proj.Capabilities); err != nil {
 		return err
 	}

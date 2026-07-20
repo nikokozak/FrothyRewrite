@@ -310,3 +310,55 @@ y = { git = "https://example/y", branch = "main" }`,
 		})
 	}
 }
+
+func TestParseLibraryManifestRequiresAndMetadata(t *testing.T) {
+	m, err := parseLibraryManifest([]byte(`name = "icp10125"
+description = "ICP-10125 barometric sensor"
+label = "Pressure sensor"
+boards = ["esp32_devkit_v1"]
+requires = ["i2c", "cells"]
+`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.Description != "ICP-10125 barometric sensor" || m.Label != "Pressure sensor" {
+		t.Fatalf("metadata lost: %+v", m)
+	}
+	if len(m.Requires) != 2 || m.Requires[0] != "i2c" || m.Requires[1] != "cells" {
+		t.Fatalf("requires lost: %+v", m.Requires)
+	}
+}
+
+func TestParseLibraryManifestRejectsUnknownRequires(t *testing.T) {
+	_, err := parseLibraryManifest([]byte(`name = "x"
+boards = ["esp32_devkit_v1"]
+requires = ["warp"]
+`))
+	if err == nil || !strings.Contains(err.Error(), `unknown capability "warp"`) {
+		t.Fatalf("want unknown-capability requires error, got %v", err)
+	}
+}
+
+func TestCapabilityGateLibraries(t *testing.T) {
+	libs := []resolvedLibrary{
+		{name: "stepper", requires: []string{"cells"}}, // always-on: ok
+		{name: "beacon", requires: []string{"ble"}},    // offered, may be off
+	}
+
+	// No deviations: ble defaults on, so the ble requirement is satisfied.
+	if err := capabilityGateLibraries(nil, libs); err != nil {
+		t.Fatalf("default composition must satisfy all requires: %v", err)
+	}
+
+	// ble explicitly disabled: beacon's requirement is now violated.
+	err := capabilityGateLibraries(map[string]bool{"ble": false}, libs)
+	if err == nil || !strings.Contains(err.Error(),
+		`library beacon requires capability "ble", which is disabled`) {
+		t.Fatalf("want ble-disabled requires failure, got %v", err)
+	}
+
+	// ble explicitly true (absence-vs-false trap): still satisfied.
+	if err := capabilityGateLibraries(map[string]bool{"ble": true}, libs); err != nil {
+		t.Fatalf("ble=true must satisfy the requirement: %v", err)
+	}
+}

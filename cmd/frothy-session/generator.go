@@ -29,6 +29,7 @@ type libraryNative struct {
 type resolvedLibrary struct {
 	name      string
 	path      string
+	requires  []string
 	extension *libraryExtension
 	natives   []libraryNative
 }

@@ -24,12 +24,15 @@ type projectManifest struct {
 }
 
 type libraryManifest struct {
-	Name      string                 `toml:"name"`
-	Version   string                 `toml:"version"`
-	Boards    []string               `toml:"boards"`
-	Extension *manifestExtension     `toml:"extension"`
-	Natives   []manifestNative       `toml:"natives"`
-	Deps      map[string]manifestDep `toml:"deps"`
+	Name        string                 `toml:"name"`
+	Version     string                 `toml:"version"`
+	Description string                 `toml:"description"`
+	Label       string                 `toml:"label"`
+	Boards      []string               `toml:"boards"`
+	Requires    []string               `toml:"requires"`
+	Extension   *manifestExtension     `toml:"extension"`
+	Natives     []manifestNative       `toml:"natives"`
+	Deps        map[string]manifestDep `toml:"deps"`
 }
 
 type manifestDep struct {
@@ -105,6 +108,11 @@ func parseLibraryManifest(data []byte) (libraryManifest, error) {
 		}
 		if n.Arity < 0 || n.Arity > 255 {
 			return libraryManifest{}, fmt.Errorf("lib.toml %s: native %s arity %d out of range", m.Name, n.Name, n.Arity)
+		}
+	}
+	for _, req := range m.Requires {
+		if !isKnownCapability(req) {
+			return libraryManifest{}, fmt.Errorf("lib.toml %s: unknown capability %q in requires", m.Name, req)
 		}
 	}
 	for n, d := range m.Deps {

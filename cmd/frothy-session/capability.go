@@ -26,6 +26,29 @@ var offeredCapabilities = []capability{
 	},
 }
 
+// knownCapabilities is the set of names a library may name in `requires`. It
+// is a superset of the offered names: always-on features like cells and i2c
+// are legitimate requirements but are not composition toggles, so they never
+// appear in offeredCapabilities. A library requiring an always-on capability
+// is always satisfied; a library requiring an offered one is satisfied unless
+// the composition disables it.
+var knownCapabilities = func() map[string]bool {
+	known := map[string]bool{
+		// Always-on requirement targets (not offerable toggles).
+		"cells": true,
+		"text":  true,
+		"i2c":   true,
+		"pwm":   true,
+		"uart":  true,
+	}
+	for _, c := range offeredCapabilities {
+		known[c.name] = true
+	}
+	return known
+}()
+
+func isKnownCapability(name string) bool { return knownCapabilities[name] }
+
 func capabilityByName(name string) (capability, bool) {
 	for _, c := range offeredCapabilities {
 		if c.name == name {

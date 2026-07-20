@@ -165,8 +165,9 @@ func loadLibraryAt(libPath string, requireManifest bool, requireNameMatchesDir b
 	}
 
 	resolved := resolvedLibrary{
-		name: m.Name,
-		path: libPath,
+		name:     m.Name,
+		path:     libPath,
+		requires: append([]string{}, m.Requires...),
 	}
 	if m.Extension != nil {
 		resolved.extension = &libraryExtension{
@@ -212,6 +213,23 @@ func boardGateLibraries(board string, libs []resolvedLibrary) error {
 		}
 		if !matched {
 			return fmt.Errorf("library %s does not support board %s (boards: %s)", lib.name, board, joinChain(m.Boards))
+		}
+	}
+	return nil
+}
+
+// capabilityGateLibraries rejects a composition that disables a capability a
+// selected library requires. It runs on the fully resolved (flattened) list,
+// so transitive library requirements are covered without a second traversal.
+// A requirement is satisfied unless the composition explicitly sets it false:
+// an absent capability means "profile default" (on for every offered gate),
+// not "disabled".
+func capabilityGateLibraries(caps map[string]bool, libs []resolvedLibrary) error {
+	for _, lib := range libs {
+		for _, req := range lib.requires {
+			if enabled, present := caps[req]; present && !enabled {
+				return fmt.Errorf("library %s requires capability %q, which is disabled in frothy.toml", lib.name, req)
+			}
 		}
 	}
 	return nil
