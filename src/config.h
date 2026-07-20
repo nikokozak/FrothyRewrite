@@ -1,5 +1,14 @@
 #pragma once
 
+/*
+ * A composition header, when provided, is included before the profile so its
+ * gate overrides win the profile's #ifndef defaults. frothy build generates
+ * it for a custom firmware composition; hand-written builds never need it.
+ */
+#ifdef FR_COMPOSITION_HEADER
+#include FR_COMPOSITION_HEADER
+#endif
+
 #ifndef FR_PROFILE_HEADER
 #define FR_PROFILE_HEADER "host_small.h"
 #endif
