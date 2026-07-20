@@ -1423,13 +1423,14 @@ func runSerialWithInterrupts(input io.Reader, output io.Writer, dev sessionDevic
 			return err
 		}
 		printDeviceResponse(output, response)
-		if failOnDeviceError && !responseOK(response) {
-			return fmt.Errorf("device returned %s", responseStatus(response))
-		}
 		if interrupted {
 			if err := handleSignalInterrupt(response); err != nil {
 				return err
 			}
+			continue
+		}
+		if failOnDeviceError && !responseOK(response) {
+			return fmt.Errorf("device returned %s", responseStatus(response))
 		}
 	}
 }
@@ -1441,7 +1442,7 @@ func handleSignalInterrupt(response string) error {
 	return nil
 }
 
-func runSerialRecords(input io.Reader, records *recordWriter, dev sessionDevice, timeout time.Duration, interrupts *interruptTracker) error {
+func runSerialRecords(input io.Reader, records *recordWriter, dev sessionDevice, timeout time.Duration, interrupts *interruptTracker, failOnDeviceError bool) error {
 	if interrupts == nil {
 		return errors.New("record session requires interrupt tracker")
 	}
@@ -1493,6 +1494,11 @@ func runSerialRecords(input io.Reader, records *recordWriter, dev sessionDevice,
 			continue
 		}
 		if err := records.response(response); err != nil {
+			return err
+		}
+		if failOnDeviceError && !responseOK(response) {
+			err := fmt.Errorf("device returned %s", responseStatus(response))
+			_ = records.sessionError(recordStateError, recordErrorSourceFailed, err.Error())
 			return err
 		}
 	}
@@ -2391,19 +2397,19 @@ func runSessionMain() int {
 		os.Exit(1)
 	}
 
+	failOnDeviceError := *filePath != "" || *replay != ""
 	if recordOutput != nil {
 		if err := recordOutput.status(status); err != nil {
 			fmt.Fprintf(os.Stderr, "records: %v\n", err)
 			os.Exit(1)
 		}
-		if err := runSerialRecords(input, recordOutput, dev, *timeout, tracker); err != nil {
+		if err := runSerialRecords(input, recordOutput, dev, *timeout, tracker, failOnDeviceError); err != nil {
 			fmt.Fprintf(os.Stderr, "session: %v\n", err)
 			os.Exit(1)
 		}
 		return 0
 	}
 
-	failOnDeviceError := *filePath != "" || *replay != ""
 	if err := runSerialWithInterrupts(input, os.Stdout, dev, *timeout, tracker, failOnDeviceError); err != nil {
 		fmt.Fprintf(os.Stderr, "session: %v\n", err)
 		os.Exit(1)

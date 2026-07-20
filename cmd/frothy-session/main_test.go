@@ -1663,6 +1663,30 @@ func TestSerialSignalInterruptUsesTracker(t *testing.T) {
 	}
 }
 
+func TestSerialFileSignalInterruptContinues(t *testing.T) {
+	tracker := &interruptTracker{}
+	dev := &fakeDevice{
+		responses: []string{
+			"error: interrupted (10)\n",
+			"ok\n",
+		},
+		onSend: func(line string) {
+			if line == "forever [ 1 ]" {
+				tracker.request()
+			}
+		},
+	}
+	var out strings.Builder
+
+	err := runSerialWithInterrupts(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, dev, time.Second, tracker, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(dev.sent, "\n"), "forever [ 1 ]\nblink:"; got != want {
+		t.Fatalf("sent %q, want %q", got, want)
+	}
+}
+
 func TestPromptRecoveredAfterInterrupt(t *testing.T) {
 	if !responseSettledAfterInterrupt("o" + "k\n") {
 		t.Fatal("responseSettledAfterInterrupt did not combine partial ok")
@@ -1755,7 +1779,7 @@ func runRecordsTestSession(t *testing.T, input io.Reader, output io.Writer, dev 
 	if err := records.status(status); err != nil {
 		t.Fatal(err)
 	}
-	return runSerialRecords(input, records, dev, timeout, tracker)
+	return runSerialRecords(input, records, dev, timeout, tracker, false)
 }
 
 func TestOpenRecordOutputWritesTranscriptCopy(t *testing.T) {
@@ -2223,6 +2247,42 @@ func TestRecordsDeviceCompilerDirectSend(t *testing.T) {
 	send := recordWithKind(records, "send")
 	if send["action"] != "direct" || send["mirror"] != "none" || send["line"] != "words" {
 		t.Fatalf("send record = %#v", send)
+	}
+}
+
+func TestRecordsFileStopsOnDeviceError(t *testing.T) {
+	dev := &fakeDevice{responses: []string{
+		statusResponse("device"),
+		"error: not found (7)\nname: ok\nok\n^^\n",
+		"ok\n",
+	}}
+	var out strings.Builder
+	records := newRecordWriter(&out, "s1")
+	if err := records.sessionStart(); err != nil {
+		t.Fatal(err)
+	}
+	status, err := readDeviceStatus(dev, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := records.status(status); err != nil {
+		t.Fatal(err)
+	}
+
+	err = runSerialRecords(strings.NewReader("ok\n2 + 2\n"), records, dev, time.Second, &interruptTracker{}, true)
+	if err == nil || err.Error() != "device returned error: not found (7)" {
+		t.Fatalf("error = %v, want device response error", err)
+	}
+	if got, want := strings.Join(dev.sent, "\n"), "status\nok"; got != want {
+		t.Fatalf("sent %q, want %q", got, want)
+	}
+	decoded := decodeRecords(t, out.String())
+	if got, want := recordKinds(decoded), "session_start,status,send,response,session_error"; got != want {
+		t.Fatalf("record kinds %q, want %q", got, want)
+	}
+	sessionError := recordWithKind(decoded, "session_error")
+	if sessionError["code"] != "source_failed" || sessionError["message"] != "device returned error: not found (7)" {
+		t.Fatalf("session_error record = %#v", sessionError)
 	}
 }
 
