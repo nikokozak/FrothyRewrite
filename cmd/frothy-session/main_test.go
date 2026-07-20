@@ -1491,6 +1491,40 @@ func TestSerialDeviceCompilerModeSendsSource(t *testing.T) {
 	}
 }
 
+func TestSerialFileStopsOnDeviceError(t *testing.T) {
+	dev := &fakeDevice{responses: []string{
+		statusResponse("device"),
+		"error: not found (7)\nname: ok\nok\n^^\n",
+		"ok\n",
+	}}
+	var out strings.Builder
+
+	err := runSerial(strings.NewReader("ok\n2 + 2\n"), &out, dev, time.Second)
+	if err == nil || err.Error() != "device returned error: not found (7)" {
+		t.Fatalf("error = %v, want device response error", err)
+	}
+	if got, want := strings.Join(dev.sent, "\n"), "status\nok"; got != want {
+		t.Fatalf("sent %q, want %q", got, want)
+	}
+}
+
+func TestSerialFileContinuesAfterNotice(t *testing.T) {
+	dev := &fakeDevice{responses: []string{
+		statusResponse("device"),
+		"notice: not saved (13)\ndetail: still live\nok\n",
+		"4\nok\n",
+	}}
+	var out strings.Builder
+
+	err := runSerial(strings.NewReader("save\n2 + 2\n"), &out, dev, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(dev.sent, "\n"), "status\nsave\n2 + 2"; got != want {
+		t.Fatalf("sent %q, want %q", got, want)
+	}
+}
+
 func TestSerialRefusesUnknownStatusBeforeSendingSource(t *testing.T) {
 	dev := &fakeDevice{responses: []string{statusResponse("unknown")}}
 	var out strings.Builder
@@ -1617,7 +1651,7 @@ func TestSerialSignalInterruptUsesTracker(t *testing.T) {
 	}
 	var out strings.Builder
 
-	err := runSerialWithInterrupts(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, dev, time.Second, tracker)
+	err := runSerialWithInterrupts(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, dev, time.Second, tracker, false)
 	if err != nil {
 		t.Fatal(err)
 	}

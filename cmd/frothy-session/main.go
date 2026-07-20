@@ -1382,10 +1382,10 @@ func runSerial(input io.Reader, output io.Writer, dev sessionDevice, timeout tim
 	if err != nil {
 		return err
 	}
-	return runSerialWithInterrupts(input, output, dev, timeout, nil)
+	return runSerialWithInterrupts(input, output, dev, timeout, nil, true)
 }
 
-func runSerialWithInterrupts(input io.Reader, output io.Writer, dev sessionDevice, timeout time.Duration, interrupts *interruptTracker) error {
+func runSerialWithInterrupts(input io.Reader, output io.Writer, dev sessionDevice, timeout time.Duration, interrupts *interruptTracker, failOnDeviceError bool) error {
 	reader := newSessionSourceFormReader(input)
 	for {
 		read, ok, err := reader.next(output, interrupts)
@@ -1423,6 +1423,9 @@ func runSerialWithInterrupts(input io.Reader, output io.Writer, dev sessionDevic
 			return err
 		}
 		printDeviceResponse(output, response)
+		if failOnDeviceError && !responseOK(response) {
+			return fmt.Errorf("device returned %s", responseStatus(response))
+		}
 		if interrupted {
 			if err := handleSignalInterrupt(response); err != nil {
 				return err
@@ -2400,7 +2403,8 @@ func runSessionMain() int {
 		return 0
 	}
 
-	if err := runSerialWithInterrupts(input, os.Stdout, dev, *timeout, tracker); err != nil {
+	failOnDeviceError := *filePath != "" || *replay != ""
+	if err := runSerialWithInterrupts(input, os.Stdout, dev, *timeout, tracker, failOnDeviceError); err != nil {
 		fmt.Fprintf(os.Stderr, "session: %v\n", err)
 		os.Exit(1)
 	}
