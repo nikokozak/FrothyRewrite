@@ -86,7 +86,14 @@ c_function = "fr_lib_neopixel_show"
 // words first.
 func TestResolveDeps_LibraryDep(t *testing.T) {
 	dir := t.TempDir()
+	// servo is a transitive dep (stage -> servo) and declares a requirement.
+	// The gate assertion below proves requires survives parse -> resolution ->
+	// the flattened list, so removing the transport in loadLibraryAt fails here.
 	writeFile(t, filepath.Join(dir, "libs/servo/lib.fr"), "to servo.attach [ ]\n")
+	writeFile(t, filepath.Join(dir, "libs/servo/lib.toml"), `name = "servo"
+boards = ["host"]
+requires = ["ble"]
+`)
 	writeFile(t, filepath.Join(dir, "libs/stage/lib.fr"), "to stage.go [ ]\n")
 	writeFile(t, filepath.Join(dir, "libs/stage/lib.toml"), `name = "stage"
 boards = ["host"]
@@ -105,6 +112,14 @@ servo = { path = "../servo" }
 	}
 	if len(libs) != 2 || libs[0].name != "servo" || libs[1].name != "stage" {
 		t.Fatalf("dep order wrong: %+v", libs)
+	}
+	// Transitive requirement reaches the flattened gate.
+	if err := capabilityGateLibraries(nil, libs); err != nil {
+		t.Fatalf("default composition must satisfy servo's requirement: %v", err)
+	}
+	err = capabilityGateLibraries(map[string]bool{"ble": false}, libs)
+	if err == nil || !strings.Contains(err.Error(), `library servo requires capability "ble"`) {
+		t.Fatalf("want transitive servo requires failure, got %v", err)
 	}
 }
 

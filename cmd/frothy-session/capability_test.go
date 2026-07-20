@@ -12,6 +12,16 @@ func TestValidateCapabilitiesUnknownName(t *testing.T) {
 	}
 }
 
+// cells is a known requirement target but NOT an offered composition toggle.
+// Project validation must reject it, guarding against a slip to isKnownCapability
+// that would let a manifest disable an always-on feature.
+func TestValidateCapabilitiesRejectsKnownButNotOffered(t *testing.T) {
+	err := validateCapabilities(map[string]bool{"cells": false})
+	if err == nil || !strings.Contains(err.Error(), `unknown capability "cells"`) {
+		t.Fatalf("want cells rejected as not-offered, got %v", err)
+	}
+}
+
 func TestValidateCapabilitiesKnownIsAccepted(t *testing.T) {
 	if err := validateCapabilities(map[string]bool{"ble": false}); err != nil {
 		t.Fatalf("ble off must be accepted: %v", err)
