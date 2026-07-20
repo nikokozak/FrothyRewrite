@@ -6,7 +6,6 @@ class Frothy < Formula
   desc "Live language kernel CLI for programmable devices"
   homepage "https://frothy.dev"
   url "@URL@"
-  version "@VERSION@"
   sha256 "@SHA256@"
   license "MIT"
 

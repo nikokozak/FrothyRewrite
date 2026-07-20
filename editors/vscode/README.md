@@ -12,7 +12,7 @@ current VSIX directly:
 
 ```sh
 make vsix
-code --install-extension editors/vscode/frothy-0.5.1.vsix
+code --install-extension editors/vscode/frothy-0.5.2.vsix
 ```
 
 The extension expects `frothy` on `PATH`, or set `frothy.binaryPath`.

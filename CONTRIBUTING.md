@@ -100,8 +100,7 @@ curl -fL "$url" -o "/tmp/frothy-${version}.tar.gz"
 curl -fL "$firmware_url" -o "/tmp/frothy-firmware-${version}.tar.gz"
 sha256="$(shasum -a 256 "/tmp/frothy-${version}.tar.gz" | cut -d ' ' -f 1)"
 firmware_sha256="$(shasum -a 256 "/tmp/frothy-firmware-${version}.tar.gz" | cut -d ' ' -f 1)"
-sed -e "s|@VERSION@|${version}|g" \
-    -e "s|@URL@|${url}|g" \
+sed -e "s|@URL@|${url}|g" \
     -e "s|@SHA256@|${sha256}|g" \
     -e "s|@FIRMWARE_URL@|${firmware_url}|g" \
     -e "s|@FIRMWARE_SHA256@|${firmware_sha256}|g" \
