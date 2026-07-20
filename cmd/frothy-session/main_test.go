@@ -1663,27 +1663,37 @@ func TestSerialSignalInterruptUsesTracker(t *testing.T) {
 	}
 }
 
-func TestSerialFileSignalInterruptContinues(t *testing.T) {
-	tracker := &interruptTracker{}
-	dev := &fakeDevice{
-		responses: []string{
-			"error: interrupted (10)\n",
-			"ok\n",
-		},
-		onSend: func(line string) {
-			if line == "forever [ 1 ]" {
-				tracker.request()
+func TestSerialFileInterruptContinues(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		hostSignal bool
+	}{
+		{name: "host signal", hostSignal: true},
+		{name: "device button"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tracker := &interruptTracker{}
+			dev := &fakeDevice{
+				responses: []string{
+					"error: interrupted (10)\n",
+					"ok\n",
+				},
+				onSend: func(line string) {
+					if test.hostSignal && line == "forever [ 1 ]" {
+						tracker.request()
+					}
+				},
 			}
-		},
-	}
-	var out strings.Builder
+			var out strings.Builder
 
-	err := runSerialWithInterrupts(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, dev, time.Second, tracker, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := strings.Join(dev.sent, "\n"), "forever [ 1 ]\nblink:"; got != want {
-		t.Fatalf("sent %q, want %q", got, want)
+			err := runSerialWithInterrupts(strings.NewReader("forever [ 1 ]\nblink:\n"), &out, dev, time.Second, tracker, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := strings.Join(dev.sent, "\n"), "forever [ 1 ]\nblink:"; got != want {
+				t.Fatalf("sent %q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -2325,6 +2335,7 @@ func TestRecordsSignalInterruptUsesTracker(t *testing.T) {
 		responses: []string{
 			statusResponse("device"),
 			"error: interrupted (10)\n",
+			"ok\n",
 		},
 		onSend: func(line string) {
 			if line == "forever [ 1 ]" {
@@ -2333,20 +2344,34 @@ func TestRecordsSignalInterruptUsesTracker(t *testing.T) {
 		},
 	}
 	var out strings.Builder
+	writer := newRecordWriter(&out, "s1")
+	if err := writer.sessionStart(); err != nil {
+		t.Fatal(err)
+	}
+	status, err := readDeviceStatus(dev, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.status(status); err != nil {
+		t.Fatal(err)
+	}
 
-	err := runRecordsTestSession(t, strings.NewReader("forever [ 1 ]\n"), &out, dev, time.Second, tracker)
+	err = runSerialRecords(strings.NewReader("forever [ 1 ]\nblink:\n"), writer, dev, time.Second, tracker, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	records := decodeRecords(t, out.String())
-	if got, want := recordKinds(records), "session_start,status,send,interrupt,session_end"; got != want {
+	if got, want := recordKinds(records), "session_start,status,send,interrupt,send,response,session_end"; got != want {
 		t.Fatalf("record kinds %q, want %q", got, want)
 	}
 	interrupt := recordWithKind(records, "interrupt")
 	if interrupt["state"] != "idle" || interrupt["mirror"] != "none" ||
 		interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
 		t.Fatalf("interrupt record = %#v", interrupt)
+	}
+	if got, want := strings.Join(dev.sent, "\n"), "status\nforever [ 1 ]\nblink:"; got != want {
+		t.Fatalf("sent %q, want %q", got, want)
 	}
 }
 

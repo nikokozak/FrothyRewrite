@@ -1429,7 +1429,7 @@ func runSerialWithInterrupts(input io.Reader, output io.Writer, dev sessionDevic
 			}
 			continue
 		}
-		if failOnDeviceError && !responseOK(response) {
+		if failOnDeviceError && !responseSettledAfterInterrupt(response) {
 			return fmt.Errorf("device returned %s", responseStatus(response))
 		}
 	}
@@ -1496,7 +1496,7 @@ func runSerialRecords(input io.Reader, records *recordWriter, dev sessionDevice,
 		if err := records.response(response); err != nil {
 			return err
 		}
-		if failOnDeviceError && !responseOK(response) {
+		if failOnDeviceError && !responseSettledAfterInterrupt(response) {
 			err := fmt.Errorf("device returned %s", responseStatus(response))
 			_ = records.sessionError(recordStateError, recordErrorSourceFailed, err.Error())
 			return err
