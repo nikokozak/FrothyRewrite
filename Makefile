@@ -65,6 +65,15 @@ FR_CFLAGS := \
 	$(BOARD_CFLAGS) \
 	$(CFLAGS)
 
+# frothy build passes these for a custom firmware composition. Empty means
+# "profile defaults", which is every hand-run make invocation. Only define the
+# macro when a path is set, so config.h never sees #include "".
+FROTHY_COMPOSITION_H ?=
+FROTHY_COMPOSITION_SDKCONFIG ?=
+ifneq ($(strip $(FROTHY_COMPOSITION_H)),)
+FR_CFLAGS += -DFR_COMPOSITION_HEADER=\"$(abspath $(FROTHY_COMPOSITION_H))\"
+endif
+
 FR_LDFLAGS := $(TARGET_LDFLAGS) $(BOARD_LDFLAGS) $(LDFLAGS)
 
 COMPILER_SOURCES ?= \
