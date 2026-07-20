@@ -1667,15 +1667,16 @@ func TestSerialFileInterruptContinues(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		hostSignal bool
+		response   string
 	}{
-		{name: "host signal", hostSignal: true},
-		{name: "device button"},
+		{name: "host signal", hostSignal: true, response: "ok\n"},
+		{name: "device button", response: "error: interrupted (10)\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tracker := &interruptTracker{}
 			dev := &fakeDevice{
 				responses: []string{
-					"error: interrupted (10)\n",
+					test.response,
 					"ok\n",
 				},
 				onSend: func(line string) {
@@ -2333,16 +2334,18 @@ func TestRecordsFileInterruptContinues(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		hostSignal bool
+		response   string
+		wantStatus string
 	}{
-		{name: "host signal", hostSignal: true},
-		{name: "device button"},
+		{name: "host signal", hostSignal: true, response: "ok\n", wantStatus: "ok"},
+		{name: "device button", response: "error: interrupted (10)\n", wantStatus: "error: interrupted (10)"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tracker := &interruptTracker{}
 			dev := &fakeDevice{
 				responses: []string{
 					statusResponse("device"),
-					"error: interrupted (10)\n",
+					test.response,
 					"ok\n",
 				},
 				onSend: func(line string) {
@@ -2375,7 +2378,7 @@ func TestRecordsFileInterruptContinues(t *testing.T) {
 			}
 			interrupt := recordWithKind(records, "interrupt")
 			if interrupt["state"] != "idle" || interrupt["mirror"] != "none" ||
-				interrupt["settled"] != true || interrupt["status"] != "error: interrupted (10)" {
+				interrupt["settled"] != true || interrupt["status"] != test.wantStatus {
 				t.Fatalf("interrupt record = %#v", interrupt)
 			}
 			if got, want := strings.Join(dev.sent, "\n"), "status\nforever [ 1 ]\nblink:"; got != want {
