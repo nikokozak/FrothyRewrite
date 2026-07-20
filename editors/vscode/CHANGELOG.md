@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2 — 2026-07-20
+
+### Changed
+
+- **Device notices remain nonfatal.** The extension recognizes canonical
+  `notice: ... (code)` responses, keeps their detail visible, and waits for the
+  terminal `ok` instead of presenting them as failed commands.
+
 ## 0.5.1 — 2026-07-17
 
 ### Changed

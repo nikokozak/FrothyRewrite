@@ -6,6 +6,61 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-20
+
+### Added
+
+- **Runtime errors now show the rejected value.** Type, range, native-argument,
+  handle, and busy-resource failures retain their compact numeric code while
+  also reporting the value that caused the failure and, where useful, the
+  expected kind or native argument position.
+
+### Changed
+
+- **Unsaved volatile state is a notice, not a failed programming session.** A
+  `save` blocked by a live handle or buffer identifies the affected slot,
+  terminates with `ok`, and leaves the device ready for the next form. The CLI,
+  browser serial client, and VS Code extension preserve that distinction.
+- **Browser editor and serial-client packages now live in Frothy App.** Core
+  retains the language, firmware, CLI, VS Code extension, and human serial
+  contract without owning browser project state or browser package builds.
+
+### Fixed
+
+- **CLI source framing can no longer mistake code for device status.** Reserved
+  text such as `ok`, multiline forms, and status-looking source are sent in a
+  source envelope; real device errors make `frothy send` exit nonzero and stop
+  later file forms, including in records mode.
+- **Interrupts settle once without losing the next form.** Host- and
+  device-originated interrupts now complete the active response and preserve
+  plain and records-mode file sequencing.
+- **Firmware manifests include a checksum for every flash segment.** Consumers
+  can validate each downloaded bootloader, partition-table, and application
+  image before flashing.
+
+## [0.1.4] - 2026-07-17
+
+### Added
+
+- **A bounded, inspectable Bluetooth Low Energy system.** Frothy can scan,
+  advertise, hold one central or peripheral connection, install a small GATT
+  server, and use one foreground GATT client procedure with short values,
+  notifications, and indications.
+
+### Changed
+
+- **BLE state and limits stay visible through ordinary Frothy words.** Scan,
+  connection, queue, procedure, error, and memory state remain inspectable,
+  while `ble.off`, `clear`, and full recovery invalidate handles and release
+  the radio.
+- **The VS Code release artifact advanced to 0.5.1.** Its device vocabulary is
+  fetched only when requested instead of appearing after every run.
+
+### Fixed
+
+- **Full recovery still erases saved state when BLE cleanup reports an error.**
+  Restart then releases any remaining platform-owned state.
+
 ## [0.1.3] - 2026-07-14
 
 ### Added
