@@ -17,9 +17,10 @@ import (
 // and rev/branch only mean anything on a git dep.
 
 type projectManifest struct {
-	Name  string                 `toml:"name"`
-	Board string                 `toml:"board"`
-	Deps  map[string]manifestDep `toml:"deps"`
+	Name         string                 `toml:"name"`
+	Board        string                 `toml:"board"`
+	Capabilities map[string]bool        `toml:"capabilities"`
+	Deps         map[string]manifestDep `toml:"deps"`
 }
 
 type libraryManifest struct {
@@ -62,6 +63,9 @@ func parseProjectManifest(data []byte) (projectManifest, error) {
 	}
 	if m.Board == "" {
 		return projectManifest{}, fmt.Errorf("frothy.toml: missing board")
+	}
+	if err := validateCapabilities(m.Capabilities); err != nil {
+		return projectManifest{}, fmt.Errorf("frothy.toml: %w", err)
 	}
 	for n, d := range m.Deps {
 		if err := validateManifestDep(n, d); err != nil {

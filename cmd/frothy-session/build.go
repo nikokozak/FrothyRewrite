@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -73,6 +74,9 @@ func runBuild(opts buildOptions, stdout io.Writer, stderr io.Writer) error {
 	if err := boardGateLibraries(proj.Board, libs); err != nil {
 		return err
 	}
+	if err := emitCompositionFiles(opts.projectDir, proj.Board, proj.Capabilities); err != nil {
+		return err
+	}
 	if err := emitGeneratedFiles(opts.projectDir, proj.Board, libs); err != nil {
 		return err
 	}
@@ -101,6 +105,40 @@ func readProjectManifest(projectDir string) (projectManifest, error) {
 // Resolved-during-pre-loop). Survives changes to CMake/make build dirs.
 func buildOutputDir(projectDir, board string) string {
 	return filepath.Join(projectDir, ".frothy", "build", board)
+}
+
+// emitCompositionFiles writes composition.h and composition.sdkconfig only
+// when the manifest deviates from the profile's default capabilities, and
+// only when their content changes — both are ESP-IDF configure inputs, so a
+// no-op rewrite would churn the incremental build. A default build removes any
+// stale files so make sees profile defaults again.
+func emitCompositionFiles(projectDir, board string, caps map[string]bool) error {
+	disabled := disabledCapabilities(caps)
+	outDir := buildOutputDir(projectDir, board)
+	headerPath := filepath.Join(outDir, "composition.h")
+	sdkPath := filepath.Join(outDir, "composition.sdkconfig")
+	if len(disabled) == 0 {
+		for _, p := range []string{headerPath, sdkPath} {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	if err := writeFileIfChanged(headerPath, []byte(generatedCompositionH(disabled))); err != nil {
+		return err
+	}
+	return writeFileIfChanged(sdkPath, []byte(generatedCompositionSdkconfig(disabled)))
+}
+
+func writeFileIfChanged(path string, content []byte) error {
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, content) {
+		return nil
+	}
+	return os.WriteFile(path, content, 0o644)
 }
 
 func emitGeneratedFiles(projectDir, board string, libs []resolvedLibrary) error {
@@ -178,9 +216,20 @@ func runMake(projectDir, board string, stdout io.Writer, stderr io.Writer) error
 	if err != nil {
 		return err
 	}
+	outDir := buildOutputDir(projectDir, board)
 	args := []string{"-C", sourceRoot, "artifacts", "BOARD=" + board,
-		"FROTHY_LIB_NATIVES_C=" + filepath.Join(buildOutputDir(projectDir, board), "lib_natives.c"),
-		"FROTHY_LIBS_CMAKE=" + filepath.Join(buildOutputDir(projectDir, board), "libs.cmake"),
+		"FROTHY_LIB_NATIVES_C=" + filepath.Join(outDir, "lib_natives.c"),
+		"FROTHY_LIBS_CMAKE=" + filepath.Join(outDir, "libs.cmake"),
+	}
+	// Pass the composition overrides only when emitCompositionFiles wrote them;
+	// their absence means profile defaults, which the Makefile treats as unset.
+	compositionH := filepath.Join(outDir, "composition.h")
+	if _, err := os.Stat(compositionH); err == nil {
+		args = append(args, "FROTHY_COMPOSITION_H="+compositionH)
+	}
+	compositionSdkconfig := filepath.Join(outDir, "composition.sdkconfig")
+	if _, err := os.Stat(compositionSdkconfig); err == nil {
+		args = append(args, "FROTHY_COMPOSITION_SDKCONFIG="+compositionSdkconfig)
 	}
 	cmd := exec.Command("make", args...)
 	cmd.Stdout = stdout
