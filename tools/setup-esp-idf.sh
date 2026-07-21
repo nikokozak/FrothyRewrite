@@ -11,10 +11,12 @@
 set -eu
 
 ESP_IDF_VERSION="v5.5"
+ESP_IDF_TARGETS="esp32,esp32c6,esp32s3"
 FROTH_HOME_DIR="${FROTH_HOME:-$HOME/.froth}"
 FROTH_SDK_DIR="$FROTH_HOME_DIR/sdk"
 IDF_INSTALL_DIR="$FROTH_SDK_DIR/esp-idf"
 IDF_READY_MARKER=".froth-install-complete"
+IDF_READY_STATE="$ESP_IDF_VERSION $ESP_IDF_TARGETS"
 
 usage() {
   cat <<'EOF'
@@ -53,7 +55,8 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 if [ -d "$IDF_INSTALL_DIR" ]; then
-  if [ "$FORCE" -eq 0 ] && [ -f "$IDF_INSTALL_DIR/$IDF_READY_MARKER" ]; then
+  if [ "$FORCE" -eq 0 ] && [ -f "$IDF_INSTALL_DIR/$IDF_READY_MARKER" ] &&
+      [ "$(cat "$IDF_INSTALL_DIR/$IDF_READY_MARKER")" = "$IDF_READY_STATE" ]; then
     echo "ESP-IDF already installed at $IDF_INSTALL_DIR"
     echo "Run with --force to reinstall."
     echo ""
@@ -106,14 +109,14 @@ restore_backup() {
   fi
 }
 
-echo "Installing ESP-IDF toolchain (esp32 target only)..."
-if ! "$IDF_INSTALL_DIR/install.sh" esp32; then
+echo "Installing ESP-IDF toolchains ($ESP_IDF_TARGETS)..."
+if ! "$IDF_INSTALL_DIR/install.sh" "$ESP_IDF_TARGETS"; then
   restore_backup
   echo "error: failed to install ESP-IDF toolchain in $IDF_INSTALL_DIR"
   exit 1
 fi
 
-touch "$IDF_INSTALL_DIR/$IDF_READY_MARKER"
+printf '%s\n' "$IDF_READY_STATE" > "$IDF_INSTALL_DIR/$IDF_READY_MARKER"
 rm -rf "$BACKUP_DIR"
 
 echo ""

@@ -65,7 +65,7 @@ jobs:
           path: |
             ~/.froth/sdk
             ~/.espressif
-          key: ${{ runner.os }}-esp-idf-v5.5
+          key: ${{ runner.os }}-esp-idf-v5.5-esp32-esp32c6-esp32s3
 
       - name: Install ESP-IDF
         run: tools/setup-esp-idf.sh
