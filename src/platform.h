@@ -174,6 +174,11 @@ void fr_host_console_fail_next_switch(void);
 
 #if FR_FEATURE_REPL
 fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof);
+/* Read one edited line from the active console for a running program. CR/LF
+ * is removed, Ctrl-C returns INTERRUPTED, and no prompt-idle handler runs
+ * reentrantly while the caller is blocked. */
+fr_err_t fr_platform_console_read_line(uint8_t *bytes, uint16_t cap,
+                                       uint16_t *out_length);
 fr_err_t fr_platform_write_text(const char *text);
 /* Idle-servicing hook. The REPL registers a handler the platform calls while
  * read_line waits for the next byte, so timer and interrupt events fire at an

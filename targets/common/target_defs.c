@@ -1325,6 +1325,24 @@ static fr_err_t fr_native_text_pack(fr_runtime_t *runtime,
 }
 #endif
 
+#if FR_FEATURE_REPL && FR_FEATURE_BYTES
+static fr_err_t fr_native_console_read_line(fr_runtime_t *runtime,
+                                            const fr_tagged_t *args,
+                                            uint8_t arg_count,
+                                            fr_tagged_t *out) {
+  uint8_t bytes[FR_PROFILE_REPL_LINE_BYTES];
+  uint16_t length = 0;
+
+  (void)args;
+  if (runtime == NULL || arg_count != 0 || out == NULL) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_platform_console_read_line(bytes, (uint16_t)sizeof(bytes),
+                                       &length));
+  return fr_bytes_install(runtime, bytes, length, out);
+}
+#endif
+
 #if FR_FEATURE_CONSOLE_ROUTING
 static fr_err_t fr_native_console_uart(fr_runtime_t *runtime,
                                        const fr_tagged_t *args,
@@ -4739,6 +4757,15 @@ static const fr_native_signature_t fr_native_handle_to_nil_signature = {
 };
 #endif
 
+#if FR_FEATURE_REPL && FR_FEATURE_BYTES
+static const fr_native_signature_t fr_native_console_read_line_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_BYTES,
+    .help = "read one data line from the active console as volatile bytes",
+};
+#endif
+
 #if FR_FEATURE_CONSOLE_ROUTING
 static const fr_native_param_t fr_native_console_uart_params[] = {
     {"tx", FR_NATIVE_VALUE_INT},
@@ -6832,6 +6859,20 @@ const fr_base_def_t fr_target_base_defs[] = {
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
         .native_signature = &fr_native_pulse_close_signature,
+#endif
+    },
+#endif
+#if FR_FEATURE_REPL && FR_FEATURE_BYTES
+    {
+        .slot_id = FR_SLOT_CONSOLE_READ_LINE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "console.read-line",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_console_read_line,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_console_read_line_signature,
 #endif
     },
 #endif

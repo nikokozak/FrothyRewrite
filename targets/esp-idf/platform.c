@@ -1983,24 +1983,30 @@ void fr_platform_set_idle_handler(fr_platform_idle_fn handler, void *ctx) {
   fr_esp_idle_ctx = ctx;
 }
 
-fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
+static fr_err_t fr_esp_read_edited_line(char *line, uint16_t cap,
+                                        bool program_input, bool *out_eof,
+                                        uint16_t *out_length) {
   uint16_t used = 0;
 
-  if (line == NULL || cap == 0 || out_eof == NULL) {
+  if (line == NULL || cap == 0 || out_eof == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
 
   *out_eof = false;
+  *out_length = 0;
   line[0] = '\0';
   for (;;) {
     uint8_t byte = 0;
     fr_err_t err = fr_esp_console_read_byte(&byte, pdMS_TO_TICKS(20));
 
     if (err == FR_ERR_NOT_FOUND) {
+      if (program_input && fr_esp_boot_button_pressed()) {
+        return FR_ERR_INTERRUPTED;
+      }
       /* No byte this tick: service timer/interrupt events so they fire at the
        * idle prompt. The handler reports its own faults and returns OK; the
        * read loop keeps running regardless. */
-      if (fr_esp_idle_handler != NULL) {
+      if (!program_input && fr_esp_idle_handler != NULL) {
         (void)fr_esp_idle_handler(fr_esp_idle_ctx);
       }
       continue;
@@ -2009,13 +2015,14 @@ fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
 
     if (byte == '\r' || byte == '\n') {
       line[used] = '\0';
+      *out_length = used;
       fr_platform_write_text("\n");
       return FR_OK;
     }
     if (byte == FR_ESP_CTRL_C) {
       line[0] = '\0';
       fr_platform_write_text("^C\n");
-      return FR_OK;
+      return program_input ? FR_ERR_INTERRUPTED : FR_OK;
     }
     if (byte == FR_ESP_BACKSPACE || byte == FR_ESP_DELETE) {
       if (used > 0) {
@@ -2037,6 +2044,19 @@ fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
     line[used] = '\0';
     (void)fr_esp_console_write(&byte, 1);
   }
+}
+
+fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
+  uint16_t length = 0;
+
+  return fr_esp_read_edited_line(line, cap, false, out_eof, &length);
+}
+
+fr_err_t fr_platform_console_read_line(uint8_t *bytes, uint16_t cap,
+                                       uint16_t *out_length) {
+  bool eof = false;
+
+  return fr_esp_read_edited_line((char *)bytes, cap, true, &eof, out_length);
 }
 
 fr_err_t fr_platform_write_text(const char *text) {

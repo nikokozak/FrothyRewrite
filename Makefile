@@ -616,6 +616,33 @@ test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 		printf '%s\nmissing contiguous error-notice transcript:\n%s\n' "$$notice_out" "$$notice_expected"; \
 		exit 1; \
 	fi; \
+	input_out=$$({ \
+		printf '%s\n' \
+			'see console.read-line' \
+			'bytes.length: console.read-line:' \
+			'' \
+			'read-lines is fn with count [ repeat count [ here line is console.read-line:; print: line; print: "\n" ] ]' \
+			'read-lines: 10' \
+			'alpha' 'bravo' 'charlie' 'delta' 'echo' \
+			'foxtrot' 'golf' 'hotel' 'india' 'juliet' \
+			'saved is text.pack: console.read-line:' \
+			'not source: []' \
+			'saved' \
+			'console.read-line:'; \
+		printf '\003\n'; \
+		printf '%s\n' '2 + 2'; \
+	} | build/host/frothy-host-normal); \
+	input_ok_count=$$(printf '%s\n' "$$input_out" | grep -c 'ok$$'); \
+	if [ "$$input_ok_count" != 8 ] || printf '%s\n' "$$input_out" | grep -q 'error:'; then \
+		printf '%s\nconsole input transcript failed\n' "$$input_out"; \
+		exit 1; \
+	fi; \
+	for expected in 'console.read-line() -> bytes' '> 0' 'alpha' 'juliet' '"not source: []"' 'interrupted' '4'; do \
+		if ! printf '%s\n' "$$input_out" | grep -qF "$$expected"; then \
+			printf '%s\nmissing console input text: %s\n' "$$input_out" "$$expected"; \
+			exit 1; \
+		fi; \
+	done; \
 	printf 'host_normal transcript ok\n'
 
 host-normal-events:

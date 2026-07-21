@@ -180,6 +180,14 @@ static fr_err_t test_persist_apply_user_overlay(
 #define FR_TEST_PULSE_SLOT_COUNT 0
 #endif
 
+#if FR_FEATURE_REPL && FR_FEATURE_BYTES
+#define FR_TEST_CONSOLE_INPUT_WORDS " console.read-line"
+#define FR_TEST_CONSOLE_INPUT_SLOT_COUNT 1
+#else
+#define FR_TEST_CONSOLE_INPUT_WORDS ""
+#define FR_TEST_CONSOLE_INPUT_SLOT_COUNT 0
+#endif
+
 #if FR_FEATURE_CONSOLE_ROUTING
 #define FR_TEST_CONSOLE_WORDS " console.uart console.default console.info"
 #define FR_TEST_CONSOLE_SLOT_COUNT 3
@@ -213,7 +221,8 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
@@ -223,7 +232,8 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
@@ -233,7 +243,8 @@ enum {
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
@@ -244,7 +255,7 @@ enum {
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
    FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
    FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT +                      \
-   FR_TEST_CONSOLE_SLOT_COUNT)
+   FR_TEST_CONSOLE_INPUT_SLOT_COUNT + FR_TEST_CONSOLE_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -252,7 +263,8 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
@@ -261,7 +273,8 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
@@ -270,7 +283,8 @@ enum {
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
-              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS FR_TEST_CONSOLE_WORDS   \
+              FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
+              FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
@@ -281,7 +295,7 @@ enum {
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
    FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
    FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT +                      \
-   FR_TEST_CONSOLE_SLOT_COUNT)
+   FR_TEST_CONSOLE_INPUT_SLOT_COUNT + FR_TEST_CONSOLE_SLOT_COUNT)
 #endif
 
 /* Boot compile binds base/core.frothy words at the first board-local slots, so
@@ -447,6 +461,7 @@ static void test_base_def_contract(void) {
       (FR_FEATURE_I2C ? 8 : 0) + (FR_FEATURE_NET ? 9 : 0) +
       (FR_FEATURE_POWER ? 4 : 0) + (FR_FEATURE_BYTES ? 8 : 0) +
       (FR_FEATURE_TRACE ? 12 : 0) + (FR_FEATURE_PULSE ? 9 : 0) +
+      FR_TEST_CONSOLE_INPUT_SLOT_COUNT +
       (FR_FEATURE_CONSOLE_ROUTING ? 3 : 0) +
       (FR_FEATURE_MATH ? 7 : 0) +
       FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT +
@@ -511,9 +526,13 @@ static void test_base_def_contract(void) {
   CHECK("board local slot ids follow board capability slots",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #endif
+#if FR_FEATURE_REPL && FR_FEATURE_BYTES
+  CHECK("console input follows protocol lab capabilities",
+        FR_SLOT_CONSOLE_READ_LINE == FR_SLOT_AFTER_PULSE);
+#endif
 #if FR_FEATURE_CONSOLE_ROUTING
-  CHECK("console slots follow protocol lab capabilities",
-        FR_SLOT_CONSOLE_UART == FR_SLOT_AFTER_PULSE &&
+  CHECK("console routing follows console input",
+        FR_SLOT_CONSOLE_UART == FR_SLOT_AFTER_CONSOLE_INPUT &&
             FR_SLOT_CONSOLE_DEFAULT == FR_SLOT_CONSOLE_UART + 1 &&
             FR_SLOT_CONSOLE_INFO == FR_SLOT_CONSOLE_DEFAULT + 1);
 #endif

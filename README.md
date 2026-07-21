@@ -88,6 +88,31 @@ is needed. Use `;` only when you want several expressions on the same line.
 Words you define stick around on the board, so you build a program by
 teaching the chip one word at a time.
 
+### Read a console line as data
+
+`console.read-line:` blocks for one line from the active console and returns
+it as data instead of evaluating it as Frothy source. It removes the line
+ending; Ctrl-C interrupts the read.
+
+```frothy
+to echo-once [
+  here line is console.read-line:
+  print: line
+  print: "\n"
+]
+```
+
+The result is volatile `Bytes`, so consume it during the current evaluation or
+loop iteration. Copy a value you need to keep into `Text` explicitly:
+
+```frothy
+answer is text.pack: console.read-line:
+```
+
+This is for printable, line-oriented data on the human console, including a
+console moved with `console.uart:`. For arbitrary binary data or an independent
+device connection, use `uart.read-byte:` and `uart.available:` instead.
+
 ### Move the live console to another UART
 
 Frothy's REPL can run over any suitable 3.3 V UART pair, not only the board's

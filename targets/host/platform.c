@@ -3074,14 +3074,17 @@ void fr_platform_set_idle_handler(fr_platform_idle_fn handler, void *ctx) {
   (void)ctx;
 }
 
-fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
+static fr_err_t fr_host_read_line(char *line, uint16_t cap,
+                                  bool interruptible, bool *out_eof,
+                                  uint16_t *out_length) {
   size_t length = 0;
 
-  if (line == NULL || cap == 0 || out_eof == NULL) {
+  if (line == NULL || cap == 0 || out_eof == NULL || out_length == NULL) {
     return FR_ERR_INVALID;
   }
 
   *out_eof = false;
+  *out_length = 0;
   if (fgets(line, cap, stdin) == NULL) {
     if (feof(stdin)) {
       line[0] = '\0';
@@ -3103,8 +3106,27 @@ fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
   if (length + 1 >= cap && !feof(stdin)) {
     return FR_ERR_RANGE;
   }
+  if (interruptible && memchr(line, 3, length) != NULL) {
+    line[0] = '\0';
+    return FR_ERR_INTERRUPTED;
+  }
 
+  *out_length = (uint16_t)length;
   return FR_OK;
+}
+
+fr_err_t fr_platform_read_line(char *line, uint16_t cap, bool *out_eof) {
+  uint16_t length = 0;
+
+  return fr_host_read_line(line, cap, false, out_eof, &length);
+}
+
+fr_err_t fr_platform_console_read_line(uint8_t *bytes, uint16_t cap,
+                                       uint16_t *out_length) {
+  bool eof = false;
+
+  FR_TRY(fr_host_read_line((char *)bytes, cap, true, &eof, out_length));
+  return eof ? FR_ERR_NOT_FOUND : FR_OK;
 }
 
 fr_err_t fr_platform_write_text(const char *text) {
