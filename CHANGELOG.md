@@ -6,6 +6,22 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-21
+
+### Added
+
+- **Firmware projects can remove offered capabilities.** A `[capabilities]`
+  table in `frothy.toml` now accepts `ble = false` and carries that choice
+  through the generated profile header and ESP-IDF configuration.
+
+### Fixed
+
+- **Library requirements are checked against the composed firmware.** A build
+  rejects a library whose required capability was disabled, while requirements
+  on known always-on capabilities remain valid.
+- **Homebrew release instructions use the archive's version directly.** The
+  formula template no longer expects a redundant version substitution.
+
 ## [0.1.5] - 2026-07-20
 
 ### Added
