@@ -1,0 +1,17 @@
+{
+  "name": "Seeed Studio XIAO ESP32C6",
+  "chip": "esp32c6",
+  "target": "esp-idf",
+  "profile": "esp32_plain",
+  "peripherals": ["gpio", "adc", "uart", "pwm", "i2c", "trace", "pulse"],
+  "pins": {
+    "$led_builtin": 15,
+    "$boot_button": 9,
+    "$a0": 0,
+    "$sda": 22,
+    "$scl": 23,
+    "uart_tx": 16,
+    "uart_rx": 17,
+    "uart_baud": 115200
+  }
+}

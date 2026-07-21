@@ -54,6 +54,7 @@ jobs:
       matrix:
         board:
           - esp32_devkit_v1
+          - seeed_xiao_esp32c6
           - seeed_xiao_esp32s3
     steps:
       - uses: actions/checkout@v4

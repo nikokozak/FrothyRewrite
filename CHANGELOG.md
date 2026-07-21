@@ -6,6 +6,20 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-21
+
+### Added
+
+- **Seeed Studio XIAO ESP32C6 is an official board.** Firmware builds for the
+  C6's RISC-V target, uses its native USB Serial/JTAG console and documented
+  board pins, and ships in the web-flasher release bundle.
+
+### Fixed
+
+- **ESP-IDF portability follows each chip's hardware.** Application UARTs now
+  count only high-power controllers, GPIO wake uses the wake mechanism offered
+  by the selected target, and CPU clocks stay in chip-specific configuration.
+
 ## [0.1.6] - 2026-07-21
 
 ### Added

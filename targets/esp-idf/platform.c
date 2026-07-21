@@ -101,15 +101,15 @@ typedef struct fr_esp_app_uart_t {
   uint32_t baud;
 } fr_esp_app_uart_t;
 
-#if SOC_UART_NUM <= 1
+#if SOC_UART_HP_NUM <= 1
 #error "FR_FEATURE_UART requires an ESP target with an application UART"
 #endif
 
 static const uart_port_t fr_esp_app_uart_ports[] = {
-#if SOC_UART_NUM > 1
+#if SOC_UART_HP_NUM > 1
     UART_NUM_1,
 #endif
-#if SOC_UART_NUM > 2
+#if SOC_UART_HP_NUM > 2
     UART_NUM_2,
 #endif
 };
@@ -3976,11 +3976,23 @@ fr_err_t fr_platform_sleep_deep(uint32_t ms) {
     }
   }
   if (fr_esp_sleep_pending) {
+#if SOC_PM_SUPPORT_EXT0_WAKEUP
     if (esp_sleep_enable_ext0_wakeup((gpio_num_t)fr_esp_sleep_pending_pin,
                                      (int)fr_esp_sleep_pending_level) !=
         ESP_OK) {
       return FR_ERR_IO;
     }
+#elif SOC_PM_SUPPORT_EXT1_WAKEUP
+    esp_sleep_ext1_wakeup_mode_t mode =
+        fr_esp_sleep_pending_level ? ESP_EXT1_WAKEUP_ANY_HIGH
+                                   : ESP_EXT1_WAKEUP_ANY_LOW;
+    if (esp_sleep_enable_ext1_wakeup_io(
+            1ULL << fr_esp_sleep_pending_pin, mode) != ESP_OK) {
+      return FR_ERR_IO;
+    }
+#else
+#error "FR_FEATURE_POWER requires GPIO wake support"
+#endif
     fr_esp_sleep_pending = false;
   }
   esp_deep_sleep_start();

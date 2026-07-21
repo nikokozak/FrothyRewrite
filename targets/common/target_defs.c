@@ -5402,7 +5402,7 @@ static const fr_native_signature_t fr_native_sleep_wake_on_gpio_signature = {
     .params = fr_native_sleep_wake_on_gpio_params,
     .arg_count = 2,
     .result = FR_NATIVE_VALUE_NIL,
-    .help = "configure ext0 GPIO wake for the next sleep.deep",
+    .help = "configure GPIO wake for the next sleep.deep",
 };
 #endif
 

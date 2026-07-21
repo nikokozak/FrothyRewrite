@@ -42,7 +42,7 @@ jobs:
           cp editors/vscode/frothy-*.vsix dist-release/
           segment_count="$(find dist-release -maxdepth 1 -type f -name '*-*-0x*.bin' | wc -l | tr -d ' ')"
           vsix_count="$(find dist-release -maxdepth 1 -type f -name 'frothy-*.vsix' | wc -l | tr -d ' ')"
-          test "$segment_count" = 6
+          test "$segment_count" = 9
           test "$vsix_count" = 1
           test -f dist-release/manifest.json
           firmware_files=(dist-release/*-*-0x*.bin)

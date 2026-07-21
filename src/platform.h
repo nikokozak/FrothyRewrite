@@ -901,9 +901,8 @@ fr_err_t fr_platform_watchdog_feed(void);
  * wake. ms == 0 with no pending wake returns FR_ERR_INVALID so the chip
  * never sleeps indefinitely. */
 fr_err_t fr_platform_sleep_deep(uint32_t ms);
-/* T14 D12: pin must be RTC-capable per the ESP32 ext0 list (0, 2, 4,
- * 12-15, 25-27, 32-39); else FR_ERR_INVALID. level is 0 or 1; other
- * values return FR_ERR_INVALID. */
+/* T14 D12: pin must support GPIO wake on the selected target; else
+ * FR_ERR_INVALID. level is 0 or 1; other values return FR_ERR_INVALID. */
 fr_err_t fr_platform_sleep_wake_on_gpio(uint16_t pin, uint16_t level);
 
 #ifdef FR_HOST_TEST_HELPERS

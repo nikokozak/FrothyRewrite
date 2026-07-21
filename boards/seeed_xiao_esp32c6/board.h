@@ -1,0 +1,10 @@
+#pragma once
+
+#define FR_BOARD_CONSOLE_USB_SERIAL_JTAG 1
+
+#define FR_BOARD_LED_BUILTIN 15u
+#define FR_BOARD_LED_ACTIVE_LEVEL 0u
+#define FR_BOARD_A0 0u
+#define FR_BOARD_BOOT_BUTTON 9u
+#define FR_BOARD_I2C_SDA 22u
+#define FR_BOARD_I2C_SCL 23u
