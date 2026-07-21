@@ -153,7 +153,7 @@ static void test_slot_rejects_bytes(void) {
 
 static void test_cell_rejects_bytes(void) {
   install_base();
-  eval_ok("c is cells(1)");
+  eval_ok("c is cells: 1");
   eval_error_expect("set c[0] to bytes.from-text: \"hi\"", FR_ERR_VOLATILE,
                     "error: not saved: bytes 2 (13)\n"
                     "detail: value cannot be stored in cells\n");
@@ -236,7 +236,7 @@ static void test_loop_reset_prevents_arena_exhaustion(void) {
 #if FR_FEATURE_NET
 static void test_event_depth_suppresses_reset(void) {
   install_base();
-  eval_ok("counter is cells(1)");
+  eval_ok("counter is cells: 1");
   eval_ok("set counter[0] to 0");
   eval_ok("handler is fn [ "
           "here b is bytes.from-text: \"abc\"; "

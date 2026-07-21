@@ -8,7 +8,7 @@
 to i2c-print-line with value [ print: value; print: bytes.from-byte: 10 ]
 
 -- Decoder state cells: SCL, SDA, active?, bit count, accumulated byte.
-i2c-state is cells(5)
+i2c-state is cells: 5
 
 to i2c-sda-edge with level [
   here prior is i2c-state[1]

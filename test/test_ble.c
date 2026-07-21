@@ -144,7 +144,7 @@ static void test_declarative_gatt_table_is_atomic_and_inspectable(void) {
       "set customflags to $ble.gatt.read + $ble.gatt.write",
       "customrow is GattRow: $ble.gatt.characteristic, "
       "\"12345678-1234-5678-1234-56789ABCDEF0\", customflags, 8",
-      "gattrows is cells(3)",
+      "gattrows is cells: 3",
       "set gattrows[0] to svcrow",
       "set gattrows[1] to levelrow",
       "set gattrows[2] to customrow",

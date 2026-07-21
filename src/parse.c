@@ -967,12 +967,19 @@ static fr_err_t fr_parse_name_or_call(fr_parser_t *parser,
 }
 
 #if FR_FEATURE_CELLS
+/* `cells: 3` asks for a fixed row of cells. The length stays a literal
+ * whole number because the row is reserved in the image at definition
+ * time, not allocated at runtime. */
 static fr_err_t fr_parse_cells(fr_parser_t *parser,
                                fr_parse_expr_id_t *out_id) {
   fr_int_t length = 0;
 
   FR_TRY(fr_parse_advance(parser));
-  FR_TRY(fr_parse_expect(parser, FR_TOKEN_LPAREN));
+  if (parser->token.kind != FR_TOKEN_COLON) {
+    return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_CELLS_COLON,
+                               FR_ERR_INVALID);
+  }
+  FR_TRY(fr_parse_advance(parser));
   if (parser->token.kind != FR_TOKEN_INT) {
     return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
                                FR_ERR_INVALID);
@@ -983,7 +990,6 @@ static fr_err_t fr_parse_cells(fr_parser_t *parser,
                                FR_ERR_RANGE);
   }
   FR_TRY(fr_parse_advance(parser));
-  FR_TRY(fr_parse_expect(parser, FR_TOKEN_RPAREN));
   return fr_parse_add_expr(parser,
                            (fr_parse_expr_t){.kind = FR_PARSE_EXPR_CELLS,
                                              .int_value = length},

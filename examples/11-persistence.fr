@@ -2,7 +2,7 @@
 -- Saves cells and words, restores them, and reads the saved values back.
 -- @tag host
 
-tally is cells(1)
+tally is cells: 1
 set tally[0] to 7
 to tally-plus with n [ tally[0] + n ]
 save

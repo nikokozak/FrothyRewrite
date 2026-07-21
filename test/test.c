@@ -774,7 +774,7 @@ static void test_persist_build_deep_ref_program(fr_runtime_t *runtime,
                           out_cap) == FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("deep refs cells",
-        fr_repl_eval_line(runtime, "holder is cells(2)", out, out_cap) ==
+        fr_repl_eval_line(runtime, "holder is cells: 2", out, out_cap) ==
                 FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("deep refs cell record",
@@ -886,7 +886,7 @@ static void test_persist_mmap_event_body_survives_remount(void) {
                           (uint16_t)sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("mmap event cells",
-        fr_repl_eval_line(&runtime, "holder is cells(2)", out,
+        fr_repl_eval_line(&runtime, "holder is cells: 2", out,
                           (uint16_t)sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("mmap event cell text",
@@ -1025,7 +1025,7 @@ static void test_persist_fake_non_xip_code_reader(void) {
                               sizeof(out)) == FR_OK);
 #if FR_FEATURE_CELLS
   CHECK("nonxip reader cell rejection words",
-        fr_repl_eval_line(&saved, "reader-cell is cells(1)", out,
+        fr_repl_eval_line(&saved, "reader-cell is cells: 1", out,
                           sizeof(out)) == FR_OK &&
             fr_repl_eval_line(&saved,
                               "bad-cell is fn [ reader-cell[9] ]", out,
@@ -1209,7 +1209,7 @@ static void test_persist_fake_non_xip_store_diagnostics(void) {
   fr_platform_persist_clear();
   CHECK("nonxip store base", fr_base_image_install(&saved) == FR_OK);
   CHECK("nonxip store fixtures",
-        fr_repl_eval_line(&saved, "reader-cell is cells(1)", out,
+        fr_repl_eval_line(&saved, "reader-cell is cells: 1", out,
                           sizeof(out)) == FR_OK &&
             fr_repl_eval_line(&saved, "reader-index is 9", out,
                               sizeof(out)) == FR_OK &&
@@ -8513,7 +8513,7 @@ static void test_parse(void) {
             parsed.exprs[parsed.exprs[expr_id].child].int_value == 7);
 #if FR_FEATURE_CELLS
   CHECK("parse cells definition",
-        fr_parse_line("counter is cells(2)", &parsed) == FR_OK &&
+        fr_parse_line("counter is cells: 2", &parsed) == FR_OK &&
             parsed.exprs[parsed.definition.value].kind ==
                 FR_PARSE_EXPR_CELLS &&
             parsed.exprs[parsed.definition.value].int_value == 2);
@@ -8553,7 +8553,15 @@ static void test_parse(void) {
             fr_parse_span_equals(
                 parsed.exprs[parsed.exprs[expr_id].children[0]].name, "i"));
   CHECK("parse rejects zero cells",
-        fr_parse_line("counter is cells(0)", &parsed) == FR_ERR_RANGE);
+        fr_parse_line("counter is cells: 0", &parsed) == FR_ERR_RANGE);
+  {
+    fr_diagnostic_t cells_diag = {0};
+
+    CHECK("parse points old cells(2) form at the colon call",
+          fr_parse_line_with_diagnostic("counter is cells(2)", &parsed,
+                                        &cells_diag) == FR_ERR_INVALID &&
+              cells_diag.message_id == FR_DIAG_MSG_PARSE_CELLS_COLON);
+  }
   CHECK("parse keeps negative literal cell index for compile/runtime checks",
         fr_parse_expression_line("counter[-1]", &parsed, &expr_id) ==
                 FR_OK &&
@@ -8563,7 +8571,7 @@ static void test_parse(void) {
             parsed.exprs[parsed.exprs[expr_id].children[0]].int_value == -1);
 #else
   CHECK("parse cells unsupported without feature",
-        fr_parse_line("counter is cells(2)", &parsed) == FR_ERR_UNSUPPORTED);
+        fr_parse_line("counter is cells: 2", &parsed) == FR_ERR_UNSUPPORTED);
   CHECK("parse cell read unsupported without feature",
         fr_parse_expression_line("counter[1]", &parsed, &expr_id) ==
             FR_ERR_UNSUPPORTED);
@@ -9043,7 +9051,7 @@ static void test_compile(void) {
   CHECK("compile runtime cells definition",
         fr_base_image_install(&cell_runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(&cell_runtime,
-                                                  "counter is cells(2)",
+                                                  "counter is cells: 2",
                                                   &update) == FR_OK &&
             update.slot_inits[0].slot_id == FR_TEST_FIRST_USER_SLOT &&
             update.slot_inits[0].ref.kind == FR_IMAGE_REF_CELL_OBJECT &&
@@ -9132,7 +9140,7 @@ static void test_compile(void) {
   }
   CHECK("compile dynamic cell index loop averages readings",
         fr_compile_overlay_update_for_runtime(
-            &cell_runtime, "readings is cells(4)", &update) == FR_OK &&
+            &cell_runtime, "readings is cells: 4", &update) == FR_OK &&
             fr_overlay_apply(&cell_runtime, &update.overlay_update) == FR_OK &&
             fr_compile_expression_for_runtime(
                 &cell_runtime, "set readings[0] to 10", &expression) == FR_OK &&
@@ -9218,10 +9226,10 @@ static void test_compile(void) {
                                               &expression) == FR_ERR_RANGE);
 #endif
   CHECK("compile rejects bare cells expression",
-        fr_compile_expression_for_runtime(&cell_runtime, "cells(1)",
+        fr_compile_expression_for_runtime(&cell_runtime, "cells: 1",
                                           &expression) == FR_ERR_UNSUPPORTED);
   CHECK("compile rejects oversized cells definition",
-        ((void)snprintf(line, sizeof(line), "large is cells(%u)",
+        ((void)snprintf(line, sizeof(line), "large is cells: %u",
                         (unsigned)FR_PROFILE_MAX_CELL_LENGTH + 1u),
          fr_compile_overlay_update_for_runtime(&cell_runtime, line, &update) ==
              FR_ERR_RANGE));
@@ -9243,7 +9251,7 @@ static void test_compile(void) {
   (void)cell_runtime;
   (void)object_id;
   CHECK("compile cells unsupported without feature",
-        fr_compile_overlay_update_for_runtime(&runtime, "counter is cells(1)",
+        fr_compile_overlay_update_for_runtime(&runtime, "counter is cells: 1",
                                               &update) == FR_ERR_UNSUPPORTED);
 #endif
 #if FR_FEATURE_RECORDS
@@ -10612,7 +10620,7 @@ static void test_compile(void) {
   CHECK("compiled while decrements cell to zero and exits",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
-                &runtime, "counter is cells(1)", &update) == FR_OK &&
+                &runtime, "counter is cells: 1", &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime,
@@ -10630,7 +10638,7 @@ static void test_compile(void) {
   CHECK("compiled while exits when comparison on slot flips",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
-                &runtime, "counter is cells(1)", &update) == FR_OK &&
+                &runtime, "counter is cells: 1", &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
                 &runtime,
@@ -10931,7 +10939,7 @@ static void test_attempt_rescue(void) {
 #if FR_FEATURE_CELLS
   CHECK("attempt cell setup",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_repl_eval_line(&runtime, "readings is cells(1)", out,
+            fr_repl_eval_line(&runtime, "readings is cells: 1", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("attempt catches cell range",
@@ -11888,7 +11896,7 @@ static void test_persist(void) {
   CHECK("persist restores cell-held binary text",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(&runtime,
-                                                  "status is cells(1)",
+                                                  "status is cells: 1",
                                                   &update) == FR_OK &&
             (slot_id = update.slot_inits[0].slot_id, true) &&
             test_persist_apply_user_overlay(&runtime,
@@ -11937,7 +11945,7 @@ static void test_persist(void) {
   CHECK("persist restores cells",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update_for_runtime(
-                &runtime, "counter is cells(2)", &update) == FR_OK &&
+                &runtime, "counter is cells: 2", &update) == FR_OK &&
             test_persist_apply_user_overlay(&runtime, &update.overlay_update) ==
                 FR_OK &&
             fr_compile_expression_for_runtime(
@@ -11968,7 +11976,7 @@ static void test_persist(void) {
 
     CHECK("persist restores dynamic cell index code",
           fr_base_image_install(&runtime) == FR_OK &&
-              fr_repl_eval_line(&runtime, "readings is cells(3)", out,
+              fr_repl_eval_line(&runtime, "readings is cells: 3", out,
                                 sizeof(out)) == FR_OK &&
               fr_repl_eval_line(&runtime, "set readings[2] to 9", out,
                                 sizeof(out)) == FR_OK &&
@@ -12023,7 +12031,7 @@ static void test_persist(void) {
 #if FR_FEATURE_CELLS
   CHECK("persist restores cell-held record ref",
         fr_compile_overlay_update_for_runtime(&runtime,
-                                              "holder is cells(1)",
+                                              "holder is cells: 1",
                                               &update) == FR_OK &&
             test_persist_apply_user_overlay(&runtime,
                                             &update.overlay_update) == FR_OK &&
@@ -13697,7 +13705,7 @@ static void test_repl(void) {
             fr_tagged_decode_int(result, &decoded) == FR_OK && decoded == 7);
 #if FR_FEATURE_CELLS
   CHECK("repl defines cells",
-        fr_repl_eval_line(&runtime, "counter is cells(1)", out,
+        fr_repl_eval_line(&runtime, "counter is cells: 1", out,
                           sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("repl displays cells",
@@ -13730,7 +13738,7 @@ static void test_repl(void) {
                 FR_OK &&
             strcmp(out, "overlay text 5\nok\n") == 0);
   CHECK("repl stores text in cell",
-        fr_repl_eval_line(&runtime, "status is cells(1)", out,
+        fr_repl_eval_line(&runtime, "status is cells: 1", out,
                           sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "set status[0] to message", out,
@@ -14162,7 +14170,7 @@ static void test_repl_error_diagnostics(void) {
 #if FR_FEATURE_CELLS && FR_FEATURE_TEXT && FR_FEATURE_NATIVE_SIGNATURES &&   \
     FR_PROFILE_MAX_OVERLAY_NAMES > 0
   const char *native_cells_type_lines[] = {
-      "nottext is cells(1)",
+      "nottext is cells: 1",
       "print: nottext",
   };
 #endif
@@ -14187,7 +14195,7 @@ static void test_repl_error_diagnostics(void) {
 #endif
 #if FR_FEATURE_CELLS
   const char *cell_oob_lines[] = {
-      "c is cells(4)",
+      "c is cells: 4",
       "c[99]",
   };
   const char *wrong_cell_lines[] = {
@@ -14212,7 +14220,7 @@ static void test_repl_error_diagnostics(void) {
   };
 #if FR_FEATURE_CELLS
   const char *wrong_record_cells_lines[] = {
-      "notrecord is cells(1)",
+      "notrecord is cells: 1",
       "notrecord->x",
   };
 #endif
@@ -15302,7 +15310,7 @@ static void test_repl_see_source_form(void) {
 #if FR_FEATURE_CELLS
   CHECK("see source dynamic cell read",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_repl_eval_line(&runtime, "readings is cells(3)", out,
+            fr_repl_eval_line(&runtime, "readings is cells: 3", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "pick is fn with i [ readings[i] ]",
@@ -15315,7 +15323,7 @@ static void test_repl_see_source_form(void) {
                         "ok\n") == 0);
   CHECK("see source dynamic cell write",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_repl_eval_line(&runtime, "readings is cells(3)", out,
+            fr_repl_eval_line(&runtime, "readings is cells: 3", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime,
@@ -15328,7 +15336,7 @@ static void test_repl_see_source_form(void) {
                         "ok\n") == 0);
   CHECK("see source dynamic cell index loop",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_repl_eval_line(&runtime, "readings is cells(4)", out,
+            fr_repl_eval_line(&runtime, "readings is cells: 4", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "i is 0", out, sizeof(out)) == FR_OK &&

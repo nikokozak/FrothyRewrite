@@ -155,7 +155,7 @@ static void test_wifi_disconnected_event_runs_body(void) {
   char out[64];
 
   install_base();
-  eval_ok("counter is cells(1)");
+  eval_ok("counter is cells: 1");
   eval_ok("set counter[0] to 1");
   eval_ok("mark is fn [ set counter[0] to 42 ]");
   eval_ok("boot is fn [ on wifi.disconnected [ mark: ] ]");
@@ -174,7 +174,7 @@ static void test_wifi_reconnected_event_runs_body(void) {
   char out[64];
 
   install_base();
-  eval_ok("counter is cells(1)");
+  eval_ok("counter is cells: 1");
   eval_ok("set counter[0] to 1");
   eval_ok("mark is fn [ set counter[0] to 99 ]");
   eval_ok("boot is fn [ on wifi.reconnected [ mark: ] ]");

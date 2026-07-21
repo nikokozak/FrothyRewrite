@@ -522,7 +522,7 @@ test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 		'random.chance?: 0, 0' \
 		'random.percent?: 100' \
 		'random.percent?: 0' \
-		'counter is cells(1)' \
+		'counter is cells: 1' \
 		'set counter[0] to 7' \
 		'counter[0]' \
 		'message is "ready"' \
@@ -536,7 +536,7 @@ test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 		'say_ready:' \
 		'say_bytes is fn [ print: bytes.from-text: "bytes\\n" ]' \
 		'say_bytes:' \
-		'status is cells(1)' \
+		'status is cells: 1' \
 		'set status[0] to message' \
 		'status[0]' \
 		'led_ref is led.on' \
@@ -687,7 +687,7 @@ test-host-normal-no-native-signatures-transcript: host-normal-no-native-signatur
 # frothy.fire-event is reachable from the REPL.
 test-host-normal-event-transcript: host-normal-events ## Replay the host_normal event transcript.
 	@out=$$(printf '%s\n' \
-		'counter is cells(1)' \
+		'counter is cells: 1' \
 		'set counter[0] to 1' \
 		'mark is fn [ set counter[0] to 42 ]' \
 		'boot is fn [ on 7 rising [ mark: ] ]' \
@@ -796,7 +796,7 @@ test-esp32-plain-host-transcript: esp32-plain-host ## Replay the esp32_plain pro
 		'adc.read: $$a0' \
 		'message is "ready"' \
 		'message' \
-		'status is cells(1)' \
+		'status is cells: 1' \
 		'set status[0] to message' \
 		'boot is fn [ pin: $$led_builtin, 1 ]' \
 		'gpio.write: $$led_builtin, 0' \

@@ -6,6 +6,13 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+### Changed
+
+- **Cell rows are asked for with a colon call: `readings is cells: 3`.** The
+  old `cells(3)` spelling was the only parenthesized call shape in the
+  language; parentheses now always mean grouping. The old form fails with a
+  pointer to the new spelling.
+
 ## [0.1.7] - 2026-07-21
 
 ### Added
