@@ -83,8 +83,8 @@ test('the reducer derives the small live editor snapshot from session records', 
       kind: 'compile_error',
       state: 'idle',
       mirror: 'none',
-      status: 'error: bad source (8)',
-      text: 'error: bad source (8)\n',
+      status: 'error: invalid (8)',
+      text: 'error: invalid (8)\n',
     }),
     record({
       v: 1,
@@ -105,7 +105,7 @@ test('the reducer derives the small live editor snapshot from session records', 
   assert.equal(snapshot.mirror, 'none');
   assert.equal(snapshot.profile, 'test');
   assert.equal(snapshot.mode, 'device');
-  assert.equal(snapshot.lastError?.status, 'error: bad source (8)');
+  assert.equal(snapshot.lastError?.status, 'error: invalid (8)');
   assert.equal(snapshot.lastResultText, 'error: interrupted (10)\n');
 });
 
@@ -143,7 +143,7 @@ test('device notices remain successful results and warning-colored output', () =
     kind: 'compile_error',
     state: 'idle',
     mirror: 'none',
-    status: 'error: bad source (8)',
+    status: 'error: invalid (8)',
   }));
   const after = reduceSessionRecord(before, notice);
 

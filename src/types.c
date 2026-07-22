@@ -19,7 +19,7 @@ const char *fr_err_name(fr_err_t err) {
   case FR_ERR_NOT_FOUND:
     return "not found";
   case FR_ERR_INVALID:
-    return "bad source";
+    return "invalid";
   case FR_ERR_UNSUPPORTED:
     return "unsupported";
   case FR_ERR_INTERRUPTED:

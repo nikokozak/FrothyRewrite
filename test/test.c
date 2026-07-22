@@ -8842,7 +8842,7 @@ static void test_parse(void) {
 }
 
 /* Regression: the first definition after wipe-user used to fail with
- * FR_ERR_INVALID ("bad source"). wipe-user freed a user slot but left
+ * FR_ERR_INVALID ("invalid"). wipe-user freed a user slot but left
  * slots.count counting it, so the next definition was assigned an id one past
  * what the install validator accepts. */
 static void test_first_definition_after_wipe(void) {
@@ -14499,7 +14499,7 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(arity_one_lines) /
                           sizeof(arity_one_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_equals(out, "error: invalid (8)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "expected 2 arguments, got 1\n") != NULL &&
             strstr(out, "add2: 1\n^^^^\n") != NULL);
@@ -14512,7 +14512,7 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(arity_three_lines) /
                           sizeof(arity_three_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_equals(out, "error: invalid (8)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "expected 2 arguments, got 3\n") != NULL &&
             strstr(out, "add2: 1, 2, 3\n^^^^\n") != NULL);
@@ -14525,7 +14525,7 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(param_shadow_lines) /
                           sizeof(param_shadow_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_equals(out, "error: invalid (8)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "parameter shadows an existing name\n") != NULL);
 #endif
@@ -14619,7 +14619,7 @@ static void test_repl_error_diagnostics(void) {
                 &runtime, eof_lines,
                 (uint8_t)(sizeof(eof_lines) / sizeof(eof_lines[0])), out,
                 (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_equals(out, "error: invalid (8)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "unexpected token\n") != NULL &&
             strstr(out, "1 +\n   ^\n") != NULL);
@@ -14632,7 +14632,7 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(missing_colon_lines) /
                           sizeof(missing_colon_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_equals(out, "error: invalid (8)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out,
                    "expected ':' before the argument to a word\n") != NULL &&
@@ -14647,7 +14647,7 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(unterminated_text_lines) /
                           sizeof(unterminated_text_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_equals(out, "error: invalid (8)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "unterminated text literal\n") != NULL &&
             strstr(out, "message is \"ready\n           ^\n") != NULL);
@@ -14661,7 +14661,7 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(malformed_to_lines) /
                           sizeof(malformed_to_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_equals(out, "error: invalid (8)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "expected ']' to close the block\n") != NULL &&
             strstr(out, "to foo [ 1\n          ^\n") != NULL);
@@ -14674,7 +14674,7 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(expected_block_end_lines) /
                           sizeof(expected_block_end_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_equals(out, "error: invalid (8)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "expected ']' to close the block\n") != NULL &&
             strstr(out, "boot is fn [ one )\n                 ^\n") != NULL);
@@ -14687,7 +14687,7 @@ static void test_repl_error_diagnostics(void) {
                 (uint8_t)(sizeof(reserved_name_lines) /
                           sizeof(reserved_name_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_equals(out, "error: invalid (8)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "reserved word cannot be used as a name\n") != NULL &&
             strstr(out, "true is 1\n^^^^\n") != NULL);
@@ -14736,7 +14736,7 @@ static void test_repl_error_diagnostics(void) {
                                 (uint8_t)(sizeof(generic_lines) /
                                           sizeof(generic_lines[0])),
                                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_equals(out, "error: invalid (8)") &&
             test_error_line_matches_wire_shape(out) &&
             strstr(out, "unexpected token\n") != NULL &&
             strstr(out, "boot is nil now\n            ^^^\n") != NULL);
@@ -15707,7 +15707,7 @@ static void test_err_name(void) {
       {FR_ERR_OVERFLOW, "overflow"},
       {FR_ERR_UNDERFLOW, "underflow"},
       {FR_ERR_NOT_FOUND, "not found"},
-      {FR_ERR_INVALID, "bad source"},
+      {FR_ERR_INVALID, "invalid"},
       {FR_ERR_UNSUPPORTED, "unsupported"},
       {FR_ERR_INTERRUPTED, "interrupted"},
       {FR_ERR_CORRUPT, "corrupt data"},
@@ -15851,7 +15851,7 @@ static void test_repl_source_form_wire(void) {
                 (uint8_t)(sizeof(malformed_then_valid_lines) /
                           sizeof(malformed_then_valid_lines[0])),
                 out, (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)") &&
+            test_error_line_equals(out, "error: invalid (8)") &&
             strstr(out, "> 1\nok\n> ") != NULL);
 
   memset(out, 0, sizeof(out));
@@ -15866,7 +15866,7 @@ static void test_repl_source_form_wire(void) {
         fr_base_image_install(&runtime) == FR_OK &&
             test_repl_run_lines(&runtime, empty_lines, 1, out,
                                 (uint16_t)sizeof(out)) &&
-            test_error_line_equals(out, "error: bad source (8)"));
+            test_error_line_equals(out, "error: invalid (8)"));
 
   memset(out, 0, sizeof(out));
   CHECK("repl multiline diagnostic shows failing physical source line",

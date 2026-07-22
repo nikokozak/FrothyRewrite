@@ -588,8 +588,8 @@ test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 		'time is 200' \
 		'words' \
 		| build/host/frothy-host-normal); \
-	if ! printf '%s\n' "$$err_out" | grep -q 'error: bad source (8)'; then \
-		printf '%s\nmissing bad-source error\n' "$$err_out"; \
+	if ! printf '%s\n' "$$err_out" | grep -q 'error: invalid (8)'; then \
+		printf '%s\nmissing invalid-source error\n' "$$err_out"; \
 		exit 1; \
 	fi; \
 	if ! printf '%s\n' "$$err_out" | grep -q 'time'; then \

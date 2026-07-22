@@ -53,7 +53,7 @@ EOF
 
   # Strip full-line comments and blank lines before feeding the REPL, the same
   # way `frothy send` delivers a file to a board. The raw REPL rejects a
-  # comment-only line as bad source; trailing `-- => V` comments on code lines
+  # comment-only line as invalid (error 8); trailing `-- => V` comments on code lines
   # are fine and stay.
   program=$(grep -v -E '^[[:space:]]*(--|$)' "$file" || true)
   if ! output=$(printf '%s\n' "$program" | "$binary" 2>&1); then

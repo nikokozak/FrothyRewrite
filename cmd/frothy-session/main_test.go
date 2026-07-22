@@ -263,7 +263,7 @@ func TestResponseNoticeKeepsHeadlineAndDetails(t *testing.T) {
 		t.Fatalf("responseNoticeText = %q, want %q", got, want)
 	}
 
-	errorResponse := "notice: quoted source (13)\nerror: bad source (8)\n"
+	errorResponse := "notice: quoted source (13)\nerror: invalid (8)\n"
 	if got := responseNoticeStatus(errorResponse); got != "" {
 		t.Fatalf("failed response reported notice %q", got)
 	}
@@ -288,7 +288,7 @@ func TestResponseTerminalStatusRequiresWholeLine(t *testing.T) {
 	}{
 		{response: "ok\n", want: true},
 		{response: "err 8\n", want: true},
-		{response: "error: bad source (8)\n", want: true},
+		{response: "error: invalid (8)\n", want: true},
 		{response: "> ok\n", want: true},
 		{response: "not ok\n", want: false},
 		{response: "ok \n", want: false},
@@ -1832,7 +1832,7 @@ func TestReplayLinesFromTranscriptKeepsOnlyAcceptedSource(t *testing.T) {
 		`{"v":1,"session":"s1","seq":2,"kind":"status","state":"idle","mirror":"none"}`,
 		`{"v":1,"session":"s1","seq":3,"kind":"send","state":"waiting","mirror":"none","source":"led is $led_builtin","line":"led is $led_builtin","action":"direct"}`,
 		`{"v":1,"session":"s1","seq":4,"kind":"response","state":"idle","mirror":"none","status":"ok","ok":true,"text":"ok\n"}`,
-		`{"v":1,"session":"s1","seq":5,"kind":"compile_error","state":"idle","mirror":"none","source":"bad is fn [ pin: ]","reason":"source","status":"error: bad source (8)","text":"error: bad source (8)\n"}`,
+		`{"v":1,"session":"s1","seq":5,"kind":"compile_error","state":"idle","mirror":"none","source":"bad is fn [ pin: ]","reason":"source","status":"error: invalid (8)","text":"error: invalid (8)\n"}`,
 		`{"v":1,"session":"s1","seq":6,"kind":"send","state":"waiting","mirror":"none","source":"bad:","line":"bad:","action":"direct"}`,
 		`{"v":1,"session":"s1","seq":7,"kind":"response","state":"idle","mirror":"none","status":"error: unsupported (9)","ok":false,"text":"error: unsupported (9)\n"}`,
 		`{"v":1,"session":"s1","seq":8,"kind":"send","state":"waiting","mirror":"none","source":"forever [ 1 ]","line":"forever [ 1 ]","action":"direct"}`,
