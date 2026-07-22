@@ -6,6 +6,30 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-07-22
+
+### Added
+
+- **Wi-Fi can be composed out of a build.** `net` joins `ble` as an offered
+  capability: a composition that turns it off drops the radio stack (~600 KB
+  of flash on a classic ESP32). Libraries can declare hardware needs with
+  `requires = ["i2s"]`.
+- **Builds report their measured size.** Every ESP-IDF build writes
+  `build/<board>/size.json`: the app image against the flashed partition
+  table's app partition, plus IRAM/DRAM (and shared-pool DIRAM) usage.
+  Reporting never fails a build that otherwise succeeded.
+
+### Changed
+
+- **The app partition is 2 MiB on every board.** All boards share one
+  partition table sized to real hardware (4 MB flash floor; larger chips
+  keep their profiles). An all-features image now keeps roughly a third of
+  the partition free instead of 7%.
+- **Error 8 is named `invalid`, not `bad source`.** The code is shared by
+  the parser and by library precondition failures, and the old phrase lied
+  outside the parse path. Parse failures keep their specific diagnostics
+  (message and caret), so nothing is lost where the old name was right.
+
 ## [0.1.8] - 2026-07-21
 
 ### Added
