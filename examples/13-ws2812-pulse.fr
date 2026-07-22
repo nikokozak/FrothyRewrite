@@ -5,11 +5,11 @@
 -- shows that your LEDs need them tuned.
 -- @tag device hardware
 
-zero-high is 400
-zero-low is 900
-one-high is 800
-one-low is 500
-reset-low is 80000
+zero-high is 400ns
+zero-low is 900ns
+one-high is 800ns
+one-low is 500ns
+reset-low is 80000ns
 
 to ws2812-bit with wave, bit [
   if bit = 0 [
@@ -22,11 +22,11 @@ to ws2812-bit with wave, bit [
 ]
 
 to ws2812-frame with pin, grb [
-  here wave is pulse.open: pin, 0
-  here mask is 8388608
+  wave is pulse.open: pin, 0
+  mask is 0b1000_0000_0000_0000_0000_0000
 
   repeat 24 [
-    here bit is mod: grb / mask, 2
+    bit is mod: grb / mask, 2
     ws2812-bit: wave, bit
     set mask to mask / 2
   ]

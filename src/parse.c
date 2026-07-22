@@ -196,11 +196,41 @@ static fr_err_t fr_parse_skip_space_and_comments(fr_parser_t *parser,
   return FR_OK;
 }
 
+/* `1s` multiplies into milliseconds; `ms`, `us`, and `ns` pass through
+ * unchanged so a literal can name the unit its API takes (each API
+ * documents one). The suffix is a compile-time multiply into the same
+ * int — there is no duration type. */
+static bool fr_parse_duration_suffix(fr_parse_span_t span, uint16_t i,
+                                     fr_parse_int_magnitude_t *out_multiplier,
+                                     uint16_t *out_length) {
+  uint16_t rest = (uint16_t)(span.length - i);
+
+  if (rest == 1 && span.start[i] == 's') {
+    *out_multiplier = 1000;
+    *out_length = 1;
+    return true;
+  }
+  if (rest == 2 && span.start[i] == 'm' && span.start[i + 1] == 's') {
+    *out_multiplier = 1;
+    *out_length = 2;
+    return true;
+  }
+  if (rest == 2 && (span.start[i] == 'u' || span.start[i] == 'n') &&
+      span.start[i + 1] == 's') {
+    *out_multiplier = 1;
+    *out_length = 2;
+    return true;
+  }
+  return false;
+}
+
 static fr_err_t fr_parse_token_int(fr_parse_span_t span, fr_int_t *out_int) {
   bool negative = false;
   fr_parse_int_magnitude_t parsed = 0;
   fr_parse_int_magnitude_t limit = 0;
   fr_parse_int_magnitude_t cutoff = 0;
+  fr_parse_int_magnitude_t multiplier = 1;
+  bool seen_digit = false;
   uint8_t cutlim = 0;
   uint8_t base = 10;
   uint16_t i = 0;
@@ -241,8 +271,26 @@ static fr_err_t fr_parse_token_int(fr_parse_span_t span, fr_int_t *out_int) {
     char c = span.start[i];
     uint8_t digit = 0;
 
+    /* `_` groups digits in any base: `1_000_000`, `0b1000_0000`. It must
+     * sit between digits, so a malformed span falls back to being a name
+     * the same way any other non-integer digit-led token does. */
+    if (c == '_') {
+      if (!seen_digit || span.start[i - 1] == '_' ||
+          i + 1u >= span.length) {
+        return base == 10 ? FR_ERR_UNSUPPORTED : FR_ERR_INVALID;
+      }
+      i += 1;
+      continue;
+    }
     if (base == 10) {
       if (!fr_parse_is_digit(c)) {
+        uint16_t suffix_length = 0;
+
+        if (seen_digit && span.start[i - 1] != '_' &&
+            fr_parse_duration_suffix(span, i, &multiplier, &suffix_length)) {
+          i = (uint16_t)(i + suffix_length);
+          break;
+        }
         return FR_ERR_UNSUPPORTED;
       }
       digit = (uint8_t)(c - '0');
@@ -268,7 +316,15 @@ static fr_err_t fr_parse_token_int(fr_parse_span_t span, fr_int_t *out_int) {
       return FR_ERR_RANGE;
     }
     parsed = (fr_parse_int_magnitude_t)((parsed * base) + digit);
+    seen_digit = true;
     i += 1;
+  }
+
+  if (multiplier > 1) {
+    if (parsed > limit / multiplier) {
+      return FR_ERR_RANGE;
+    }
+    parsed = (fr_parse_int_magnitude_t)(parsed * multiplier);
   }
 
   if (negative) {

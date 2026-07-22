@@ -6,6 +6,15 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+### Added
+
+- **Duration and digit-grouped literals.** `every 2s`, `after 500ms`,
+  `pulse.add: wave, 1, 400ns`: `s` multiplies into milliseconds; `ms`, `us`,
+  and `ns` pass through so a literal can name the unit its API documents.
+  Underscores group digits in any base: `1_000_000`,
+  `0b1000_0000_0000_0000_0000_0000`. All of it is lexer-level sugar over the
+  same int.
+
 ### Changed
 
 - **A call's arguments end where the next call begins — for every operator.**

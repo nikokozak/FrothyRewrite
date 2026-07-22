@@ -8768,6 +8768,40 @@ static void test_parse(void) {
         fr_parse_expression_line("0xFF", &parsed, &expr_id) == FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
             parsed.exprs[expr_id].int_value == 255);
+  CHECK("parse underscore groups decimal digits",
+        fr_parse_expression_line("1_000_000", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 1000000);
+  CHECK("parse underscore groups binary digits",
+        fr_parse_expression_line("0b1010_0101", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 165);
+  CHECK("parse trailing underscore stays a name",
+        fr_parse_expression_line("1_", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_NAME);
+  CHECK("parse ms suffix passes through",
+        fr_parse_expression_line("500ms", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 500);
+  CHECK("parse s suffix multiplies into milliseconds",
+        fr_parse_expression_line("2s", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 2000);
+  CHECK("parse us suffix passes through",
+        fr_parse_expression_line("400us", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 400);
+  CHECK("parse ns suffix passes through",
+        fr_parse_expression_line("400ns", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == 400);
+  CHECK("parse negative duration literal",
+        fr_parse_expression_line("-2s", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
+            parsed.exprs[expr_id].int_value == -2000);
+  CHECK("parse non-suffix letters stay a name",
+        fr_parse_expression_line("2nd", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_NAME);
   CHECK("parse hex literal big X",
         fr_parse_expression_line("0Xff", &parsed, &expr_id) == FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
