@@ -119,8 +119,7 @@ static void test_bytes_ready_tracks_queue_drain(void) {
   eval_ok("sock is tcp.open: \"example.com\", 80");
   eval_expect_output("tcp.available: sock", "5\nok\n");
   eval_expect_output("text.pack: tcp.read: sock, 2", "\"ab\"\nok\n");
-  /* Old spelling kept as a deprecated alias for one release. */
-  eval_expect_output("tcp.bytes-ready?: sock", "3\nok\n");
+  eval_expect_output("tcp.available: sock", "3\nok\n");
 }
 
 static void test_force_disconnect_surfaces_on_next_op(void) {

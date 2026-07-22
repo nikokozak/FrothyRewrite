@@ -497,7 +497,7 @@ test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 	@out=$$(printf '%s\n' \
 		'status' \
 		'time is 200' \
-		'myblink is fn [ pin: $$led_builtin, 1; ms: time; pin: $$led_builtin, 0; ms: time ]' \
+		'myblink is fn [ pin: $$led_builtin, 1; wait: time; pin: $$led_builtin, 0; wait: time ]' \
 		'blink_times is fn with count [ repeat count [ myblink: ] ]' \
 		'boot is fn [ blink_times: 3 ]' \
 		'gpio.high: $$led_builtin' \
@@ -658,7 +658,7 @@ host-normal-no-native-signatures:
 test-host-normal-no-native-signatures-transcript: host-normal-no-native-signatures
 	@out=$$(printf '%s\n' \
 		'wifi.save: "ssid", "012345678901234567890123456789012345678901234567890123456789abcde"' \
-		'ms: true' \
+		'wait: true' \
 		| build/host/frothy-host-no-native-signatures); \
 	if printf '%s\n' "$$out" | grep -qF '0123456789'; then \
 		printf '%s\nsecret argument leaked without native signatures\n' "$$out"; \
@@ -676,7 +676,7 @@ test-host-normal-no-native-signatures-transcript: host-normal-no-native-signatur
 		printf '%s\nmissing signature-off type error\n' "$$out"; \
 		exit 1; \
 	fi; \
-	if ! printf '%s\n' "$$out" | grep -qF 'detail: ms argument 1 was rejected'; then \
+	if ! printf '%s\n' "$$out" | grep -qF 'detail: wait argument 1 was rejected'; then \
 		printf '%s\nmissing signature-off numeric argument context\n' "$$out"; \
 		exit 1; \
 	fi; \

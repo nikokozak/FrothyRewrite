@@ -215,7 +215,7 @@ enum {
 
 #if FR_FEATURE_PERSISTENCE
 #define FR_TEST_WORDS                                                        \
-  "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
+  "boot wait one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
   "gpio.read adc.read adc.above? millis micros" FR_TEST_UART_WORDS             \
       FR_TEST_RANDOM_WORDS FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS                \
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
@@ -226,7 +226,7 @@ enum {
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
-  "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
+  "boot wait one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
   "gpio.read adc.read adc.above? millis micros" FR_TEST_UART_WORDS             \
       FR_TEST_RANDOM_WORDS FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS                \
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
@@ -237,7 +237,7 @@ enum {
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
-  "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
+  "boot wait one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
   "gpio.read adc.read adc.above? millis micros" FR_TEST_UART_WORDS             \
       FR_TEST_RANDOM_WORDS FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS                \
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
@@ -258,7 +258,7 @@ enum {
    FR_TEST_CONSOLE_INPUT_SLOT_COUNT + FR_TEST_CONSOLE_SLOT_COUNT)
 #else
 #define FR_TEST_WORDS                                                        \
-  "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
+  "boot wait one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above? millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
@@ -268,7 +268,7 @@ enum {
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
-  "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
+  "boot wait one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above? millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
@@ -278,7 +278,7 @@ enum {
               FR_TEST_EVENT_TEST_WORDS                                        \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
-  "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
+  "boot wait one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
   "adc.above? millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
@@ -3025,9 +3025,6 @@ static void test_pad(void) {
             bytes[0] == 'A' && bytes[1] == '\n');
   CHECK("pad len reports byte count",
         fr_repl_eval_line(&runtime, "pad.length:", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "2\nok\n") == 0);
-  CHECK("pad.len alias still resolves",
-        fr_repl_eval_line(&runtime, "pad.len:", out, sizeof(out)) == FR_OK &&
             strcmp(out, "2\nok\n") == 0);
   CHECK("pad peeks bytes without consuming",
         fr_repl_eval_line(&runtime, "pad.peek-byte: 0", out, sizeof(out)) ==
@@ -7306,8 +7303,8 @@ static void test_image(void) {
         fr_base_image_install(&runtime) == FR_OK &&
             fr_slot_read(&runtime, FR_SLOT_BOOT, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
-  CHECK("base image installs ms native",
-        fr_slot_read(&runtime, FR_SLOT_MS, &tagged) == FR_OK &&
+  CHECK("base image installs wait native",
+        fr_slot_read(&runtime, FR_SLOT_WAIT, &tagged) == FR_OK &&
             fr_tagged_decode_native_id(tagged, &native_id) == FR_OK &&
             fr_native_get(&runtime, native_id, &entry) == FR_OK &&
             entry->arity == 1);
@@ -7396,7 +7393,7 @@ static void test_image(void) {
   CHECK("base image exposes host slot names",
         fr_base_slot_count() == FR_TEST_BASE_SLOT_COUNT &&
             strcmp(fr_base_slot_name_at(0), "boot") == 0 &&
-            strcmp(fr_base_slot_name_at(1), "ms") == 0 &&
+            strcmp(fr_base_slot_name_at(1), "wait") == 0 &&
             strcmp(fr_base_slot_name_at(2), "one") == 0 &&
             strcmp(fr_base_slot_name_at(3), "gpio.write") == 0 &&
             strcmp(fr_base_slot_name_at(4), "$led_builtin") == 0 &&
@@ -7404,7 +7401,7 @@ static void test_image(void) {
                    "$led_active_level") == 0 &&
             fr_base_slot_name_at(FR_TEST_BASE_SLOT_COUNT) == NULL &&
             strcmp(fr_base_slot_name(FR_SLOT_BOOT), "boot") == 0 &&
-            strcmp(fr_base_slot_name(FR_SLOT_MS), "ms") == 0 &&
+            strcmp(fr_base_slot_name(FR_SLOT_WAIT), "wait") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_ONE), "one") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_GPIO_WRITE), "gpio.write") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_GPIO_MODE), "gpio.mode") == 0 &&
@@ -7482,8 +7479,8 @@ static void test_image(void) {
   CHECK("base image looks up host slot names",
         fr_base_slot_id_for_name("boot", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_BOOT &&
-            fr_base_slot_id_for_name("ms", &slot_id) == FR_OK &&
-            slot_id == FR_SLOT_MS &&
+            fr_base_slot_id_for_name("wait", &slot_id) == FR_OK &&
+            slot_id == FR_SLOT_WAIT &&
             fr_base_slot_id_for_name("one", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_ONE &&
             fr_base_slot_id_for_name("gpio.write", &slot_id) == FR_OK &&
@@ -7497,8 +7494,6 @@ static void test_image(void) {
             fr_base_slot_id_for_name("adc.read", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_ADC_READ &&
             fr_base_slot_id_for_name("adc.above?", &slot_id) == FR_OK &&
-            slot_id == FR_SLOT_ADC_ABOVE &&
-            fr_base_slot_id_for_name("adc.above", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_ADC_ABOVE &&
             fr_base_slot_id_for_name("millis", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_MILLIS &&
@@ -7557,7 +7552,7 @@ static void test_image(void) {
             fr_base_slot_id_for_name("boot", &slot_id) == FR_ERR_UNSUPPORTED);
 #endif
   CHECK("base image records native layer",
-        fr_base_slot_layer(FR_SLOT_MS, &layer) == FR_OK &&
+        fr_base_slot_layer(FR_SLOT_WAIT, &layer) == FR_OK &&
             layer == FR_BASE_LAYER_TARGET &&
             fr_base_slot_layer(FR_SLOT_GPIO_WRITE, &layer) == FR_OK &&
             layer == FR_BASE_LAYER_TARGET &&
@@ -8162,7 +8157,7 @@ static void test_parse(void) {
         fr_parse_line(line, &parsed) == FR_ERR_RANGE);
 
   CHECK("parse call punctuation without spaces",
-        fr_parse_line("boot is fn[ms:100]", &parsed) == FR_OK &&
+        fr_parse_line("boot is fn[wait:100]", &parsed) == FR_OK &&
             parsed.expr_count == 4 &&
             (value = &parsed.exprs[parsed.definition.value])->kind ==
                 FR_PARSE_EXPR_FUNCTION &&
@@ -8170,7 +8165,7 @@ static void test_parse(void) {
             body->child_count == 1 &&
             (body = &parsed.exprs[body->children[0]])->kind ==
                 FR_PARSE_EXPR_CALL &&
-            fr_parse_span_equals(body->name, "ms") && body->child_count == 1 &&
+            fr_parse_span_equals(body->name, "wait") && body->child_count == 1 &&
             (arg = &parsed.exprs[body->child])->kind == FR_PARSE_EXPR_INT &&
             arg->int_value == 100);
 
@@ -8193,7 +8188,7 @@ static void test_parse(void) {
             parsed.exprs[body->children[1]].int_value == 1);
 
   CHECK("parse bare name is not call",
-        fr_parse_line("boot is fn [ ms ]", &parsed) == FR_OK &&
+        fr_parse_line("boot is fn [ wait ]", &parsed) == FR_OK &&
             (value = &parsed.exprs[parsed.definition.value])->kind ==
                 FR_PARSE_EXPR_FUNCTION &&
             (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
@@ -8250,13 +8245,13 @@ static void test_parse(void) {
 #endif
 
   CHECK("parse semicolon statement list",
-        fr_parse_line("boot is fn [ ms: 100; one ]", &parsed) == FR_OK &&
+        fr_parse_line("boot is fn [ wait: 100; one ]", &parsed) == FR_OK &&
             (value = &parsed.exprs[parsed.definition.value])->kind ==
                 FR_PARSE_EXPR_FUNCTION &&
             (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
             body->child_count == 2);
   CHECK("parse statement list final semicolon",
-        fr_parse_line("boot is fn [ ms: 100; one; ]", &parsed) == FR_OK &&
+        fr_parse_line("boot is fn [ wait: 100; one; ]", &parsed) == FR_OK &&
             (value = &parsed.exprs[parsed.definition.value])->kind ==
                 FR_PARSE_EXPR_FUNCTION &&
             (body = &parsed.exprs[value->child])->kind == FR_PARSE_EXPR_LIST &&
@@ -8439,7 +8434,7 @@ static void test_parse(void) {
         fr_parse_line("boot is fn [ unless 1 [ one ] else [ nil ] ]",
                       &parsed) == FR_ERR_INVALID);
   CHECK("parse repeat expression",
-        fr_parse_line("boot is fn [ repeat 2 [ ms: 10 ] ]", &parsed) ==
+        fr_parse_line("boot is fn [ repeat 2 [ wait: 10 ] ]", &parsed) ==
                 FR_OK &&
             (value = &parsed.exprs[parsed.definition.value])->kind ==
                 FR_PARSE_EXPR_FUNCTION &&
@@ -8455,7 +8450,7 @@ static void test_parse(void) {
                 FR_PARSE_EXPR_LIST &&
             body->child_count == 1 &&
             parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_CALL &&
-            fr_parse_span_equals(parsed.exprs[body->children[0]].name, "ms"));
+            fr_parse_span_equals(parsed.exprs[body->children[0]].name, "wait"));
   CHECK("parse repeat as expression keeps index name on repeat",
         fr_parse_line("boot is fn with count [ repeat count as i [ i ] ]",
                       &parsed) == FR_OK &&
@@ -8494,7 +8489,7 @@ static void test_parse(void) {
             parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_NAME &&
             fr_parse_span_equals(parsed.exprs[body->children[0]].name, "one"));
   CHECK("parse forever expression",
-        fr_parse_line("boot is fn [ forever [ ms: 10 ] ]", &parsed) ==
+        fr_parse_line("boot is fn [ forever [ wait: 10 ] ]", &parsed) ==
                 FR_OK &&
             (value = &parsed.exprs[parsed.definition.value])->kind ==
                 FR_PARSE_EXPR_FUNCTION &&
@@ -8507,7 +8502,7 @@ static void test_parse(void) {
                 FR_PARSE_EXPR_LIST &&
             body->child_count == 1 &&
             parsed.exprs[body->children[0]].kind == FR_PARSE_EXPR_CALL &&
-            fr_parse_span_equals(parsed.exprs[body->children[0]].name, "ms"));
+            fr_parse_span_equals(parsed.exprs[body->children[0]].name, "wait"));
   CHECK("parse set name to expr is name write",
         fr_parse_expression_line("set count to 7", &parsed, &expr_id) ==
                 FR_OK &&
@@ -9708,7 +9703,7 @@ static void test_compile(void) {
   CHECK("compiled parameter repeat uses load arg",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update(
-                "boot is fn with count [ repeat count [ ms: 1 ] ]",
+                "boot is fn with count [ repeat count [ wait: 1 ] ]",
                 &update) == FR_OK &&
             update.code_object.instructions.length ==
                 17u + push_size + FR_TEST_LOOP_RESET &&
@@ -10154,7 +10149,7 @@ static void test_compile(void) {
                                          &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
   CHECK("compiled native call owns instruction bytes",
-        fr_compile_overlay_update("boot is fn [ ms: 100 ]", &update) == FR_OK &&
+        fr_compile_overlay_update("boot is fn [ wait: 100 ]", &update) == FR_OK &&
             update.slot_inits[0].slot_id == FR_SLOT_BOOT &&
             update.slot_inits[0].ref.kind == FR_IMAGE_REF_CODE_OBJECT &&
             update.slot_inits[0].ref.index == 0 &&
@@ -10171,35 +10166,35 @@ static void test_compile(void) {
             update.instruction_bytes[3] == 100 &&
             update.instruction_bytes[2u + push_size] ==
                 FR_OP_CALL_NATIVE_SLOT &&
-            update.instruction_bytes[3u + push_size] == FR_SLOT_MS &&
+            update.instruction_bytes[3u + push_size] == FR_SLOT_WAIT &&
             update.instruction_bytes[5u + push_size] == FR_OP_RETURN);
   CHECK("compiled native call uses base slot",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_compile_overlay_update("boot is fn [ ms: 100 ]", &update) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ wait: 100 ]", &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
   CHECK("compiled statement list drops non-final result",
-        fr_compile_overlay_update("boot is fn [ ms: 100; one ]", &update) == FR_OK &&
+        fr_compile_overlay_update("boot is fn [ wait: 100; one ]", &update) == FR_OK &&
             update.code_object.instructions.length == 10u + push_size &&
             update.instruction_bytes[2] == FR_OP_PUSH_INT &&
             update.instruction_bytes[3] == 100 &&
             update.instruction_bytes[2u + push_size] ==
                 FR_OP_CALL_NATIVE_SLOT &&
-            update.instruction_bytes[3u + push_size] == FR_SLOT_MS &&
+            update.instruction_bytes[3u + push_size] == FR_SLOT_WAIT &&
             update.instruction_bytes[5u + push_size] == FR_OP_DROP &&
             update.instruction_bytes[6u + push_size] == FR_OP_LOAD_SLOT &&
             update.instruction_bytes[7u + push_size] == FR_SLOT_ONE &&
             update.instruction_bytes[9u + push_size] == FR_OP_RETURN);
   CHECK("compiled statement list returns final result",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_compile_overlay_update("boot is fn [ ms: 100; one ]", &update) ==
+            fr_compile_overlay_update("boot is fn [ wait: 100; one ]", &update) ==
                 FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
   CHECK("compiled statement list accepts final terminator",
-        fr_compile_overlay_update("boot is fn [ ms: 100; one; ]", &update) ==
+        fr_compile_overlay_update("boot is fn [ wait: 100; one; ]", &update) ==
                 FR_OK &&
             update.code_object.instructions.length == 10u + push_size &&
             update.instruction_bytes[5u + push_size] == FR_OP_DROP &&
@@ -10207,7 +10202,7 @@ static void test_compile(void) {
             update.instruction_bytes[7u + push_size] == FR_SLOT_ONE &&
             update.instruction_bytes[9u + push_size] == FR_OP_RETURN);
   CHECK("compiled statement list supports repeated calls",
-        fr_compile_overlay_update("boot is fn [ ms: 100; ms: 100; one ]", &update) ==
+        fr_compile_overlay_update("boot is fn [ wait: 100; wait: 100; one ]", &update) ==
                 FR_OK &&
             update.code_object.instructions.length == 14u + (push_size * 2u) &&
             update.instruction_bytes[2] == FR_OP_PUSH_INT &&
@@ -10224,15 +10219,15 @@ static void test_compile(void) {
                 FR_OP_RETURN);
   CHECK("compiled repeated calls return final result",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_compile_overlay_update("boot is fn [ ms: 100; ms: 100; one ]",
+            fr_compile_overlay_update("boot is fn [ wait: 100; wait: 100; one ]",
                               &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 1);
   CHECK("compiled mechanical boot owns instruction bytes",
         fr_compile_overlay_update(
-            "boot is fn [ pin: $led_builtin, 1; ms: 100; "
-            "pin: $led_builtin, 0; ms: 100 ]",
+            "boot is fn [ pin: $led_builtin, 1; wait: 100; "
+            "pin: $led_builtin, 0; wait: 100 ]",
             &update) == FR_OK &&
             update.code_object.instructions.length == 24u + (push_size * 4u) &&
             update.instruction_bytes[2] == FR_OP_LOAD_SLOT &&
@@ -10246,7 +10241,7 @@ static void test_compile(void) {
             update.instruction_bytes[9u + push_size] == FR_OP_PUSH_INT &&
             update.instruction_bytes[9u + (push_size * 2u)] ==
                 FR_OP_CALL_NATIVE_SLOT &&
-            update.instruction_bytes[10u + (push_size * 2u)] == FR_SLOT_MS &&
+            update.instruction_bytes[10u + (push_size * 2u)] == FR_SLOT_WAIT &&
             update.instruction_bytes[12u + (push_size * 2u)] == FR_OP_DROP &&
             update.instruction_bytes[13u + (push_size * 2u)] ==
                 FR_OP_LOAD_SLOT &&
@@ -10264,21 +10259,21 @@ static void test_compile(void) {
                 FR_OP_PUSH_INT &&
             update.instruction_bytes[20u + (push_size * 4u)] ==
                 FR_OP_CALL_NATIVE_SLOT &&
-            update.instruction_bytes[21u + (push_size * 4u)] == FR_SLOT_MS &&
+            update.instruction_bytes[21u + (push_size * 4u)] == FR_SLOT_WAIT &&
             update.instruction_bytes[23u + (push_size * 4u)] ==
                 FR_OP_RETURN);
   CHECK("compiled mechanical boot runs",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update(
-                "boot is fn [ pin: $led_builtin, 1; ms: 100; "
-                "pin: $led_builtin, 0; ms: 100 ]",
+                "boot is fn [ pin: $led_builtin, 1; wait: 100; "
+                "pin: $led_builtin, 0; wait: 100 ]",
                 &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
-  CHECK("compiled ms rejects negative domain",
+  CHECK("compiled wait rejects negative domain",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_compile_overlay_update("boot is fn [ ms: -1 ]", &update) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ wait: -1 ]", &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_ERR_DOMAIN);
   CHECK("compiled pin rejects negative value",
@@ -10289,9 +10284,9 @@ static void test_compile(void) {
             fr_vm_run_boot(&runtime, &tagged) == FR_ERR_DOMAIN);
   CHECK("compiled bare native name reads base slot",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_compile_overlay_update("boot is fn [ ms ]", &update) == FR_OK &&
+            fr_compile_overlay_update("boot is fn [ wait ]", &update) == FR_OK &&
             update.instruction_bytes[2] == FR_OP_LOAD_SLOT &&
-            update.instruction_bytes[3] == FR_SLOT_MS &&
+            update.instruction_bytes[3] == FR_SLOT_WAIT &&
             update.instruction_bytes[4] == 0 &&
             update.instruction_bytes[5] == FR_OP_RETURN &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
@@ -10320,7 +10315,7 @@ static void test_compile(void) {
                         (int32_t)FR_TAGGED_INT_MAX + 1),
          fr_compile_overlay_update(line, &update) == FR_ERR_RANGE));
   CHECK("compiled native call rejects missing arg",
-        fr_compile_overlay_update("boot is fn [ ms: ]", &update) == FR_ERR_INVALID);
+        fr_compile_overlay_update("boot is fn [ wait: ]", &update) == FR_ERR_INVALID);
   CHECK("compiled if else owns jumps",
         fr_compile_overlay_update("boot is fn [ if true [ one ] else [ nil ] ]",
                                   &update) == FR_OK &&
@@ -10539,7 +10534,7 @@ static void test_compile(void) {
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
             fr_tagged_is_nil(tagged));
   CHECK("compiled repeat uses loop opcodes",
-        fr_compile_overlay_update("boot is fn [ repeat 2 [ ms: 1 ] ]",
+        fr_compile_overlay_update("boot is fn [ repeat 2 [ wait: 1 ] ]",
                                   &update) == FR_OK &&
             update.code_object.instructions.length ==
                 14u + (push_size * 2u) + FR_TEST_LOOP_RESET &&
@@ -10552,7 +10547,7 @@ static void test_compile(void) {
             update.instruction_bytes[6u + push_size] == 1 &&
             update.instruction_bytes[5u + (push_size * 2u)] ==
                 FR_OP_CALL_NATIVE_SLOT &&
-            update.instruction_bytes[6u + (push_size * 2u)] == FR_SLOT_MS &&
+            update.instruction_bytes[6u + (push_size * 2u)] == FR_SLOT_WAIT &&
             update.instruction_bytes[8u + (push_size * 2u)] == FR_OP_DROP &&
             (FR_TEST_LOOP_RESET == 0u ||
              update.instruction_bytes[9u + (push_size * 2u)] ==
@@ -10620,7 +10615,7 @@ static void test_compile(void) {
                                  0));
   CHECK("compiled repeat returns nil",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_compile_overlay_update("boot is fn [ repeat 2 [ ms: 1 ] ]",
+            fr_compile_overlay_update("boot is fn [ repeat 2 [ wait: 1 ] ]",
                                       &update) == FR_OK &&
             fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
             fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
@@ -10650,7 +10645,7 @@ static void test_compile(void) {
                 FR_OP_RETURN);
   CHECK("compiled repeat accepts dynamic count",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_compile_overlay_update("boot is fn [ repeat one [ ms: 1 ] ]",
+            fr_compile_overlay_update("boot is fn [ repeat one [ wait: 1 ] ]",
                                       &update) == FR_OK &&
             update.code_object.instructions.length ==
                 17u + push_size + FR_TEST_LOOP_RESET &&
@@ -10752,7 +10747,7 @@ static void test_compile(void) {
             fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 0);
 #endif
   CHECK("compiled forever uses jump loop",
-        fr_compile_overlay_update("boot is fn [ forever [ ms: 1 ] ]",
+        fr_compile_overlay_update("boot is fn [ forever [ wait: 1 ] ]",
                                   &update) == FR_OK &&
             update.code_object.instructions.length ==
                 11u + push_size + FR_TEST_LOOP_RESET &&
@@ -10760,7 +10755,7 @@ static void test_compile(void) {
             update.instruction_bytes[3] == 1 &&
             update.instruction_bytes[2u + push_size] ==
                 FR_OP_CALL_NATIVE_SLOT &&
-            update.instruction_bytes[3u + push_size] == FR_SLOT_MS &&
+            update.instruction_bytes[3u + push_size] == FR_SLOT_WAIT &&
             update.instruction_bytes[5u + push_size] == FR_OP_DROP &&
             (FR_TEST_LOOP_RESET == 0u ||
              update.instruction_bytes[6u + push_size] == FR_OP_BYTES_RESET) &&
@@ -11684,8 +11679,8 @@ static void test_persist(void) {
 #endif
   CHECK("persist save mechanical boot",
         fr_compile_overlay_update(
-            "boot is fn [ pin: $led_builtin, 1; ms: 100; "
-            "pin: $led_builtin, 0; ms: 100 ]",
+            "boot is fn [ pin: $led_builtin, 1; wait: 100; "
+            "pin: $led_builtin, 0; wait: 100 ]",
             &update) == FR_OK &&
             test_persist_apply_user_overlay(&runtime,
                                             &update.overlay_update) == FR_OK &&
@@ -11882,7 +11877,7 @@ static void test_persist(void) {
   CHECK("persist prepares control flow code",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_compile_overlay_update(
-                "boot is fn [ if true [ repeat 2 [ ms: 1 ]; one ] else [ nil ] ]",
+                "boot is fn [ if true [ repeat 2 [ wait: 1 ]; one ] else [ nil ] ]",
                 &update) == FR_OK &&
             test_persist_apply_user_overlay(&runtime,
                                             &update.overlay_update) == FR_OK &&
@@ -13558,10 +13553,10 @@ static void test_repl(void) {
                    "micros() -> int\n"
                    "read microseconds since boot, wrapped to int range\n"
                    "ok\n") == 0);
-  CHECK("repl see ms renders signature",
-        fr_repl_eval_line(&runtime, "see ms", out, sizeof(out)) == FR_OK &&
+  CHECK("repl see wait renders signature",
+        fr_repl_eval_line(&runtime, "see wait", out, sizeof(out)) == FR_OK &&
             strcmp(out,
-                   "ms(millis: int) -> nil\n"
+                   "wait(ms: int) -> nil\n"
                    "sleep for a number of milliseconds\n"
                    "ok\n") == 0);
   CHECK("repl see gpio.read renders signature",
@@ -13663,7 +13658,7 @@ static void test_repl(void) {
   after_ms = before_ms + 10u;
   snprintf(expected_ms, sizeof(expected_ms), "%u\nok\n", (unsigned)after_ms);
   CHECK("repl advances millis during ms",
-        fr_repl_eval_line(&runtime, "ms: 10", out, sizeof(out)) == FR_OK &&
+        fr_repl_eval_line(&runtime, "wait: 10", out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "millis:", out, sizeof(out)) == FR_OK &&
             strcmp(out, expected_ms) == 0);
@@ -13675,7 +13670,7 @@ static void test_repl(void) {
         fr_repl_eval_line(&runtime, "micros:", out, sizeof(out)) == FR_OK &&
             strcmp(out, expected_us) == 0);
   CHECK("repl advances micros during ms",
-        fr_repl_eval_line(&runtime, "ms: 2", out, sizeof(out)) == FR_OK &&
+        fr_repl_eval_line(&runtime, "wait: 2", out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_platform_micros(&after_us) == FR_OK &&
             after_us > before_us &&
@@ -13708,7 +13703,7 @@ static void test_repl(void) {
             strcmp(out, expected_ms) == 0);
   snprintf(expected_ms, sizeof(expected_ms), "4\nok\n");
   CHECK("repl millis wraps at tagged ceiling",
-        fr_repl_eval_line(&runtime, "ms: 10", out, sizeof(out)) == FR_OK &&
+        fr_repl_eval_line(&runtime, "wait: 10", out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "millis:", out, sizeof(out)) == FR_OK &&
             strcmp(out, expected_ms) == 0);
@@ -13721,11 +13716,11 @@ static void test_repl(void) {
                 FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("repl runs repeat expression",
-        fr_repl_eval_line(&runtime, "repeat 2 [ ms: 1 ]", out, sizeof(out)) ==
+        fr_repl_eval_line(&runtime, "repeat 2 [ wait: 1 ]", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("repl runs repeat with dynamic count",
-        fr_repl_eval_line(&runtime, "repeat one [ ms: 1 ]", out,
+        fr_repl_eval_line(&runtime, "repeat one [ wait: 1 ]", out,
                           sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("repl boot colon nil",
@@ -14809,11 +14804,11 @@ static void test_repl_error_diagnostics(void) {
   memset(out, 0, sizeof(out));
   CHECK("native negative argument reports the rejected value",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_repl_eval_line(&runtime, "ms: -1", out,
+            fr_repl_eval_line(&runtime, "wait: -1", out,
                               (uint16_t)sizeof(out)) == FR_ERR_DOMAIN &&
             strcmp(out,
                    "error: bad value: -1 (3)\n"
-                   "detail: ms argument 1 was rejected\n") == 0);
+                   "detail: wait argument 1 was rejected\n") == 0);
 
 #if FR_TAGGED_INT_MAX > UINT16_MAX
   memset(out, 0, sizeof(out));
@@ -15459,13 +15454,13 @@ static void test_repl_see_source_form(void) {
   CHECK("see source while",
         fr_base_image_install(&runtime) == FR_OK &&
             fr_repl_eval_line(
-                &runtime, "wait is fn with p [ while gpio.read: p [ ms: 1 ] ]",
+                &runtime, "wait is fn with p [ while gpio.read: p [ wait: 1 ] ]",
                 out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "see wait", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "overlay code\n"
-                        "to wait with p [ while gpio.read: p [ ms: 1 ] ]\n"
+                        "to wait with p [ while gpio.read: p [ wait: 1 ] ]\n"
                         "ok\n") == 0);
   /* repeat count: a blink-shaped body that drives a pin a fixed number of
    * passes. Fresh install for the same overlay-name budget reason. */
@@ -15496,15 +15491,15 @@ static void test_repl_see_source_form(void) {
         fr_base_image_install(&runtime) == FR_OK &&
             fr_repl_eval_line(
                 &runtime,
-                "poll is fn with p [ while gpio.read: p [ if p > 0 [ ms: 1 ] "
-                "else [ ms: 2 ] ] ]",
+                "poll is fn with p [ while gpio.read: p [ if p > 0 [ wait: 1 ] "
+                "else [ wait: 2 ] ] ]",
                 out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "see poll", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "overlay code\n"
                         "to poll with p [ while gpio.read: p [ if p > 0 "
-                        "[ ms: 1 ] else [ ms: 2 ] ] ]\n"
+                        "[ wait: 1 ] else [ wait: 2 ] ] ]\n"
                         "ok\n") == 0);
   /* Multi-statement body: two `;`-separated statements over the param. Each
    * leaves a value the compiler drops between statements. Fresh install for
@@ -15539,11 +15534,11 @@ static void test_repl_see_source_form(void) {
    * picks up the lone arg. Fresh install for the overlay-name budget. */
   CHECK("see source bare native one-arg call",
         fr_base_image_install(&runtime) == FR_OK &&
-            fr_repl_eval_line(&runtime, "baz is fn [ ms: 100 ]", out,
+            fr_repl_eval_line(&runtime, "baz is fn [ wait: 100 ]", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "see baz", out, sizeof(out)) == FR_OK &&
-            strcmp(out, "overlay code\nto baz [ ms: 100 ]\nok\n") == 0);
+            strcmp(out, "overlay code\nto baz [ wait: 100 ]\nok\n") == 0);
   /* Bare two-arg native call over two params. Fresh install for the budget. */
   CHECK("see source bare native two-arg call",
         fr_base_image_install(&runtime) == FR_OK &&
@@ -15654,12 +15649,12 @@ static void test_source_base_word_proofs(void) {
       {"led.off",
        "to led.off [ gpio.write: $led_builtin, 1 - $led_active_level ]"},
       {"led.toggle", "to led.toggle [ gpio.toggle: $led_builtin ]"},
-      {"blink", "to blink with pin, count, wait [ repeat count [ gpio.high: "
-                "pin ; ms: wait ; gpio.low: pin ; ms: wait ] ]"},
-      {"led.blink", "to led.blink with count, wait [ repeat count [ "
-                    "gpio.write: $led_builtin, $led_active_level ; ms: wait ; "
-                    "gpio.write: $led_builtin, 1 - $led_active_level ; ms: "
-                    "wait ] ]"},
+      {"blink", "to blink with pin, count, delay [ repeat count [ gpio.high: "
+                "pin ; wait: delay ; gpio.low: pin ; wait: delay ] ]"},
+      {"led.blink", "to led.blink with count, delay [ repeat count [ "
+                    "gpio.write: $led_builtin, $led_active_level ; wait: delay ; "
+                    "gpio.write: $led_builtin, 1 - $led_active_level ; wait: "
+                    "delay ] ]"},
       {"wrap", "to wrap with value, size [ if size <= 0 [ 0 ] else "
                "[ value % size ] ]"},
       {"random.chance?", "to random.chance? with numer, denom [ if denom <= 0 "
@@ -15942,8 +15937,8 @@ static void test_repl_transcript(void) {
   CHECK("repl transcript define mechanical boot",
         fr_repl_eval_line(
             &runtime,
-            "boot is fn [ pin: $led_builtin, 1; ms: 100; "
-            "pin: $led_builtin, 0; ms: 100 ]",
+            "boot is fn [ pin: $led_builtin, 1; wait: 100; "
+            "pin: $led_builtin, 0; wait: 100 ]",
             out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("repl transcript direct pin on",
@@ -15961,8 +15956,8 @@ static void test_repl_transcript(void) {
   CHECK("repl transcript rejects definition without compiler",
         fr_repl_eval_line(
             &runtime,
-            "boot is fn [ pin: $led_builtin, 1; ms: 100; "
-            "pin: $led_builtin, 0; ms: 100 ]",
+            "boot is fn [ pin: $led_builtin, 1; wait: 100; "
+            "pin: $led_builtin, 0; wait: 100 ]",
             out, sizeof(out)) == FR_ERR_UNSUPPORTED);
   CHECK("repl transcript rejects direct pin without compiler",
         fr_repl_eval_line(&runtime, "pin: $led_builtin, 1", out,

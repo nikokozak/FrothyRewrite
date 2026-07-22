@@ -102,7 +102,7 @@ static fr_err_t fr_native_decode_handle_arg(
 }
 #endif
 
-static fr_err_t fr_native_ms(fr_runtime_t *runtime, const fr_tagged_t *args,
+static fr_err_t fr_native_wait(fr_runtime_t *runtime, const fr_tagged_t *args,
                              uint8_t arg_count, fr_tagged_t *out) {
   fr_int_t ms = 0;
 
@@ -4654,11 +4654,11 @@ static const fr_native_signature_t fr_native_fire_event_signature = {
 };
 #endif
 
-static const fr_native_param_t fr_native_ms_params[] = {
-    {"millis", FR_NATIVE_VALUE_INT},
+static const fr_native_param_t fr_native_wait_params[] = {
+    {"ms", FR_NATIVE_VALUE_INT},
 };
-static const fr_native_signature_t fr_native_ms_signature = {
-    .params = fr_native_ms_params,
+static const fr_native_signature_t fr_native_wait_signature = {
+    .params = fr_native_wait_params,
     .arg_count = 1,
     .result = FR_NATIVE_VALUE_NIL,
     .help = "sleep for a number of milliseconds",
@@ -5694,15 +5694,15 @@ enum {
 
 const fr_base_def_t fr_target_base_defs[] = {
     {
-        .slot_id = FR_SLOT_MS,
+        .slot_id = FR_SLOT_WAIT,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
-        .name = "ms",
+        .name = "wait",
 #endif
         .kind = FR_BASE_DEF_NATIVE,
-        .native_fn = fr_native_ms,
+        .native_fn = fr_native_wait,
         .native_arity = 1,
 #if FR_FEATURE_NATIVE_SIGNATURES
-        .native_signature = &fr_native_ms_signature,
+        .native_signature = &fr_native_wait_signature,
 #endif
     },
     {
@@ -5758,7 +5758,6 @@ const fr_base_def_t fr_target_base_defs[] = {
         .slot_id = FR_SLOT_ADC_ABOVE,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
         .name = "adc.above?",
-        .alias = "adc.above",
 #endif
         .kind = FR_BASE_DEF_NATIVE,
         .native_fn = fr_native_adc_above,
@@ -6188,7 +6187,6 @@ const fr_base_def_t fr_target_base_defs[] = {
         .slot_id = FR_SLOT_TCP_BYTES_READY_P,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
         .name = "tcp.available",
-        .alias = "tcp.bytes-ready?",
 #endif
         .kind = FR_BASE_DEF_NATIVE,
         .native_fn = fr_native_tcp_bytes_ready_p,
@@ -6461,7 +6459,6 @@ const fr_base_def_t fr_target_base_defs[] = {
         .slot_id = FR_SLOT_PAD_LEN,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
         .name = "pad.length",
-        .alias = "pad.len",
 #endif
         .kind = FR_BASE_DEF_NATIVE,
         .native_fn = fr_native_pad_len,

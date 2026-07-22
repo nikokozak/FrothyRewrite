@@ -8,7 +8,7 @@
 
 enum {
   FR_SLOT_BOOT = 0,
-  FR_SLOT_MS = 1,
+  FR_SLOT_WAIT = 1,
   FR_SLOT_ONE = 2,
   FR_SLOT_GPIO_WRITE = 3,
   FR_SLOT_LED_BUILTIN = 4,

@@ -70,8 +70,9 @@ new native against it before adding the row:
   order is pure readability: sort by what, then which, then does.
 - **Constructors that take a variant keep the base name plus a suffix.**
   `uart.open` picks default pins; `uart.open-on` takes them explicitly.
-- **Renames keep the old spelling as a `.alias` for one release**, then the
-  alias comes out.
+- **A word has exactly one spelling.** Renames land without aliases once the
+  architect approves them; `.alias` exists only for deliberate second names
+  like `pin` for `gpio.write`.
 
 ## Releasing And Firmware Bundles
 

@@ -18,10 +18,12 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 ### Changed
 
 - **Native names follow one charter** (see CONTRIBUTING.md): predicates end
-  in `?`, counts are nouns, no abbreviations. Renamed: `pad.len` →
-  `pad.length`, `tcp.bytes-ready?` → `tcp.available`, `adc.above` →
-  `adc.above?` (old spellings stay as aliases for one release), and the
-  test-only `frothy.fire-event` → `frothy.event-fire`.
+  in `?`, counts are nouns, no abbreviations, one spelling per word.
+  Renamed: `ms` → `wait` (the sleep gets a verb; `millis`/`micros` clock
+  reads are unchanged), `pad.len` → `pad.length`, `tcp.bytes-ready?` →
+  `tcp.available`, `adc.above` → `adc.above?`, and the test-only
+  `frothy.fire-event` → `frothy.event-fire`. The old spellings are gone —
+  no aliases.
 - **A call's arguments end where the next call begins — for every operator.**
   Previously only `+` stopped before a following call, so
   `fib: n - 1 - fib: n - 2` silently parsed as `fib: (n - 1 - fib: n - 2)`
