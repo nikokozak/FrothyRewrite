@@ -47,6 +47,9 @@ fr_err_t fr_source_render_instruction_view(fr_runtime_t *runtime,
 typedef struct fr_source_frag_t {
   uint16_t start;     /* offset of a NUL-terminated string in the arena */
   bool parenthesize;  /* a binop result, wrapped when it feeds another binop */
+  bool has_call;      /* an unfenced colon call; a reparse would let an
+                       * operator or comma fall into its arguments, so
+                       * operand and argument positions wrap it in parens */
 } fr_source_frag_t;
 
 typedef struct fr_source_render_t {
@@ -136,8 +139,8 @@ static fr_err_t fr_source_put_quoted_text(fr_source_render_t *r,
 }
 
 /* Step past the trailing NUL, then record the fragment on the stack. */
-static fr_err_t fr_source_seal(fr_source_render_t *r, uint16_t start,
-                               bool parenthesize) {
+static fr_err_t fr_source_seal_frag(fr_source_render_t *r, uint16_t start,
+                                    bool parenthesize, bool has_call) {
   if (r->depth >= (uint8_t)(sizeof(r->stack) / sizeof(r->stack[0]))) {
     return FR_ERR_CAPACITY;
   }
@@ -147,8 +150,14 @@ static fr_err_t fr_source_seal(fr_source_render_t *r, uint16_t start,
   r->used = (uint16_t)(r->used + 1u);
   r->stack[r->depth].start = start;
   r->stack[r->depth].parenthesize = parenthesize;
+  r->stack[r->depth].has_call = has_call;
   r->depth = (uint8_t)(r->depth + 1u);
   return FR_OK;
+}
+
+static fr_err_t fr_source_seal(fr_source_render_t *r, uint16_t start,
+                               bool parenthesize) {
+  return fr_source_seal_frag(r, start, parenthesize, false);
 }
 
 static fr_err_t fr_source_put_name(fr_source_render_t *r,
@@ -201,6 +210,9 @@ static fr_err_t fr_source_reduce_binop(fr_source_render_t *r,
   fr_source_frag_t lhs;
   fr_source_frag_t rhs;
   uint16_t start = r->used;
+  bool rhs_splits = false;
+  bool fence_lhs = false;
+  bool fence_rhs = false;
 
   if (r->depth < 2) {
     return FR_ERR_UNSUPPORTED;
@@ -209,12 +221,22 @@ static fr_err_t fr_source_reduce_binop(fr_source_render_t *r,
   lhs = r->stack[r->depth - 2];
   r->depth = (uint8_t)(r->depth - 2);
 
-  FR_TRY(fr_source_emit_operand(r, lhs));
+  /* When the right side begins with a call, a reparse in argument position
+   * splits at this operator, which is exactly what an unfenced call on the
+   * left needs. Otherwise a left-side call would swallow the operator into
+   * its arguments and has to be fenced. */
+  rhs_splits = rhs.has_call && !rhs.parenthesize;
+  fence_lhs = lhs.parenthesize || (lhs.has_call && !rhs_splits);
+  fence_rhs = rhs.parenthesize;
+
+  FR_TRY(fr_source_emit_operand(
+      r, (fr_source_frag_t){.start = lhs.start, .parenthesize = fence_lhs}));
   FR_TRY(fr_source_putc(r, ' '));
   FR_TRY(fr_source_puts(r, symbol));
   FR_TRY(fr_source_putc(r, ' '));
-  FR_TRY(fr_source_emit_operand(r, rhs));
-  return fr_source_seal(r, start, true);
+  FR_TRY(fr_source_emit_operand(
+      r, (fr_source_frag_t){.start = rhs.start, .parenthesize = fence_rhs}));
+  return fr_source_seal_frag(r, start, true, rhs_splits);
 }
 
 static fr_err_t fr_source_reduce_call(fr_source_render_t *r,
@@ -233,14 +255,21 @@ static fr_err_t fr_source_reduce_call(fr_source_render_t *r,
   FR_TRY(fr_source_put_name(r, name));
   FR_TRY(fr_source_puts(r, ": "));
   for (uint8_t i = 0; i < arg_count; i++) {
+    fr_source_frag_t arg = r->stack[base + i];
+    /* An argument with an unfenced call inside is wrapped in parens: a
+     * trailing comma or operator would otherwise fall into the inner
+     * call's arguments on reparse. A plain call as the last argument is
+     * the one safe raw spelling (`f: g: b`). */
+    bool fence = arg.has_call && (i + 1u < arg_count || arg.parenthesize);
+
     if (i > 0) {
       FR_TRY(fr_source_puts(r, ", "));
     }
-    FR_TRY(
-        fr_source_puts(r, &fr_source_render_arena[r->stack[base + i].start]));
+    FR_TRY(fr_source_emit_operand(
+        r, (fr_source_frag_t){.start = arg.start, .parenthesize = fence}));
   }
   r->depth = base;
-  return fr_source_seal(r, start, false);
+  return fr_source_seal_frag(r, start, false, true);
 }
 
 static fr_err_t fr_source_write_slot_write(fr_source_render_t *r,

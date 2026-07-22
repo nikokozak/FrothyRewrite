@@ -106,6 +106,8 @@ const char *fr_diag_message(uint16_t message_id) {
       [FR_DIAG_MSG_PARSE_TOO_DEEP] = "expression is too deeply nested",
       [FR_DIAG_MSG_PARSE_CELLS_COLON] =
           "cells takes its length after ':' -- write cells: 3",
+      [FR_DIAG_MSG_PARSE_CHAINED_COMPARISON] =
+          "comparisons don't chain -- join two comparisons with and",
       [FR_DIAG_MSG_COMPILE_EVENT_BODY_LOCAL] =
           "event bodies can't use the caller's locals -- lift it to a global",
       [FR_DIAG_MSG_COMPILE_CONTROL_FLOW_DISABLED] =

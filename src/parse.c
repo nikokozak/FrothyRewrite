@@ -48,7 +48,7 @@ typedef struct fr_parser_t {
   fr_diagnostic_t *diag;
   uint8_t expr_depth;
   uint8_t call_arg_stop_depth;
-  bool stop_plus_before_call;
+  bool stop_infix_before_call;
   bool stop_before_repeat_as;
   bool inside_rescue_block;
 } fr_parser_t;
@@ -575,13 +575,14 @@ static fr_err_t fr_parse_expect_word(fr_parser_t *parser, const char *word) {
   return fr_parse_advance(parser);
 }
 
-static bool fr_parse_plus_rhs_starts_call(const fr_parser_t *parser) {
+static bool fr_parse_infix_rhs_starts_call(const fr_parser_t *parser) {
   fr_parser_t lookahead;
 
-  if (parser == NULL || parser->token.kind != FR_TOKEN_PLUS) {
+  if (parser == NULL) {
     return false;
   }
   lookahead = *parser;
+  lookahead.diag = NULL;
   if (fr_parse_advance(&lookahead) != FR_OK ||
       lookahead.token.kind != FR_TOKEN_NAME) {
     return false;
@@ -590,6 +591,16 @@ static bool fr_parse_plus_rhs_starts_call(const fr_parser_t *parser) {
     return false;
   }
   return lookahead.token.kind == FR_TOKEN_COLON;
+}
+
+/* In a call argument, an infix operator whose right side starts another
+ * call ends the argument: a call's arguments end where the next call
+ * begins. The rule is the same for every operator; parentheses opt back
+ * in by raising expr_depth. */
+static bool fr_parse_call_arg_ends_before_call(const fr_parser_t *parser) {
+  return parser->stop_infix_before_call &&
+         parser->expr_depth == parser->call_arg_stop_depth &&
+         fr_parse_infix_rhs_starts_call(parser);
 }
 
 static fr_err_t fr_parse_finish_line(fr_parser_t *parser) {
@@ -858,7 +869,7 @@ static fr_err_t fr_parse_function(fr_parser_t *parser,
 
 static fr_err_t fr_parse_call_argument(fr_parser_t *parser,
                                        fr_parse_expr_id_t *out_id) {
-  bool saved_stop_plus_before_call = false;
+  bool saved_stop_infix_before_call = false;
   uint8_t saved_call_arg_stop_depth = 0;
   fr_err_t err = FR_OK;
 
@@ -866,12 +877,12 @@ static fr_err_t fr_parse_call_argument(fr_parser_t *parser,
     return FR_ERR_INVALID;
   }
 
-  saved_stop_plus_before_call = parser->stop_plus_before_call;
+  saved_stop_infix_before_call = parser->stop_infix_before_call;
   saved_call_arg_stop_depth = parser->call_arg_stop_depth;
-  parser->stop_plus_before_call = true;
+  parser->stop_infix_before_call = true;
   parser->call_arg_stop_depth = (uint8_t)(parser->expr_depth + 1u);
   err = fr_parse_expression(parser, out_id);
-  parser->stop_plus_before_call = saved_stop_plus_before_call;
+  parser->stop_infix_before_call = saved_stop_infix_before_call;
   parser->call_arg_stop_depth = saved_call_arg_stop_depth;
   return err;
 }
@@ -1417,28 +1428,11 @@ static bool fr_parse_name_followed_by_block(fr_parser_t *parser) {
   return lookahead.token.kind == FR_TOKEN_LBRACKET;
 }
 
-static fr_err_t fr_parse_unary(fr_parser_t *parser,
-                               fr_parse_expr_id_t *out_id) {
-  fr_parse_expr_id_t child = 0;
-
-  if (fr_parse_name_token_is(parser, "not")) {
-    FR_TRY(fr_parse_advance(parser));
-    FR_TRY(fr_parse_unary(parser, &child));
-    return fr_parse_add_expr(
-        parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_NOT,
-                                  .child = child,
-                                  .children = {child},
-                                  .child_count = 1},
-        out_id);
-  }
-  return fr_parse_expression_inner(parser, out_id);
-}
-
 static fr_err_t fr_parse_multiplicative(fr_parser_t *parser,
                                         fr_parse_expr_id_t *out_id) {
   fr_parse_expr_id_t lhs = 0;
 
-  FR_TRY(fr_parse_unary(parser, &lhs));
+  FR_TRY(fr_parse_expression_inner(parser, &lhs));
   while (parser->token.kind == FR_TOKEN_STAR ||
          parser->token.kind == FR_TOKEN_SLASH ||
          parser->token.kind == FR_TOKEN_PERCENT) {
@@ -1453,8 +1447,11 @@ static fr_err_t fr_parse_multiplicative(fr_parser_t *parser,
     if (parser->token.leading_newline) {
       break;
     }
+    if (fr_parse_call_arg_ends_before_call(parser)) {
+      break;
+    }
     FR_TRY(fr_parse_advance(parser));
-    FR_TRY(fr_parse_unary(parser, &rhs));
+    FR_TRY(fr_parse_expression_inner(parser, &rhs));
     binop.children[0] = lhs;
     binop.children[1] = rhs;
     binop.child = lhs;
@@ -1480,13 +1477,7 @@ static fr_err_t fr_parse_additive(fr_parser_t *parser,
     if (parser->token.leading_newline) {
       break;
     }
-
-    /* In a call arg, `foo: a + bar: b` leaves the plus outside the first
-     * call. The depth check lets parentheses keep that plus inside the arg. */
-    if (parser->stop_plus_before_call &&
-        parser->expr_depth == parser->call_arg_stop_depth &&
-        parser->token.kind == FR_TOKEN_PLUS &&
-        fr_parse_plus_rhs_starts_call(parser)) {
+    if (fr_parse_call_arg_ends_before_call(parser)) {
       break;
     }
     FR_TRY(fr_parse_advance(parser));
@@ -1500,41 +1491,68 @@ static fr_err_t fr_parse_additive(fr_parser_t *parser,
   return FR_OK;
 }
 
+/* Comparison does not associate: `1 < 2 < 3` is a parse error that asks
+ * for `and`, never a bool compared against an int. */
 static fr_err_t fr_parse_comparison(fr_parser_t *parser,
                                     fr_parse_expr_id_t *out_id) {
   fr_parse_expr_id_t lhs = 0;
   fr_parse_expr_kind_t op_kind = FR_PARSE_EXPR_LT;
 
   FR_TRY(fr_parse_additive(parser, &lhs));
-  while (fr_parse_compare_token_kind(parser->token.kind, &op_kind)) {
+  if (fr_parse_compare_token_kind(parser->token.kind, &op_kind) &&
+      !parser->token.leading_newline &&
+      !fr_parse_call_arg_ends_before_call(parser)) {
     fr_parse_expr_id_t rhs = 0;
     fr_parse_expr_t binop = {.kind = op_kind, .child_count = 2};
 
-    if (parser->token.leading_newline) {
-      break;
-    }
     FR_TRY(fr_parse_advance(parser));
     FR_TRY(fr_parse_additive(parser, &rhs));
     binop.children[0] = lhs;
     binop.children[1] = rhs;
     binop.child = lhs;
     FR_TRY(fr_parse_add_expr(parser, binop, &lhs));
+    if (fr_parse_compare_token_kind(parser->token.kind, &op_kind) &&
+        !parser->token.leading_newline) {
+      return fr_parse_fail_token(parser,
+                                 FR_DIAG_MSG_PARSE_CHAINED_COMPARISON,
+                                 FR_ERR_INVALID);
+    }
   }
   *out_id = lhs;
   return FR_OK;
 }
 
+/* `not` sits between comparison and `and`: `not x = 1` negates the
+ * comparison, and `not a and b` reads as `(not a) and b`. */
+static fr_err_t fr_parse_not_level(fr_parser_t *parser,
+                                   fr_parse_expr_id_t *out_id) {
+  fr_parse_expr_id_t child = 0;
+
+  if (fr_parse_name_token_is(parser, "not")) {
+    FR_TRY(fr_parse_advance(parser));
+    FR_TRY(fr_parse_not_level(parser, &child));
+    return fr_parse_add_expr(
+        parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_NOT,
+                                  .child = child,
+                                  .children = {child},
+                                  .child_count = 1},
+        out_id);
+  }
+  return fr_parse_comparison(parser, out_id);
+}
+
 static fr_err_t fr_parse_and(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
   fr_parse_expr_id_t lhs = 0;
 
-  FR_TRY(fr_parse_comparison(parser, &lhs));
+  FR_TRY(fr_parse_not_level(parser, &lhs));
   while (fr_parse_name_token_is(parser, "and") &&
-         !parser->token.leading_newline) {
+         !parser->token.leading_newline &&
+         !fr_parse_call_arg_ends_before_call(parser)) {
     fr_parse_expr_id_t rhs = 0;
     fr_parse_expr_t binop = {.kind = FR_PARSE_EXPR_AND, .child_count = 2};
 
     FR_TRY(fr_parse_advance(parser));
-    FR_TRY(fr_parse_comparison(parser, &rhs));
+    FR_TRY(fr_parse_not_level(parser, &rhs));
     binop.children[0] = lhs;
     binop.children[1] = rhs;
     binop.child = lhs;
@@ -1549,7 +1567,8 @@ static fr_err_t fr_parse_or(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
 
   FR_TRY(fr_parse_and(parser, &lhs));
   while (fr_parse_name_token_is(parser, "or") &&
-         !parser->token.leading_newline) {
+         !parser->token.leading_newline &&
+         !fr_parse_call_arg_ends_before_call(parser)) {
     fr_parse_expr_id_t rhs = 0;
     fr_parse_expr_t binop = {.kind = FR_PARSE_EXPR_OR, .child_count = 2};
 
@@ -1645,6 +1664,12 @@ static fr_err_t fr_parse_expression_inner(fr_parser_t *parser,
       FR_TRY(fr_parse_advance(parser));
       return fr_parse_add_expr(
           parser, (fr_parse_expr_t){.kind = FR_PARSE_EXPR_TRUE}, out_id);
+    }
+    if (fr_parse_span_equals(parser->token.span, "not")) {
+      /* `not` lives between comparison and `and`; inside arithmetic it
+       * needs parentheses, so reaching it here is an error. */
+      return fr_parse_fail_token(parser, FR_DIAG_MSG_PARSE_UNEXPECTED_TOKEN,
+                                 FR_ERR_INVALID);
     }
     if (fr_parse_span_equals(parser->token.span, "fn")) {
       return fr_parse_function(parser, out_id);

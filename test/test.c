@@ -8711,12 +8711,48 @@ static void test_parse(void) {
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_OR &&
             parsed.exprs[parsed.exprs[expr_id].children[1]].kind ==
                 FR_PARSE_EXPR_AND);
-  CHECK("parse not sits above comparison",
+  CHECK("parse not negates a whole comparison",
         fr_parse_expression_line("not true = false", &parsed, &expr_id) ==
                 FR_OK &&
-            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_EQ &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_NOT &&
+            parsed.exprs[parsed.exprs[expr_id].child].kind ==
+                FR_PARSE_EXPR_EQ);
+  CHECK("parse not binds tighter than and",
+        fr_parse_expression_line("not true and false", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_AND &&
             parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
                 FR_PARSE_EXPR_NOT);
+  CHECK("parse chained comparison is an error that asks for and",
+        fr_parse_expression_line("1 < 2 < 3", &parsed, &expr_id) ==
+            FR_ERR_INVALID);
+  {
+    fr_diagnostic_t chain_diag = {0};
+
+    CHECK("parse chained comparison names the fix",
+          fr_parse_expression_line_with_diagnostic("1 < 2 < 3", &parsed,
+                                                   &expr_id, &chain_diag) ==
+                  FR_ERR_INVALID &&
+              chain_diag.message_id ==
+                  FR_DIAG_MSG_PARSE_CHAINED_COMPARISON);
+  }
+  CHECK("parse call argument ends where a minus call begins",
+        fr_parse_expression_line("fib: 3 - 1 - fib: 2", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_SUB &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_CALL &&
+            parsed.exprs[parsed.exprs[expr_id].children[1]].kind ==
+                FR_PARSE_EXPR_CALL);
+  CHECK("parse call argument ends where a star call begins",
+        fr_parse_expression_line("f: 2 * g: 3", &parsed, &expr_id) == FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_MUL);
+  CHECK("parse parens keep a call inside an argument",
+        fr_parse_expression_line("f: 2 - (g: 3)", &parsed, &expr_id) ==
+                FR_OK &&
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_CALL &&
+            parsed.exprs[parsed.exprs[expr_id].children[0]].kind ==
+                FR_PARSE_EXPR_SUB);
   CHECK("parse double not",
         fr_parse_expression_line("not not true", &parsed, &expr_id) == FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_NOT &&
@@ -15571,7 +15607,7 @@ static void test_source_base_word_proofs(void) {
       {"gpio.high", "to gpio.high with pin [ gpio.write: pin, 1 ]"},
       {"gpio.low", "to gpio.low with pin [ gpio.write: pin, 0 ]"},
       {"gpio.toggle",
-       "to gpio.toggle with pin [ gpio.write: pin, 1 - gpio.read: pin ]"},
+       "to gpio.toggle with pin [ gpio.write: pin, (1 - gpio.read: pin) ]"},
       {"gpio.output", "to gpio.output with pin [ gpio.mode: pin, 1 ]"},
       {"gpio.input", "to gpio.input with pin [ gpio.mode: pin, 0 ]"},
       {"led.on",

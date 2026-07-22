@@ -1,6 +1,6 @@
 to gpio.high with pin [ gpio.write: pin, 1 ]
 to gpio.low with pin [ gpio.write: pin, 0 ]
-to gpio.toggle with pin [ gpio.write: pin, 1 - gpio.read: pin ]
+to gpio.toggle with pin [ gpio.write: pin, (1 - gpio.read: pin) ]
 to gpio.output with pin [ gpio.mode: pin, 1 ]
 to gpio.input with pin [ gpio.mode: pin, 0 ]
 to led.on [ gpio.write: $led_builtin, $led_active_level ]

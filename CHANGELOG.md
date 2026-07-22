@@ -8,6 +8,18 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ### Changed
 
+- **A call's arguments end where the next call begins — for every operator.**
+  Previously only `+` stopped before a following call, so
+  `fib: n - 1 - fib: n - 2` silently parsed as `fib: (n - 1 - fib: n - 2)`
+  and recursed forever. Now `-`, `*`, `/`, `%`, comparisons, `and`, and `or`
+  all follow the same sentence. Parentheses opt an inner call back into an
+  argument: `gpio.write: pin, (1 - gpio.read: pin)`. `see` re-renders old
+  code with the needed parens.
+- **Chained comparison is a parse error.** `1 < 2 < 3` no longer evaluates
+  `true < 3`; the error suggests joining two comparisons with `and`.
+- **`not` negates a whole comparison.** `not x = 1` now means `not (x = 1)`,
+  matching Python, Ruby, Lua, and SQL. Inside arithmetic, `not` needs
+  parentheses.
 - **`is` inside a block declares a local: `x is 5`.** Position decides scope:
   at the top level `is` binds a slot as before; in a body it declares a local
   in the innermost block. `here x is 5` still parses and means exactly the
