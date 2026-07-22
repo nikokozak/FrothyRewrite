@@ -24,6 +24,14 @@ var offeredCapabilities = []capability{
 		offDefines:   []string{"#define FR_FEATURE_BLE 0"},
 		offSdkconfig: []string{"CONFIG_BT_ENABLED=n"},
 	},
+	{
+		// No sdkconfig lines: with FR_FEATURE_NET 0 nothing references
+		// esp_wifi/lwip, so the linker drops them (measured on esp32_devkit_v1:
+		// -608 KiB flash). Wi-Fi reserves no static RAM until initialized, so
+		// unlike BLE there is no controller config to flip.
+		name:       "net",
+		offDefines: []string{"#define FR_FEATURE_NET 0"},
+	},
 }
 
 // knownCapabilities is the set of names a library may name in `requires`. It
@@ -38,6 +46,7 @@ var knownCapabilities = func() map[string]bool {
 		"cells": true,
 		"text":  true,
 		"i2c":   true,
+		"i2s":   true,
 		"pwm":   true,
 		"uart":  true,
 	}
