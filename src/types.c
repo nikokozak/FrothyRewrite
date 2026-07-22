@@ -120,6 +120,8 @@ const char *fr_diag_message(uint16_t message_id) {
           "events are not enabled in this build",
       [FR_DIAG_MSG_COMPILE_PARAM_SHADOW] =
           "parameter shadows an existing name",
+      [FR_DIAG_MSG_COMPILE_SET_UNDECLARED] =
+          "set changes an existing name -- declare it first with is",
       [FR_DIAG_MSG_COMPILE_RECORD_NAME_NOT_SHAPE] =
           "record name is already used by another value",
       [FR_DIAG_MSG_RUNTIME_STACK_OVERFLOW] = "stack overflow",

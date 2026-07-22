@@ -10335,6 +10335,28 @@ static void test_compile(void) {
         fr_runtime_init(&runtime) == FR_OK &&
             test_make_else_if_overflow_line(cap_line, sizeof(cap_line)) &&
             fr_compile_overlay_update(cap_line, &update) == FR_ERR_CAPACITY);
+  CHECK("bare is inside a block declares a local",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ x is 5 ; x + 1 ]", &update) == FR_OK &&
+            fr_overlay_apply(&runtime, &update.overlay_update) == FR_OK &&
+            fr_vm_run_boot(&runtime, &tagged) == FR_OK &&
+            fr_tagged_decode_int(tagged, &decoded) == FR_OK && decoded == 6);
+  CHECK("bare is local in an if body is not visible after the block",
+        fr_runtime_init(&runtime) == FR_OK &&
+            fr_compile_overlay_update(
+                "boot is fn [ x is 1 ; if true [ y is 2 ] ; y ]",
+                &update) == FR_ERR_NOT_FOUND);
+  {
+    fr_diagnostic_t set_diag = {0};
+
+    CHECK("set of an undeclared name points at is",
+          fr_runtime_init(&runtime) == FR_OK &&
+              fr_compile_overlay_update_for_runtime_with_diagnostic(
+                  &runtime, "boot is fn [ set tally to 1 ]", &update,
+                  &set_diag) == FR_ERR_NOT_FOUND &&
+              set_diag.message_id == FR_DIAG_MSG_COMPILE_SET_UNDECLARED);
+  }
   CHECK("compiled here local binding yields nil",
         fr_runtime_init(&runtime) == FR_OK &&
             fr_compile_overlay_update("boot is fn [ here x is 5 ]",
@@ -15238,13 +15260,13 @@ static void test_repl_see_source_form(void) {
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "see g", out, sizeof(out)) == FR_OK &&
             strcmp(out, "overlay code\n"
-                        "to g [ here local0 is 5 ; local0 + 1 ]\n"
+                        "to g [ local0 is 5 ; local0 + 1 ]\n"
                         "ok\n") == 0);
   CHECK("see round-trip set local keeps assignment source",
         test_see_round_trip_line_int(
             "bump-local is fn [ here n is 0 ; set n to 5 ; n ]",
             "bump-local",
-            "to bump-local [ here local0 is 0 ; set local0 to 5 ; local0 ]",
+            "to bump-local [ local0 is 0 ; set local0 to 5 ; local0 ]",
             5));
   CHECK("see round-trip attempt rescue",
         test_see_round_trip_line_int(
@@ -15269,7 +15291,7 @@ static void test_repl_see_source_form(void) {
             "while-guard is fn [ here n is 0 ; while n < 1 "
             "[ set n to attempt [ 2 / 0 ] rescue [ 1 ] ] ; n ]",
             "while-guard",
-            "to while-guard [ here local0 is 0 ; while local0 < 1 "
+            "to while-guard [ local0 is 0 ; while local0 < 1 "
             "[ set local0 to attempt [ 2 / 0 ] rescue [ 1 ] ] ; local0 ]",
             1));
 #if FR_FEATURE_TEXT
@@ -15303,7 +15325,7 @@ static void test_repl_see_source_form(void) {
               strcmp(local_out, "ok\n") == 0 &&
               fr_repl_eval_line(&runtime, "see many-locals", local_out,
                                 sizeof(local_out)) == FR_OK &&
-              strstr(local_out, "here local10 is 10") != NULL &&
+              strstr(local_out, "local10 is 10") != NULL &&
               strstr(local_out, "local10 ]") != NULL);
   }
 #endif
@@ -15389,7 +15411,7 @@ static void test_repl_see_source_form(void) {
             "sum-index is fn [ here t is 0 ; repeat 4 as i "
             "[ set t to t + i ] ; t ]",
             "sum-index",
-            "to sum-index [ here local0 is 0 ; repeat 4 as local1 [ "
+            "to sum-index [ local0 is 0 ; repeat 4 as local1 [ "
             "set local0 to local0 + local1 ] ; local0 ]",
             6));
   /* Nested form: an if/else inside a while. The while body must reduce to one
@@ -15570,7 +15592,7 @@ static void test_source_base_word_proofs(void) {
       {"random.percent?",
        "to random.percent? with percent [ random.chance?: percent, 100 ]"},
       {"sign", "to sign with n [ clamp: n, -1, 1 ]"},
-      {"adc.percent", "to adc.percent with pin [ here local0 is adc.read: pin ; "
+      {"adc.percent", "to adc.percent with pin [ local0 is adc.read: pin ; "
                       "map: local0, 0, 4095, 0, 100 ]"},
   };
   fr_runtime_t runtime;

@@ -1794,9 +1794,20 @@ static fr_err_t fr_compile_emit_expr(const fr_compile_context_t *ctx,
     if (fr_compile_param_for_name(ctx, expr->name, &arg_index)) {
       return FR_ERR_INVALID;
     }
-    /* fr_compile_expr_slot_for_name errors if the name has never been declared,
-     * which is exactly the "set on undeclared slot" rejection we want. */
-    FR_TRY(fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id, false));
+    /* `set` never declares. An unknown name is either a typo (the name
+     * diagnostic suggests the near miss) or a missing `is` declaration --
+     * say so instead of leaving a bare unknown-name error. */
+    {
+      fr_err_t slot_err =
+          fr_compile_expr_slot_for_name(ctx, expr->name, &slot_id, false);
+
+      if (slot_err == FR_ERR_NOT_FOUND && ctx != NULL && ctx->diag != NULL &&
+          ctx->diag->kind == FR_DIAG_NAME &&
+          ctx->diag->message_id == FR_DIAG_MSG_NONE) {
+        ctx->diag->message_id = FR_DIAG_MSG_COMPILE_SET_UNDECLARED;
+      }
+      FR_TRY(slot_err);
+    }
     FR_TRY(fr_compile_emit_expr(ctx, parsed, expr->child, instruction_bytes,
                                 offset));
     return fr_compile_emit_slot_op(instruction_bytes, offset, FR_OP_STORE_SLOT,

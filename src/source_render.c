@@ -945,7 +945,6 @@ static fr_err_t fr_source_render_span(fr_source_render_t *r,
       r->depth = (uint8_t)(r->depth - 1);
 
       fr_source_local_name(local_index, canon);
-      FR_TRY(fr_source_puts(r, "here "));
       FR_TRY(fr_source_puts(r, canon));
       FR_TRY(fr_source_puts(r, " is "));
       FR_TRY(fr_source_puts(r, &fr_source_render_arena[value.start]));

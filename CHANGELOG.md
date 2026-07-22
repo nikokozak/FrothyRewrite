@@ -8,6 +8,11 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ### Changed
 
+- **`is` inside a block declares a local: `x is 5`.** Position decides scope:
+  at the top level `is` binds a slot as before; in a body it declares a local
+  in the innermost block. `here x is 5` still parses and means exactly the
+  same thing. `set` never declares — setting an undeclared name now says
+  "declare it first with is" alongside the near-miss suggestion.
 - **Cell rows are asked for with a colon call: `readings is cells: 3`.** The
   old `cells(3)` spelling was the only parenthesized call shape in the
   language; parentheses now always mean grouping. The old form fails with a

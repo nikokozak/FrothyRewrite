@@ -1053,12 +1053,15 @@ static fr_err_t fr_parse_set(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
                              FR_ERR_INVALID);
 }
 
-static fr_err_t fr_parse_here(fr_parser_t *parser,
-                              fr_parse_expr_id_t *out_id) {
+/* `name is value` in statement position declares a local. The current
+ * token must be the name; the caller has already decided this statement
+ * is a binding. `here name is value` spells the same statement with the
+ * scope written out. */
+static fr_err_t fr_parse_local_bind(fr_parser_t *parser,
+                                    fr_parse_expr_id_t *out_id) {
   fr_parse_span_t name = {0};
   fr_parse_expr_id_t value = 0;
 
-  FR_TRY(fr_parse_advance(parser));
   if (parser->token.kind != FR_TOKEN_NAME ||
       fr_parse_is_reserved_parameter(parser->token.span)) {
     if (parser->token.kind == FR_TOKEN_NAME) {
@@ -1078,6 +1081,31 @@ static fr_err_t fr_parse_here(fr_parser_t *parser,
                                 .child = value,
                                 .child_count = 1},
       out_id);
+}
+
+static fr_err_t fr_parse_here(fr_parser_t *parser,
+                              fr_parse_expr_id_t *out_id) {
+  FR_TRY(fr_parse_advance(parser));
+  return fr_parse_local_bind(parser, out_id);
+}
+
+/* A statement that reads `name is ...` is a local declaration, not an
+ * expression. Reserved names fall through so their own parses can give a
+ * sharper error. */
+static bool fr_parse_statement_starts_local_bind(fr_parser_t *parser) {
+  fr_parser_t lookahead;
+
+  if (parser->token.kind != FR_TOKEN_NAME ||
+      fr_parse_is_reserved_parameter(parser->token.span)) {
+    return false;
+  }
+  lookahead = *parser;
+  lookahead.diag = NULL;
+  if (fr_parse_advance(&lookahead) != FR_OK) {
+    return false;
+  }
+  return lookahead.token.kind == FR_TOKEN_NAME &&
+         fr_parse_span_equals(lookahead.token.span, "is");
 }
 
 static fr_err_t fr_parse_if(fr_parser_t *parser, fr_parse_expr_id_t *out_id) {
@@ -1704,7 +1732,11 @@ static fr_err_t fr_parse_statement_list(fr_parser_t *parser,
     if (list.child_count >= FR_PARSE_MAX_BODY_EXPRS) {
       return FR_ERR_CAPACITY;
     }
-    FR_TRY(fr_parse_expression(parser, &list.children[list.child_count]));
+    if (fr_parse_statement_starts_local_bind(parser)) {
+      FR_TRY(fr_parse_local_bind(parser, &list.children[list.child_count]));
+    } else {
+      FR_TRY(fr_parse_expression(parser, &list.children[list.child_count]));
+    }
     list.child_count += 1;
     if (parser->token.kind == FR_TOKEN_SEMICOLON) {
       FR_TRY(fr_parse_advance(parser));
