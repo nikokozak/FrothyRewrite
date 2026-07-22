@@ -93,7 +93,13 @@ func runBuild(opts buildOptions, stdout io.Writer, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "frothy build: generator emission complete for board %s (--no-make set)\n", proj.Board)
 		return nil
 	}
-	return runMake(opts.projectDir, proj.Board, stdout, stderr)
+	if err := runMake(opts.projectDir, proj.Board, stdout, stderr); err != nil {
+		return err
+	}
+	if sourceRoot, err := resolveFrothySourceRoot(opts.projectDir); err == nil {
+		emitSizeReport(sourceRoot, opts.projectDir, proj.Board, stdout, stderr)
+	}
+	return nil
 }
 
 func readProjectManifest(projectDir string) (projectManifest, error) {
