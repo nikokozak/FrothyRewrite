@@ -6,8 +6,13 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-07-21
+
 ### Added
 
+- **Console programs can read one human-entered line.** `console.read-line:`
+  waits for a complete data line without turning it into Frothy source, while
+  Ctrl-C still interrupts the active evaluation.
 - **Duration and digit-grouped literals.** `every 2s`, `after 500ms`,
   `pulse.add: wave, 1, 400ns`: `s` multiplies into milliseconds; `ms`, `us`,
   and `ns` pass through so a literal can name the unit its API documents.
