@@ -1,102 +1,113 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestPartitionCSVNameFromSdkconfig(t *testing.T) {
-	sdkconfig := []byte("CONFIG_FOO=y\nCONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions-esp32c6.csv\"\n")
-	name, err := partitionCSVName(sdkconfig)
-	if err != nil || name != "partitions-esp32c6.csv" {
-		t.Fatalf("want partitions-esp32c6.csv, got %q, %v", name, err)
-	}
-	if _, err := partitionCSVName([]byte("CONFIG_FOO=y\n")); err == nil {
-		t.Fatal("want error when no partition table is named")
-	}
+// partitionEntry builds one 32-byte partition-table.bin record.
+func partitionEntry(entryType byte, size uint32) []byte {
+	entry := make([]byte, partitionEntryBytes)
+	binary.LittleEndian.PutUint16(entry[0:2], partitionMagic)
+	entry[2] = entryType
+	binary.LittleEndian.PutUint32(entry[8:12], size)
+	return entry
 }
 
-func TestSmallestAppPartitionBytes(t *testing.T) {
-	csv := []byte(`# Name, Type, SubType, Offset, Size, Flags
-nvs,     data, nvs,     0x9000,  0x6000,
-factory, app,  factory, 0x10000, 0x177000,
-frothy,  data, 0x40,    0x187000, 0x40000,
-`)
-	size, err := smallestAppPartitionBytes(csv)
-	if err != nil || size != 0x177000 {
-		t.Fatalf("want 0x177000, got %#x, %v", size, err)
+func TestSmallestAppPartitionBytesFromBin(t *testing.T) {
+	table := append(partitionEntry(0x01, 0x6000), partitionEntry(partitionTypeApp, 0x200000)...)
+	size, err := smallestAppPartitionBytes(table)
+	if err != nil || size != 0x200000 {
+		t.Fatalf("want 0x200000, got %#x, %v", size, err)
 	}
 }
 
 func TestSmallestAppPartitionBytesPicksSmallest(t *testing.T) {
-	csv := []byte("ota_0, app, ota_0, 0x10000, 2M,\nota_1, app, ota_1, 0x210000, 1500K,\n")
-	size, err := smallestAppPartitionBytes(csv)
-	if err != nil || size != 1500*1024 {
-		t.Fatalf("want 1500K, got %d, %v", size, err)
+	table := append(partitionEntry(partitionTypeApp, 0x200000), partitionEntry(partitionTypeApp, 0x180000)...)
+	size, err := smallestAppPartitionBytes(table)
+	if err != nil || size != 0x180000 {
+		t.Fatalf("want 0x180000, got %#x, %v", size, err)
+	}
+}
+
+func TestSmallestAppPartitionBytesStopsAtNonMagic(t *testing.T) {
+	// The MD5 sentinel row (0xEBEB) ends the table; an app entry after it is
+	// not part of the flashed table and must be ignored.
+	md5Row := make([]byte, partitionEntryBytes)
+	md5Row[0], md5Row[1] = 0xEB, 0xEB
+	table := append(partitionEntry(partitionTypeApp, 0x100000), md5Row...)
+	table = append(table, partitionEntry(partitionTypeApp, 0x1000)...)
+	size, err := smallestAppPartitionBytes(table)
+	if err != nil || size != 0x100000 {
+		t.Fatalf("want 0x100000, got %#x, %v", size, err)
 	}
 }
 
 func TestSmallestAppPartitionBytesNoApp(t *testing.T) {
-	if _, err := smallestAppPartitionBytes([]byte("nvs, data, nvs, 0x9000, 0x6000,\n")); err == nil {
+	if _, err := smallestAppPartitionBytes(partitionEntry(0x01, 0x6000)); err == nil {
 		t.Fatal("want error for a table without an app partition")
 	}
-}
-
-func TestParsePartitionSizeForms(t *testing.T) {
-	cases := map[string]int64{"0x177000": 0x177000, "4096": 4096, "64K": 64 * 1024, "2M": 2 * 1024 * 1024}
-	for text, want := range cases {
-		got, err := parsePartitionSize(text)
-		if err != nil || got != want {
-			t.Fatalf("%q: want %d, got %d, %v", text, want, got, err)
-		}
-	}
-	for _, bad := range []string{"", "-1", "0", "lots"} {
-		if _, err := parsePartitionSize(bad); err == nil {
-			t.Fatalf("%q: want error", bad)
-		}
+	if _, err := smallestAppPartitionBytes(nil); err == nil {
+		t.Fatal("want error for an empty table")
 	}
 }
 
 // buildSizeReport reads only artifacts the build already wrote; prove the
-// composition from a synthetic source root.
+// composition, including the S3-style shared DIRAM pool, from a synthetic
+// source root.
 func TestBuildSizeReportFromArtifacts(t *testing.T) {
 	root := t.TempDir()
-	buildDir := filepath.Join(root, "build", "esp32_devkit_v1")
-	if err := os.MkdirAll(buildDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	espDir := filepath.Join(root, "targets", "esp-idf")
-	if err := os.MkdirAll(espDir, 0o755); err != nil {
+	buildDir := filepath.Join(root, "build", "seeed_xiao_esp32s3")
+	if err := os.MkdirAll(filepath.Join(buildDir, "partition_table"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(buildDir, "frothy.bin"), strings.Repeat("x", 1234))
-	writeTestFile(t, filepath.Join(buildDir, "sdkconfig"),
-		"CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions.csv\"\n")
-	writeTestFile(t, filepath.Join(espDir, "partitions.csv"),
-		"factory, app, factory, 0x10000, 0x177000,\n")
+	if err := os.WriteFile(filepath.Join(buildDir, "partition_table", "partition-table.bin"),
+		partitionEntry(partitionTypeApp, 0x200000), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	writeTestFile(t, filepath.Join(buildDir, "frothy.size.json"),
-		`{"used_iram": 60919, "iram_total": 131072, "used_dram": 59992, "dram_total": 180736}`)
+		`{"used_iram": 16384, "iram_total": 16384, "used_dram": 0, "dram_total": 0,
+		  "used_diram": 200763, "diram_total": 341760}`)
 
-	report, err := buildSizeReport(root, "esp32_devkit_v1")
+	report, err := buildSizeReport(root, "seeed_xiao_esp32s3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := sizeReport{
 		AppImageBytes:     1234,
-		AppPartitionBytes: 0x177000,
-		IramUsed:          60919,
-		IramTotal:         131072,
-		DramUsed:          59992,
-		DramTotal:         180736,
+		AppPartitionBytes: 0x200000,
+		IramUsed:          16384,
+		IramTotal:         16384,
+		DramUsed:          0,
+		DramTotal:         0,
+		DiramUsed:         200763,
+		DiramTotal:        341760,
 	}
 	if report != want {
 		t.Fatalf("report mismatch:\n got %+v\nwant %+v", report, want)
 	}
-	if _, err := json.Marshal(report); err != nil {
+}
+
+// A skipped report must remove last run's size.json, never leave it to be
+// attached to new firmware.
+func TestEmitSizeReportRemovesStaleReport(t *testing.T) {
+	root := t.TempDir()
+	project := t.TempDir()
+	outDir := buildOutputDir(project, "esp32_devkit_v1")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		t.Fatal(err)
+	}
+	stale := filepath.Join(outDir, "size.json")
+	writeTestFile(t, stale, `{"app_image_bytes": 1}`)
+
+	// No build artifacts under root: the report must skip AND remove the stale file.
+	emitSizeReport(root, project, "esp32_devkit_v1", os.Stderr, os.Stderr)
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale size.json must be removed on skip, stat err = %v", err)
 	}
 }
 
