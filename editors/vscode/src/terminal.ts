@@ -23,7 +23,7 @@ export function initTerminal(context: vscode.ExtensionContext): void {
 // ponytail: plain shell + sendText keeps verb output and prompts fully
 // interactive; no exit detection — the status bar covers reconnecting.
 export async function runVerb(verb: string, ...args: string[]): Promise<void> {
-  const bin = vscode.workspace.getConfiguration('frothy').get<string>('binaryPath', 'frothy');
+  const bin = proc.resolveCli();
   if (TAKES_PORT.has(verb) && proc.isConnected()) await proc.teardown();
   if (!terminal || terminal.exitStatus !== undefined) {
     terminal = vscode.window.createTerminal({ name: 'Frothy' });

@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
 import * as vscode from 'vscode';
+import { findFrothy } from './cli';
 import { appendChunk, appendLine, appendSent, appendText, flushPartial, show } from './output';
 import {
   emptySessionSnapshot,
@@ -59,6 +60,11 @@ function fireConnectionChanged(): void {
   if (onConnectionChanged) onConnectionChanged();
 }
 
+export function resolveCli(): string {
+  const configured = vscode.workspace.getConfiguration('frothy').get<string>('binaryPath', '');
+  return findFrothy(configured.trim(), process.env.PATH ?? '', process.platform);
+}
+
 export function connect(portOverride?: string): Promise<void> {
   if (connecting) return connecting;
   connecting = doConnect(portOverride).finally(() => {
@@ -71,7 +77,7 @@ async function doConnect(portOverride?: string): Promise<void> {
   await teardown();
 
   const cfg = vscode.workspace.getConfiguration('frothy');
-  const bin = cfg.get<string>('binaryPath', 'frothy');
+  const bin = resolveCli();
   const port = portOverride ?? cfg.get<string>('port', '');
   const baud = cfg.get<number>('baud', 115200);
 
