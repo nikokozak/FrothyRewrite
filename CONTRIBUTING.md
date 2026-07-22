@@ -50,6 +50,29 @@ shape before behavior, and names a stranger can read without project history.
 If a change touches hardware behavior, say which board you used and how you
 verified it.
 
+## Naming The Native Vocabulary
+
+Every public word a sketch can call follows the same small charter. Check a
+new native against it before adding the row:
+
+- **One metaphor per module.** All of a module's words tell one story:
+  `open`/`close` bracket a resource, `read`/`write` move values,
+  `start`/`stop` toggle an activity, `dump` prints a human-readable view.
+  Do not mix registers (`open` in one word, `begin` in its sibling).
+- **Predicates end in `?` and return a boolean.** `wifi.ready?`,
+  `adc.above?`. A word that returns a count is a noun, never a `?` word:
+  `uart.available`, `tcp.available`.
+- **No abbreviations a stranger must decode.** `pad.length`, not `pad.len`.
+  Established hardware vocabulary (`gpio`, `adc`, `pwm`, `i2c`, `ms`) is not
+  an abbreviation; it is the domain's name for the thing.
+- **Module first, then noun, then verb.** `ble.scan.start`,
+  `frothy.event-register`. The dotted name is one word to the parser, so the
+  order is pure readability: sort by what, then which, then does.
+- **Constructors that take a variant keep the base name plus a suffix.**
+  `uart.open` picks default pins; `uart.open-on` takes them explicitly.
+- **Renames keep the old spelling as a `.alias` for one release**, then the
+  alias comes out.
+
 ## Releasing And Firmware Bundles
 
 The website and Frothy App consume the web flasher's firmware segments from

@@ -92,7 +92,7 @@ static fr_err_t test_persist_apply_user_overlay(
 #define FR_TEST_PAD_LAST_SLOT FR_SLOT_PAD_PEEK_BYTE
 #endif
 #define FR_TEST_PAD_WORDS                                                    \
-  " pad.reset pad.emit-byte pad.len pad.type pad.peek-byte"                  \
+  " pad.reset pad.emit-byte pad.length pad.type pad.peek-byte"                  \
       FR_TEST_PAD_PACK_WORD
 #define FR_TEST_PAD_SLOT_COUNT (5 + FR_TEST_PAD_PACK_SLOT_COUNT)
 #else
@@ -121,7 +121,7 @@ static fr_err_t test_persist_apply_user_overlay(
 #define FR_TEST_EVENT_REGISTER_SLOT_COUNT 2
 
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
-#define FR_TEST_EVENT_TEST_WORDS " frothy.fire-event"
+#define FR_TEST_EVENT_TEST_WORDS " frothy.event-fire"
 #define FR_TEST_EVENT_TEST_SLOT_COUNT 1
 #else
 #define FR_TEST_EVENT_TEST_WORDS ""
@@ -133,7 +133,7 @@ static fr_err_t test_persist_apply_user_overlay(
 #if FR_FEATURE_NET
 #define FR_TEST_NET_WORDS                                                    \
   " wifi.save wifi.connect wifi.ready? http.get tcp.open tcp.read "          \
-  "tcp.write tcp.close tcp.bytes-ready?"
+  "tcp.write tcp.close tcp.available"
 #define FR_TEST_NET_SLOT_COUNT 9
 #else
 #define FR_TEST_NET_WORDS ""
@@ -216,7 +216,7 @@ enum {
 #if FR_FEATURE_PERSISTENCE
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
-  "gpio.read adc.read adc.above millis micros" FR_TEST_UART_WORDS             \
+  "gpio.read adc.read adc.above? millis micros" FR_TEST_UART_WORDS             \
       FR_TEST_RANDOM_WORDS FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS                \
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
@@ -227,7 +227,7 @@ enum {
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
-  "gpio.read adc.read adc.above millis micros" FR_TEST_UART_WORDS             \
+  "gpio.read adc.read adc.above? millis micros" FR_TEST_UART_WORDS             \
       FR_TEST_RANDOM_WORDS FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS                \
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
@@ -238,7 +238,7 @@ enum {
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
-  "gpio.read adc.read adc.above millis micros" FR_TEST_UART_WORDS             \
+  "gpio.read adc.read adc.above? millis micros" FR_TEST_UART_WORDS             \
       FR_TEST_RANDOM_WORDS FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS                \
           FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS FR_TEST_TEXT_WORDS             \
               FR_TEST_EVENT_REGISTER_WORDS                                    \
@@ -259,7 +259,7 @@ enum {
 #else
 #define FR_TEST_WORDS                                                        \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
-  "adc.above millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
+  "adc.above? millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
@@ -269,7 +269,7 @@ enum {
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
-  "adc.above millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
+  "adc.above? millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
@@ -279,7 +279,7 @@ enum {
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot ms one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
-  "adc.above millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
+  "adc.above? millis micros" FR_TEST_UART_WORDS FR_TEST_RANDOM_WORDS          \
       FR_TEST_PWM_WORDS FR_TEST_I2C_WORDS FR_TEST_MATH_WORDS FR_TEST_PAD_WORDS \
           FR_TEST_TEXT_WORDS FR_TEST_EVENT_REGISTER_WORDS                      \
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
@@ -834,7 +834,7 @@ static void test_persist_assert_deep_ref_program(fr_runtime_t *runtime,
             text_length == 5 && memcmp(text, "ready", 5) == 0);
   CHECK("deep refs event mutates cell",
         fr_cells_write(runtime, holder_id, 0, message) == FR_OK &&
-            fr_repl_eval_line(runtime, "frothy.fire-event: \"on\", 7, "
+            fr_repl_eval_line(runtime, "frothy.event-fire: \"on\", 7, "
                                        "\"rising\"",
                               out, out_cap) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
@@ -927,7 +927,7 @@ static void test_persist_mmap_event_body_survives_remount(void) {
                                  &body_view) == FR_OK &&
             body_view.length > 0);
   CHECK("mmap event fires from active mount",
-        fr_repl_eval_line(&runtime, "frothy.fire-event: \"every\", 50, nil",
+        fr_repl_eval_line(&runtime, "frothy.event-fire: \"every\", 50, nil",
                           out, (uint16_t)sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0);
   CHECK("mmap event body used restored record",
@@ -2996,7 +2996,7 @@ static void test_pad(void) {
             fr_repl_eval_line(&runtime, "see pad.emit-byte", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "base target native arity 1\nok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "see pad.len", out, sizeof(out)) ==
+            fr_repl_eval_line(&runtime, "see pad.length", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "base target native arity 0\nok\n") == 0 &&
             fr_repl_eval_line(&runtime, "see pad.type", out, sizeof(out)) ==
@@ -3024,6 +3024,9 @@ static void test_pad(void) {
             fr_pad_view(&runtime, &bytes, &length) == FR_OK && length == 2 &&
             bytes[0] == 'A' && bytes[1] == '\n');
   CHECK("pad len reports byte count",
+        fr_repl_eval_line(&runtime, "pad.length:", out, sizeof(out)) == FR_OK &&
+            strcmp(out, "2\nok\n") == 0);
+  CHECK("pad.len alias still resolves",
         fr_repl_eval_line(&runtime, "pad.len:", out, sizeof(out)) == FR_OK &&
             strcmp(out, "2\nok\n") == 0);
   CHECK("pad peeks bytes without consuming",
@@ -3033,7 +3036,7 @@ static void test_pad(void) {
             fr_repl_eval_line(&runtime, "pad.peek-byte: 1", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "10\nok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "pad.len:", out, sizeof(out)) ==
+            fr_repl_eval_line(&runtime, "pad.length:", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "2\nok\n") == 0);
   CHECK("pad rejects peek outside byte range",
@@ -3055,7 +3058,7 @@ static void test_pad(void) {
   CHECK("pad reset clears bytes",
         fr_repl_eval_line(&runtime, "pad.reset", out, sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "pad.len:", out, sizeof(out)) ==
+            fr_repl_eval_line(&runtime, "pad.length:", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "0\nok\n") == 0);
   CHECK("pad rejects byte outside range",
@@ -3072,7 +3075,7 @@ static void test_pad(void) {
             fr_pad_view(&runtime, &bytes, &length) == FR_OK && length == 0);
   CHECK("pad function calls native byte append",
         fr_repl_eval_line(&runtime,
-                          "pad_two is fn [ pad.emit-byte: 66; pad.len: ]", out,
+                          "pad_two is fn [ pad.emit-byte: 66; pad.length: ]", out,
                           sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_repl_eval_line(&runtime, "pad_two:", out, sizeof(out)) ==
@@ -3085,7 +3088,7 @@ static void test_pad(void) {
                               sizeof(out)) == FR_OK &&
             strcmp(out, "ok\n") == 0 &&
             fr_pad_length(&runtime, &length) == FR_OK && length == 2 &&
-            fr_repl_eval_line(&runtime, "pad.len:", out, sizeof(out)) ==
+            fr_repl_eval_line(&runtime, "pad.length:", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "2\nok\n") == 0);
 }
@@ -6457,10 +6460,10 @@ static void test_event_fire_event_native(void) {
 
   CHECK("fire-event wrong edge returns not found",
         fr_repl_eval_line(&runtime,
-                          "frothy.fire-event: \"on\", 0, \"falling\"", out,
+                          "frothy.event-fire: \"on\", 0, \"falling\"", out,
                           sizeof(out)) == FR_ERR_NOT_FOUND);
   CHECK("fire-event rising fires the body",
-        fr_repl_eval_line(&runtime, "frothy.fire-event: \"on\", 0, \"rising\"",
+        fr_repl_eval_line(&runtime, "frothy.event-fire: \"on\", 0, \"rising\"",
                           out, sizeof(out)) == FR_OK);
   CHECK("fire-event body wrote the slot",
         fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
@@ -6468,7 +6471,7 @@ static void test_event_fire_event_native(void) {
             decoded == 42);
 }
 
-/* cancel removes the binding so frothy.fire-event for the same source returns
+/* cancel removes the binding so frothy.event-fire for the same source returns
  * not found and never runs the body. GPIO half cancels by pin; timer half
  * cancels by (kind, ms). A second cancel on a missing source returns not
  * found per spec §7. */
@@ -6510,7 +6513,7 @@ static void test_event_cancel_blocks_fire_event(void) {
             FR_ERR_NOT_FOUND);
   CHECK("fire-event after gpio cancel returns not found",
         fr_repl_eval_line(&runtime,
-                          "frothy.fire-event: \"on\", 0, \"rising\"", out,
+                          "frothy.event-fire: \"on\", 0, \"rising\"", out,
                           sizeof(out)) == FR_ERR_NOT_FOUND);
   CHECK("gpio body did not run",
         fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
@@ -6525,7 +6528,7 @@ static void test_event_cancel_blocks_fire_event(void) {
   CHECK("cancel every 50 again returns not found",
         fr_event_cancel(&runtime, FR_EVENT_KIND_EVERY, 50) == FR_ERR_NOT_FOUND);
   CHECK("fire-event after every cancel returns not found",
-        fr_repl_eval_line(&runtime, "frothy.fire-event: \"every\", 50, nil",
+        fr_repl_eval_line(&runtime, "frothy.event-fire: \"every\", 50, nil",
                           out, sizeof(out)) == FR_ERR_NOT_FOUND);
   CHECK("timer body did not run",
         fr_slot_read(&runtime, FR_TEST_FIRST_USER_SLOT, &slot_value) == FR_OK &&
@@ -6534,7 +6537,7 @@ static void test_event_cancel_blocks_fire_event(void) {
 }
 
 /* Re-fire while a handler is mid-execution coalesces to one additional
- * dispatch. The body calls `frothy.fire-event` twice from inside its own
+ * dispatch. The body calls `frothy.event-fire` twice from inside its own
  * execution, so both candidates arrive after the dispatcher has already
  * cleared this binding's pending bit. The per-binding pending flag then
  * collapses both mid-handler arrivals into a single re-fire: without
@@ -6597,7 +6600,7 @@ static void test_event_mid_handler_re_fire_coalesces(void) {
   jump_patch_off = off;
   body_bytes[off++] = 0;
   body_bytes[off++] = 0;
-  /* two frothy.fire-event calls posting the same `on 0 rising` candidate */
+  /* two frothy.event-fire calls posting the same `on 0 rising` candidate */
   for (int call = 0; call < 2; call++) {
     body_bytes[off++] = FR_OP_PUSH_OBJECT_ID;
     body_bytes[off++] = (uint8_t)(on_id & 0xffu);
@@ -6695,7 +6698,7 @@ static void test_event_compiled_body_fires(void) {
             decoded == 0);
   CHECK("compiled body fires the event",
         fr_repl_eval_line(&runtime,
-                          "frothy.fire-event: \"on\", 0, \"rising\"", out,
+                          "frothy.event-fire: \"on\", 0, \"rising\"", out,
                           sizeof(out)) == FR_OK);
   CHECK("compiled body fires incremented counter",
         fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
@@ -6726,14 +6729,14 @@ static void test_event_compiled_every_body_fires(void) {
   CHECK("compiled every runs boot",
         fr_vm_run_boot(&runtime, &boot_result) == FR_OK);
   CHECK("compiled every fires once",
-        fr_repl_eval_line(&runtime, "frothy.fire-event: \"every\", 50, nil",
+        fr_repl_eval_line(&runtime, "frothy.event-fire: \"every\", 50, nil",
                           out, sizeof(out)) == FR_OK);
   CHECK("compiled every counter is one",
         fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
             fr_tagged_decode_int(slot_value, &decoded) == FR_OK &&
             decoded == 1);
   CHECK("compiled every fires again (periodic stays registered)",
-        fr_repl_eval_line(&runtime, "frothy.fire-event: \"every\", 50, nil",
+        fr_repl_eval_line(&runtime, "frothy.event-fire: \"every\", 50, nil",
                           out, sizeof(out)) == FR_OK);
   CHECK("compiled every counter is two",
         fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
@@ -6765,7 +6768,7 @@ static void test_event_compiled_changes_body_fires(void) {
         fr_vm_run_boot(&runtime, &boot_result) == FR_OK);
   CHECK("compiled changes fires on rising",
         fr_repl_eval_line(&runtime,
-                          "frothy.fire-event: \"on\", 0, \"rising\"", out,
+                          "frothy.event-fire: \"on\", 0, \"rising\"", out,
                           sizeof(out)) == FR_OK);
   CHECK("compiled changes counter is one",
         fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
@@ -6773,7 +6776,7 @@ static void test_event_compiled_changes_body_fires(void) {
             decoded == 1);
   CHECK("compiled changes fires on falling",
         fr_repl_eval_line(&runtime,
-                          "frothy.fire-event: \"on\", 0, \"falling\"", out,
+                          "frothy.event-fire: \"on\", 0, \"falling\"", out,
                           sizeof(out)) == FR_OK);
   CHECK("compiled changes counter is two",
         fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
@@ -7328,7 +7331,7 @@ static void test_image(void) {
             fr_tagged_decode_native_id(tagged, &native_id) == FR_OK &&
             fr_native_get(&runtime, native_id, &entry) == FR_OK &&
             entry->arity == 1);
-  CHECK("base image installs adc.above native",
+  CHECK("base image installs adc.above? native",
         fr_slot_read(&runtime, FR_SLOT_ADC_ABOVE, &tagged) == FR_OK &&
             fr_tagged_decode_native_id(tagged, &native_id) == FR_OK &&
             fr_native_get(&runtime, native_id, &entry) == FR_OK &&
@@ -7407,7 +7410,7 @@ static void test_image(void) {
             strcmp(fr_base_slot_name(FR_SLOT_GPIO_MODE), "gpio.mode") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_GPIO_READ), "gpio.read") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_ADC_READ), "adc.read") == 0 &&
-            strcmp(fr_base_slot_name(FR_SLOT_ADC_ABOVE), "adc.above") == 0 &&
+            strcmp(fr_base_slot_name(FR_SLOT_ADC_ABOVE), "adc.above?") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_MILLIS), "millis") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_MICROS), "micros") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_LED_BUILTIN), "$led_builtin") ==
@@ -7458,7 +7461,7 @@ static void test_image(void) {
             strcmp(fr_base_slot_name_at(8), "gpio.mode") == 0 &&
             strcmp(fr_base_slot_name_at(9), "gpio.read") == 0 &&
             strcmp(fr_base_slot_name_at(10), "adc.read") == 0 &&
-            strcmp(fr_base_slot_name_at(11), "adc.above") == 0 &&
+            strcmp(fr_base_slot_name_at(11), "adc.above?") == 0 &&
             strcmp(fr_base_slot_name_at(12), "millis") == 0 &&
             strcmp(fr_base_slot_name_at(13), "micros") == 0 &&
             strcmp(fr_base_slot_name(FR_SLOT_SAVE), "save") == 0 &&
@@ -7472,7 +7475,7 @@ static void test_image(void) {
             strcmp(fr_base_slot_name_at(5), "gpio.mode") == 0 &&
             strcmp(fr_base_slot_name_at(6), "gpio.read") == 0 &&
             strcmp(fr_base_slot_name_at(7), "adc.read") == 0 &&
-            strcmp(fr_base_slot_name_at(8), "adc.above") == 0 &&
+            strcmp(fr_base_slot_name_at(8), "adc.above?") == 0 &&
             strcmp(fr_base_slot_name_at(9), "millis") == 0 &&
             strcmp(fr_base_slot_name_at(10), "micros") == 0);
 #endif
@@ -7493,6 +7496,8 @@ static void test_image(void) {
             slot_id == FR_SLOT_GPIO_READ &&
             fr_base_slot_id_for_name("adc.read", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_ADC_READ &&
+            fr_base_slot_id_for_name("adc.above?", &slot_id) == FR_OK &&
+            slot_id == FR_SLOT_ADC_ABOVE &&
             fr_base_slot_id_for_name("adc.above", &slot_id) == FR_OK &&
             slot_id == FR_SLOT_ADC_ABOVE &&
             fr_base_slot_id_for_name("millis", &slot_id) == FR_OK &&
@@ -12641,7 +12646,7 @@ static void test_persist_events_round_trip(void) {
             decoded == 0);
   CHECK("persist on rising fires",
         fr_repl_eval_line(&runtime,
-                          "frothy.fire-event: \"on\", 0, \"rising\"", out,
+                          "frothy.event-fire: \"on\", 0, \"rising\"", out,
                           sizeof(out)) == FR_OK);
   CHECK("persist on rising body ran",
         fr_slot_read(&runtime, counter_slot, &slot_value) == FR_OK &&
@@ -12667,7 +12672,7 @@ static void test_persist_events_round_trip(void) {
         runtime.events.entries[0].kind == FR_EVENT_KIND_EVERY &&
             runtime.events.entries[0].source == 50);
   CHECK("persist every fires",
-        fr_repl_eval_line(&runtime, "frothy.fire-event: \"every\", 50, nil",
+        fr_repl_eval_line(&runtime, "frothy.event-fire: \"every\", 50, nil",
                           out, sizeof(out)) == FR_OK);
   CHECK("persist every body ran",
         fr_slot_id_for_name(&runtime, "counter", &counter_slot) == FR_OK &&
@@ -12711,7 +12716,7 @@ static void test_persist_events_round_trip(void) {
   CHECK("persist after after fire runs boot",
         fr_vm_run_boot(&runtime, &boot_result) == FR_OK);
   CHECK("persist after after fire fires",
-        fr_repl_eval_line(&runtime, "frothy.fire-event: \"after\", 1000, nil",
+        fr_repl_eval_line(&runtime, "frothy.event-fire: \"after\", 1000, nil",
                           out, sizeof(out)) == FR_OK);
   CHECK("persist after after fire binding cleared at runtime",
         runtime.events.entries[0].kind == FR_EVENT_KIND_NONE);
@@ -13566,11 +13571,11 @@ static void test_repl(void) {
                    "gpio.read(pin: int) -> int\n"
                    "read the level of a gpio pin\n"
                    "ok\n") == 0);
-  CHECK("repl see adc.above renders signature",
-        fr_repl_eval_line(&runtime, "see adc.above", out, sizeof(out)) ==
+  CHECK("repl see adc.above? renders signature",
+        fr_repl_eval_line(&runtime, "see adc.above?", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out,
-                   "adc.above(pin: int, threshold: int) -> any\n"
+                   "adc.above?(pin: int, threshold: int) -> any\n"
                    "true when an adc pin reads above a threshold\n"
                    "ok\n") == 0);
 #else
@@ -13634,10 +13639,10 @@ static void test_repl(void) {
                 FR_OK &&
             strcmp(out, "512\nok\n") == 0);
   CHECK("repl compares adc threshold",
-        fr_repl_eval_line(&runtime, "adc.above: 14, 500", out, sizeof(out)) ==
+        fr_repl_eval_line(&runtime, "adc.above?: 14, 500", out, sizeof(out)) ==
                 FR_OK &&
             strcmp(out, "true\nok\n") == 0 &&
-            fr_repl_eval_line(&runtime, "adc.above: 14, 600", out,
+            fr_repl_eval_line(&runtime, "adc.above?: 14, 600", out,
                               sizeof(out)) == FR_OK &&
             strcmp(out, "false\nok\n") == 0);
   CHECK("host microsecond delay carries sub-millisecond time",

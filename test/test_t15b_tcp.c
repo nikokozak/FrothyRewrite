@@ -117,8 +117,9 @@ static void test_bytes_ready_tracks_queue_drain(void) {
   install_base();
   fr_host_tcp_queue_response(0, body, 5);
   eval_ok("sock is tcp.open: \"example.com\", 80");
-  eval_expect_output("tcp.bytes-ready?: sock", "5\nok\n");
+  eval_expect_output("tcp.available: sock", "5\nok\n");
   eval_expect_output("text.pack: tcp.read: sock, 2", "\"ab\"\nok\n");
+  /* Old spelling kept as a deprecated alias for one release. */
   eval_expect_output("tcp.bytes-ready?: sock", "3\nok\n");
 }
 
@@ -135,7 +136,7 @@ static void test_force_disconnect_surfaces_on_next_op(void) {
    * even though the host stub's wifi_down has not been cleared. */
   TEST_ASSERT_TRUE(s_runtime.tcp_handles[0].failed);
   TEST_ASSERT_EQUAL(FR_ERR_NET_DISCONNECTED,
-                    eval_err("tcp.bytes-ready?: sock"));
+                    eval_err("tcp.available: sock"));
 }
 
 static void test_close_then_reopen_clears_failed(void) {

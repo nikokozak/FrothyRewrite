@@ -530,7 +530,7 @@ test-host-normal-transcript: host-normal ## Replay the host_normal transcript.
 		'pad.reset' \
 		'pad.emit-byte: 65' \
 		'pad.emit-byte: 10' \
-		'pad.len:' \
+		'pad.length:' \
 		'pad.type' \
 		'say_ready is fn [ print: "inner"; print: "\\n" ]' \
 		'say_ready:' \
@@ -684,7 +684,7 @@ test-host-normal-no-native-signatures-transcript: host-normal-no-native-signatur
 
 # Exercises the T11a save -> reinstall-base -> restore -> fire-event
 # round-trip through the CLI. Needs FR_INCLUDE_TEST_NATIVES so
-# frothy.fire-event is reachable from the REPL.
+# frothy.event-fire is reachable from the REPL.
 test-host-normal-event-transcript: host-normal-events ## Replay the host_normal event transcript.
 	@out=$$(printf '%s\n' \
 		'counter is cells: 1' \
@@ -697,7 +697,7 @@ test-host-normal-event-transcript: host-normal-events ## Replay the host_normal 
 		'clear' \
 		'restore' \
 		'counter[0]' \
-		'frothy.fire-event: "on", 7, "rising"' \
+		'frothy.event-fire: "on", 7, "rising"' \
 		'counter[0]' \
 		| build/host/frothy-host-normal-events); \
 	ok_count=$$(printf '%s\n' "$$out" | grep -c '^> ok$$'); \

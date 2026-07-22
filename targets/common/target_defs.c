@@ -5757,7 +5757,8 @@ const fr_base_def_t fr_target_base_defs[] = {
     {
         .slot_id = FR_SLOT_ADC_ABOVE,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
-        .name = "adc.above",
+        .name = "adc.above?",
+        .alias = "adc.above",
 #endif
         .kind = FR_BASE_DEF_NATIVE,
         .native_fn = fr_native_adc_above,
@@ -6186,7 +6187,8 @@ const fr_base_def_t fr_target_base_defs[] = {
     {
         .slot_id = FR_SLOT_TCP_BYTES_READY_P,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
-        .name = "tcp.bytes-ready?",
+        .name = "tcp.available",
+        .alias = "tcp.bytes-ready?",
 #endif
         .kind = FR_BASE_DEF_NATIVE,
         .native_fn = fr_native_tcp_bytes_ready_p,
@@ -6458,7 +6460,8 @@ const fr_base_def_t fr_target_base_defs[] = {
     {
         .slot_id = FR_SLOT_PAD_LEN,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
-        .name = "pad.len",
+        .name = "pad.length",
+        .alias = "pad.len",
 #endif
         .kind = FR_BASE_DEF_NATIVE,
         .native_fn = fr_native_pad_len,
@@ -7513,7 +7516,7 @@ const fr_base_def_t fr_target_base_defs[] = {
     {
         .slot_id = FR_SLOT_FIRE_EVENT,
 #if FR_BASE_IMAGE_INCLUDE_SYMBOLS
-        .name = "frothy.fire-event",
+        .name = "frothy.event-fire",
 #endif
         .kind = FR_BASE_DEF_NATIVE,
         .native_fn = fr_native_fire_event,
