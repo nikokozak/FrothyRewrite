@@ -8,10 +8,13 @@ import (
 	"testing"
 )
 
-// partitionEntry builds one 32-byte partition-table.bin record.
+// partitionEntry builds one 32-byte partition-table.bin record. The magic is
+// spelled as the literal on-disk bytes AA 50 (not via the parser's own
+// constant) so a byte-order mistake in the parser cannot hide in the fixture
+// — round 1 shipped exactly that bug, verified against a real table.
 func partitionEntry(entryType byte, size uint32) []byte {
 	entry := make([]byte, partitionEntryBytes)
-	binary.LittleEndian.PutUint16(entry[0:2], partitionMagic)
+	entry[0], entry[1] = 0xAA, 0x50
 	entry[2] = entryType
 	binary.LittleEndian.PutUint32(entry[8:12], size)
 	return entry

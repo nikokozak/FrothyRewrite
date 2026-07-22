@@ -44,12 +44,13 @@ type espIdfSizeSummary struct {
 	DiramTotal int64 `json:"diram_total"`
 }
 
-// ESP-IDF partition table binary format: 32-byte entries, little-endian,
-// magic 0xAA50, then type (0x00 = app), subtype, offset, size, label. The
-// table ends at the first non-magic entry (the MD5 row starts 0xEBEB).
+// ESP-IDF partition table binary format: 32-byte entries starting with the
+// bytes AA 50 (ESP_PARTITION_MAGIC 0x50AA read little-endian), then type
+// (0x00 = app), subtype, offset, size, label. The table ends at the first
+// non-magic entry (the MD5 row reads 0xEBEB).
 const (
 	partitionEntryBytes = 32
-	partitionMagic      = 0xAA50
+	partitionMagic      = 0x50AA
 	partitionTypeApp    = 0x00
 )
 

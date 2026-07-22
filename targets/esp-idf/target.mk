@@ -59,10 +59,10 @@ $(ESP_IDF_SDKCONFIG_STAMP): $(ESP_IDF_SDKCONFIG_DEFAULTS) $(ESP_IDF_PROFILE_STAM
 	touch "$@"
 
 TARGET_BUILD_COMMAND = cd $(ESP_IDF_PROJECT_DIR) && . "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && idf.py -B "$(ESP_IDF_BUILD_DIR)" -DSDKCONFIG="$(ESP_IDF_SDKCONFIG)" -DFR_REWRITE_ROOT="$(ESP_IDF_ROOT)" -DFR_REWRITE_BOARD="$(BOARD)" -DFR_REWRITE_PROFILE="$(PROFILE)" -DIDF_TARGET="$(ESP_IDF_BOARD_TARGET)" $(ESP_IDF_FROTHY_GEN_DEFINES) build
-# The JSON leg feeds the CLI's measured size report. It is best-effort and
-# atomic: a converter failure removes the (possibly stale) JSON instead of
-# failing a build whose firmware already exists; the report layer treats the
-# missing file as "skip".
-TARGET_SIZE_COMMAND = cd $(ESP_IDF_PROJECT_DIR) && . "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && idf.py -B "$(ESP_IDF_BUILD_DIR)" -DSDKCONFIG="$(ESP_IDF_SDKCONFIG)" size > "$(abspath $(ARTIFACT_SIZE))" && { python -m esp_idf_size --format json "$(ESP_IDF_BUILD_DIR)/frothy.map" > "$(abspath $(ARTIFACT_SIZE)).json.tmp" && mv "$(abspath $(ARTIFACT_SIZE)).json.tmp" "$(abspath $(ARTIFACT_SIZE)).json" || rm -f "$(abspath $(ARTIFACT_SIZE)).json" "$(abspath $(ARTIFACT_SIZE)).json.tmp"; }
+# Size reporting is entirely best-effort: stale outputs are removed before
+# either command runs, so a failure at any point leaves no report (the CLI
+# treats a missing frothy.size.json as "skip") and never fails a build whose
+# firmware already exists.
+TARGET_SIZE_COMMAND = cd $(ESP_IDF_PROJECT_DIR) && rm -f "$(abspath $(ARTIFACT_SIZE))" "$(abspath $(ARTIFACT_SIZE)).json" "$(abspath $(ARTIFACT_SIZE)).json.tmp" && { . "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && idf.py -B "$(ESP_IDF_BUILD_DIR)" -DSDKCONFIG="$(ESP_IDF_SDKCONFIG)" size > "$(abspath $(ARTIFACT_SIZE))" && python -m esp_idf_size --format json "$(ESP_IDF_BUILD_DIR)/frothy.map" > "$(abspath $(ARTIFACT_SIZE)).json.tmp" && mv "$(abspath $(ARTIFACT_SIZE)).json.tmp" "$(abspath $(ARTIFACT_SIZE)).json"; } || true
 TARGET_FLASH_DEPS = $(ARTIFACT_ELF)
 TARGET_FLASH_COMMAND = cd $(ESP_IDF_PROJECT_DIR) && . "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && idf.py -B "$(ESP_IDF_BUILD_DIR)" -DSDKCONFIG="$(ESP_IDF_SDKCONFIG)" $(ESP_IDF_FROTHY_GEN_DEFINES) -p "$(BOARD_PORT)" flash
