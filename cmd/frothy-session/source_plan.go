@@ -39,6 +39,7 @@ func runSourcePlanCommand(args []string, stdout io.Writer, stderr io.Writer) int
 	fs := flag.NewFlagSet("frothy source-plan", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	projectDir := fs.String("project", ".", "project directory containing frothy.toml")
+	entry := fs.String("entry", "main.fr", "entry source file, relative to the project root")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -55,7 +56,7 @@ func runSourcePlanCommand(args []string, stdout io.Writer, stderr io.Writer) int
 		writeSourcePlanResult(stdout, sourcePlanResult{Kind: "error", Message: err.Error()})
 		return 1
 	}
-	result, err := resolveSourcePlan(absProject)
+	result, err := resolveSourcePlan(absProject, *entry)
 	if err != nil {
 		writeSourcePlanResult(stdout, sourcePlanResult{Kind: "error", Message: err.Error()})
 		return 1
@@ -64,7 +65,7 @@ func runSourcePlanCommand(args []string, stdout io.Writer, stderr io.Writer) int
 	return 0
 }
 
-func resolveSourcePlan(projectDir string) (sourcePlanResult, error) {
+func resolveSourcePlan(projectDir string, entry string) (sourcePlanResult, error) {
 	project, err := readProjectManifest(projectDir)
 	if err != nil {
 		return sourcePlanResult{}, err
@@ -93,17 +94,19 @@ func resolveSourcePlan(projectDir string) (sourcePlanResult, error) {
 	if err != nil {
 		return sourcePlanResult{}, err
 	}
-	mainSource, err := preprocessInclude("main.fr", load)
+	// The loader enforces the entry rules (relative, .fr, inside the project)
+	// the same way it does for include targets.
+	entrySource, err := preprocessInclude(entry, load)
 	if err != nil {
-		return sourcePlanResult{}, fmt.Errorf("main.fr: %w", err)
+		return sourcePlanResult{}, fmt.Errorf("%s: %w", entry, err)
 	}
 	return sourcePlanResult{
 		Kind:            "resolved",
 		ResolverVersion: 1,
 		Board:           project.Board,
 		Sources: []sourcePlanSource{{
-			Path:   "main.fr",
-			Source: mainSource,
+			Path:   entry,
+			Source: entrySource,
 		}},
 	}, nil
 }

@@ -6,6 +6,16 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+### Changed
+
+- **`pwm.open` on a pin that is already open reports `busy`**, not
+  `bad value`. The two failures need different fixes — a held pin wants a
+  `pwm.close` or reset, an invalid pin wants different wiring — and they
+  were indistinguishable at the prompt.
+- **`frothy source-plan` accepts `--entry <path>`** (default `main.fr`) so
+  the editor can run any project file as the include-resolution root. Entry
+  paths obey the same confinement rules as include targets.
+
 ### Removed
 
 - **Duration suffixes on integer literals** (`2s`, `500ms`, `400us`, `400ns`),

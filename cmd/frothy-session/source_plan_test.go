@@ -33,6 +33,48 @@ func TestSourcePlanResolvesIncludesInPlace(t *testing.T) {
 	}
 }
 
+func TestSourcePlanResolvesAnEntryOtherThanMain(t *testing.T) {
+	root := t.TempDir()
+	writeSourcePlanFile(t, root, "frothy.toml", "name = \"web\"\nboard = \"esp32_devkit_v1\"\n")
+	writeSourcePlanFile(t, root, "main.fr", "main is fn [ 1 ]\n")
+	writeSourcePlanFile(t, root, "src/led.fr", "include \"pin.fr\"\nled is fn [ pin ]\n")
+	writeSourcePlanFile(t, root, "src/pin.fr", "pin is 13\n")
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"--project", root, "--entry", "src/led.fr"}
+	if code := runSourcePlanCommand(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("source-plan exit = %d, stderr = %q, stdout = %q", code, stderr.String(), stdout.String())
+	}
+	var result sourcePlanResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	want := "pin is 13\nled is fn [ pin ]\n"
+	if result.Kind != "resolved" || len(result.Sources) != 1 ||
+		result.Sources[0].Path != "src/led.fr" || result.Sources[0].Source != want {
+		t.Fatalf("sources = %#v, want src/led.fr %q", result.Sources, want)
+	}
+}
+
+func TestSourcePlanRejectsAnEntryOutsideTheProject(t *testing.T) {
+	root := t.TempDir()
+	writeSourcePlanFile(t, root, "frothy.toml", "name = \"web\"\nboard = \"esp32_devkit_v1\"\n")
+	writeSourcePlanFile(t, root, "main.fr", "main is fn [ 1 ]\n")
+
+	var stdout bytes.Buffer
+	args := []string{"--project", root, "--entry", "../outside.fr"}
+	if code := runSourcePlanCommand(args, &stdout, &bytes.Buffer{}); code != 1 {
+		t.Fatalf("source-plan exit = %d, stdout = %q", code, stdout.String())
+	}
+	var result sourcePlanResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Kind != "error" || !strings.Contains(result.Message, "escapes the project") {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 func TestSourcePlanConfinesEveryInclude(t *testing.T) {
 	root := t.TempDir()
 	writeSourcePlanFile(t, root, "frothy.toml", "name = \"web\"\nboard = \"esp32_devkit_v1\"\n")

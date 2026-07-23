@@ -2137,7 +2137,7 @@ fr_err_t fr_platform_pwm_open(uint16_t pin, uint16_t freq,
     return FR_ERR_DOMAIN;
   }
   if (fr_esp_pwm_pin_in_use(pin)) {
-    return FR_ERR_DOMAIN;
+    return FR_ERR_BUSY;
   }
 
   for (uint16_t i = 0; i < FR_ESP_PWM_MAX; i++) {

@@ -3165,8 +3165,11 @@ fr_err_t fr_platform_pwm_open(uint16_t pin, uint16_t freq,
   if (out_platform_index == NULL) {
     return FR_ERR_INVALID;
   }
-  if (pin > FR_HOST_MAX_PIN || freq == 0 || fr_host_pwm_pin_in_use(pin)) {
+  if (pin > FR_HOST_MAX_PIN || freq == 0) {
     return FR_ERR_DOMAIN;
+  }
+  if (fr_host_pwm_pin_in_use(pin)) {
+    return FR_ERR_BUSY;
   }
 
   for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {

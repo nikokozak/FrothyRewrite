@@ -78,6 +78,15 @@ static void test_host_stub_drain_empties_ring(void) {
                                                             sizeof(duties[0])));
 }
 
+static void test_reopening_a_held_pin_reports_busy(void) {
+  char out[64];
+
+  open_pwm();
+  TEST_ASSERT_EQUAL(FR_ERR_BUSY,
+                    fr_repl_eval_line(&s_runtime, "pwm.open: 4, 50",
+                                      out, sizeof(out)));
+}
+
 #endif /* FR_FEATURE_PWM */
 
 int main(void) {
@@ -85,6 +94,7 @@ int main(void) {
 #if FR_FEATURE_PWM
   RUN_TEST(test_host_stub_records_writes_in_fifo);
   RUN_TEST(test_host_stub_drain_empties_ring);
+  RUN_TEST(test_reopening_a_held_pin_reports_busy);
 #endif
   return UNITY_END();
 }

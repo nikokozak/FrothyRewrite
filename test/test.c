@@ -3727,10 +3727,10 @@ static void test_pwm(void) {
                 FR_OK &&
             fr_tagged_is_nil(result));
 
-  CHECK("pwm rejects pin conflict",
+  CHECK("pwm reports a held pin as busy",
         test_pwm_open_call(&runtime, open_entry, 5, 1000, &handle) == FR_OK &&
             test_pwm_open_call(&runtime, open_entry, 5, 2000,
-                               &second_handle) == FR_ERR_DOMAIN &&
+                               &second_handle) == FR_ERR_BUSY &&
             test_pwm_close_call(&runtime, close_entry, handle, &result) ==
                 FR_OK);
 
