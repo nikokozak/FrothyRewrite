@@ -61,6 +61,10 @@
 enum {
   FR_ESP_CONSOLE_RX_BYTES = 256,
   FR_ESP_CONSOLE_TX_BYTES = 256,
+  /* Bytes the safe-point interrupt poll may consume ahead of the console
+     reader. Sized for a pasted console.read-line line; overflow drops the
+     newest bytes. */
+  FR_ESP_TYPEAHEAD_BYTES = 128,
 #if FR_FEATURE_CONSOLE_ROUTING
   FR_ESP_CONSOLE_TX_WAIT_MS = 100,
 #endif
@@ -348,8 +352,13 @@ static fr_err_t fr_esp_pulse_entry(uint16_t platform_index,
 #endif
 
 static bool fr_esp_initialized;
-static bool fr_esp_pending_byte_valid;
-static uint8_t fr_esp_pending_byte;
+/* Console typeahead ring: bytes the interrupt poll or the recovery window
+   consumed from the driver that belong to the next console read. Fixed
+   storage; the poll never grows memory. */
+static uint8_t fr_esp_typeahead[FR_ESP_TYPEAHEAD_BYTES];
+static uint8_t fr_esp_typeahead_start;
+static uint8_t fr_esp_typeahead_count;
+static void fr_esp_typeahead_clear(void);
 static adc_oneshot_unit_handle_t fr_esp_adc1;
 static bool fr_esp_adc1_initialized;
 static int64_t fr_esp_last_vm_yield_us;
@@ -523,7 +532,7 @@ static fr_err_t fr_esp_console_init(void) {
 #if FR_FEATURE_CONSOLE_ROUTING
   fr_esp_console_route = fr_esp_console_default_route;
 #endif
-  fr_esp_pending_byte_valid = false;
+  fr_esp_typeahead_clear();
   return FR_OK;
 }
 
@@ -586,10 +595,21 @@ static fr_err_t fr_esp_console_write(const void *bytes, uint16_t length) {
   return written == length ? FR_OK : FR_ERR_IO;
 }
 
-static void fr_esp_save_pending_byte(uint8_t byte) {
-  /* One-byte typeahead: safe-point polling must never grow memory. */
-  fr_esp_pending_byte = byte;
-  fr_esp_pending_byte_valid = true;
+static void fr_esp_typeahead_push(uint8_t byte) {
+  uint8_t slot = 0;
+
+  if (fr_esp_typeahead_count >= FR_ESP_TYPEAHEAD_BYTES) {
+    return; /* full: drop the newest, keep read order intact */
+  }
+  slot = (uint8_t)((fr_esp_typeahead_start + fr_esp_typeahead_count) %
+                   FR_ESP_TYPEAHEAD_BYTES);
+  fr_esp_typeahead[slot] = byte;
+  fr_esp_typeahead_count++;
+}
+
+static void fr_esp_typeahead_clear(void) {
+  fr_esp_typeahead_start = 0;
+  fr_esp_typeahead_count = 0;
 }
 
 static fr_err_t fr_esp_console_read_byte(uint8_t *out_byte,
@@ -597,26 +617,15 @@ static fr_err_t fr_esp_console_read_byte(uint8_t *out_byte,
   if (out_byte == NULL) {
     return FR_ERR_INVALID;
   }
-  if (fr_esp_pending_byte_valid) {
-    *out_byte = fr_esp_pending_byte;
-    fr_esp_pending_byte_valid = false;
+  if (fr_esp_typeahead_count > 0) {
+    *out_byte = fr_esp_typeahead[fr_esp_typeahead_start];
+    fr_esp_typeahead_start =
+        (uint8_t)((fr_esp_typeahead_start + 1) % FR_ESP_TYPEAHEAD_BYTES);
+    fr_esp_typeahead_count--;
     return FR_OK;
   }
 
   return fr_esp_console_driver_read(out_byte, timeout);
-}
-
-static bool fr_esp_console_key_ready(void) {
-  uint8_t byte = 0;
-
-  if (fr_esp_pending_byte_valid) {
-    return true;
-  }
-  if (fr_esp_console_driver_read(&byte, 0) != FR_OK) {
-    return false;
-  }
-  fr_esp_save_pending_byte(byte);
-  return true;
 }
 
 #if FR_FEATURE_CONSOLE_ROUTING
@@ -655,7 +664,7 @@ fr_err_t fr_platform_console_set_uart(uint16_t tx, uint16_t rx,
   }
 
   fr_esp_console_route = target;
-  fr_esp_pending_byte_valid = false;
+  fr_esp_typeahead_clear();
   return FR_OK;
 }
 
@@ -671,7 +680,7 @@ fr_err_t fr_platform_console_restore_default(void) {
   }
   FR_TRY(fr_esp_console_wait_tx_done(&fr_esp_console_route));
   fr_esp_console_route = fr_esp_console_default_route;
-  fr_esp_pending_byte_valid = false;
+  fr_esp_typeahead_clear();
   return FR_OK;
 #endif
 }
@@ -715,7 +724,7 @@ fr_err_t fr_platform_recovery_requested(uint16_t window_ms,
       *out_requested = true;
       return FR_OK;
     }
-    fr_esp_save_pending_byte(byte);
+    fr_esp_typeahead_push(byte);
     return FR_OK;
   }
   return FR_OK;
@@ -997,9 +1006,27 @@ fr_err_t fr_platform_adc_read(uint16_t pin, uint16_t *out_value) {
   return FR_OK;
 }
 
+/* Cold path of the interrupt poll: at least one byte is buffered. Ctrl-C
+   interrupts and abandons any input queued behind it; other bytes go to the
+   typeahead ring so input typed or streamed ahead of a console read survives
+   the poll. Kept out of line so the empty-buffer poll stays a single probe. */
+static IRAM_ATTR __attribute__((noinline)) fr_err_t
+fr_esp_console_drain(fr_runtime_t *runtime, uint8_t byte) {
+  for (;;) {
+    if (byte == FR_ESP_CTRL_C) {
+      fr_esp_typeahead_clear();
+      fr_runtime_interrupt(runtime);
+      return FR_OK;
+    }
+    fr_esp_typeahead_push(byte);
+    if (fr_esp_console_driver_read(&byte, 0) != FR_OK) {
+      return FR_OK;
+    }
+  }
+}
+
 fr_err_t fr_platform_poll_interrupt(fr_runtime_t *runtime) {
   uint8_t byte = 0;
-  fr_err_t err = FR_OK;
 
   if (runtime == NULL) {
     return FR_ERR_INVALID;
@@ -1008,21 +1035,16 @@ fr_err_t fr_platform_poll_interrupt(fr_runtime_t *runtime) {
     fr_runtime_interrupt(runtime);
     return FR_OK;
   }
-  if (!fr_esp_console_key_ready()) {
+  /* Hot path: one driver probe, nothing else. Reading back through the
+     typeahead here would re-examine the same saved byte on every poll and
+     never reach the driver again, so one buffered character would wall off
+     a later Ctrl-C until reset. The stashing drain lives out of line: with
+     it inlined in this loop the poll measurably slows tight programs
+     (repeat 2M spin: 6.25s vs 5.88s on esp32_devkit_v1). */
+  if (fr_esp_console_driver_read(&byte, 0) != FR_OK) {
     return FR_OK;
   }
-
-  err = fr_esp_console_read_byte(&byte, 0);
-  if (err == FR_ERR_NOT_FOUND) {
-    return FR_OK;
-  }
-  FR_TRY(err);
-  if (byte == FR_ESP_CTRL_C) {
-    fr_runtime_interrupt(runtime);
-  } else {
-    fr_esp_save_pending_byte(byte);
-  }
-  return FR_OK;
+  return fr_esp_console_drain(runtime, byte);
 }
 
 fr_err_t fr_platform_heap_free(uint32_t *out_bytes) {
