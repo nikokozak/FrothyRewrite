@@ -8,11 +8,11 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ### Fixed
 
-- **`wipe-user` closes platform handles.** The tier wipe dropped every
-  binding that could close an open handle while the platform channel stayed
-  open, so an editor wipe-then-rerun cycle found the pin `busy` and only a
-  reset could recover it. Handles are user runtime state, like events, and
-  the wipe now closes them.
+- **`wipe-user` and `restore` close platform handles.** Both replace the
+  user tier, dropping every binding that could close an open handle while
+  the platform channel stayed open — so an editor wipe-then-rerun cycle
+  found the pin `busy` and only a reset could recover it. Handles are user
+  runtime state, like events, and both paths now close them.
 
 ### Changed
 

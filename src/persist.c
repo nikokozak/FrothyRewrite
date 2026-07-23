@@ -294,6 +294,10 @@ fr_err_t fr_persist_restore(fr_runtime_t *runtime) {
    * user code replaces the current user tier. */
   FR_TRY(fr_platform_ble_project_clear());
 #endif
+  /* Handles are volatile project state for the same reason: replacing the
+   * user tier drops every binding that could close them, leaving the pin
+   * stuck busy until reset (same failure wipe-user had). */
+  fr_handle_close_all(runtime);
   return fr_persist_restore_read_and_apply(
       runtime, fr_persist_payload_restore_user_only, false, NULL);
 }

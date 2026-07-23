@@ -5622,6 +5622,23 @@ static void test_wipe_user_closes_handles(void) {
                           sizeof(out)) == FR_OK);
 }
 
+/* Regression: public restore must close platform handles too — replacing the
+ * user tier orphans open channels the same way wipe-user did. */
+static void test_restore_closes_handles(void) {
+  fr_runtime_t runtime;
+  char out[64];
+
+  CHECK("restore-handles base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("restore-handles save baseline", fr_persist_save(&runtime) == FR_OK);
+  CHECK("restore-handles open pwm",
+        fr_repl_eval_line(&runtime, "h is pwm.open: 6, 1000", out,
+                          sizeof(out)) == FR_OK);
+  CHECK("restore-handles restore ok", fr_persist_restore(&runtime) == FR_OK);
+  CHECK("restore-handles pin reopens after restore",
+        fr_repl_eval_line(&runtime, "h is pwm.open: 6, 1000", out,
+                          sizeof(out)) == FR_OK);
+}
+
 static void test_event_register_cancel(void) {
   fr_runtime_t runtime;
   fr_event_binding_t *entry;
@@ -16177,6 +16194,7 @@ int main(void) {
   test_event_register_cancel();
   test_wipe_user_clears_events();
   test_wipe_user_closes_handles();
+  test_restore_closes_handles();
   test_event_drain_dispatch();
   test_event_safe_point_fires_when_active();
   test_event_handler_fault_keeps_foreground_diag_empty();
