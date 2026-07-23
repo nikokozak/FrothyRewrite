@@ -9,6 +9,7 @@
 #include "code.h"
 #include "crc.h"
 #include "event.h"
+#include "handle.h"
 #include "object.h"
 #include "persist_payload.h"
 #include "platform.h"
@@ -368,11 +369,15 @@ fr_err_t fr_persist_wipe_user(fr_runtime_t *runtime) {
   if (runtime == NULL) {
     return FR_ERR_INVALID;
   }
-  /* Events are user runtime state: they are only ever armed by user code
-   * calling every/after/on. Stop them here (a full wipe does so via
-   * fr_runtime_reset) so a timer cannot keep firing into a slot the tier wipe
-   * just cleared, which spams 'wrong type' errors. */
+  /* Events and handles are user runtime state: they are only ever created by
+   * user code. Stop events here (a full wipe does so via fr_runtime_reset) so
+   * a timer cannot keep firing into a slot the tier wipe just cleared, which
+   * spams 'wrong type' errors. Close handles for the same reason with a worse
+   * failure mode: the tier wipe drops every binding that could close them, so
+   * a surviving platform channel (an open PWM pin, an I2C bus) would be
+   * unreachable and its pin stuck busy until reset. */
   FR_TRY(fr_event_clear_table(runtime));
+  fr_handle_close_all(runtime);
   fr_persist_session_wipe_user_tier(runtime);
   return fr_persist_save(runtime);
 }

@@ -5601,6 +5601,27 @@ static void test_wipe_user_clears_events(void) {
             runtime.events.entries[0].kind == FR_EVENT_KIND_NONE);
 }
 
+/* Regression: wipe-user must close platform handles. The tier wipe drops
+ * every binding that could close them, so a surviving channel left the pin
+ * permanently busy: the editor's wipe-then-rerun program flow hit `busy` on
+ * the second run and only a reset could recover the pin. */
+static void test_wipe_user_closes_handles(void) {
+  fr_runtime_t runtime;
+  char out[64];
+
+  CHECK("wipe-handles base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("wipe-handles open pwm",
+        fr_repl_eval_line(&runtime, "h is pwm.open: 5, 1000", out,
+                          sizeof(out)) == FR_OK);
+  CHECK("wipe-handles reopen busy",
+        fr_repl_eval_line(&runtime, "pwm.open: 5, 1000", out, sizeof(out)) ==
+            FR_ERR_BUSY);
+  CHECK("wipe-handles wipe-user ok", fr_persist_wipe_user(&runtime) == FR_OK);
+  CHECK("wipe-handles pin reopens after wipe",
+        fr_repl_eval_line(&runtime, "h is pwm.open: 5, 1000", out,
+                          sizeof(out)) == FR_OK);
+}
+
 static void test_event_register_cancel(void) {
   fr_runtime_t runtime;
   fr_event_binding_t *entry;
@@ -16155,6 +16176,7 @@ int main(void) {
   test_event_table();
   test_event_register_cancel();
   test_wipe_user_clears_events();
+  test_wipe_user_closes_handles();
   test_event_drain_dispatch();
   test_event_safe_point_fires_when_active();
   test_event_handler_fault_keeps_foreground_diag_empty();
