@@ -6,6 +6,22 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-07-23
+
+### Fixed
+
+- **Ctrl-C reaches a running program even behind buffered input.** The
+  safe-point interrupt poll re-examined one saved typeahead byte forever, so
+  any character that arrived before a Ctrl-C — a host request written to a
+  busy board, a typed-ahead key — made the interrupt unreachable until reset,
+  including against a saved boot routine stuck in `forever`. The poll now
+  drains the console driver directly; measured interrupt latency behind
+  buffered input is ~50 ms on hardware.
+- **Input typed ahead of `console.read-line` survives the poll.** Drained
+  non-interrupt bytes are kept in a small typeahead ring and handed to the
+  next console read in order; a Ctrl-C discards input queued behind it. VM
+  throughput is unchanged (spin benchmark at parity on `esp32_devkit_v1`).
+
 ## [0.1.9] - 2026-07-22
 
 ### Added
