@@ -324,6 +324,12 @@ fr_err_t fr_platform_gpio_mode(uint16_t pin, uint16_t mode) {
   if (mode > 2) {
     return FR_ERR_DOMAIN;
   }
+#if FR_FEATURE_PWM
+  /* Mirror the device rule (ADR 0067): mutating a PWM-held pin is refused. */
+  if (fr_host_pwm_pin_in_use(pin)) {
+    return FR_ERR_BUSY;
+  }
+#endif
   return FR_OK;
 }
 
@@ -331,6 +337,11 @@ fr_err_t fr_platform_gpio_write(uint16_t pin, uint16_t value) {
   if (pin > FR_HOST_MAX_PIN) {
     return FR_ERR_DOMAIN;
   }
+#if FR_FEATURE_PWM
+  if (fr_host_pwm_pin_in_use(pin)) {
+    return FR_ERR_BUSY;
+  }
+#endif
 
   fr_host_gpio_values[pin] = value == 0 ? 0 : 1;
   return FR_OK;
@@ -3189,6 +3200,26 @@ fr_err_t fr_platform_pwm_open(uint16_t pin, uint16_t freq,
   }
 
   return FR_ERR_CAPACITY;
+}
+
+fr_err_t fr_platform_pwm_find(uint16_t pin, uint16_t freq,
+                              uint16_t *out_platform_index) {
+  if (out_platform_index == NULL || freq == 0) {
+    return FR_ERR_INVALID;
+  }
+  for (uint16_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
+    const fr_host_pwm_t *pwm = &fr_host_pwms[i];
+
+    if (!pwm->in_use || pwm->pin != pin) {
+      continue;
+    }
+    if (pwm->freq != freq) {
+      return FR_ERR_BUSY;
+    }
+    *out_platform_index = i;
+    return FR_OK;
+  }
+  return FR_ERR_NOT_FOUND;
 }
 
 fr_err_t fr_platform_pwm_write(uint16_t platform_index, uint16_t duty) {

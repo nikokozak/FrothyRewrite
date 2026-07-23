@@ -240,6 +240,36 @@ fr_err_t fr_handle_lookup(const fr_runtime_t *runtime, fr_handle_ref_t ref,
 #endif
 }
 
+fr_err_t fr_handle_find_active(const fr_runtime_t *runtime,
+                               fr_handle_kind_t kind, uint16_t platform_index,
+                               fr_tagged_t *out_tagged) {
+#if FR_FEATURE_HANDLES
+  if (runtime == NULL || out_tagged == NULL ||
+      !fr_handle_kind_is_known(kind) ||
+      platform_index == FR_HANDLE_PLATFORM_NONE) {
+    return FR_ERR_INVALID;
+  }
+  for (fr_handle_id_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
+    const fr_handle_entry_t *entry = &runtime->handles.entries[i];
+    fr_handle_ref_t ref;
+
+    if (entry->kind != kind || entry->retired ||
+        entry->platform_index != platform_index) {
+      continue;
+    }
+    ref = (fr_handle_ref_t){.id = i, .generation = entry->generation};
+    return fr_tagged_encode_handle_ref(ref, out_tagged);
+  }
+  return FR_ERR_NOT_FOUND;
+#else
+  (void)runtime;
+  (void)kind;
+  (void)platform_index;
+  (void)out_tagged;
+  return FR_ERR_UNSUPPORTED;
+#endif
+}
+
 fr_err_t fr_handle_close(fr_runtime_t *runtime, fr_handle_ref_t ref) {
 #if FR_FEATURE_HANDLES
   fr_handle_entry_t *entry = NULL;

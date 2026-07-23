@@ -14,8 +14,25 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
   found the pin `busy` and only a reset could recover it. Handles are user
   runtime state, like events, and both paths now close them.
 
+### Added
+
+- **The firmware reports its release.** `status` gains a `release=` field
+  and the new `frothy.release` word returns the release name as text, on
+  every target: the value is a plain compile-time constant the build stamps
+  from the git tag. Boards flashed before this release cannot say what they
+  run; everything after can.
+
 ### Changed
 
+- **Re-running an identical `pwm.open` is not an error.** An exact repeat —
+  same pin, same frequency — returns the existing handle with no state
+  change, so re-evaluating a setup line at the prompt just works. Opening a
+  held pin at a *different* frequency still reports `busy`; changing
+  configuration remains an explicit `pwm.close` + `pwm.open`.
+- **`gpio.write` and `gpio.mode` refuse a PWM-held pin with `busy`.**
+  Driving a pin as plain GPIO silently detached it from the PWM peripheral
+  while the channel kept running; the conflict is now a diagnosable error.
+  `gpio.read` still works on any pin.
 - **`pwm.open` on a pin that is already open reports `busy`**, not
   `bad value`. The two failures need different fixes — a held pin wants a
   `pwm.close` or reset, an invalid pin wants different wiring — and they

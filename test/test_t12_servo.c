@@ -17,6 +17,8 @@
 #include "unity/unity.h"
 
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 void setUp(void) {
 #if FR_FEATURE_PWM
@@ -78,23 +80,41 @@ static void test_host_stub_drain_empties_ring(void) {
                                                             sizeof(duties[0])));
 }
 
-static void test_reopening_a_held_pin_reports_busy(void) {
+static void test_exact_repeat_open_is_idempotent(void) {
   char out[64];
 
   open_pwm();
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "h2 is pwm.open: 4, 50",
+                                      out, sizeof(out)));
   TEST_ASSERT_EQUAL(FR_ERR_BUSY,
-                    fr_repl_eval_line(&s_runtime, "pwm.open: 4, 50",
+                    fr_repl_eval_line(&s_runtime, "pwm.open: 4, 60",
                                       out, sizeof(out)));
 }
 
 #endif /* FR_FEATURE_PWM */
+
+#if FR_FEATURE_TEXT
+static void test_release_word_yields_release_text(void) {
+  char out[96];
+
+  TEST_ASSERT_EQUAL(FR_OK, fr_base_image_install(&s_runtime));
+  TEST_ASSERT_EQUAL(FR_OK,
+                    fr_repl_eval_line(&s_runtime, "frothy.release:",
+                                      out, sizeof(out)));
+  TEST_ASSERT_NOT_NULL(strstr(out, FR_RELEASE));
+}
+#endif
 
 int main(void) {
   UNITY_BEGIN();
 #if FR_FEATURE_PWM
   RUN_TEST(test_host_stub_records_writes_in_fifo);
   RUN_TEST(test_host_stub_drain_empties_ring);
-  RUN_TEST(test_reopening_a_held_pin_reports_busy);
+  RUN_TEST(test_exact_repeat_open_is_idempotent);
+#endif
+#if FR_FEATURE_TEXT
+  RUN_TEST(test_release_word_yields_release_text);
 #endif
   return UNITY_END();
 }

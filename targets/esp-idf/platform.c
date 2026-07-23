@@ -900,6 +900,12 @@ fr_err_t fr_platform_gpio_mode(uint16_t pin, uint16_t mode) {
   if (!fr_esp_gpio_pin_valid(pin)) {
     return FR_ERR_DOMAIN;
   }
+#if FR_FEATURE_PWM
+  /* Same protection as gpio_write: gpio_config detaches the pin from LEDC. */
+  if (fr_esp_pwm_pin_in_use(pin)) {
+    return FR_ERR_BUSY;
+  }
+#endif
 
   switch (mode) {
   case 0:
@@ -933,6 +939,14 @@ fr_err_t fr_platform_gpio_write(uint16_t pin, uint16_t value) {
   if (!fr_esp_gpio_output_valid(pin)) {
     return FR_ERR_DOMAIN;
   }
+#if FR_FEATURE_PWM
+  /* gpio_set_direction re-routes the GPIO matrix away from LEDC while the
+   * channel keeps running -- refuse instead of silently killing the PWM
+   * output (ADR 0067). */
+  if (fr_esp_pwm_pin_in_use(pin)) {
+    return FR_ERR_BUSY;
+  }
+#endif
 
   FR_TRY(fr_esp_err(gpio_set_direction((gpio_num_t)pin, GPIO_MODE_INPUT_OUTPUT)));
   return fr_esp_err(gpio_set_level((gpio_num_t)pin, value == 0 ? 0 : 1));
@@ -2177,6 +2191,26 @@ fr_err_t fr_platform_pwm_open(uint16_t pin, uint16_t freq,
   }
 
   return FR_ERR_CAPACITY;
+}
+
+fr_err_t fr_platform_pwm_find(uint16_t pin, uint16_t freq,
+                              uint16_t *out_platform_index) {
+  if (out_platform_index == NULL || freq == 0) {
+    return FR_ERR_INVALID;
+  }
+  for (uint16_t i = 0; i < FR_ESP_PWM_MAX; i++) {
+    const fr_esp_pwm_t *pwm = &fr_esp_pwms[i];
+
+    if (!pwm->in_use || pwm->pin != pin) {
+      continue;
+    }
+    if (pwm->freq != freq) {
+      return FR_ERR_BUSY;
+    }
+    *out_platform_index = i;
+    return FR_OK;
+  }
+  return FR_ERR_NOT_FOUND;
 }
 
 fr_err_t fr_platform_pwm_write(uint16_t platform_index, uint16_t duty) {

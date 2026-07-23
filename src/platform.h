@@ -200,6 +200,11 @@ void fr_platform_random_seed(uint32_t seed);
 #if FR_FEATURE_PWM
 fr_err_t fr_platform_pwm_open(uint16_t pin, uint16_t freq,
                               uint16_t *out_platform_index);
+/* Exact-repeat lookup for idempotent open (ADR 0067). FR_OK: the pin is open
+ * at this frequency, *out_platform_index set. FR_ERR_BUSY: the pin is open at
+ * a different frequency. FR_ERR_NOT_FOUND: the pin is not open. */
+fr_err_t fr_platform_pwm_find(uint16_t pin, uint16_t freq,
+                              uint16_t *out_platform_index);
 fr_err_t fr_platform_pwm_write(uint16_t platform_index, uint16_t duty);
 fr_err_t fr_platform_pwm_close(uint16_t platform_index);
 #ifdef FR_HOST_TEST_HELPERS

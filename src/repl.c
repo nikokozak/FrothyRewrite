@@ -593,7 +593,9 @@ static fr_err_t fr_repl_write_status(const fr_repl_writer_t *writer) {
     return FR_ERR_INVALID;
   }
 
-  FR_TRY(fr_repl_writer_write(writer, "frothy status v1 profile="));
+  FR_TRY(fr_repl_writer_write(writer, "frothy status v1 release="));
+  FR_TRY(fr_repl_writer_write(writer, FR_RELEASE));
+  FR_TRY(fr_repl_writer_write(writer, " profile="));
   FR_TRY(fr_repl_writer_write(writer, fr_profile_contract_name()));
   FR_TRY(fr_repl_writer_write(writer, " profile_hash="));
   FR_TRY(fr_repl_writer_write_hex_u32(writer, fr_profile_hash()));

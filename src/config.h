@@ -16,6 +16,16 @@
 #include FR_PROFILE_HEADER
 
 /*
+ * The release name the firmware reports (status line and the frothy.release
+ * word). The build injects the git tag (-DFR_RELEASE="\"v0.1.11\""); a build
+ * without one is honest about it. Cross-platform by construction: plain C,
+ * no target APIs.
+ */
+#ifndef FR_RELEASE
+#define FR_RELEASE "dev"
+#endif
+
+/*
  * Every profile header must declare FR_WORD_SIZE. A silent default would let a
  * new profile pick up the wrong tagged-word contract without the author
  * noticing.

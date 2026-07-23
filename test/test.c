@@ -3727,12 +3727,28 @@ static void test_pwm(void) {
                 FR_OK &&
             fr_tagged_is_nil(result));
 
-  CHECK("pwm reports a held pin as busy",
+  CHECK("pwm reports a frequency change on a held pin as busy",
         test_pwm_open_call(&runtime, open_entry, 5, 1000, &handle) == FR_OK &&
             test_pwm_open_call(&runtime, open_entry, 5, 2000,
                                &second_handle) == FR_ERR_BUSY &&
             test_pwm_close_call(&runtime, close_entry, handle, &result) ==
                 FR_OK);
+
+  CHECK("pwm exact-repeat open returns the same handle",
+        test_pwm_open_call(&runtime, open_entry, 5, 1000, &handle) == FR_OK &&
+            test_pwm_open_call(&runtime, open_entry, 5, 1000,
+                               &second_handle) == FR_OK &&
+            handle == second_handle &&
+            test_pwm_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK);
+
+  CHECK("gpio refuses a pwm-held pin",
+        test_pwm_open_call(&runtime, open_entry, 5, 1000, &handle) == FR_OK &&
+            fr_platform_gpio_write(5, 1) == FR_ERR_BUSY &&
+            fr_platform_gpio_mode(5, 1) == FR_ERR_BUSY &&
+            test_pwm_close_call(&runtime, close_entry, handle, &result) ==
+                FR_OK &&
+            fr_platform_gpio_write(5, 1) == FR_OK);
 
   CHECK("pwm rejects out-of-range duty",
         test_pwm_open_call(&runtime, open_entry, 6, 1000, &handle) == FR_OK &&
@@ -5613,14 +5629,27 @@ static void test_wipe_user_closes_handles(void) {
   CHECK("wipe-handles open pwm",
         fr_repl_eval_line(&runtime, "h is pwm.open: 5, 1000", out,
                           sizeof(out)) == FR_OK);
-  CHECK("wipe-handles reopen busy",
-        fr_repl_eval_line(&runtime, "pwm.open: 5, 1000", out, sizeof(out)) ==
+  CHECK("wipe-handles frequency change stays busy",
+        fr_repl_eval_line(&runtime, "pwm.open: 5, 2000", out, sizeof(out)) ==
             FR_ERR_BUSY);
   CHECK("wipe-handles wipe-user ok", fr_persist_wipe_user(&runtime) == FR_OK);
   CHECK("wipe-handles pin reopens after wipe",
         fr_repl_eval_line(&runtime, "h is pwm.open: 5, 1000", out,
                           sizeof(out)) == FR_OK);
 }
+
+#if FR_FEATURE_TEXT
+static void test_release_word_reports_text(void) {
+  fr_runtime_t runtime;
+  char out[64];
+
+  CHECK("release base image", fr_base_image_install(&runtime) == FR_OK);
+  CHECK("release word yields the build name",
+        fr_repl_eval_line(&runtime, "frothy.release:", out, sizeof(out)) ==
+                FR_OK &&
+            strstr(out, FR_RELEASE) != NULL);
+}
+#endif
 
 /* Regression: public restore must close platform handles too — replacing the
  * user tier orphans open channels the same way wipe-user did. */
@@ -13359,7 +13388,7 @@ static void test_repl(void) {
 
   CHECK("repl installs base image", fr_base_image_install(&runtime) == FR_OK);
   snprintf(status_prefix, sizeof(status_prefix),
-           "frothy status v1 profile=%s profile_hash=",
+           "frothy status v1 release=%s profile=%s profile_hash=", FR_RELEASE,
            fr_profile_contract_name());
   CHECK("repl status reports profile contract",
         fr_repl_eval_line(&runtime, "status", out, sizeof(out)) == FR_OK &&
@@ -16194,6 +16223,9 @@ int main(void) {
   test_event_register_cancel();
   test_wipe_user_clears_events();
   test_wipe_user_closes_handles();
+#if FR_FEATURE_TEXT
+  test_release_word_reports_text();
+#endif
   test_restore_closes_handles();
   test_event_drain_dispatch();
   test_event_safe_point_fires_when_active();

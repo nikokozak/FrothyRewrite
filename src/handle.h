@@ -51,5 +51,10 @@ fr_err_t fr_handle_lookup(const fr_runtime_t *runtime, fr_handle_ref_t ref,
                           fr_handle_kind_t expected_kind,
                           fr_handle_kind_t *out_kind,
                           uint16_t *out_platform_index);
+/* Reverse lookup for idempotent open (ADR 0067): the live tagged handle for
+ * an active (kind, platform_index) pair, or FR_ERR_NOT_FOUND. */
+fr_err_t fr_handle_find_active(const fr_runtime_t *runtime,
+                               fr_handle_kind_t kind, uint16_t platform_index,
+                               fr_tagged_t *out_tagged);
 fr_err_t fr_handle_close(fr_runtime_t *runtime, fr_handle_ref_t ref);
 const char *fr_handle_kind_name(fr_handle_kind_t kind);

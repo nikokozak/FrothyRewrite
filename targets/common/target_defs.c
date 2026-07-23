@@ -468,6 +468,24 @@ static fr_err_t fr_native_pwm_open(fr_runtime_t *runtime,
     return fr_native_reject_arg(runtime, args, arg_count, 1, FR_ERR_DOMAIN);
   }
 
+  /* Exact-repeat open is idempotent (ADR 0067): the same pin at the same
+   * frequency returns the existing handle with no state change, checked
+   * before reservation so no generation is burned. A different frequency on
+   * an open pin stays busy; a platform slot with no live handle entry cannot
+   * happen after the wipe/restore close fixes, but reports busy honestly if
+   * it ever does. */
+  err = fr_platform_pwm_find(pin, freq, &platform_index);
+  if (err == FR_OK) {
+    if (fr_handle_find_active(runtime, FR_HANDLE_KIND_PWM, platform_index,
+                              out) == FR_OK) {
+      return FR_OK;
+    }
+    return FR_ERR_BUSY;
+  }
+  if (err != FR_ERR_NOT_FOUND) {
+    return err;
+  }
+
   FR_TRY(fr_handle_reserve(runtime, FR_HANDLE_KIND_PWM, &ref, &handle));
   err = fr_platform_pwm_open(pin, freq, &platform_index);
   if (err != FR_OK) {
@@ -3861,6 +3879,23 @@ static fr_err_t fr_native_event_cancel(fr_runtime_t *runtime,
   return FR_OK;
 }
 
+#if FR_FEATURE_TEXT
+static fr_err_t fr_native_frothy_release(fr_runtime_t *runtime,
+                                         const fr_tagged_t *args,
+                                         uint8_t arg_count, fr_tagged_t *out) {
+  static const char release[] = FR_RELEASE;
+  fr_object_id_t object_id = 0;
+
+  (void)args;
+  if (runtime == NULL || out == NULL || arg_count != 0) {
+    return FR_ERR_INVALID;
+  }
+  FR_TRY(fr_text_install(runtime, (const uint8_t *)release,
+                         (uint16_t)(sizeof(release) - 1u), &object_id));
+  return fr_tagged_encode_object_id(object_id, out);
+}
+#endif
+
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
 static fr_err_t fr_native_fire_event_view_text(const fr_runtime_t *runtime,
                                                fr_tagged_t arg,
@@ -4639,6 +4674,15 @@ static const fr_native_signature_t fr_native_event_cancel_signature = {
     .result = FR_NATIVE_VALUE_NIL,
     .help = "cancel an event binding from compiled cancel",
 };
+
+#if FR_FEATURE_TEXT
+static const fr_native_signature_t fr_native_frothy_release_signature = {
+    .params = NULL,
+    .arg_count = 0,
+    .result = FR_NATIVE_VALUE_TEXT,
+    .help = "read the firmware release name",
+};
+#endif
 
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
 static const fr_native_param_t fr_native_fire_event_params[] = {
@@ -7508,6 +7552,20 @@ const fr_base_def_t fr_target_base_defs[] = {
 #endif
     },
 #endif
+#endif
+#if FR_FEATURE_TEXT
+    {
+        .slot_id = FR_SLOT_FROTHY_RELEASE,
+#if FR_BASE_IMAGE_INCLUDE_SYMBOLS
+        .name = "frothy.release",
+#endif
+        .kind = FR_BASE_DEF_NATIVE,
+        .native_fn = fr_native_frothy_release,
+        .native_arity = 0,
+#if FR_FEATURE_NATIVE_SIGNATURES
+        .native_signature = &fr_native_frothy_release_signature,
+#endif
+    },
 #endif
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
     {

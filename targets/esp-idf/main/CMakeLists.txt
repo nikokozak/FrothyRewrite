@@ -74,9 +74,20 @@ idf_component_register(
         esp_wifi
         nvs_flash)
 
+execute_process(
+    COMMAND git describe --tags --always
+    WORKING_DIRECTORY ${FR_REWRITE_ROOT}
+    OUTPUT_VARIABLE FR_RELEASE_NAME
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if(NOT FR_RELEASE_NAME)
+    set(FR_RELEASE_NAME "dev")
+endif()
+
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     FR_PROFILE_HEADER="${FR_REWRITE_PROFILE}.h"
-    FR_PROFILE_NAME="${FR_REWRITE_PROFILE}")
+    FR_PROFILE_NAME="${FR_REWRITE_PROFILE}"
+    FR_RELEASE="${FR_RELEASE_NAME}")
 
 # A composition header, when frothy build supplies one, is included before the
 # profile by config.h and overrides its gate defaults. Empty means unset, so

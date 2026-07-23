@@ -48,6 +48,8 @@ else
 FR_CC := $(CC)
 endif
 
+FR_RELEASE ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
+
 FR_CFLAGS := \
 	-std=c99 \
 	-Wall \
@@ -61,6 +63,7 @@ FR_CFLAGS := \
 	-I$(BOARD_DIR) \
 	-DFR_PROFILE_HEADER=\"$(PROFILE).h\" \
 	-DFR_PROFILE_NAME=\"$(PROFILE)\" \
+	-DFR_RELEASE=\"$(FR_RELEASE)\" \
 	$(TARGET_CFLAGS) \
 	$(BOARD_CFLAGS) \
 	$(CFLAGS)
