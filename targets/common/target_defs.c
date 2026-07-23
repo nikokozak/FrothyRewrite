@@ -471,16 +471,18 @@ static fr_err_t fr_native_pwm_open(fr_runtime_t *runtime,
   /* Exact-repeat open is idempotent (ADR 0067): the same pin at the same
    * frequency returns the existing handle with no state change, checked
    * before reservation so no generation is burned. A different frequency on
-   * an open pin stays busy; a platform slot with no live handle entry cannot
-   * happen after the wipe/restore close fixes, but reports busy honestly if
-   * it ever does. */
+   * an open pin stays busy. A platform slot with no live handle entry is
+   * rare but reachable -- close-all is best-effort and a failed platform
+   * close keeps the slot occupied after the runtime entry clears -- so that
+   * case fails closed as busy; other lookup errors propagate as themselves. */
   err = fr_platform_pwm_find(pin, freq, &platform_index);
   if (err == FR_OK) {
-    if (fr_handle_find_active(runtime, FR_HANDLE_KIND_PWM, platform_index,
-                              out) == FR_OK) {
-      return FR_OK;
+    err = fr_handle_find_active(runtime, FR_HANDLE_KIND_PWM, platform_index,
+                                out);
+    if (err == FR_ERR_NOT_FOUND) {
+      return FR_ERR_BUSY;
     }
-    return FR_ERR_BUSY;
+    return err;
   }
   if (err != FR_ERR_NOT_FOUND) {
     return err;
@@ -4733,7 +4735,7 @@ static const fr_native_signature_t fr_native_gpio_write_signature = {
     .params = fr_native_gpio_write_params,
     .arg_count = 2,
     .result = FR_NATIVE_VALUE_NIL,
-    .help = "set gpio pin to a level (0 or 1)",
+    .help = "set gpio pin to a level (0 or 1); busy if pwm holds the pin",
 };
 
 static const fr_native_signature_t fr_native_gpio_write_to_nil_signature = {
@@ -5234,7 +5236,7 @@ static const fr_native_signature_t fr_native_pwm_open_signature = {
     .params = fr_native_pwm_open_params,
     .arg_count = 2,
     .result = FR_NATIVE_VALUE_HANDLE,
-    .help = "open a PWM channel on a pin at a frequency in Hz",
+    .help = "open a PWM channel on a pin at a frequency in Hz; an exact repeat returns the existing handle",
 };
 
 static const fr_native_param_t fr_native_pwm_write_params[] = {

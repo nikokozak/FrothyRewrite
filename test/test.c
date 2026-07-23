@@ -128,6 +128,14 @@ static fr_err_t test_persist_apply_user_overlay(
 #define FR_TEST_EVENT_TEST_SLOT_COUNT 0
 #endif
 
+#if FR_FEATURE_TEXT
+#define FR_TEST_RELEASE_WORDS " frothy.release"
+#define FR_TEST_RELEASE_SLOT_COUNT 1
+#else
+#define FR_TEST_RELEASE_WORDS ""
+#define FR_TEST_RELEASE_SLOT_COUNT 0
+#endif
+
 /* T15 wifi/http/tcp, T14 power, T16 bytes — slot blocks sized to match
  * src/base_defs.h FR_SLOT_AFTER_NET / _AFTER_POWER / _AFTER_BYTES. */
 #if FR_FEATURE_NET
@@ -223,7 +231,7 @@ enum {
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
               FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
-              FR_TEST_EVENT_TEST_WORDS                                        \
+              FR_TEST_RELEASE_WORDS FR_TEST_EVENT_TEST_WORDS                  \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot wait one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
@@ -234,7 +242,7 @@ enum {
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
               FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
-              FR_TEST_EVENT_TEST_WORDS                                        \
+              FR_TEST_RELEASE_WORDS FR_TEST_EVENT_TEST_WORDS                  \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot wait one gpio.write $led_builtin save restore dangerous.wipe gpio.mode "  \
@@ -245,7 +253,7 @@ enum {
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
               FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
-              FR_TEST_EVENT_TEST_WORDS                                        \
+              FR_TEST_RELEASE_WORDS FR_TEST_EVENT_TEST_WORDS                  \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (15 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
@@ -253,7 +261,8 @@ enum {
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
-   FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
+   FR_TEST_BYTES_SLOT_COUNT + FR_TEST_RELEASE_SLOT_COUNT +                    \
+   FR_TEST_EVENT_TEST_SLOT_COUNT +                                            \
    FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT +                      \
    FR_TEST_CONSOLE_INPUT_SLOT_COUNT + FR_TEST_CONSOLE_SLOT_COUNT)
 #else
@@ -265,7 +274,7 @@ enum {
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
               FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
-              FR_TEST_EVENT_TEST_WORDS                                        \
+              FR_TEST_RELEASE_WORDS FR_TEST_EVENT_TEST_WORDS                  \
               " $led_active_level" FR_TEST_SOURCE_WORDS "\nok\n"
 #define FR_TEST_WORDS_WITH_LED                                                \
   "boot wait one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -275,7 +284,7 @@ enum {
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
               FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
-              FR_TEST_EVENT_TEST_WORDS                                        \
+              FR_TEST_RELEASE_WORDS FR_TEST_EVENT_TEST_WORDS                  \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led\nok\n"
 #define FR_TEST_WORDS_WITH_LED_AND_MYBLINK                                    \
   "boot wait one gpio.write $led_builtin gpio.mode gpio.read adc.read "        \
@@ -285,7 +294,7 @@ enum {
               FR_TEST_NET_WORDS FR_TEST_POWER_WORDS FR_TEST_BYTES_WORDS       \
               FR_TEST_TRACE_WORDS FR_TEST_PULSE_WORDS                         \
               FR_TEST_CONSOLE_INPUT_WORDS FR_TEST_CONSOLE_WORDS              \
-              FR_TEST_EVENT_TEST_WORDS                                        \
+              FR_TEST_RELEASE_WORDS FR_TEST_EVENT_TEST_WORDS                  \
               " $led_active_level" FR_TEST_SOURCE_WORDS " led myblink\nok\n"
 #define FR_TEST_BASE_SLOT_COUNT                                               \
   (12 + FR_TEST_UART_SLOT_COUNT + FR_TEST_RANDOM_SLOT_COUNT +                \
@@ -293,7 +302,8 @@ enum {
    FR_TEST_MATH_SLOT_COUNT + FR_TEST_PAD_SLOT_COUNT +                         \
    FR_TEST_TEXT_SLOT_COUNT + FR_TEST_EVENT_REGISTER_SLOT_COUNT +              \
    FR_TEST_NET_SLOT_COUNT + FR_TEST_POWER_SLOT_COUNT +                        \
-   FR_TEST_BYTES_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT +                 \
+   FR_TEST_BYTES_SLOT_COUNT + FR_TEST_RELEASE_SLOT_COUNT +                    \
+   FR_TEST_EVENT_TEST_SLOT_COUNT +                                            \
    FR_TEST_TRACE_SLOT_COUNT + FR_TEST_PULSE_SLOT_COUNT +                      \
    FR_TEST_CONSOLE_INPUT_SLOT_COUNT + FR_TEST_CONSOLE_SLOT_COUNT)
 #endif
@@ -465,7 +475,8 @@ static void test_base_def_contract(void) {
       (FR_FEATURE_CONSOLE_ROUTING ? 3 : 0) +
       (FR_FEATURE_MATH ? 7 : 0) +
       FR_TEST_PAD_SLOT_COUNT + FR_TEST_TEXT_SLOT_COUNT +
-      FR_TEST_EVENT_REGISTER_SLOT_COUNT + FR_TEST_EVENT_TEST_SLOT_COUNT;
+      FR_TEST_EVENT_REGISTER_SLOT_COUNT + FR_TEST_RELEASE_SLOT_COUNT +
+      FR_TEST_EVENT_TEST_SLOT_COUNT;
   uint16_t global_index = 0;
   uint16_t native_count = 0;
   fr_slot_id_t highest_slot_id = 0;
@@ -493,8 +504,10 @@ static void test_base_def_contract(void) {
 #if FR_INCLUDE_TEST_NATIVES && FR_FEATURE_TEXT
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("fire-event slot follows protocol blocks",
-        FR_SLOT_FIRE_EVENT == FR_SLOT_AFTER_CONSOLE);
+  CHECK("release slot follows protocol blocks",
+        FR_SLOT_FROTHY_RELEASE == FR_SLOT_AFTER_CONSOLE);
+  CHECK("fire-event slot follows release slot",
+        FR_SLOT_FIRE_EVENT == FR_SLOT_FROTHY_RELEASE + 1);
   CHECK("board capability slot follows fire-event slot",
         FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_FIRE_EVENT + 1);
   CHECK("board local slot ids follow board capability slots",
@@ -502,8 +515,10 @@ static void test_base_def_contract(void) {
 #else
   CHECK("event cancel slot follows event register slot",
         FR_SLOT_EVENT_CANCEL == FR_SLOT_EVENT_REGISTER + 1);
-  CHECK("board capability slot follows target capability blocks",
-        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_AFTER_CONSOLE);
+  CHECK("release slot follows protocol blocks",
+        FR_SLOT_FROTHY_RELEASE == FR_SLOT_AFTER_CONSOLE);
+  CHECK("board capability slot follows release slot",
+        FR_SLOT_LED_ACTIVE_LEVEL == FR_SLOT_FROTHY_RELEASE + 1);
   CHECK("board local slot ids follow board capability slots",
         FR_SLOT_BOARD_LOCAL_BASE == FR_SLOT_LED_ACTIVE_LEVEL + 1);
 #endif
@@ -3682,7 +3697,7 @@ static void test_pwm(void) {
   fr_tagged_t handle = 0;
   fr_tagged_t second_handle = 0;
   fr_tagged_t result = 0;
-  char out[128];
+  char out[192];
 
   CHECK("pwm installs base image", fr_base_image_install(&runtime) == FR_OK);
   CHECK("pwm finds native entries",
@@ -3697,7 +3712,7 @@ static void test_pwm(void) {
                 FR_OK &&
             strcmp(out,
                    "pwm.open(pin: int, freq: int) -> handle\n"
-                   "open a PWM channel on a pin at a frequency in Hz\n"
+                   "open a PWM channel on a pin at a frequency in Hz; an exact repeat returns the existing handle\n"
                    "ok\n") == 0);
   CHECK("pwm see write renders signature",
         fr_repl_eval_line(&runtime, "see pwm.write", out, sizeof(out)) ==
@@ -3749,6 +3764,25 @@ static void test_pwm(void) {
             test_pwm_close_call(&runtime, close_entry, handle, &result) ==
                 FR_OK &&
             fr_platform_gpio_write(5, 1) == FR_OK);
+
+  {
+    fr_tagged_t fill_handle = 0;
+    uint16_t fill_pin = 6;
+    fr_err_t fill_err = FR_OK;
+
+    CHECK("pwm open for full-table repeat",
+          test_pwm_open_call(&runtime, open_entry, 5, 1000, &handle) == FR_OK);
+    while ((fill_err = test_pwm_open_call(&runtime, open_entry, fill_pin,
+                                          1000, &fill_handle)) == FR_OK) {
+      fill_pin += 1;
+    }
+    CHECK("pwm table fills to capacity", fill_err == FR_ERR_CAPACITY);
+    CHECK("pwm exact repeat succeeds with a full handle table",
+          test_pwm_open_call(&runtime, open_entry, 5, 1000, &second_handle) ==
+                  FR_OK &&
+              second_handle == handle);
+    fr_handle_close_all(&runtime);
+  }
 
   CHECK("pwm rejects out-of-range duty",
         test_pwm_open_call(&runtime, open_entry, 6, 1000, &handle) == FR_OK &&
@@ -13582,13 +13616,13 @@ static void test_repl(void) {
                 FR_OK &&
             strcmp(out,
                    "gpio.write(pin: int, level: int) -> nil\n"
-                   "set gpio pin to a level (0 or 1)\n"
+                   "set gpio pin to a level (0 or 1); busy if pwm holds the pin\n"
                    "ok\n") == 0);
   CHECK("repl see pin sugar renders signature under canonical name",
         fr_repl_eval_line(&runtime, "see pin", out, sizeof(out)) == FR_OK &&
             strcmp(out,
                    "gpio.write(pin: int, level: int) -> nil\n"
-                   "set gpio pin to a level (0 or 1)\n"
+                   "set gpio pin to a level (0 or 1); busy if pwm holds the pin\n"
                    "ok\n") == 0);
   CHECK("repl see gpio.mode falls back without names or help",
         fr_repl_eval_line(&runtime, "see gpio.mode", out, sizeof(out)) ==

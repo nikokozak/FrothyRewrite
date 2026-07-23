@@ -900,12 +900,6 @@ fr_err_t fr_platform_gpio_mode(uint16_t pin, uint16_t mode) {
   if (!fr_esp_gpio_pin_valid(pin)) {
     return FR_ERR_DOMAIN;
   }
-#if FR_FEATURE_PWM
-  /* Same protection as gpio_write: gpio_config detaches the pin from LEDC. */
-  if (fr_esp_pwm_pin_in_use(pin)) {
-    return FR_ERR_BUSY;
-  }
-#endif
 
   switch (mode) {
   case 0:
@@ -929,6 +923,15 @@ fr_err_t fr_platform_gpio_mode(uint16_t pin, uint16_t mode) {
   default:
     return FR_ERR_DOMAIN;
   }
+
+#if FR_FEATURE_PWM
+  /* Same protection as gpio_write: gpio_config detaches the pin from LEDC.
+   * Checked after argument validation so both targets agree that domain
+   * errors win over busy. */
+  if (fr_esp_pwm_pin_in_use(pin)) {
+    return FR_ERR_BUSY;
+  }
+#endif
 
   config.intr_type = GPIO_INTR_DISABLE;
   config.pin_bit_mask = 1ULL << pin;

@@ -74,12 +74,16 @@ idf_component_register(
         esp_wifi
         nvs_flash)
 
-execute_process(
-    COMMAND git describe --tags --always
-    WORKING_DIRECTORY ${FR_REWRITE_ROOT}
-    OUTPUT_VARIABLE FR_RELEASE_NAME
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET)
+# The release name is owned by tools/release-name.sh; the Makefile passes it
+# via -DFR_RELEASE_NAME so firmware and bundle manifest cannot disagree. The
+# fallback covers direct idf.py invocations.
+if(NOT FR_RELEASE_NAME)
+    execute_process(
+        COMMAND ${FR_REWRITE_ROOT}/tools/release-name.sh
+        OUTPUT_VARIABLE FR_RELEASE_NAME
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+endif()
 if(NOT FR_RELEASE_NAME)
     set(FR_RELEASE_NAME "dev")
 endif()

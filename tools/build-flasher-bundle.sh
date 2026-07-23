@@ -11,7 +11,7 @@ set -euo pipefail
 
 dest="${1:?usage: build-flasher-bundle.sh <dest-firmware-dir>}"
 here="$(cd "$(dirname "$0")/.." && pwd)"
-version="$(git -C "$here" describe --tags --always --dirty 2>/dev/null || echo unknown)"
+version="$("$here/tools/release-name.sh")"
 
 node - "$here" "$dest" "$version" <<'NODE'
 const childProcess = require("child_process");

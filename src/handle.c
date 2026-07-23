@@ -158,6 +158,16 @@ fr_err_t fr_handle_activate(fr_runtime_t *runtime, fr_handle_ref_t ref,
   if (entry->platform_index != FR_HANDLE_PLATFORM_NONE) {
     return FR_ERR_INVALID;
   }
+  /* One live entry per (kind, platform_index): reverse lookup (ADR 0067)
+   * must never have to guess between two owners of one platform slot. */
+  for (fr_handle_id_t i = 0; i < FR_PROFILE_MAX_HANDLES; i++) {
+    const fr_handle_entry_t *other = &runtime->handles.entries[i];
+
+    if (i != ref.id && other->kind == entry->kind &&
+        other->platform_index == platform_index) {
+      return FR_ERR_INVALID;
+    }
+  }
 
   entry->platform_index = platform_index;
   return FR_OK;

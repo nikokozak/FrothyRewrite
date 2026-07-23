@@ -48,7 +48,11 @@ else
 FR_CC := $(CC)
 endif
 
-FR_RELEASE ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
+FR_RELEASE ?= $(shell tools/release-name.sh)
+# A release-named stamp makes the embedded name a real dependency: when the
+# git state changes the stamp filename changes, so cached binaries rebuild
+# instead of shipping a stale FR_RELEASE.
+FR_RELEASE_STAMP := $(BUILD_DIR)/release-$(subst /,-,$(FR_RELEASE)).stamp
 
 FR_CFLAGS := \
 	-std=c99 \
@@ -268,6 +272,7 @@ KERNEL_DEPS = \
 
 BUILD_DEPS = \
 	Makefile \
+	$(FR_RELEASE_STAMP) \
 	$(BOARD_MK) \
 	$(TARGET_MK) \
 	$(BOARD_HEADERS) \
@@ -419,6 +424,10 @@ artifacts: $(ARTIFACTS) ## Build firmware artifacts for the selected board.
 
 $(BUILD_DIR):
 	mkdir -p $@
+
+$(FR_RELEASE_STAMP): | $(BUILD_DIR)
+	rm -f $(BUILD_DIR)/release-*.stamp
+	touch $@
 
 # Bake base/core.frothy into a C object the boot compiler reads. Hex encoding
 # only -- the same compiler that handles REPL input compiles these bytes. The

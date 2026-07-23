@@ -16,27 +16,27 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ### Added
 
-- **The firmware reports its release.** `status` gains a `release=` field
-  and the new `frothy.release` word returns the release name as text, on
-  every target: the value is a plain compile-time constant the build stamps
-  from the git tag. Boards flashed before this release cannot say what they
-  run; everything after can.
+- **The firmware reports its release.** `status` gains a `release=` field on
+  every target, and the new `frothy.release` word (text-enabled profiles,
+  which includes every shipped board) returns the release name as text. The
+  value is one compile-time constant the build stamps from the git tag via
+  `tools/release-name.sh` — the same owner feeds the firmware, the ESP-IDF
+  build, and the flasher bundle manifest, and a release-named stamp file
+  makes cached builds rebuild when it changes. Boards flashed before this
+  release cannot say what they run; everything after can.
 
 ### Changed
 
-- **Re-running an identical `pwm.open` is not an error.** An exact repeat —
-  same pin, same frequency — returns the existing handle with no state
-  change, so re-evaluating a setup line at the prompt just works. Opening a
-  held pin at a *different* frequency still reports `busy`; changing
+- **`pwm.open` on a held pin: an exact repeat succeeds, everything else is
+  `busy`.** Re-running the same open — same pin, same frequency — returns
+  the existing handle with no state change, so re-evaluating a setup line
+  at the prompt just works. A different frequency on a held pin reports
+  `busy` (previously an undifferentiated `bad value`); changing
   configuration remains an explicit `pwm.close` + `pwm.open`.
 - **`gpio.write` and `gpio.mode` refuse a PWM-held pin with `busy`.**
   Driving a pin as plain GPIO silently detached it from the PWM peripheral
   while the channel kept running; the conflict is now a diagnosable error.
   `gpio.read` still works on any pin.
-- **`pwm.open` on a pin that is already open reports `busy`**, not
-  `bad value`. The two failures need different fixes — a held pin wants a
-  `pwm.close` or reset, an invalid pin wants different wiring — and they
-  were indistinguishable at the prompt.
 - **`frothy source-plan` accepts `--entry <path>`** (default `main.fr`) so
   the editor can run any project file as the include-resolution root. Entry
   paths obey the same confinement rules as include targets.

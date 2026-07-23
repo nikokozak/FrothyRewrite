@@ -58,7 +58,7 @@ $(ESP_IDF_SDKCONFIG_STAMP): $(ESP_IDF_SDKCONFIG_DEFAULTS) $(ESP_IDF_PROFILE_STAM
 	$(RM) "$(ESP_IDF_SDKCONFIG)"
 	touch "$@"
 
-TARGET_BUILD_COMMAND = cd $(ESP_IDF_PROJECT_DIR) && . "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && idf.py -B "$(ESP_IDF_BUILD_DIR)" -DSDKCONFIG="$(ESP_IDF_SDKCONFIG)" -DFR_REWRITE_ROOT="$(ESP_IDF_ROOT)" -DFR_REWRITE_BOARD="$(BOARD)" -DFR_REWRITE_PROFILE="$(PROFILE)" -DIDF_TARGET="$(ESP_IDF_BOARD_TARGET)" $(ESP_IDF_FROTHY_GEN_DEFINES) build
+TARGET_BUILD_COMMAND = cd $(ESP_IDF_PROJECT_DIR) && . "$$HOME/.froth/sdk/esp-idf/export.sh" >/dev/null && idf.py -B "$(ESP_IDF_BUILD_DIR)" -DSDKCONFIG="$(ESP_IDF_SDKCONFIG)" -DFR_REWRITE_ROOT="$(ESP_IDF_ROOT)" -DFR_REWRITE_BOARD="$(BOARD)" -DFR_REWRITE_PROFILE="$(PROFILE)" -DFR_RELEASE_NAME="$(FR_RELEASE)" -DIDF_TARGET="$(ESP_IDF_BOARD_TARGET)" $(ESP_IDF_FROTHY_GEN_DEFINES) build
 # Size reporting is entirely best-effort: stale outputs are removed before
 # either command runs, so a failure at any point leaves no report (the CLI
 # treats a missing frothy.size.json as "skip") and never fails a build whose

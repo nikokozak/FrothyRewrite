@@ -331,7 +331,7 @@ func statusResponse(compiler string) string {
 }
 
 func statusResponse32(compiler string) string {
-	return "status\r\nfrothy status v1 profile=test32 profile_hash=bead1234 compiler=" +
+	return "status\r\nfrothy status v1 release=vTEST profile=test32 profile_hash=bead1234 compiler=" +
 		compiler + " names=device storage=volatile interrupt=cooperative word_size=32 int_min=-1073741824 int_max=1073741823 apply_bytes=128\r\nok\r\n"
 }
 
