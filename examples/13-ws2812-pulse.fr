@@ -5,11 +5,12 @@
 -- shows that your LEDs need them tuned.
 -- @tag device hardware
 
-zero-high is 400ns
-zero-low is 900ns
-one-high is 800ns
-one-low is 500ns
-reset-low is 80000ns
+-- Span durations are nanoseconds, the unit pulse.add takes.
+zero-high is 400
+zero-low is 900
+one-high is 800
+one-low is 500
+reset-low is 80000
 
 to ws2812-bit with wave, bit [
   if bit = 0 [

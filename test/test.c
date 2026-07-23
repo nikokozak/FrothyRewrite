@@ -8779,26 +8779,12 @@ static void test_parse(void) {
   CHECK("parse trailing underscore stays a name",
         fr_parse_expression_line("1_", &parsed, &expr_id) == FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_NAME);
-  CHECK("parse ms suffix passes through",
+  CHECK("parse digit-led ms token stays a name",
         fr_parse_expression_line("500ms", &parsed, &expr_id) == FR_OK &&
-            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
-            parsed.exprs[expr_id].int_value == 500);
-  CHECK("parse s suffix multiplies into milliseconds",
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_NAME);
+  CHECK("parse digit-led s token stays a name",
         fr_parse_expression_line("2s", &parsed, &expr_id) == FR_OK &&
-            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
-            parsed.exprs[expr_id].int_value == 2000);
-  CHECK("parse us suffix passes through",
-        fr_parse_expression_line("400us", &parsed, &expr_id) == FR_OK &&
-            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
-            parsed.exprs[expr_id].int_value == 400);
-  CHECK("parse ns suffix passes through",
-        fr_parse_expression_line("400ns", &parsed, &expr_id) == FR_OK &&
-            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
-            parsed.exprs[expr_id].int_value == 400);
-  CHECK("parse negative duration literal",
-        fr_parse_expression_line("-2s", &parsed, &expr_id) == FR_OK &&
-            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_INT &&
-            parsed.exprs[expr_id].int_value == -2000);
+            parsed.exprs[expr_id].kind == FR_PARSE_EXPR_NAME);
   CHECK("parse non-suffix letters stay a name",
         fr_parse_expression_line("2nd", &parsed, &expr_id) == FR_OK &&
             parsed.exprs[expr_id].kind == FR_PARSE_EXPR_NAME);

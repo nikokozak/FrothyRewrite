@@ -6,6 +6,18 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+### Removed
+
+- **Duration suffixes on integer literals** (`2s`, `500ms`, `400us`, `400ns`),
+  introduced alongside digit grouping and shipped in 0.1.10. The suffix was a
+  compile-time multiply with no duration type behind it, so it looked checked
+  but was not: `wait: 50ns` meant 50 milliseconds, and `2s` in a
+  nanosecond-unit call meant 2 microseconds. A unit now lives where it always
+  did — in the word's contract and, when a word has a non-default unit, in its
+  name (`pulse.duration-ns`, `trace.delta-ns`). A digit-led token with a
+  trailing suffix falls back to being a name, like any other non-integer
+  token. Underscore digit grouping (`1_000_000`) is unchanged.
+
 ## [0.1.10] - 2026-07-23
 
 ### Fixed
