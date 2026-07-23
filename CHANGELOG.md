@@ -6,6 +6,8 @@ tags described in the "Releasing" section of CONTRIBUTING.md.
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-07-23
+
 ### Fixed
 
 - **`wipe-user` and `restore` close platform handles.** Both replace the
